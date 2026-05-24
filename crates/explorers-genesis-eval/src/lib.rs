@@ -3,7 +3,6 @@ pub enum FailureMode {
     Extinction,
     PopulationExplosion,
     EnergyDeath,
-    FrozenDynamics,
     Monoculture,
     GeneralistDominance,
 }
@@ -24,7 +23,6 @@ pub struct FitnessBreakdown {
 pub struct EvalConfig {
     pub max_population: usize,
     pub energy_death_window: usize,
-    pub frozen_dynamics_fraction: f32,
     pub clustering_threshold: f32,
     pub dbscan_eps: f32,
     pub dbscan_min_points: usize,
@@ -38,7 +36,6 @@ impl Default for EvalConfig {
         Self {
             max_population: 1000,
             energy_death_window: 50,
-            frozen_dynamics_fraction: 0.3,
             clustering_threshold: 0.5,
             dbscan_eps: 1.0,
             dbscan_min_points: 5,
@@ -54,10 +51,7 @@ pub struct RunObserver {
     max_ticks: u64,
     tick: u64,
     grace_ticks: u64,
-    frozen_dynamics_window: usize,
     energy_history: Vec<f32>,
-    birth_history: Vec<usize>,
-    death_history: Vec<usize>,
     total_births: usize,
     total_deaths: usize,
     cluster_counts: Vec<usize>,
@@ -71,18 +65,12 @@ pub struct RunObserver {
 impl RunObserver {
     pub fn new(config: EvalConfig, max_ticks: u64) -> Self {
         let grace_ticks = (max_ticks as f32 * config.grace_period_fraction) as u64;
-        let post_grace_ticks = max_ticks.saturating_sub(grace_ticks);
-        let frozen_dynamics_window =
-            ((post_grace_ticks as f32 * config.frozen_dynamics_fraction) as usize).max(1);
         Self {
             config,
             max_ticks,
             tick: 0,
             grace_ticks,
-            frozen_dynamics_window,
             energy_history: Vec::new(),
-            birth_history: Vec::new(),
-            death_history: Vec::new(),
             total_births: 0,
             total_deaths: 0,
             cluster_counts: Vec::new(),
@@ -109,8 +97,6 @@ impl RunObserver {
 
         if self.tick == self.grace_ticks && self.grace_ticks > 0 {
             self.energy_history.clear();
-            self.birth_history.clear();
-            self.death_history.clear();
         }
 
         // Catastrophic detectors always fire
@@ -127,8 +113,6 @@ impl RunObserver {
 
         let total_energy: f32 = agents.iter().map(|a| a.energy).sum();
         self.energy_history.push(total_energy);
-        self.birth_history.push(world.last_tick_births());
-        self.death_history.push(world.last_tick_deaths());
         self.total_births += world.last_tick_births();
         self.total_deaths += world.last_tick_deaths();
 
@@ -136,15 +120,6 @@ impl RunObserver {
         if !in_grace_period {
             if is_energy_death(&self.energy_history, self.config.energy_death_window) {
                 self.failed = Some(FailureMode::EnergyDeath);
-                self.tick += 1;
-                return;
-            }
-            if is_frozen_dynamics(
-                &self.birth_history,
-                &self.death_history,
-                self.frozen_dynamics_window,
-            ) {
-                self.failed = Some(FailureMode::FrozenDynamics);
                 self.tick += 1;
                 return;
             }
@@ -270,15 +245,6 @@ pub fn is_extinct(agent_count: usize) -> bool {
 
 pub fn is_population_explosion(agent_count: usize, ceiling: usize) -> bool {
     agent_count > ceiling
-}
-
-pub fn is_frozen_dynamics(birth_history: &[usize], death_history: &[usize], window: usize) -> bool {
-    if birth_history.len() < window || death_history.len() < window {
-        return false;
-    }
-    let b_tail = &birth_history[birth_history.len() - window..];
-    let d_tail = &death_history[death_history.len() - window..];
-    b_tail.iter().all(|&b| b == 0) && d_tail.iter().all(|&d| d == 0)
 }
 
 pub fn dip_statistic(sorted_data: &[f32]) -> f32 {
@@ -674,34 +640,6 @@ mod tests {
     fn no_energy_death_when_history_shorter_than_window() {
         let history = vec![100.0, 90.0];
         assert!(!is_energy_death(&history, 5));
-    }
-
-    #[test]
-    fn frozen_when_no_births_and_no_deaths() {
-        let births = vec![0, 0, 0, 0, 0];
-        let deaths = vec![0, 0, 0, 0, 0];
-        assert!(is_frozen_dynamics(&births, &deaths, 5));
-    }
-
-    #[test]
-    fn not_frozen_when_births_occur() {
-        let births = vec![0, 0, 1, 0, 0];
-        let deaths = vec![0, 0, 0, 0, 0];
-        assert!(!is_frozen_dynamics(&births, &deaths, 5));
-    }
-
-    #[test]
-    fn not_frozen_when_deaths_occur() {
-        let births = vec![0, 0, 0, 0, 0];
-        let deaths = vec![0, 0, 0, 1, 0];
-        assert!(!is_frozen_dynamics(&births, &deaths, 5));
-    }
-
-    #[test]
-    fn not_frozen_when_history_shorter_than_window() {
-        let births = vec![0, 0];
-        let deaths = vec![0, 0];
-        assert!(!is_frozen_dynamics(&births, &deaths, 5));
     }
 
     fn make_trait_vector(vals: [f32; 8]) -> explorers_sim::TraitVector {
@@ -1270,16 +1208,12 @@ mod tests {
         let config = EvalConfig {
             grace_period_fraction: 1.0,
             energy_death_window: 3,
-            frozen_dynamics_fraction: 0.3,
             ..EvalConfig::default()
         };
         let max_ticks = 10;
         let mut observer = RunObserver::new(config, max_ticks);
         let energy_history = vec![100.0, 90.0, 80.0, 70.0];
         assert!(is_energy_death(&energy_history, 3));
-        let birth_history = vec![0, 0, 0, 0];
-        let death_history = vec![0, 0, 0, 0];
-        assert!(is_frozen_dynamics(&birth_history, &death_history, 3));
 
         let params = explorers_sim::WorldParameters {
             solar_flux_magnitude: 0.0,
@@ -1418,77 +1352,13 @@ mod tests {
     }
 
     #[test]
-    fn frozen_dynamics_needs_full_window_after_grace_period() {
+    fn frozen_population_scores_via_geometric_mean_not_hard_failure() {
         let max_ticks: u64 = 100;
-        let grace_fraction = 0.2; // grace ends at tick 20, post-grace = 80
-        let frozen_fraction = 0.0625; // 0.0625 * 80 = 5-tick window
-        let frozen_window = ((max_ticks as f32 * (1.0 - grace_fraction) * frozen_fraction) as usize).max(1);
         let config = EvalConfig {
-            grace_period_fraction: grace_fraction,
-            frozen_dynamics_fraction: frozen_fraction,
+            grace_period_fraction: 0.0,
             ..EvalConfig::default()
         };
         let mut observer = RunObserver::new(config, max_ticks);
-        // Frozen population: photosynthesizers that never reproduce
-        let params = explorers_sim::WorldParameters {
-            solar_flux_magnitude: 5.0,
-            base_metabolic_rate: 0.01,
-            sensing_cost_coefficient: 0.0,
-            consumption_efficiency: 0.5,
-            decomposition_efficiency: 0.5,
-            reproduction_efficiency: 0.7,
-            movement_cost_coefficient: 0.0,
-            reproduction_energy_threshold: 500.0, // too high to reproduce
-            mutation_rate: 0.0,
-            mutation_magnitude: 0.0,
-            contact_radius: 5.0,
-            world_extent: 100.0,
-            initial_population_size: 5,
-        };
-        let dist = explorers_sim::InitialDistribution {
-            mean_traits: explorers_sim::TraitVector {
-                photosynthetic_absorption: 1.0,
-                consumption_rate: 0.0,
-                scavenging_rate: 0.0,
-                mobility: 0.0,
-                chemotaxis_sensitivity: 0.0,
-                mate_selectivity: 0.0,
-                sensing_range: 0.0,
-                reproductive_investment: 0.0,
-            },
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 50.0,
-        };
-        let mut world = explorers_sim::World::new(params, dist, 42);
-        let grace_ticks = (max_ticks as f32 * grace_fraction) as u64;
-        // Run through grace period + 1 tick after — should NOT fire yet
-        for _ in 0..=grace_ticks {
-            world.step();
-            observer.observe(&world);
-        }
-        assert!(observer.failed().is_none(),
-            "frozen dynamics should not fire on first tick after grace period, \
-             it needs a full {frozen_window}-tick window of post-grace data");
-
-        // Run until the window fills after grace period
-        for _ in (grace_ticks + 1)..grace_ticks + frozen_window as u64 + 1 {
-            world.step();
-            observer.observe(&world);
-        }
-        assert_eq!(observer.failed(), Some(&FailureMode::FrozenDynamics),
-            "frozen dynamics should fire once a full window of post-grace data shows no activity");
-    }
-
-    #[test]
-    fn frozen_dynamics_window_scales_with_max_ticks() {
-        // With max_ticks=300, grace=20% (60 ticks), post-grace=240 ticks.
-        // 30% of 240 = 72-tick window. The old fixed 50-tick window fired too early.
-        let max_ticks: u64 = 300;
-        let config = EvalConfig::default(); // grace=0.2, frozen_fraction=0.3
-        let mut observer_short = RunObserver::new(config.clone(), max_ticks);
-        let mut observer_long = RunObserver::new(config, 1000);
-
         let params = explorers_sim::WorldParameters {
             solar_flux_magnitude: 5.0,
             base_metabolic_rate: 0.01,
@@ -1519,24 +1389,21 @@ mod tests {
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
         };
-        let mut world_short = explorers_sim::World::new(params.clone(), dist.clone(), 42);
-        let mut world_long = explorers_sim::World::new(params, dist, 42);
-
-        // Run both for 120 ticks (past old 50-tick window but before scaled window)
-        for _ in 0..120 {
-            world_short.step();
-            observer_short.observe(&world_short);
-            world_long.step();
-            observer_long.observe(&world_long);
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        for _ in 0..max_ticks {
+            world.step();
+            observer.observe(&world);
+            if observer.failed().is_some() {
+                break;
+            }
         }
-
-        // 300-tick run: grace=60, post-grace window=30% of 240=72, fires at 60+72=132
-        // At tick 120 (60 post-grace ticks), should NOT have fired yet
-        assert!(observer_short.failed().is_none(),
-            "300-tick run should not fire frozen dynamics at tick 120 (window should be ~72 post-grace ticks)");
-
-        // 1000-tick run: grace=200, at tick 120 we're still in grace period
-        assert!(observer_long.failed().is_none(),
-            "1000-tick run should still be in grace period at tick 120");
+        let result = observer.evaluate();
+        // No hard failure — frozen dynamics is no longer a failure mode
+        assert!(result.failure.is_none(),
+            "frozen population should not be a hard failure, got {:?}", result.failure);
+        // turnover_score=0 zeros the geometric mean
+        assert_eq!(result.turnover_score, 0.0);
+        assert_eq!(result.fitness, 0.0,
+            "geometric mean with turnover_score=0 should be 0");
     }
 }
