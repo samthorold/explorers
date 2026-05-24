@@ -1,0 +1,16 @@
+[package]
+name = "explorers-search"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+explorers-sim = { path = "../explorers-sim" }
+explorers-genesis = { path = "../explorers-genesis" }
+rand = "0.9"
+rand_chacha = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "explorers-search"
+path = "src/main.rs"
