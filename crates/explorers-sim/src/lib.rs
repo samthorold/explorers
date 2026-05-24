@@ -1,3 +1,5 @@
+pub mod spatial;
+
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal};
