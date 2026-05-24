@@ -73,6 +73,65 @@ fn main() {
         eprintln!("  {}. fitness = {:.4}", i + 1, p.median_fitness);
     }
 
+    // Diagnostic: summarise failure modes and component scores
+    let total_runs: usize = result.parameterisations.iter()
+        .map(|p| p.run_breakdowns.len())
+        .sum();
+    let mut failures: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut surviving_runs = Vec::new();
+    for p in &result.parameterisations {
+        for r in &p.run_breakdowns {
+            if let Some(f) = &r.failure {
+                *failures.entry(f.clone()).or_default() += 1;
+            } else {
+                surviving_runs.push(r);
+            }
+        }
+    }
+    eprintln!("\nDiagnostics ({total_runs} total runs):");
+    eprintln!("  Failures:");
+    if failures.is_empty() {
+        eprintln!("    (none)");
+    }
+    let mut failure_vec: Vec<_> = failures.into_iter().collect();
+    failure_vec.sort_by(|a, b| b.1.cmp(&a.1));
+    for (mode, count) in &failure_vec {
+        eprintln!("    {mode}: {count}");
+    }
+    eprintln!("  Survived: {}", surviving_runs.len());
+
+    if !surviving_runs.is_empty() {
+        let mut os_zero = 0;
+        let mut cs_zero = 0;
+        let mut cd_zero = 0;
+        let mut ts_zero = 0;
+        let mut tb_zero = 0;
+        let mut os_sum = 0.0_f32;
+        let mut cs_sum = 0.0_f32;
+        let mut cd_sum = 0.0_f32;
+        let mut ts_sum = 0.0_f32;
+        let mut tb_sum = 0.0_f32;
+        for r in &surviving_runs {
+            if r.oscillation_strength == 0.0 { os_zero += 1; }
+            if r.clustering_strength == 0.0 { cs_zero += 1; }
+            if r.coexistence_duration == 0.0 { cd_zero += 1; }
+            if r.turnover_score == 0.0 { ts_zero += 1; }
+            if r.trophic_balance_score == 0.0 { tb_zero += 1; }
+            os_sum += r.oscillation_strength;
+            cs_sum += r.clustering_strength;
+            cd_sum += r.coexistence_duration;
+            ts_sum += r.turnover_score;
+            tb_sum += r.trophic_balance_score;
+        }
+        let n = surviving_runs.len() as f32;
+        eprintln!("  Component scores (surviving runs — zero count / mean):");
+        eprintln!("    oscillation:  {os_zero} zero, mean {:.4}", os_sum / n);
+        eprintln!("    clustering:   {cs_zero} zero, mean {:.4}", cs_sum / n);
+        eprintln!("    coexistence:  {cd_zero} zero, mean {:.4}", cd_sum / n);
+        eprintln!("    turnover:     {ts_zero} zero, mean {:.4}", ts_sum / n);
+        eprintln!("    trophic_bal:  {tb_zero} zero, mean {:.4}", tb_sum / n);
+    }
+
     if !result.sensitivity.rankings.is_empty() {
         eprintln!("\nSensitivity ranking (by total-effect):");
         for entry in result.sensitivity.rankings.iter().take(10) {

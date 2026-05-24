@@ -54,6 +54,11 @@ pub struct RunBreakdown {
     pub fitness: f32,
     pub failure: Option<String>,
     pub termination_tick: u64,
+    pub oscillation_strength: f32,
+    pub clustering_strength: f32,
+    pub coexistence_duration: f32,
+    pub turnover_score: f32,
+    pub trophic_balance_score: f32,
 }
 
 #[derive(Serialize)]
@@ -272,6 +277,11 @@ fn to_evaluated(
                 fitness: r.fitness,
                 failure: r.failure.as_ref().map(|f| format!("{:?}", f)),
                 termination_tick: r.termination_tick,
+                oscillation_strength: r.breakdown.oscillation_strength,
+                clustering_strength: r.breakdown.clustering_strength,
+                coexistence_duration: r.breakdown.coexistence_duration,
+                turnover_score: r.breakdown.turnover_score,
+                trophic_balance_score: r.breakdown.trophic_balance_score,
             })
             .collect(),
     }
