@@ -117,6 +117,7 @@ pub fn default_ranges() -> Vec<ParameterRange> {
         ParameterRange { name: "photo_maintenance_cost".into(), min: 0.001, max: 0.1 },
         ParameterRange { name: "consumption_maintenance_cost".into(), min: 0.001, max: 0.1 },
         ParameterRange { name: "scavenging_maintenance_cost".into(), min: 0.001, max: 0.1 },
+        ParameterRange { name: "spatial_decay_rate".into(), min: 0.1, max: 0.9 },
         ParameterRange { name: "mean_photosynthetic_absorption".into(), min: 0.0, max: 1.0 },
         ParameterRange { name: "mean_consumption_rate".into(), min: 0.0, max: 1.0 },
         ParameterRange { name: "mean_scavenging_rate".into(), min: 0.0, max: 1.0 },
@@ -155,22 +156,23 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         photo_maintenance_cost: v(14) as f32,
         consumption_maintenance_cost: v(15) as f32,
         scavenging_maintenance_cost: v(16) as f32,
+        spatial_decay_rate: v(17) as f32,
     };
 
     let dist = InitialDistribution {
         mean_traits: TraitVector {
-            photosynthetic_absorption: v(17) as f32,
-            consumption_rate: v(18) as f32,
-            scavenging_rate: v(19) as f32,
-            mobility: v(20) as f32,
-            chemotaxis_sensitivity: v(21) as f32,
-            mate_selectivity: v(22) as f32,
-            sensing_range: v(23) as f32,
-            reproductive_investment: v(24) as f32,
+            photosynthetic_absorption: v(18) as f32,
+            consumption_rate: v(19) as f32,
+            scavenging_rate: v(20) as f32,
+            mobility: v(21) as f32,
+            chemotaxis_sensitivity: v(22) as f32,
+            mate_selectivity: v(23) as f32,
+            sensing_range: v(24) as f32,
+            reproductive_investment: v(25) as f32,
         },
-        trait_covariance: v(25) as f32,
-        initial_cluster_count: v(26).round() as u32,
-        initial_energy_per_agent: v(27) as f32,
+        trait_covariance: v(26) as f32,
+        initial_cluster_count: v(27).round() as u32,
+        initial_energy_per_agent: v(28) as f32,
     };
 
     (params, dist)

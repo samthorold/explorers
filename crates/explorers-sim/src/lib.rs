@@ -1,5 +1,6 @@
 pub mod event;
 pub mod spatial;
+pub mod spatial_projection;
 pub mod topology;
 
 use rand::seq::SliceRandom;
@@ -109,6 +110,7 @@ pub struct WorldParameters {
     pub photo_maintenance_cost: f32,
     pub consumption_maintenance_cost: f32,
     pub scavenging_maintenance_cost: f32,
+    pub spatial_decay_rate: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -462,6 +464,7 @@ impl World {
                         agents[consumer].id,
                         Some(agents[*target].id),
                         consumer_drain,
+                        Some(agents[consumer].position),
                     );
                 }
                 consumption_deltas[*target] -= drain;
@@ -526,6 +529,7 @@ impl World {
                         agents[scavenger].id,
                         Some(carcass_id),
                         scavenger_drain,
+                        Some(agents[scavenger].position),
                     );
                 }
                 carcass_drains[*ci] = drain;
@@ -535,12 +539,12 @@ impl World {
         for (ci, carcass) in self.carcasses.iter_mut().enumerate() {
             carcass.energy -= carcass_drains[ci];
         }
-        let depleted_carcasses: Vec<u64> = self.carcasses.iter()
+        let depleted_carcasses: Vec<(u64, (f32, f32))> = self.carcasses.iter()
             .filter(|c| c.energy <= 0.0)
-            .map(|c| c.id)
+            .map(|c| (c.id, c.position))
             .collect();
-        for carcass_id in depleted_carcasses {
-            self.emit(event::EventKind::CarcassDepleted, carcass_id, None, 0.0);
+        for (carcass_id, pos) in depleted_carcasses {
+            self.emit(event::EventKind::CarcassDepleted, carcass_id, None, 0.0, Some(pos));
         }
         self.carcasses.retain(|c| c.energy > 0.0);
 
@@ -621,7 +625,7 @@ impl World {
             }
             reproduced[i] = true;
             reproduced[j] = true;
-            self.emit(event::EventKind::MateSelected, agents[i].id, Some(agents[j].id), 0.0);
+            self.emit(event::EventKind::MateSelected, agents[i].id, Some(agents[j].id), 0.0, Some(agents[i].position));
 
             let inv_a = agents[i].traits.reproductive_investment;
             let inv_b = agents[j].traits.reproductive_investment;
@@ -671,7 +675,7 @@ impl World {
 
             let offspring_id = self.next_agent_id;
             self.next_agent_id += 1;
-            self.emit(event::EventKind::Born, offspring_id, None, offspring_energy);
+            self.emit(event::EventKind::Born, offspring_id, None, offspring_energy, Some(agents[i].position));
             offspring.push(Agent {
                 id: offspring_id,
                 position: agents[i].position,
@@ -687,8 +691,8 @@ impl World {
         for (i, agent) in agents.into_iter().enumerate() {
             if agent.energy <= 0.0 {
                 let carcass_energy = (pre_tick_energies[i] + consumption_deltas[i]).max(0.0);
-                self.emit(event::EventKind::Died, agent.id, None, 0.0);
-                self.emit(event::EventKind::CarcassCreated, agent.id, None, carcass_energy);
+                self.emit(event::EventKind::Died, agent.id, None, 0.0, Some(agent.position));
+                self.emit(event::EventKind::CarcassCreated, agent.id, None, carcass_energy, Some(agent.position));
                 next_carcasses.push(Carcass {
                     id: agent.id,
                     position: agent.position,
@@ -748,7 +752,7 @@ impl World {
         &self.event_log
     }
 
-    fn emit(&mut self, kind: event::EventKind, source: u64, target: Option<u64>, energy_delta: f32) {
+    fn emit(&mut self, kind: event::EventKind, source: u64, target: Option<u64>, energy_delta: f32, position: Option<(f32, f32)>) {
         let seq = self.next_seq;
         self.next_seq += 1;
         let _ = self.event_log.append(event::Event {
@@ -758,6 +762,7 @@ impl World {
             source,
             target,
             energy_delta,
+            position,
         });
     }
 }
@@ -807,6 +812,8 @@ mod tests {
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
+spatial_decay_rate: 0.5,
+
         }
     }
 
@@ -2739,6 +2746,8 @@ mod tests {
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
+spatial_decay_rate: 0.5,
+
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -2802,6 +2811,8 @@ mod tests {
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
+spatial_decay_rate: 0.5,
+
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -2851,6 +2862,8 @@ mod tests {
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
+spatial_decay_rate: 0.5,
+
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -2907,6 +2920,8 @@ mod tests {
             photo_maintenance_cost: 0.1,
             consumption_maintenance_cost: 0.2,
             scavenging_maintenance_cost: 0.3,
+spatial_decay_rate: 0.5,
+
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -2969,6 +2984,8 @@ mod tests {
             photo_maintenance_cost: 0.05,
             consumption_maintenance_cost: 0.1,
             scavenging_maintenance_cost: 0.1,
+spatial_decay_rate: 0.5,
+
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -3401,6 +3418,8 @@ mod tests {
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
+spatial_decay_rate: 0.5,
+
         }
     }
 

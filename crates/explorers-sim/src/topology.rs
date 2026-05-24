@@ -179,7 +179,7 @@ mod tests {
             kind: EventKind::Born,
             source: 42,
             target: None,
-            energy_delta: 10.0,
+            energy_delta: 10.0, position: None,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -196,7 +196,7 @@ mod tests {
             kind: EventKind::Consumed,
             source: 10,
             target: Some(20),
-            energy_delta: 5.0,
+            energy_delta: 5.0, position: None,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -215,7 +215,7 @@ mod tests {
                 kind: EventKind::Consumed,
                 source: 10,
                 target: Some(20),
-                energy_delta: 5.0,
+                energy_delta: 5.0, position: None,
             },
             Event {
                 tick: 2,
@@ -223,7 +223,7 @@ mod tests {
                 kind: EventKind::Consumed,
                 source: 10,
                 target: Some(20),
-                energy_delta: 3.0,
+                energy_delta: 3.0, position: None,
             },
         ]);
 
@@ -242,7 +242,7 @@ mod tests {
                 kind: EventKind::Born,
                 source: 10,
                 target: None,
-                energy_delta: 10.0,
+                energy_delta: 10.0, position: None,
             },
             Event {
                 tick: 1,
@@ -250,7 +250,7 @@ mod tests {
                 kind: EventKind::Born,
                 source: 20,
                 target: None,
-                energy_delta: 10.0,
+                energy_delta: 10.0, position: None,
             },
             Event {
                 tick: 2,
@@ -258,7 +258,7 @@ mod tests {
                 kind: EventKind::Consumed,
                 source: 10,
                 target: Some(20),
-                energy_delta: 5.0,
+                energy_delta: 5.0, position: None,
             },
             Event {
                 tick: 3,
@@ -266,7 +266,7 @@ mod tests {
                 kind: EventKind::Died,
                 source: 20,
                 target: None,
-                energy_delta: 0.0,
+                energy_delta: 0.0, position: None,
             },
         ]);
 
@@ -286,7 +286,7 @@ mod tests {
                 kind: EventKind::Born,
                 source: 1,
                 target: None,
-                energy_delta: 10.0,
+                energy_delta: 10.0, position: None,
             },
             Event {
                 tick: 1,
@@ -294,7 +294,7 @@ mod tests {
                 kind: EventKind::Born,
                 source: 2,
                 target: None,
-                energy_delta: 10.0,
+                energy_delta: 10.0, position: None,
             },
             Event {
                 tick: 1,
@@ -302,7 +302,7 @@ mod tests {
                 kind: EventKind::Born,
                 source: 3,
                 target: None,
-                energy_delta: 10.0,
+                energy_delta: 10.0, position: None,
             },
             // Agent 2 consumes agent 1 → consumer
             Event {
@@ -311,7 +311,7 @@ mod tests {
                 kind: EventKind::Consumed,
                 source: 2,
                 target: Some(1),
-                energy_delta: 5.0,
+                energy_delta: 5.0, position: None,
             },
             // Agent 3 decomposes carcass 99 → decomposer
             Event {
@@ -320,7 +320,7 @@ mod tests {
                 kind: EventKind::Decomposed,
                 source: 3,
                 target: Some(99),
-                energy_delta: 3.0,
+                energy_delta: 3.0, position: None,
             },
             // Agent 1 has no outgoing edges → producer
         ]);
@@ -337,8 +337,8 @@ mod tests {
     #[test]
     fn lineage_tracks_parent_offspring_from_mate_selected_and_born() {
         let log = make_log(vec![
-            Event { tick: 1, seq: 0, kind: EventKind::MateSelected, source: 10, target: Some(20), energy_delta: 0.0 },
-            Event { tick: 1, seq: 1, kind: EventKind::Born, source: 30, target: None, energy_delta: 8.0 },
+            Event { tick: 1, seq: 0, kind: EventKind::MateSelected, source: 10, target: Some(20), energy_delta: 0.0, position: None },
+            Event { tick: 1, seq: 1, kind: EventKind::Born, source: 30, target: None, energy_delta: 8.0, position: None },
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -351,10 +351,10 @@ mod tests {
     #[test]
     fn active_agents_at_tick_reflects_births_and_deaths() {
         let log = make_log(vec![
-            Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0 },
-            Event { tick: 2, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0 },
-            Event { tick: 3, seq: 2, kind: EventKind::Died, source: 1, target: None, energy_delta: 0.0 },
-            Event { tick: 4, seq: 3, kind: EventKind::Born, source: 3, target: None, energy_delta: 10.0 },
+            Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 2, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 3, seq: 2, kind: EventKind::Died, source: 1, target: None, energy_delta: 0.0, position: None },
+            Event { tick: 4, seq: 3, kind: EventKind::Born, source: 3, target: None, energy_delta: 10.0, position: None },
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -370,14 +370,14 @@ mod tests {
     #[test]
     fn energy_flow_between_trophic_groups() {
         let log = make_log(vec![
-            Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0 },
-            Event { tick: 1, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0 },
-            Event { tick: 1, seq: 2, kind: EventKind::Born, source: 3, target: None, energy_delta: 10.0 },
+            Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 1, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 1, seq: 2, kind: EventKind::Born, source: 3, target: None, energy_delta: 10.0, position: None },
             // Consumer 2 eats producer 1 twice
-            Event { tick: 2, seq: 3, kind: EventKind::Consumed, source: 2, target: Some(1), energy_delta: 5.0 },
-            Event { tick: 3, seq: 4, kind: EventKind::Consumed, source: 2, target: Some(1), energy_delta: 3.0 },
+            Event { tick: 2, seq: 3, kind: EventKind::Consumed, source: 2, target: Some(1), energy_delta: 5.0, position: None },
+            Event { tick: 3, seq: 4, kind: EventKind::Consumed, source: 2, target: Some(1), energy_delta: 3.0, position: None },
             // Consumer 3 also eats producer 1
-            Event { tick: 3, seq: 5, kind: EventKind::Consumed, source: 3, target: Some(1), energy_delta: 2.0 },
+            Event { tick: 3, seq: 5, kind: EventKind::Consumed, source: 3, target: Some(1), energy_delta: 2.0, position: None },
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -396,13 +396,13 @@ mod tests {
     #[test]
     fn incremental_update_processes_only_new_events() {
         let mut log = EventLog::new();
-        log.append(Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0 }).unwrap();
+        log.append(Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0, position: None }).unwrap();
 
         let mut proj = TopologyProjection::new();
         proj.update(&log);
         assert_eq!(proj.active_agents().len(), 1);
 
-        log.append(Event { tick: 2, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0 }).unwrap();
+        log.append(Event { tick: 2, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0, position: None }).unwrap();
         proj.update(&log);
         assert_eq!(proj.active_agents().len(), 2);
         assert!(proj.active_agents().contains(&1));
