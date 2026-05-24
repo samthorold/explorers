@@ -2344,11 +2344,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "explorers"
+name = "explorers-app"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "explorers-sim",
 ]
+
+[[package]]
+name = "explorers-sim"
+version = "0.1.0"
 
 [[package]]
 name = "fastrand"
