@@ -1,5 +1,7 @@
 use std::fs;
 
+use std::time::Duration;
+
 use bevy::prelude::*;
 use bevy::camera::ScalingMode;
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe};
@@ -101,9 +103,9 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .insert_resource(SimWorld(world))
-        .add_systems(Startup, (setup_camera, spawn_agent_sprites))
+        .add_systems(Startup, (setup_camera, spawn_agent_sprites, configure_timestep))
         .add_systems(FixedUpdate, step_simulation)
-        .add_systems(Update, sync_agent_transforms)
+        .add_systems(Update, (tick_rate_control, sync_agent_transforms))
         .run();
 }
 
@@ -127,6 +129,104 @@ fn setup_camera(mut commands: Commands, sim: Res<SimWorld>) {
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::input::ButtonInput;
+
+    fn press_key(app: &mut App, key: KeyCode) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(key);
+    }
+
+    fn release_key(app: &mut App, key: KeyCode) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(key);
+    }
+
+    fn timestep_secs(app: &App) -> f64 {
+        app.world().resource::<Time<Fixed>>().timestep().as_secs_f64()
+    }
+
+    fn make_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<Time<Virtual>>();
+        app.add_systems(Startup, configure_timestep);
+        app.add_systems(Update, tick_rate_control);
+        app.update();
+        app
+    }
+
+    #[test]
+    fn default_timestep_is_100ms() {
+        let app = make_app();
+        let timestep = app.world().resource::<Time<Fixed>>().timestep();
+        assert_eq!(timestep, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn up_arrow_halves_timestep() {
+        let mut app = make_app();
+        press_key(&mut app, KeyCode::ArrowUp);
+        app.update();
+        assert_eq!(timestep_secs(&app), 0.05);
+    }
+
+    #[test]
+    fn down_arrow_doubles_timestep() {
+        let mut app = make_app();
+        press_key(&mut app, KeyCode::ArrowDown);
+        app.update();
+        assert_eq!(timestep_secs(&app), 0.2);
+    }
+
+    #[test]
+    fn speed_up_has_floor_at_10ms() {
+        let mut app = make_app();
+        // Press up enough times to hit the floor: 100 -> 50 -> 25 -> 12.5 -> 10 (clamped)
+        for _ in 0..10 {
+            press_key(&mut app, KeyCode::ArrowUp);
+            app.update();
+            release_key(&mut app, KeyCode::ArrowUp);
+            app.update();
+        }
+        assert_eq!(app.world().resource::<Time<Fixed>>().timestep(), Duration::from_millis(10));
+    }
+
+    #[test]
+    fn slow_down_has_ceiling_at_2s() {
+        let mut app = make_app();
+        // Press down enough times to hit the ceiling: 100 -> 200 -> 400 -> 800 -> 1600 -> 2000 (clamped)
+        for _ in 0..10 {
+            press_key(&mut app, KeyCode::ArrowDown);
+            app.update();
+            release_key(&mut app, KeyCode::ArrowDown);
+            app.update();
+        }
+        assert_eq!(app.world().resource::<Time<Fixed>>().timestep(), Duration::from_millis(2000));
+    }
+
+    fn clear_inputs(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+    }
+
+    #[test]
+    fn spacebar_toggles_pause() {
+        let mut app = make_app();
+
+        press_key(&mut app, KeyCode::Space);
+        app.update();
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+
+        release_key(&mut app, KeyCode::Space);
+        clear_inputs(&mut app);
+        press_key(&mut app, KeyCode::Space);
+        app.update();
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+    }
 
     fn test_world(world_extent: f32) -> World {
         World::new(
@@ -226,6 +326,36 @@ fn spawn_agent_sprites(
             Transform::from_xyz(agent.position.0, agent.position.1, 0.0),
             AgentMarker(i),
         ));
+    }
+}
+
+fn configure_timestep(mut time: ResMut<Time<Fixed>>) {
+    time.set_timestep(Duration::from_millis(100));
+}
+
+fn tick_rate_control(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut time: ResMut<Time<Fixed>>,
+    mut virtual_time: ResMut<Time<Virtual>>,
+) {
+    if keyboard.just_pressed(KeyCode::ArrowUp) {
+        let new = time.timestep().div_f64(2.0).max(Duration::from_millis(10));
+        time.set_timestep(new);
+        eprintln!("Tick rate: {:.1} tps ({:.0}ms)", 1.0 / new.as_secs_f64(), new.as_secs_f64() * 1000.0);
+    }
+    if keyboard.just_pressed(KeyCode::ArrowDown) {
+        let new = time.timestep().mul_f64(2.0).min(Duration::from_millis(2000));
+        time.set_timestep(new);
+        eprintln!("Tick rate: {:.1} tps ({:.0}ms)", 1.0 / new.as_secs_f64(), new.as_secs_f64() * 1000.0);
+    }
+    if keyboard.just_pressed(KeyCode::Space) {
+        if virtual_time.is_paused() {
+            virtual_time.unpause();
+            eprintln!("Simulation resumed");
+        } else {
+            virtual_time.pause();
+            eprintln!("Simulation paused");
+        }
     }
 }
 
