@@ -11,11 +11,11 @@ The fundamental unit of the simulation. Everything in the world is an agent: org
 _Avoid_: entity, creature, organism (when referring to the simulation abstraction)
 
 **Trait vector**:
-A multi-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Dimensions: photosynthetic absorption, consumption rate, scavenging rate, mobility, chemotaxis sensitivity, social weight, mate selectivity, sensing range, reproductive investment, chemical signature.
+A multi-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Genesis-minimal dimensions (8): photosynthetic absorption, consumption rate, scavenging rate, mobility, chemotaxis sensitivity, mate selectivity, sensing range, reproductive investment. Deferred dimensions: social weight (herding — emergent flavour, not structurally necessary for genesis criteria), chemical signature (player interaction and species recognition, not needed for genesis fitness).
 _Avoid_: stats, attributes, genome (genome implies a genotype/phenotype distinction that doesn't exist here)
 
 **Energy**:
-The universal currency of the simulation. Enters the world only through solar flux. Flows between agents through consumption, reproduction, and decomposition. Agents that deplete their energy die.
+The universal currency of the simulation. Enters the world only through solar flux. Flows between agents through consumption, reproduction, and decomposition. Energy conversion is lossy at every trophic transfer — consumers capture only a fraction of the energy they drain (per Lindeman 1942's trophic efficiency principle). The remainder is dissipated. Metabolic cost also dissipates energy. The system is open: solar flux is the sole tap, metabolic dissipation and transfer loss are the drains. Carrying capacity and trophic pyramid structure emerge from this energy budget rather than being imposed.
 _Avoid_: health, mana, resources
 
 **Tick**:
@@ -63,7 +63,7 @@ The sensing model. Agents detect others within their sensing range, but signal s
 ### Reproduction and evolution
 
 **Sexual reproduction**:
-Two agents within sensing range whose trait vectors are within a compatibility distance produce an offspring via budding. Both parents survive. Offspring traits are a crossover of parent traits plus mutation.
+Two agents within sensing range whose trait vectors are within a compatibility distance produce an offspring via budding. Both parents survive. Each parent invests energy according to their own reproductive investment trait. Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Uniform crossover is deliberately chosen over arithmetic mean (Dieckmann & Doebeli 1999) because recombination works against speciation — clusters that persist despite recombination are ecologically reinforced, not just reproductively isolated.
 _Avoid_: mating, breeding (too specific to animal analogues)
 
 **Mate selectivity**:
@@ -77,6 +77,79 @@ _Avoid_: brood size, litter size
 **Speciation**:
 The divergence of agent populations into distinct clusters in trait space that no longer interbreed due to trait distance exceeding mate selectivity thresholds. Not designed — emerges from selection and reproductive dynamics.
 _Avoid_: species (as a designed concept — there are no species definitions, only emergent clusters)
+
+### World parameters
+
+**World parameters**:
+The constants that define the physics of the simulation. Searched by genesis across ensemble runs. Not visible to agents, not evolvable. Distinct from the trait vector, which evolves within a run.
+
+**Solar flux magnitude**:
+Energy input rate per tick per unit photosynthetic absorption. The sole tap — controls how much energy enters the system.
+
+**Consumption efficiency**:
+Energy transferred per tick per unit consumption rate on sustained contact with a living agent.
+
+**Decomposition efficiency**:
+Energy transferred per tick per unit scavenging rate on contact with a carcass.
+
+**Base metabolic rate**:
+Energy cost per tick, scaled by activity (body size, movement, sensing). The sole drain alongside reproduction.
+
+**Movement cost coefficient**:
+Energy cost per unit distance moved per tick. Makes mobility expensive — creates the core trade-off between sessile photosynthesis and mobile consumption.
+
+**Sensing cost coefficient**:
+Energy cost per tick per unit sensing range. Makes wide awareness expensive.
+
+**Reproduction efficiency**:
+Fraction of energy invested by the parent that the offspring actually receives. The remainder is dissipated. Reproduction is lossy like all energy transfers.
+
+**Reproduction energy threshold**:
+Minimum energy an agent must have to attempt reproduction. Below this, agents prioritise survival.
+
+**Mutation rate**:
+Probability of each trait dimension mutating per reproduction event.
+
+**Mutation magnitude**:
+Standard deviation of the Gaussian perturbation applied to a mutated trait dimension.
+
+**Contact radius**:
+Distance threshold below which two agents are considered in contact. Governs consumption, decomposition, and reproduction. A world parameter, uniform for all agents.
+
+**World extent**:
+Spatial dimensions of the world. Interacts with population size to determine density. Toroidal topology during genesis (no edges, no boundary effects). Play-time topology — where the player can move beyond the genesis world — is a separate design problem (see future ADR).
+
+**Initial population size**:
+Number of agents at tick zero.
+
+### Initial trait distribution
+
+**Initial trait distribution**:
+The starting configuration of agents in trait space. Searched by genesis alongside world parameters, but secondary — if world parameters are correct, many initial distributions should converge to sensible ecologies (the ensemble tests this).
+
+**Mean trait vector**:
+Centre of the initial population in trait space.
+
+**Trait covariance**:
+Whether initial trait dimensions are independent or correlated (e.g., high mobility correlated with high consumption). Controls whether the founding population starts as a single cloud or an elongated structure in trait space.
+
+**Initial cluster count**:
+Whether genesis seeds one uniform population or multiple pre-differentiated groups. Seeding multiple clusters tests whether the world parameters sustain diversity; seeding one tests whether differentiation emerges spontaneously.
+
+**Initial energy per agent**:
+Starting energy budget. Interacts with metabolic rate to determine how long agents survive before they must acquire energy.
+
+### Measurement
+
+**Trait-distance distribution**:
+The distribution of pairwise distances between all agents in trait space. A uniform population produces a unimodal distribution. A population with emergent clusters produces a multimodal distribution — short within-cluster distances and long between-cluster distances. The primary tool for detecting whether clustering exists.
+
+**Dip test**:
+A statistical test for multimodality in a distribution (Hartigan & Hartigan 1985). Applied to the trait-distance distribution, it yields a single scalar (the dip statistic) indicating how strongly the population departs from unimodality. Parameter-free. Used as the accept/reject signal for trait-space clustering during world genesis.
+_Avoid_: cluster count (the question during genesis is whether clustering exists, not how many)
+
+**Cluster labelling**:
+Identifying and tracking specific clusters in trait space over time. Performed via DBSCAN (density-based, no preset cluster count; Ester et al. 1996) once the dip test confirms clustering exists. Required for all downstream measurements: oscillation detection per cluster, coexistence duration between clusters, trophic pyramid by cluster energy. Variance-ratio / gap statistic (scalar measure of clustering strength vs. uniform expectation) is an alternative approach.
 
 ### Player
 
@@ -102,7 +175,15 @@ One-sided interactions that benefit the player at an agent's expense. The ecolog
 ### Simulation
 
 **World genesis**:
-The process of generating a playable world. A random initial population is simulated forward (off-screen) until it reaches a quasi-stable attractor. Degenerate configurations (e.g. mass extinction, no trophic differentiation) are discarded automatically. The player drops into a world with history.
+The process of generating a playable world. A parameterisation is evaluated as an ensemble of replicate runs (same parameters, different random seeds). Each run simulates a random initial population forward (off-screen). Degenerate runs are detected and terminated early. A parameterisation is accepted only when most runs in the ensemble produce sensible worlds. The player drops into a world with history.
+
+**Degenerate configuration**:
+A simulation outcome that fails to produce a functioning ecology. Six canonical failure modes: extinction (all agents die), monoculture (trait space collapses to a single cluster), energy death (free energy trends irreversibly toward zero), population explosion (unbounded growth), frozen dynamics (no turnover despite agents surviving), generalist dominance (one or more clusters with high values across multiple energy-acquisition traits outcompete specialists — indicates missing trade-off pressure in the model).
+_Avoid_: bad run, failed world (too vague)
+
+**Sensible world**:
+A world that exhibits the positive patterns expected of a functioning ecology. Primary criteria: endogenous population oscillations between trophic levels (Lotka & Volterra; verified in ABMs by DeAngelis & Grimm 2014), trait-space clustering with gaps (emergent speciation), and coexistence duration (multiple clusters persisting simultaneously over extended periods, per Chesson 2000's coexistence theory). Secondary criteria (sanity checks): trophic pyramid (energy decreasing at higher trophic levels, Lindeman 1942) and demographic turnover (non-trivial birth and death rates). Evaluation follows the pattern-oriented modelling approach (Grimm et al. 2005): a parameterisation is accepted only when multiple independent patterns are reproduced simultaneously across an ensemble of runs.
+_Avoid_: balanced world, stable world (stability is not the goal — dynamic persistence is)
 
 **Death**:
 When an agent's energy reaches zero. The agent becomes a **carcass**.
@@ -129,11 +210,11 @@ When an agent's energy reaches zero. The agent becomes a **carcass**.
 
 ### The world is a complex adaptive system
 
-The world is an agent-based model in the tradition of computational ecology. All entities are heterogeneous, adaptive agents interacting locally in 2D continuous space. Population dynamics emerge from individual agent behaviour — there is no top-down control of species populations or ecosystem balance.
+The world is an agent-based model in the tradition of computational ecology (Grimm & Railsback 2005, *Individual-based Modeling and Ecology*; DeAngelis & Grimm 2014). All entities are heterogeneous, adaptive agents interacting locally in 2D continuous space. Population dynamics emerge from individual agent behaviour — there is no top-down control of species populations or ecosystem balance.
 
 ### Earth-analogous ecology
 
-The simulation follows real ecological principles: energy conservation, trophic levels (producers, consumers, decomposers), nutrient cycling, carrying capacity. The forms may be alien but the dynamics are grounded. This allows us to draw on established ABM literature and ecological models. Alien mechanics can be layered on once the base ecology produces coherent dynamics.
+The simulation follows real ecological principles: energy conservation, trophic levels (Lindeman 1942), nutrient cycling, carrying capacity. The forms may be alien but the dynamics are grounded. This allows us to draw on established ABM literature and ecological models (the ODD protocol, Grimm et al. 2006, 2010, provides the standard description format; pattern-oriented modelling, Grimm et al. 2005, provides the validation approach). Alien mechanics can be layered on once the base ecology produces coherent dynamics.
 
 ### No explicit rules for the player
 
