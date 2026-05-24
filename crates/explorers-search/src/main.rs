@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use explorers_search::search::{SearchConfig, run_search};
+use explorers_search::search::{SearchConfig, default_ranges, run_search};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -15,6 +15,7 @@ fn main() {
     let mut bayesopt_iterations = 10;
     let mut seed = 42u64;
     let mut output_path = PathBuf::from("search_results.json");
+    let mut recipe_output_path = PathBuf::from("recipe.json");
 
     let mut i = 1;
     while i < args.len() {
@@ -25,6 +26,7 @@ fn main() {
             "--bayesopt-iterations" => { i += 1; bayesopt_iterations = args[i].parse().unwrap(); }
             "--seed" => { i += 1; seed = args[i].parse().unwrap(); }
             "--output" => { i += 1; output_path = PathBuf::from(&args[i]); }
+            "--recipe-output" => { i += 1; recipe_output_path = PathBuf::from(&args[i]); }
             "--help" | "-h" => {
                 print_usage();
                 return;
@@ -60,7 +62,12 @@ fn main() {
     let json = serde_json::to_string_pretty(&result).unwrap();
     fs::write(&output_path, &json).unwrap();
 
+    let recipe = result.best_recipe(&default_ranges());
+    let recipe_json = serde_json::to_string_pretty(&recipe).unwrap();
+    fs::write(&recipe_output_path, &recipe_json).unwrap();
+
     eprintln!("Results written to {}", output_path.display());
+    eprintln!("Recipe written to {}", recipe_output_path.display());
     eprintln!("Top parameterisations by fitness:");
     for (i, p) in result.parameterisations.iter().take(5).enumerate() {
         eprintln!("  {}. fitness = {:.4}", i + 1, p.median_fitness);
@@ -87,5 +94,6 @@ fn print_usage() {
     eprintln!("  --bayesopt-iterations N  Bayesian optimisation iterations (default: 10)");
     eprintln!("  --seed N                 Random seed (default: 42)");
     eprintln!("  --output PATH            Output JSON path (default: search_results.json)");
+    eprintln!("  --recipe-output PATH     Recipe JSON path (default: recipe.json)");
     eprintln!("  --help, -h               Show this help");
 }

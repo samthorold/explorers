@@ -1,6 +1,7 @@
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal};
+use serde::{Deserialize, Serialize};
 
 pub fn toroidal_distance(a: (f32, f32), b: (f32, f32), extent: f32) -> f32 {
     let (dx, dy) = toroidal_displacement(a, b, extent);
@@ -30,7 +31,7 @@ fn wrap_position(pos: (f32, f32), extent: f32) -> (f32, f32) {
     (x, y)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TraitVector {
     pub photosynthetic_absorption: f32,
     pub consumption_rate: f32,
@@ -84,7 +85,7 @@ impl TraitVector {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldParameters {
     pub solar_flux_magnitude: f32,
     pub consumption_efficiency: f32,
@@ -101,12 +102,18 @@ pub struct WorldParameters {
     pub initial_population_size: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InitialDistribution {
     pub mean_traits: TraitVector,
     pub trait_covariance: f32,
     pub initial_cluster_count: u32,
     pub initial_energy_per_agent: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorldRecipe {
+    pub parameters: WorldParameters,
+    pub initial_distribution: InitialDistribution,
 }
 
 pub struct Agent {
@@ -2339,5 +2346,43 @@ mod tests {
             sorted_energies(&world_b),
             "reproduction pairing should not depend on agent insertion order"
         );
+    }
+
+    #[test]
+    fn world_from_deserialized_recipe_matches_direct_construction() {
+        let recipe = WorldRecipe {
+            parameters: test_params(),
+            initial_distribution: test_distribution(),
+        };
+        let json = serde_json::to_string(&recipe).unwrap();
+        let recovered: WorldRecipe = serde_json::from_str(&json).unwrap();
+
+        let seed = 99;
+        let world_direct = World::new(test_params(), test_distribution(), seed);
+        let world_recipe = World::new(
+            recovered.parameters,
+            recovered.initial_distribution,
+            seed,
+        );
+
+        assert_eq!(world_direct.agents().len(), world_recipe.agents().len());
+        for (a, b) in world_direct.agents().iter().zip(world_recipe.agents().iter()) {
+            assert_eq!(a.position, b.position);
+            assert_eq!(a.energy, b.energy);
+            assert_eq!(a.traits, b.traits);
+        }
+    }
+
+    #[test]
+    fn world_recipe_round_trips_through_json() {
+        let recipe = WorldRecipe {
+            parameters: test_params(),
+            initial_distribution: test_distribution(),
+        };
+
+        let json = serde_json::to_string_pretty(&recipe).unwrap();
+        let recovered: WorldRecipe = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(recipe, recovered);
     }
 }

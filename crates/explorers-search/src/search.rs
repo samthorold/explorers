@@ -5,7 +5,7 @@ use explorers_genesis::{
     EnsembleConfig, EnsembleResult, RunConfig, WorldParameters,
     InitialDistribution, EvalConfig,
 };
-use explorers_sim::TraitVector;
+use explorers_sim::{TraitVector, WorldRecipe};
 
 use crate::bayesopt::BayesianOptimiser;
 use crate::lhs;
@@ -73,6 +73,23 @@ pub struct SearchResult {
     pub parameterisations: Vec<EvaluatedParameterisation>,
     pub sensitivity: SensitivityReport,
     pub optimised: Vec<EvaluatedParameterisation>,
+}
+
+impl SearchResult {
+    pub fn best_recipe(&self, ranges: &[ParameterRange]) -> WorldRecipe {
+        let best = &self.optimised[0];
+        let unit_values: Vec<f64> = best
+            .parameters
+            .iter()
+            .zip(ranges.iter())
+            .map(|(&actual, range)| (actual - range.min) / (range.max - range.min))
+            .collect();
+        let (parameters, initial_distribution) = decode(&unit_values, ranges);
+        WorldRecipe {
+            parameters,
+            initial_distribution,
+        }
+    }
 }
 
 pub fn default_ranges() -> Vec<ParameterRange> {
@@ -327,5 +344,30 @@ mod tests {
             assert_eq!(p.parameter_names.len(), config.ranges.len());
             assert_eq!(p.parameters.len(), config.ranges.len());
         }
+    }
+
+    #[test]
+    fn search_result_converts_to_valid_recipe() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let config = SearchConfig {
+            lhs_samples: 3,
+            ensemble_size: 1,
+            max_ticks: 10,
+            bayesopt_iterations: 2,
+            sensitivity_threshold: 0.05,
+            ..Default::default()
+        };
+
+        let result = run_search(&config, 42, &mut rng);
+        let recipe = result.best_recipe(&config.ranges);
+
+        let json = serde_json::to_string_pretty(&recipe).unwrap();
+        let recovered: explorers_sim::WorldRecipe = serde_json::from_str(&json).unwrap();
+        assert_eq!(recipe, recovered);
+        assert!(recipe.parameters.solar_flux_magnitude > 0.0);
+        assert!(recipe.parameters.initial_population_size > 0);
     }
 }

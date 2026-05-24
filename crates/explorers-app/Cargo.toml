@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 explorers-sim = { path = "../explorers-sim" }
 bevy = "0.18.1"
+rand = "0.9"
+serde_json = "1"

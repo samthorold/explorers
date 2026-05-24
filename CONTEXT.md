@@ -185,6 +185,10 @@ _Avoid_: bad run, failed world (too vague)
 A world that exhibits the positive patterns expected of a functioning ecology. Primary criteria: endogenous population oscillations between trophic levels (Lotka & Volterra; verified in ABMs by DeAngelis & Grimm 2014), trait-space clustering with gaps (emergent speciation), and coexistence duration (multiple clusters persisting simultaneously over extended periods, per Chesson 2000's coexistence theory). Secondary criteria (sanity checks): trophic pyramid (energy decreasing at higher trophic levels, Lindeman 1942) and demographic turnover (non-trivial birth and death rates). Evaluation follows the pattern-oriented modelling approach (Grimm et al. 2005): a parameterisation is accepted only when multiple independent patterns are reproduced simultaneously across an ensemble of runs.
 _Avoid_: balanced world, stable world (stability is not the goal — dynamic persistence is)
 
+**World recipe**:
+The output artifact of world genesis. A pairing of **world parameters** and an **initial distribution** — the minimal specification needed to deterministically create a world given a seed. Does not contain a seed (each playthrough generates a fresh one) or a tick count (how far to fast-forward is a presentation decision, not a property of the recipe). The simulation is deterministic: the same recipe + seed always produces the same world history.
+_Avoid_: save file, world state, snapshot (a recipe is instructions for creating a world, not a captured moment of one)
+
 **Death**:
 When an agent's energy reaches zero. The agent becomes a **carcass**.
 
