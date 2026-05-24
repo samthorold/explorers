@@ -1,0 +1,8 @@
+[package]
+name = "explorers-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+explorers-sim = { path = "../explorers-sim" }
+bevy = "0.18.1"
