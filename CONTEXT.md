@@ -54,7 +54,7 @@ Attraction toward nearby feeding agents. An agent's social weight trait determin
 _Avoid_: flocking, herding (as a mechanic — herding is emergent, not prescribed)
 
 **Sensing range**:
-The radius within which an agent detects other agents. An evolvable trait with metabolic cost — wider sensing costs more energy per tick. Signals are distance-weighted: closer agents produce stronger signals.
+The radius within which an agent detects other agents. An evolvable trait with metabolic cost — wider sensing costs more energy per tick. Signals are distance-weighted: closer agents produce stronger signals. For sessile agents, sensing range also determines **spore dispersal** radius — the distance over which they can reproduce without physical contact.
 _Avoid_: vision, awareness radius
 
 **Distance-weighted detection**:
@@ -63,7 +63,7 @@ The sensing model. Agents detect others within their sensing range, but signal s
 ### Reproduction and evolution
 
 **Sexual reproduction**:
-Two agents within sensing range whose trait vectors are within a compatibility distance produce an offspring via budding. Both parents survive. Each parent invests energy according to their own reproductive investment trait. Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Uniform crossover is deliberately chosen over arithmetic mean (Dieckmann & Doebeli 1999) because recombination works against speciation — clusters that persist despite recombination are ecologically reinforced, not just reproductively isolated.
+Two agents whose trait vectors are within a compatibility distance produce an offspring via budding. Both parents survive. Each parent invests energy according to their own reproductive investment trait. Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Uniform crossover is deliberately chosen over arithmetic mean (Dieckmann & Doebeli 1999) because recombination works against speciation — clusters that persist despite recombination are ecologically reinforced, not just reproductively isolated. The effective reproduction radius depends on the mobility gate: sessile agents disperse spores over their **sensing range**, mobile agents require physical contact within **contact radius**, with continuous interpolation between. A pair can reproduce if their spatial distance is within the maximum of both agents' effective radii — spores travel one way.
 _Avoid_: mating, breeding (too specific to animal analogues)
 
 **Mate selectivity**:
@@ -73,6 +73,10 @@ _Avoid_: choosiness, pickiness
 **Reproductive investment**:
 A trait dimension controlling how much energy a parent transfers to offspring at birth. High investment = fewer, fitter offspring (K-strategy). Low investment = many, fragile offspring (r-strategy).
 _Avoid_: brood size, litter size
+
+**Spore dispersal**:
+The reproduction mechanism for sessile agents. Instead of requiring physical contact, a sessile agent broadcasts reproductive material over its **sensing range**. The effective reproduction radius is interpolated by the mobility gate: sessile agents (gate ≈ 1) use sensing range, mobile agents (gate ≈ 0) use contact radius. This is a law of the world, not a tunable parameter — the same sigmoid that gates photosynthesis gates the reproduction mechanism.
+_Avoid_: pollination (implies a specific biological mechanism), asexual reproduction (spore dispersal is still sexual — both parents contribute traits)
 
 **Speciation**:
 The divergence of agent populations into distinct clusters in trait space that no longer interbreed due to trait distance exceeding mate selectivity thresholds. Not designed — emerges from selection and reproductive dynamics.
