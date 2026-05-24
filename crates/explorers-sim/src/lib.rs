@@ -151,30 +151,58 @@ impl World {
         let mut rng = ChaCha8Rng::seed_from_u64(seed);
         let extent = params.world_extent;
         let pop_size = params.initial_population_size as usize;
+        let n_clusters = (distribution.initial_cluster_count as usize).max(1);
 
         let pos_dist = rand::distr::Uniform::new(-extent / 2.0, extent / 2.0).unwrap();
         let trait_dist = Normal::new(0.0_f32, distribution.trait_covariance).unwrap();
+
+        let mean = &distribution.mean_traits;
+        let trophic_total = mean.photosynthetic_absorption + mean.consumption_rate + mean.scavenging_rate;
+
+        let cluster_centroids: Vec<TraitVector> = (0..n_clusters)
+            .map(|c| {
+                let (photo, cons, scav) = if n_clusters == 1 || trophic_total <= 0.0 {
+                    (mean.photosynthetic_absorption, mean.consumption_rate, mean.scavenging_rate)
+                } else {
+                    match c % 3 {
+                        0 => (trophic_total, 0.0, 0.0),
+                        1 => (0.0, trophic_total, 0.0),
+                        _ => (0.0, 0.0, trophic_total),
+                    }
+                };
+                TraitVector {
+                    photosynthetic_absorption: photo,
+                    consumption_rate: cons,
+                    scavenging_rate: scav,
+                    mobility: mean.mobility,
+                    chemotaxis_sensitivity: mean.chemotaxis_sensitivity,
+                    mate_selectivity: mean.mate_selectivity,
+                    sensing_range: mean.sensing_range,
+                    reproductive_investment: mean.reproductive_investment,
+                }
+            })
+            .collect();
 
         let agents = (0..pop_size)
             .map(|id| {
                 let x = pos_dist.sample(&mut rng);
                 let y = pos_dist.sample(&mut rng);
-                let mean = &distribution.mean_traits;
+                let centroid = &cluster_centroids[id % n_clusters];
                 Agent {
                     id: id as u64,
                     position: (x, y),
                     energy: distribution.initial_energy_per_agent,
                     traits: TraitVector {
-                        photosynthetic_absorption: mean.photosynthetic_absorption
+                        photosynthetic_absorption: centroid.photosynthetic_absorption
                             + trait_dist.sample(&mut rng),
-                        consumption_rate: mean.consumption_rate + trait_dist.sample(&mut rng),
-                        scavenging_rate: mean.scavenging_rate + trait_dist.sample(&mut rng),
-                        mobility: mean.mobility + trait_dist.sample(&mut rng),
-                        chemotaxis_sensitivity: mean.chemotaxis_sensitivity
+                        consumption_rate: centroid.consumption_rate + trait_dist.sample(&mut rng),
+                        scavenging_rate: centroid.scavenging_rate + trait_dist.sample(&mut rng),
+                        mobility: centroid.mobility + trait_dist.sample(&mut rng),
+                        chemotaxis_sensitivity: centroid.chemotaxis_sensitivity
                             + trait_dist.sample(&mut rng),
-                        mate_selectivity: mean.mate_selectivity + trait_dist.sample(&mut rng),
-                        sensing_range: mean.sensing_range + trait_dist.sample(&mut rng),
-                        reproductive_investment: mean.reproductive_investment
+                        mate_selectivity: centroid.mate_selectivity + trait_dist.sample(&mut rng),
+                        sensing_range: centroid.sensing_range + trait_dist.sample(&mut rng),
+                        reproductive_investment: centroid.reproductive_investment
                             + trait_dist.sample(&mut rng),
                     },
                 }
