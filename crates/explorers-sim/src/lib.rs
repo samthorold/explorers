@@ -118,12 +118,14 @@ pub struct WorldRecipe {
 }
 
 pub struct Agent {
+    pub id: u64,
     pub position: (f32, f32),
     pub energy: f32,
     pub traits: TraitVector,
 }
 
 pub struct Carcass {
+    pub id: u64,
     pub position: (f32, f32),
     pub energy: f32,
 }
@@ -137,6 +139,7 @@ pub struct World {
     rng: ChaCha8Rng,
     last_tick_births: usize,
     last_tick_deaths: usize,
+    next_agent_id: u64,
 }
 
 impl World {
@@ -149,11 +152,12 @@ impl World {
         let trait_dist = Normal::new(0.0_f32, distribution.trait_covariance).unwrap();
 
         let agents = (0..pop_size)
-            .map(|_| {
+            .map(|id| {
                 let x = pos_dist.sample(&mut rng);
                 let y = pos_dist.sample(&mut rng);
                 let mean = &distribution.mean_traits;
                 Agent {
+                    id: id as u64,
                     position: (x, y),
                     energy: distribution.initial_energy_per_agent,
                     traits: TraitVector {
@@ -182,10 +186,13 @@ impl World {
             rng,
             last_tick_births: 0,
             last_tick_deaths: 0,
+            next_agent_id: pop_size as u64,
         }
     }
 
-    pub fn add_agent(&mut self, agent: Agent) {
+    pub fn add_agent(&mut self, mut agent: Agent) {
+        agent.id = self.next_agent_id;
+        self.next_agent_id += 1;
         self.agents.push(agent);
     }
 
@@ -284,6 +291,7 @@ impl World {
             pre_tick_energies.push(agent.energy);
             solar_gains.push(solar_gain);
             agents.push(Agent {
+                id: agent.id,
                 position: new_pos,
                 energy,
                 traits: agent.traits,
@@ -513,7 +521,10 @@ impl World {
                 }
             }
 
+            let offspring_id = self.next_agent_id;
+            self.next_agent_id += 1;
             offspring.push(Agent {
+                id: offspring_id,
                 position: agents[i].position,
                 energy: offspring_energy,
                 traits: child_traits,
@@ -528,6 +539,7 @@ impl World {
             if agent.energy <= 0.0 {
                 let carcass_energy = (pre_tick_energies[i] + consumption_deltas[i]).max(0.0);
                 next_carcasses.push(Carcass {
+                    id: agent.id,
                     position: agent.position,
                     energy: carcass_energy,
                 });
@@ -928,6 +940,7 @@ mod tests {
         let mut world = World::new(params, dist, 42);
         // Manually place two agents: consumer at (0,0), food at (20,0)
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: TraitVector {
@@ -939,6 +952,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (20.0, 0.0),
             energy: 100.0,
             traits: zero_traits(),
@@ -980,6 +994,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: TraitVector {
@@ -991,6 +1006,7 @@ mod tests {
             },
         });
         world.add_carcass(Carcass {
+            id: 0,
             position: (20.0, 0.0),
             energy: 50.0,
         });
@@ -1032,6 +1048,7 @@ mod tests {
         let mut world = World::new(params, dist, 42);
         // Consumer at -48, food at +48 → toroidal distance = 4
         world.add_agent(Agent {
+            id: 0,
             position: (-48.0, 0.0),
             energy: 100.0,
             traits: TraitVector {
@@ -1043,6 +1060,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (48.0, 0.0),
             energy: 100.0,
             traits: zero_traits(),
@@ -1102,6 +1120,7 @@ mod tests {
         // Place consumer near edge, food just across boundary
         // Consumer at (48, 0), food at (-48, 0) → toroidal dist = 4
         world.add_agent(Agent {
+            id: 0,
             position: (48.0, 0.0),
             energy: 100.0,
             traits: TraitVector {
@@ -1113,6 +1132,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (-48.0, 0.0),
             energy: 100.0,
             traits: zero_traits(),
@@ -1150,6 +1170,7 @@ mod tests {
         let mut world = World::new(params, dist, 42);
         let mobility = 3.0;
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: TraitVector {
@@ -1224,6 +1245,7 @@ mod tests {
         let mut world = World::new(params, dist, 42);
         // Consumer at (0,0), target at (3,0) — within contact_radius of 5
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1232,6 +1254,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (3.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
@@ -1265,6 +1288,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1273,6 +1297,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
@@ -1304,6 +1329,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1312,6 +1338,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (2.0, 0.0),
             energy: 5.0,
             traits: zero_traits(),
@@ -1346,6 +1373,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1354,6 +1382,7 @@ mod tests {
             },
         });
         world.add_carcass(Carcass {
+            id: 0,
             position: (3.0, 0.0),
             energy: 20.0,
         });
@@ -1384,6 +1413,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1392,6 +1422,7 @@ mod tests {
             },
         });
         world.add_carcass(Carcass {
+            id: 0,
             position: (2.0, 0.0),
             energy: 6.0,
         });
@@ -1425,6 +1456,7 @@ mod tests {
         let mut world = World::new(params, dist, 42);
         // Agent with both consumption and scavenging
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1435,12 +1467,14 @@ mod tests {
         });
         // Living target
         world.add_agent(Agent {
+            id: 0,
             position: (1.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
         });
         // Carcass
         world.add_carcass(Carcass {
+            id: 0,
             position: (0.0, 1.0),
             energy: 20.0,
         });
@@ -1471,16 +1505,19 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
         });
         world.add_agent(Agent {
+            id: 0,
             position: (1.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
         });
         world.add_carcass(Carcass {
+            id: 0,
             position: (0.0, 1.0),
             energy: 20.0,
         });
@@ -1512,6 +1549,7 @@ mod tests {
         let mut world = World::new(params, dist, 42);
         // Consumer at -48, target at +48 → toroidal distance = 4 (within contact_radius 5)
         world.add_agent(Agent {
+            id: 0,
             position: (-48.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1520,6 +1558,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (48.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
@@ -1595,6 +1634,7 @@ mod tests {
         let mut world = World::new(params, dist, 42);
         // Consumer at (0,0), target at (10,0) — outside contact_radius of 5
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1603,6 +1643,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (10.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
@@ -1640,11 +1681,13 @@ mod tests {
             ..zero_traits()
         };
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: shared_traits,
         });
         world.add_agent(Agent {
+            id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
             traits: shared_traits,
@@ -1680,6 +1723,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1689,6 +1733,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1726,6 +1771,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1735,6 +1781,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1780,11 +1827,13 @@ mod tests {
             ..zero_traits()
         };
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 40.0, // below threshold of 50
             traits: shared_traits,
         });
         world.add_agent(Agent {
+            id: 0,
             position: (2.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
@@ -1820,11 +1869,13 @@ mod tests {
             ..zero_traits()
         };
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: shared_traits,
         });
         world.add_agent(Agent {
+            id: 0,
             position: (20.0, 0.0), // far outside contact_radius of 5
             energy: 50.0,
             traits: shared_traits,
@@ -1857,6 +1908,7 @@ mod tests {
         // Agent A has high selectivity (accepts B), agent B has low selectivity (rejects A)
         // Trait distance between them = sqrt((10-0.5)^2) = 9.5 (via mate_selectivity difference)
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1866,6 +1918,7 @@ mod tests {
             },
         });
         world.add_agent(Agent {
+            id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
@@ -1907,16 +1960,19 @@ mod tests {
         };
         // Three compatible agents all in contact — should produce at most 1 offspring (one pair)
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
         });
         world.add_agent(Agent {
+            id: 0,
             position: (1.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
         });
         world.add_agent(Agent {
+            id: 0,
             position: (2.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
@@ -1954,6 +2010,7 @@ mod tests {
             let mut world = World::new(params, dist, seed);
             // Parents with distinct trait values per dimension so we can tell who contributed
             world.add_agent(Agent {
+                id: 0,
                 position: (0.0, 0.0),
                 energy: 100.0,
                 traits: TraitVector {
@@ -1968,6 +2025,7 @@ mod tests {
                 },
             });
             world.add_agent(Agent {
+                id: 0,
                 position: (1.0, 0.0),
                 energy: 100.0,
                 traits: TraitVector {
@@ -2032,11 +2090,13 @@ mod tests {
             ..zero_traits()
         };
         world.add_agent(Agent {
+            id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
         });
         world.add_agent(Agent {
+            id: 0,
             position: (1.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
@@ -2086,11 +2146,13 @@ mod tests {
                 ..zero_traits()
             };
             world.add_agent(Agent {
+                id: 0,
                 position: (0.0, 0.0),
                 energy: 100.0,
                 traits: shared_traits,
             });
             world.add_agent(Agent {
+                id: 0,
                 position: (1.0, 0.0),
                 energy: 100.0,
                 traits: shared_traits,
@@ -2230,16 +2292,16 @@ mod tests {
         // Consumers have different starting energy so sorted results differ if order matters
         // World A: consumer1 first, then consumer2, then victim
         let mut world_a = World::new(make_params(), empty_dist(), 42);
-        world_a.add_agent(Agent { position: (0.0, 0.0), energy: 50.0, traits: consumer_traits });
-        world_a.add_agent(Agent { position: (1.0, 0.0), energy: 30.0, traits: consumer_traits });
-        world_a.add_agent(Agent { position: (0.5, 0.0), energy: 4.0, traits: zero_traits() });
+        world_a.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits: consumer_traits });
+        world_a.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 30.0, traits: consumer_traits });
+        world_a.add_agent(Agent { id: 0, position: (0.5, 0.0), energy: 4.0, traits: zero_traits() });
         world_a.step();
 
         // World B: consumer2 first, then consumer1, then victim
         let mut world_b = World::new(make_params(), empty_dist(), 42);
-        world_b.add_agent(Agent { position: (1.0, 0.0), energy: 30.0, traits: consumer_traits });
-        world_b.add_agent(Agent { position: (0.0, 0.0), energy: 50.0, traits: consumer_traits });
-        world_b.add_agent(Agent { position: (0.5, 0.0), energy: 4.0, traits: zero_traits() });
+        world_b.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 30.0, traits: consumer_traits });
+        world_b.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits: consumer_traits });
+        world_b.add_agent(Agent { id: 0, position: (0.5, 0.0), energy: 4.0, traits: zero_traits() });
         world_b.step();
 
         assert_eq!(
@@ -2276,16 +2338,16 @@ mod tests {
         // Carcass has only 4.0 energy — not enough for two scavengers each wanting 3.0
         // World A: scavenger1 first, then scavenger2
         let mut world_a = World::new(make_params(), empty_dist(), 42);
-        world_a.add_agent(Agent { position: (0.0, 0.0), energy: 50.0, traits: scavenger_traits });
-        world_a.add_agent(Agent { position: (1.0, 0.0), energy: 30.0, traits: scavenger_traits });
-        world_a.add_carcass(Carcass { position: (0.5, 0.0), energy: 4.0 });
+        world_a.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits: scavenger_traits });
+        world_a.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 30.0, traits: scavenger_traits });
+        world_a.add_carcass(Carcass { id: 0, position: (0.5, 0.0), energy: 4.0 });
         world_a.step();
 
         // World B: scavenger2 first, then scavenger1
         let mut world_b = World::new(make_params(), empty_dist(), 42);
-        world_b.add_agent(Agent { position: (1.0, 0.0), energy: 30.0, traits: scavenger_traits });
-        world_b.add_agent(Agent { position: (0.0, 0.0), energy: 50.0, traits: scavenger_traits });
-        world_b.add_carcass(Carcass { position: (0.5, 0.0), energy: 4.0 });
+        world_b.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 30.0, traits: scavenger_traits });
+        world_b.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits: scavenger_traits });
+        world_b.add_carcass(Carcass { id: 0, position: (0.5, 0.0), energy: 4.0 });
         world_b.step();
 
         assert_eq!(
@@ -2330,16 +2392,16 @@ mod tests {
 
         // World A: agent order is A, B, C
         let mut world_a = World::new(make_params(), empty_dist(), 42);
-        world_a.add_agent(Agent { position: (0.0, 0.0), energy: 50.0, traits });
-        world_a.add_agent(Agent { position: (1.0, 0.0), energy: 40.0, traits });
-        world_a.add_agent(Agent { position: (2.0, 0.0), energy: 30.0, traits });
+        world_a.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits });
+        world_a.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 40.0, traits });
+        world_a.add_agent(Agent { id: 0, position: (2.0, 0.0), energy: 30.0, traits });
         world_a.step();
 
         // World B: agent order is C, B, A
         let mut world_b = World::new(make_params(), empty_dist(), 42);
-        world_b.add_agent(Agent { position: (2.0, 0.0), energy: 30.0, traits });
-        world_b.add_agent(Agent { position: (1.0, 0.0), energy: 40.0, traits });
-        world_b.add_agent(Agent { position: (0.0, 0.0), energy: 50.0, traits });
+        world_b.add_agent(Agent { id: 0, position: (2.0, 0.0), energy: 30.0, traits });
+        world_b.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 40.0, traits });
+        world_b.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits });
         world_b.step();
 
         assert_eq!(
@@ -2387,5 +2449,94 @@ mod tests {
         let recovered: WorldRecipe = serde_json::from_str(&json).unwrap();
 
         assert_eq!(recipe, recovered);
+    }
+
+    #[test]
+    fn initial_agents_have_unique_sequential_ids() {
+        let world = World::new(test_params(), test_distribution(), 42);
+        let ids: Vec<u64> = world.agents().iter().map(|a| a.id).collect();
+        let expected: Vec<u64> = (0..ids.len() as u64).collect();
+        assert_eq!(ids, expected);
+    }
+
+    #[test]
+    fn offspring_ids_do_not_collide_with_initial_population() {
+        let mut params = test_params();
+        params.initial_population_size = 0;
+        params.contact_radius = 5.0;
+        params.reproduction_energy_threshold = 1.0;
+        params.consumption_efficiency = 0.0;
+        let mut world = World::new(params, test_distribution(), 42);
+
+        let reproducer_traits = TraitVector {
+            reproductive_investment: 0.5,
+            mate_selectivity: 0.0,
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 100.0, traits: reproducer_traits });
+        world.add_agent(Agent { id: 0, position: (0.1, 0.0), energy: 100.0, traits: reproducer_traits });
+
+        let initial_max_id = world.agents().iter().map(|a| a.id).max().unwrap();
+
+        world.step();
+
+        let mut all_ids: Vec<u64> = world.agents().iter().map(|a| a.id).collect();
+        all_ids.sort();
+        let unique_count = {
+            let mut u = all_ids.clone();
+            u.dedup();
+            u.len()
+        };
+        assert_eq!(all_ids.len(), unique_count, "all agent IDs must be unique");
+        for agent in world.agents() {
+            if agent.id > initial_max_id {
+                assert!(agent.id > initial_max_id, "offspring ID must exceed initial population IDs");
+            }
+        }
+    }
+
+    #[test]
+    fn carcass_inherits_dead_agent_id() {
+        let mut params = test_params();
+        params.initial_population_size = 0;
+        let mut world = World::new(params, test_distribution(), 42);
+
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 0.01,
+            traits: zero_traits(),
+        });
+        let agent_id = world.agents()[0].id;
+
+        world.step();
+
+        assert!(world.agents().is_empty(), "agent should have died");
+        assert_eq!(world.carcasses().len(), 1);
+        assert_eq!(world.carcasses()[0].id, agent_id, "carcass must inherit the dead agent's ID");
+    }
+
+    #[test]
+    fn agent_ids_are_deterministic_given_same_seed() {
+        let seed = 77;
+        let params = test_params();
+        let dist = test_distribution();
+
+        let mut world_a = World::new(params.clone(), dist.clone(), seed);
+        let mut world_b = World::new(params, dist, seed);
+
+        for _ in 0..5 {
+            world_a.step();
+            world_b.step();
+        }
+
+        let ids_a: Vec<u64> = world_a.agents().iter().map(|a| a.id).collect();
+        let ids_b: Vec<u64> = world_b.agents().iter().map(|a| a.id).collect();
+        assert_eq!(ids_a, ids_b, "same seed must produce identical agent IDs");
+
+        let carcass_ids_a: Vec<u64> = world_a.carcasses().iter().map(|c| c.id).collect();
+        let carcass_ids_b: Vec<u64> = world_b.carcasses().iter().map(|c| c.id).collect();
+        assert_eq!(carcass_ids_a, carcass_ids_b, "same seed must produce identical carcass IDs");
     }
 }
