@@ -102,6 +102,12 @@ impl RunObserver {
         let agent_count = agents.len();
         let in_grace_period = self.tick < self.grace_ticks;
 
+        if self.tick == self.grace_ticks && self.grace_ticks > 0 {
+            self.energy_history.clear();
+            self.birth_history.clear();
+            self.death_history.clear();
+        }
+
         // Catastrophic detectors always fire
         if is_extinct(agent_count) {
             self.failed = Some(FailureMode::Extinction);
@@ -1404,5 +1410,67 @@ mod tests {
         }
         let result = observer.evaluate();
         assert_eq!(result.ticks_survived, max_ticks as u64);
+    }
+
+    #[test]
+    fn frozen_dynamics_needs_full_window_after_grace_period() {
+        let frozen_window = 5;
+        let max_ticks = 100;
+        let grace_fraction = 0.2; // grace ends at tick 20
+        let config = EvalConfig {
+            grace_period_fraction: grace_fraction,
+            frozen_dynamics_window: frozen_window,
+            ..EvalConfig::default()
+        };
+        let mut observer = RunObserver::new(config, max_ticks);
+        // Frozen population: photosynthesizers that never reproduce
+        let params = explorers_sim::WorldParameters {
+            solar_flux_magnitude: 5.0,
+            base_metabolic_rate: 0.01,
+            sensing_cost_coefficient: 0.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            reproduction_efficiency: 0.7,
+            movement_cost_coefficient: 0.0,
+            reproduction_energy_threshold: 500.0, // too high to reproduce
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            contact_radius: 5.0,
+            world_extent: 100.0,
+            initial_population_size: 5,
+        };
+        let dist = explorers_sim::InitialDistribution {
+            mean_traits: explorers_sim::TraitVector {
+                photosynthetic_absorption: 1.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let grace_ticks = (max_ticks as f32 * grace_fraction) as u64;
+        // Run through grace period + 1 tick after — should NOT fire yet
+        for _ in 0..=grace_ticks {
+            world.step();
+            observer.observe(&world);
+        }
+        assert!(observer.failed().is_none(),
+            "frozen dynamics should not fire on first tick after grace period, \
+             it needs a full {frozen_window}-tick window of post-grace data");
+
+        // Run until the window fills after grace period
+        for _ in (grace_ticks + 1)..grace_ticks + frozen_window as u64 + 1 {
+            world.step();
+            observer.observe(&world);
+        }
+        assert_eq!(observer.failed(), Some(&FailureMode::FrozenDynamics),
+            "frozen dynamics should fire once a full window of post-grace data shows no activity");
     }
 }
