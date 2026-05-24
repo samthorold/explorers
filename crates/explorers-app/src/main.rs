@@ -43,17 +43,17 @@ fn main() {
         i += 1;
     }
 
-    let (params, distribution) = match recipe_path {
+    let recipe = match recipe_path {
         Some(path) => {
             let contents = fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("Failed to read recipe file {path}: {e}"));
             let recipe: WorldRecipe = serde_json::from_str(&contents)
                 .unwrap_or_else(|e| panic!("Failed to parse recipe file {path}: {e}"));
             eprintln!("Loaded recipe from {path}");
-            (recipe.parameters, recipe.initial_distribution)
+            recipe
         }
-        None => {
-            let params = WorldParameters {
+        None => WorldRecipe {
+            parameters: WorldParameters {
                 solar_flux_magnitude: 1.0,
                 consumption_efficiency: 0.5,
                 decomposition_efficiency: 0.5,
@@ -67,8 +67,8 @@ fn main() {
                 contact_radius: 5.0,
                 world_extent: 200.0,
                 initial_population_size: 3,
-            };
-            let distribution = InitialDistribution {
+            },
+            initial_distribution: InitialDistribution {
                 mean_traits: TraitVector {
                     photosynthetic_absorption: 0.5,
                     consumption_rate: 0.3,
@@ -82,21 +82,20 @@ fn main() {
                 trait_covariance: 0.1,
                 initial_cluster_count: 1,
                 initial_energy_per_agent: 100.0,
-            };
-            (params, distribution)
-        }
+            },
+            max_ticks: 100,
+        },
     };
 
+    let ticks = if fast_forward > 0 { fast_forward } else { recipe.max_ticks };
     let seed: u64 = rand::random();
-    let mut world = World::new(params, distribution, seed);
+    let mut world = World::new(recipe.parameters, recipe.initial_distribution, seed);
 
-    if fast_forward > 0 {
-        eprintln!("Fast-forwarding {fast_forward} ticks...");
-        for _ in 0..fast_forward {
-            world.step();
-        }
-        eprintln!("Fast-forward complete. {} agents alive.", world.agents().len());
+    eprintln!("Fast-forwarding {ticks} ticks...");
+    for _ in 0..ticks {
+        world.step();
     }
+    eprintln!("Fast-forward complete. {} agents alive.", world.agents().len());
 
     App::new()
         .add_plugins(DefaultPlugins)

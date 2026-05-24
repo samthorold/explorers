@@ -186,7 +186,7 @@ A world that exhibits the positive patterns expected of a functioning ecology. P
 _Avoid_: balanced world, stable world (stability is not the goal — dynamic persistence is)
 
 **World recipe**:
-The output artifact of world genesis. A pairing of **world parameters** and an **initial distribution** — the minimal specification needed to deterministically create a world given a seed. Does not contain a seed (each playthrough generates a fresh one) or a tick count (how far to fast-forward is a presentation decision, not a property of the recipe). The simulation is deterministic: the same recipe + seed always produces the same world history.
+The output artifact of world genesis. A combination of **world parameters**, an **initial distribution**, and a **max ticks** count — the minimal specification needed to deterministically create a world given a seed. Does not contain a seed (each playthrough generates a fresh one). Max ticks is the tick count at which genesis certified the ecology as sensible — the app fast-forwards to this point before the player enters. The simulation is deterministic: the same recipe + seed always produces the same world history.
 _Avoid_: save file, world state, snapshot (a recipe is instructions for creating a world, not a captured moment of one)
 
 **Death**:

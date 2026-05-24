@@ -62,7 +62,7 @@ fn main() {
     let json = serde_json::to_string_pretty(&result).unwrap();
     fs::write(&output_path, &json).unwrap();
 
-    let recipe = result.best_recipe(&default_ranges());
+    let recipe = result.best_recipe(&default_ranges(), config.max_ticks);
     let recipe_json = serde_json::to_string_pretty(&recipe).unwrap();
     fs::write(&recipe_output_path, &recipe_json).unwrap();
 

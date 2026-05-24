@@ -114,6 +114,7 @@ pub struct InitialDistribution {
 pub struct WorldRecipe {
     pub parameters: WorldParameters,
     pub initial_distribution: InitialDistribution,
+    pub max_ticks: u64,
 }
 
 pub struct Agent {
@@ -2353,6 +2354,7 @@ mod tests {
         let recipe = WorldRecipe {
             parameters: test_params(),
             initial_distribution: test_distribution(),
+            max_ticks: 100,
         };
         let json = serde_json::to_string(&recipe).unwrap();
         let recovered: WorldRecipe = serde_json::from_str(&json).unwrap();
@@ -2378,6 +2380,7 @@ mod tests {
         let recipe = WorldRecipe {
             parameters: test_params(),
             initial_distribution: test_distribution(),
+            max_ticks: 100,
         };
 
         let json = serde_json::to_string_pretty(&recipe).unwrap();

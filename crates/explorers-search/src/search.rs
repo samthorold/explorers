@@ -76,7 +76,7 @@ pub struct SearchResult {
 }
 
 impl SearchResult {
-    pub fn best_recipe(&self, ranges: &[ParameterRange]) -> WorldRecipe {
+    pub fn best_recipe(&self, ranges: &[ParameterRange], max_ticks: u64) -> WorldRecipe {
         let best = &self.optimised[0];
         let unit_values: Vec<f64> = best
             .parameters
@@ -88,6 +88,7 @@ impl SearchResult {
         WorldRecipe {
             parameters,
             initial_distribution,
+            max_ticks,
         }
     }
 }
@@ -362,7 +363,7 @@ mod tests {
         };
 
         let result = run_search(&config, 42, &mut rng);
-        let recipe = result.best_recipe(&config.ranges);
+        let recipe = result.best_recipe(&config.ranges, config.max_ticks);
 
         let json = serde_json::to_string_pretty(&recipe).unwrap();
         let recovered: explorers_sim::WorldRecipe = serde_json::from_str(&json).unwrap();
