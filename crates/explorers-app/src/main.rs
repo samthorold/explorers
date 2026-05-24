@@ -10,7 +10,16 @@ use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters, Wo
 struct SimWorld(World);
 
 #[derive(Component)]
-struct AgentMarker(usize);
+struct AgentMarker(u64);
+
+#[derive(Component)]
+struct CarcassMarker(u64);
+
+#[derive(Resource)]
+struct AgentMesh(Handle<Mesh>);
+
+#[derive(Resource)]
+struct CarcassMesh(Handle<Mesh>);
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -103,9 +112,9 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .insert_resource(SimWorld(world))
-        .add_systems(Startup, (setup_camera, spawn_agent_sprites, configure_timestep))
-        .add_systems(FixedUpdate, step_simulation)
-        .add_systems(Update, (tick_rate_control, sync_agent_transforms))
+        .add_systems(Startup, (setup_camera, setup_meshes, configure_timestep))
+        .add_systems(FixedUpdate, (step_simulation, reconcile_entities).chain())
+        .add_systems(Update, tick_rate_control)
         .run();
 }
 
@@ -130,6 +139,97 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::input::ButtonInput;
+
+    #[test]
+    fn pure_producer_maps_to_green() {
+        let traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            consumption_rate: 0.0,
+            scavenging_rate: 0.0,
+            mobility: 0.0,
+            chemotaxis_sensitivity: 0.0,
+            mate_selectivity: 0.0,
+            sensing_range: 0.0,
+            reproductive_investment: 0.0,
+        };
+        let color = trophic_color(&traits);
+        let rgba = color.to_srgba();
+        assert!(rgba.green > 0.9, "green channel should be high, got {}", rgba.green);
+        assert!(rgba.red < 0.1, "red channel should be low, got {}", rgba.red);
+        assert!(rgba.blue < 0.1, "blue channel should be low, got {}", rgba.blue);
+    }
+
+    #[test]
+    fn pure_consumer_maps_to_red() {
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.0,
+            consumption_rate: 1.0,
+            scavenging_rate: 0.0,
+            mobility: 0.0,
+            chemotaxis_sensitivity: 0.0,
+            mate_selectivity: 0.0,
+            sensing_range: 0.0,
+            reproductive_investment: 0.0,
+        };
+        let color = trophic_color(&traits);
+        let rgba = color.to_srgba();
+        assert!(rgba.red > 0.9, "red channel should be high, got {}", rgba.red);
+        assert!(rgba.green < 0.1, "green channel should be low, got {}", rgba.green);
+        assert!(rgba.blue < 0.1, "blue channel should be low, got {}", rgba.blue);
+    }
+
+    #[test]
+    fn pure_decomposer_maps_to_blue() {
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.0,
+            consumption_rate: 0.0,
+            scavenging_rate: 1.0,
+            mobility: 0.0,
+            chemotaxis_sensitivity: 0.0,
+            mate_selectivity: 0.0,
+            sensing_range: 0.0,
+            reproductive_investment: 0.0,
+        };
+        let color = trophic_color(&traits);
+        let rgba = color.to_srgba();
+        assert!(rgba.blue > 0.9, "blue channel should be high, got {}", rgba.blue);
+        assert!(rgba.red < 0.1, "red channel should be low, got {}", rgba.red);
+        assert!(rgba.green < 0.1, "green channel should be low, got {}", rgba.green);
+    }
+
+    #[test]
+    fn hybrid_traits_produce_blended_color() {
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.6,
+            consumption_rate: 0.4,
+            scavenging_rate: 0.2,
+            mobility: 0.0,
+            chemotaxis_sensitivity: 0.0,
+            mate_selectivity: 0.0,
+            sensing_range: 0.0,
+            reproductive_investment: 0.0,
+        };
+        let color = trophic_color(&traits);
+        let rgba = color.to_srgba();
+        assert!((rgba.red - 0.4).abs() < 0.01, "red should be ~0.4, got {}", rgba.red);
+        assert!((rgba.green - 0.6).abs() < 0.01, "green should be ~0.6, got {}", rgba.green);
+        assert!((rgba.blue - 0.2).abs() < 0.01, "blue should be ~0.2, got {}", rgba.blue);
+    }
+
+    #[test]
+    fn zero_energy_has_minimum_visible_scale() {
+        let scale = energy_to_scale(0.0);
+        assert!(scale > 0.0, "scale should be positive at zero energy, got {scale}");
+    }
+
+    #[test]
+    fn energy_to_scale_increases_monotonically() {
+        let low = energy_to_scale(10.0);
+        let mid = energy_to_scale(50.0);
+        let high = energy_to_scale(100.0);
+        assert!(mid > low, "mid ({mid}) should exceed low ({low})");
+        assert!(high > mid, "high ({high}) should exceed mid ({mid})");
+    }
 
     fn press_key(app: &mut App, key: KeyCode) {
         app.world_mut()
@@ -311,22 +411,106 @@ mod tests {
     }
 }
 
-fn spawn_agent_sprites(
+fn setup_meshes(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+    commands.insert_resource(AgentMesh(meshes.add(Circle::new(1.0))));
+    commands.insert_resource(CarcassMesh(meshes.add(RegularPolygon::new(1.0, 4))));
+}
+
+const CARCASS_COLOR: Color = Color::srgb(0.5, 0.5, 0.5);
+
+fn reconcile_entities(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
     sim: Res<SimWorld>,
+    agent_mesh: Res<AgentMesh>,
+    carcass_mesh: Res<CarcassMesh>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut agents_query: Query<(Entity, &AgentMarker, &mut Transform, &MeshMaterial2d<ColorMaterial>)>,
+    mut carcasses_query: Query<(Entity, &CarcassMarker, &mut Transform), Without<AgentMarker>>,
 ) {
-    let mesh = meshes.add(Circle::new(12.0));
-    for (i, agent) in sim.0.agents().iter().enumerate() {
-        let color = Color::hsl(agent.traits.photosynthetic_absorption * 360.0, 0.7, 0.5);
-        commands.spawn((
-            Mesh2d(mesh.clone()),
-            MeshMaterial2d(materials.add(ColorMaterial::from_color(color))),
-            Transform::from_xyz(agent.position.0, agent.position.1, 0.0),
-            AgentMarker(i),
-        ));
+    let living: std::collections::HashSet<u64> =
+        sim.0.agents().iter().map(|a| a.id).collect();
+
+    for (entity, marker, _, _) in &agents_query {
+        if !living.contains(&marker.0) {
+            commands.entity(entity).despawn();
+        }
     }
+
+    let existing_agents: std::collections::HashSet<u64> =
+        agents_query.iter().map(|(_, m, _, _)| m.0).collect();
+
+    for agent in sim.0.agents() {
+        if !existing_agents.contains(&agent.id) {
+            let color = trophic_color(&agent.traits);
+            let scale = energy_to_scale(agent.energy);
+            commands.spawn((
+                Mesh2d(agent_mesh.0.clone()),
+                MeshMaterial2d(materials.add(ColorMaterial::from_color(color))),
+                Transform::from_xyz(agent.position.0, agent.position.1, 0.0)
+                    .with_scale(Vec3::splat(scale)),
+                AgentMarker(agent.id),
+            ));
+        }
+    }
+
+    for (_, marker, mut transform, material_handle) in &mut agents_query {
+        if let Some(agent) = sim.0.agents().iter().find(|a| a.id == marker.0) {
+            transform.translation.x = agent.position.0;
+            transform.translation.y = agent.position.1;
+            let scale = energy_to_scale(agent.energy);
+            transform.scale = Vec3::splat(scale);
+            if let Some(mat) = materials.get_mut(&material_handle.0) {
+                mat.color = trophic_color(&agent.traits);
+            }
+        }
+    }
+
+    let sim_carcass_ids: std::collections::HashSet<u64> =
+        sim.0.carcasses().iter().map(|c| c.id).collect();
+
+    for (entity, marker, _) in &carcasses_query {
+        if !sim_carcass_ids.contains(&marker.0) {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    let existing_carcasses: std::collections::HashSet<u64> =
+        carcasses_query.iter().map(|(_, m, _)| m.0).collect();
+
+    for carcass in sim.0.carcasses() {
+        if !existing_carcasses.contains(&carcass.id) {
+            let scale = energy_to_scale(carcass.energy);
+            commands.spawn((
+                Mesh2d(carcass_mesh.0.clone()),
+                MeshMaterial2d(materials.add(ColorMaterial::from_color(CARCASS_COLOR))),
+                Transform::from_xyz(carcass.position.0, carcass.position.1, 0.0)
+                    .with_scale(Vec3::splat(scale)),
+                CarcassMarker(carcass.id),
+            ));
+        }
+    }
+
+    for (_, marker, mut transform) in &mut carcasses_query {
+        if let Some(carcass) = sim.0.carcasses().iter().find(|c| c.id == marker.0) {
+            let scale = energy_to_scale(carcass.energy);
+            transform.scale = Vec3::splat(scale);
+        }
+    }
+}
+
+fn trophic_color(traits: &TraitVector) -> Color {
+    Color::srgb(
+        traits.consumption_rate.clamp(0.0, 1.0),
+        traits.photosynthetic_absorption.clamp(0.0, 1.0),
+        traits.scavenging_rate.clamp(0.0, 1.0),
+    )
+}
+
+const BASE_RADIUS: f32 = 4.0;
+const ENERGY_SCALE_FACTOR: f32 = 0.1;
+
+fn energy_to_scale(energy: f32) -> f32 {
+    BASE_RADIUS + energy.max(0.0) * ENERGY_SCALE_FACTOR
 }
 
 fn configure_timestep(mut time: ResMut<Time<Fixed>>) {
@@ -363,11 +547,3 @@ fn step_simulation(mut sim: ResMut<SimWorld>) {
     sim.0.step();
 }
 
-fn sync_agent_transforms(sim: Res<SimWorld>, mut query: Query<(&AgentMarker, &mut Transform)>) {
-    for (marker, mut transform) in &mut query {
-        if let Some(agent) = sim.0.agents().get(marker.0) {
-            transform.translation.x = agent.position.0;
-            transform.translation.y = agent.position.1;
-        }
-    }
-}
