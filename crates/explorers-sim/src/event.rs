@@ -62,6 +62,14 @@ impl EventLog {
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
+
+    pub fn since(&self, index: usize) -> &[Event] {
+        if index >= self.events.len() {
+            &[]
+        } else {
+            &self.events[index..]
+        }
+    }
 }
 
 #[cfg(test)]
