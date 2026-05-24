@@ -205,9 +205,10 @@ impl World {
             })
             .collect();
 
-        // --- Act: apply movement, energy, death ---
-        let mut next_agents: Vec<Agent> = Vec::with_capacity(agent_count);
-        let mut next_carcasses: Vec<Carcass> = self.carcasses.drain(..).collect();
+        // --- Act: apply movement, energy ---
+        let mut agents: Vec<Agent> = Vec::with_capacity(agent_count);
+        let mut pre_tick_energies: Vec<f32> = Vec::with_capacity(agent_count);
+        let mut solar_gains: Vec<f32> = Vec::with_capacity(agent_count);
 
         for (i, agent) in self.agents.iter().enumerate() {
             let (mx, my) = movements[i];
@@ -224,21 +225,107 @@ impl World {
                 + agent.traits.sensing_range * self.params.sensing_cost_coefficient;
             self.total_solar_input += solar_gain;
             let energy = agent.energy + solar_gain - metabolic_cost - movement_cost;
-            if energy <= 0.0 {
-                next_carcasses.push(Carcass {
-                    position: new_pos,
-                    energy: agent.energy,
-                });
-                self.dissipated_energy += solar_gain;
-            } else {
-                self.dissipated_energy += metabolic_cost + movement_cost;
-                next_agents.push(Agent {
-                    position: new_pos,
-                    energy,
-                    traits: agent.traits,
-                });
+            pre_tick_energies.push(agent.energy);
+            solar_gains.push(solar_gain);
+            agents.push(Agent {
+                position: new_pos,
+                energy,
+                traits: agent.traits,
+            });
+        }
+
+        // --- Consumption: agents drain energy from living targets within contact_radius ---
+        let contact_radius = self.params.contact_radius;
+        let consumption_efficiency = self.params.consumption_efficiency;
+        let n = agents.len();
+        let mut consumption_deltas = vec![0.0_f32; n];
+
+        for i in 0..n {
+            if agents[i].traits.consumption_rate <= 0.0 {
+                continue;
+            }
+            let mut best_target: Option<usize> = None;
+            let mut best_dist = f32::MAX;
+            for j in 0..n {
+                if j == i {
+                    continue;
+                }
+                let dist = toroidal_distance(agents[i].position, agents[j].position, extent);
+                if dist < contact_radius && dist < best_dist {
+                    best_dist = dist;
+                    best_target = Some(j);
+                }
+            }
+            if let Some(target) = best_target {
+                let available = (agents[target].energy + consumption_deltas[target]).max(0.0);
+                let drain = agents[i].traits.consumption_rate.min(available);
+                if drain > 0.0 {
+                    consumption_deltas[i] += drain * consumption_efficiency;
+                    consumption_deltas[target] -= drain;
+                    self.dissipated_energy += drain * (1.0 - consumption_efficiency);
+                }
             }
         }
+
+        for i in 0..n {
+            agents[i].energy += consumption_deltas[i];
+        }
+
+        // --- Decomposition: agents drain energy from carcasses within contact_radius ---
+        let decomposition_efficiency = self.params.decomposition_efficiency;
+        let mut carcass_drains = vec![0.0_f32; self.carcasses.len()];
+        let mut decomposition_gains = vec![0.0_f32; n];
+
+        for i in 0..n {
+            if agents[i].traits.scavenging_rate <= 0.0 {
+                continue;
+            }
+            let mut best_carcass: Option<usize> = None;
+            let mut best_dist = f32::MAX;
+            for (ci, carcass) in self.carcasses.iter().enumerate() {
+                let dist = toroidal_distance(agents[i].position, carcass.position, extent);
+                if dist < contact_radius && dist < best_dist {
+                    best_dist = dist;
+                    best_carcass = Some(ci);
+                }
+            }
+            if let Some(ci) = best_carcass {
+                let available = (self.carcasses[ci].energy - carcass_drains[ci]).max(0.0);
+                let drain = agents[i].traits.scavenging_rate.min(available);
+                if drain > 0.0 {
+                    decomposition_gains[i] = drain * decomposition_efficiency;
+                    agents[i].energy += decomposition_gains[i];
+                    carcass_drains[ci] += drain;
+                    self.dissipated_energy += drain * (1.0 - decomposition_efficiency);
+                }
+            }
+        }
+
+        for (ci, carcass) in self.carcasses.iter_mut().enumerate() {
+            carcass.energy -= carcass_drains[ci];
+        }
+        self.carcasses.retain(|c| c.energy > 0.0);
+
+        // --- Death check and carcass creation ---
+        let mut next_agents: Vec<Agent> = Vec::with_capacity(n);
+        let mut next_carcasses: Vec<Carcass> = self.carcasses.drain(..).collect();
+
+        for (i, agent) in agents.into_iter().enumerate() {
+            if agent.energy <= 0.0 {
+                let carcass_energy = (pre_tick_energies[i] + consumption_deltas[i]).max(0.0);
+                next_carcasses.push(Carcass {
+                    position: agent.position,
+                    energy: carcass_energy,
+                });
+                self.dissipated_energy += solar_gains[i] + decomposition_gains[i];
+            } else {
+                let total_input = solar_gains[i] + consumption_deltas[i] + decomposition_gains[i];
+                let costs = pre_tick_energies[i] + total_input - agent.energy;
+                self.dissipated_energy += costs;
+                next_agents.push(agent);
+            }
+        }
+
         self.agents = next_agents;
         self.carcasses = next_carcasses;
     }
@@ -888,6 +975,415 @@ mod tests {
         world.step();
         assert_eq!(world.agents()[0].position, initial_pos);
         assert_eq!(world.agents()[0].energy, initial_energy);
+    }
+
+    #[test]
+    fn consumer_drains_energy_from_living_agent_within_contact_radius() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Consumer at (0,0), target at (3,0) — within contact_radius of 5
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                consumption_rate: 2.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (3.0, 0.0),
+            energy: 50.0,
+            traits: zero_traits(),
+        });
+        world.step();
+        // Consumer should have gained energy, target should have lost energy
+        let consumer = &world.agents()[0];
+        let target = &world.agents()[1];
+        // Drained = consumption_rate = 2.0, gained = 2.0 * 0.5 = 1.0
+        assert_eq!(consumer.energy, 50.0 + 1.0);
+        assert_eq!(target.energy, 50.0 - 2.0);
+    }
+
+    #[test]
+    fn consumption_energy_accounting_with_efficiency() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.7,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                consumption_rate: 3.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (2.0, 0.0),
+            energy: 50.0,
+            traits: zero_traits(),
+        });
+        world.step();
+        // Drain = 3.0, gained = 3.0 * 0.7 = 2.1, dissipated = 3.0 * 0.3 = 0.9
+        assert!((world.agents()[0].energy - 52.1).abs() < 1e-5);
+        assert!((world.agents()[1].energy - 47.0).abs() < 1e-5);
+        assert!((world.dissipated_energy() - 0.9).abs() < 1e-5);
+    }
+
+    #[test]
+    fn consumed_agent_becomes_carcass_at_zero_energy() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                consumption_rate: 10.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (2.0, 0.0),
+            energy: 5.0,
+            traits: zero_traits(),
+        });
+        world.step();
+        // Drain capped at target's energy = 5.0
+        // Consumer gains 5.0 * 0.5 = 2.5
+        // Target dies → carcass with 0 energy (fully drained)
+        assert_eq!(world.agents().len(), 1);
+        assert!((world.agents()[0].energy - 52.5).abs() < 1e-5);
+        assert_eq!(world.carcasses().len(), 1);
+        assert_eq!(world.carcasses()[0].energy, 0.0);
+    }
+
+    #[test]
+    fn scavenger_drains_energy_from_carcass_within_contact_radius() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            decomposition_efficiency: 0.6,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                scavenging_rate: 4.0,
+                ..zero_traits()
+            },
+        });
+        world.add_carcass(Carcass {
+            position: (3.0, 0.0),
+            energy: 20.0,
+        });
+        world.step();
+        // Drain = 4.0, gained = 4.0 * 0.6 = 2.4, dissipated = 4.0 * 0.4 = 1.6
+        assert!((world.agents()[0].energy - 52.4).abs() < 1e-5);
+        assert!((world.carcasses()[0].energy - 16.0).abs() < 1e-5);
+        assert!((world.dissipated_energy() - 1.6).abs() < 1e-5);
+    }
+
+    #[test]
+    fn fully_decomposed_carcass_is_removed() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            decomposition_efficiency: 0.5,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                scavenging_rate: 10.0,
+                ..zero_traits()
+            },
+        });
+        world.add_carcass(Carcass {
+            position: (2.0, 0.0),
+            energy: 6.0,
+        });
+        world.step();
+        // Drain capped at carcass energy = 6.0
+        // Gained = 6.0 * 0.5 = 3.0, dissipated = 6.0 * 0.5 = 3.0
+        assert!((world.agents()[0].energy - 53.0).abs() < 1e-5);
+        assert_eq!(world.carcasses().len(), 0);
+        assert!((world.dissipated_energy() - 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn agent_with_both_traits_consumes_and_decomposes_in_one_tick() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Agent with both consumption and scavenging
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                consumption_rate: 2.0,
+                scavenging_rate: 3.0,
+                ..zero_traits()
+            },
+        });
+        // Living target
+        world.add_agent(Agent {
+            position: (1.0, 0.0),
+            energy: 50.0,
+            traits: zero_traits(),
+        });
+        // Carcass
+        world.add_carcass(Carcass {
+            position: (0.0, 1.0),
+            energy: 20.0,
+        });
+        world.step();
+        // Consumption: drain 2.0 from living, gain 1.0
+        // Decomposition: drain 3.0 from carcass, gain 1.5
+        assert!((world.agents()[0].energy - 52.5).abs() < 1e-5);
+        assert!((world.agents()[1].energy - 48.0).abs() < 1e-5);
+        assert!((world.carcasses()[0].energy - 17.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn zero_rate_agent_does_not_drain_even_in_contact() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: zero_traits(),
+        });
+        world.add_agent(Agent {
+            position: (1.0, 0.0),
+            energy: 50.0,
+            traits: zero_traits(),
+        });
+        world.add_carcass(Carcass {
+            position: (0.0, 1.0),
+            energy: 20.0,
+        });
+        world.step();
+        assert_eq!(world.agents()[0].energy, 50.0);
+        assert_eq!(world.agents()[1].energy, 50.0);
+        assert_eq!(world.carcasses()[0].energy, 20.0);
+    }
+
+    #[test]
+    fn contact_uses_toroidal_distance() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            world_extent: 100.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Consumer at -48, target at +48 → toroidal distance = 4 (within contact_radius 5)
+        world.add_agent(Agent {
+            position: (-48.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                consumption_rate: 2.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (48.0, 0.0),
+            energy: 50.0,
+            traits: zero_traits(),
+        });
+        world.step();
+        // Should drain across boundary
+        assert!((world.agents()[0].energy - 51.0).abs() < 1e-5);
+        assert!((world.agents()[1].energy - 48.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn energy_accounting_holds_with_consumption_and_decomposition() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 1.5,
+            base_metabolic_rate: 0.3,
+            sensing_cost_coefficient: 0.05,
+            movement_cost_coefficient: 0.02,
+            contact_radius: 8.0,
+            consumption_efficiency: 0.6,
+            decomposition_efficiency: 0.4,
+            initial_population_size: 10,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.3,
+                consumption_rate: 0.5,
+                scavenging_rate: 0.3,
+                mobility: 0.4,
+                chemotaxis_sensitivity: 0.3,
+                mate_selectivity: 0.0,
+                sensing_range: 5.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.1,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 20.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let initial_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        for _ in 0..50 {
+            world.step();
+        }
+        let living_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        let carcass_energy: f32 = world.carcasses().iter().map(|c| c.energy).sum();
+        let total = living_energy + carcass_energy + world.dissipated_energy();
+        let expected = initial_energy + world.total_solar_input();
+        let diff = (total - expected).abs();
+        assert!(
+            diff < 1e-2,
+            "energy accounting off by {diff}: total={total}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn no_consumption_when_outside_contact_radius() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Consumer at (0,0), target at (10,0) — outside contact_radius of 5
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                consumption_rate: 2.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (10.0, 0.0),
+            energy: 50.0,
+            traits: zero_traits(),
+        });
+        world.step();
+        assert_eq!(world.agents()[0].energy, 50.0);
+        assert_eq!(world.agents()[1].energy, 50.0);
     }
 
     #[test]
