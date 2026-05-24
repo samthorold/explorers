@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use explorers_sim::{Agent, TraitVector, World};
+use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 
 #[derive(Resource)]
 struct SimWorld(World);
@@ -8,25 +8,39 @@ struct SimWorld(World);
 struct AgentMarker(usize);
 
 fn main() {
+    let params = WorldParameters {
+        solar_flux_magnitude: 1.0,
+        consumption_efficiency: 0.5,
+        decomposition_efficiency: 0.5,
+        reproduction_efficiency: 0.7,
+        base_metabolic_rate: 0.1,
+        movement_cost_coefficient: 0.05,
+        sensing_cost_coefficient: 0.02,
+        reproduction_energy_threshold: 50.0,
+        mutation_rate: 0.1,
+        mutation_magnitude: 0.05,
+        contact_radius: 5.0,
+        world_extent: 200.0,
+        initial_population_size: 3,
+    };
+    let distribution = InitialDistribution {
+        mean_traits: TraitVector {
+            photosynthetic_absorption: 0.5,
+            consumption_rate: 0.3,
+            scavenging_rate: 0.2,
+            mobility: 0.4,
+            chemotaxis_sensitivity: 0.3,
+            mate_selectivity: 0.5,
+            sensing_range: 0.4,
+            reproductive_investment: 0.3,
+        },
+        trait_covariance: 0.1,
+        initial_cluster_count: 1,
+        initial_energy_per_agent: 100.0,
+    };
     App::new()
         .add_plugins(DefaultPlugins)
-        .insert_resource(SimWorld(World::new(vec![
-            Agent {
-                position: (0.0, 0.0),
-                energy: 100.0,
-                traits: TraitVector { values: [0.3, 0.8] },
-            },
-            Agent {
-                position: (100.0, 50.0),
-                energy: 80.0,
-                traits: TraitVector { values: [0.7, 0.2] },
-            },
-            Agent {
-                position: (-80.0, -60.0),
-                energy: 90.0,
-                traits: TraitVector { values: [0.5, 0.5] },
-            },
-        ])))
+        .insert_resource(SimWorld(World::new(params, distribution, 42)))
         .add_systems(Startup, (setup_camera, spawn_agent_sprites))
         .add_systems(FixedUpdate, step_simulation)
         .add_systems(Update, sync_agent_transforms)
@@ -45,7 +59,7 @@ fn spawn_agent_sprites(
 ) {
     let mesh = meshes.add(Circle::new(12.0));
     for (i, agent) in sim.0.agents().iter().enumerate() {
-        let color = Color::hsl(agent.traits.values[0] * 360.0, 0.7, 0.5);
+        let color = Color::hsl(agent.traits.photosynthetic_absorption * 360.0, 0.7, 0.5);
         commands.spawn((
             Mesh2d(mesh.clone()),
             MeshMaterial2d(materials.add(ColorMaterial::from_color(color))),
