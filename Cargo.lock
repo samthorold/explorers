@@ -2352,6 +2352,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "explorers-genesis-eval"
+version = "0.1.0"
+dependencies = [
+ "explorers-sim",
+ "rand",
+ "rand_chacha",
+ "rand_distr",
+]
+
+[[package]]
 name = "explorers-sim"
 version = "0.1.0"
 dependencies = [

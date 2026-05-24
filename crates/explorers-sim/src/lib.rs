@@ -125,6 +125,8 @@ pub struct World {
     dissipated_energy: f32,
     total_solar_input: f32,
     rng: ChaCha8Rng,
+    last_tick_births: usize,
+    last_tick_deaths: usize,
 }
 
 impl World {
@@ -168,6 +170,8 @@ impl World {
             dissipated_energy: 0.0,
             total_solar_input: 0.0,
             rng,
+            last_tick_births: 0,
+            last_tick_deaths: 0,
         }
     }
 
@@ -460,6 +464,8 @@ impl World {
             }
         }
 
+        self.last_tick_births = offspring.len();
+        self.last_tick_deaths = n - next_agents.len();
         next_agents.extend(offspring);
         self.agents = next_agents;
         self.carcasses = next_carcasses;
@@ -483,6 +489,14 @@ impl World {
 
     pub fn total_solar_input(&self) -> f32 {
         self.total_solar_input
+    }
+
+    pub fn last_tick_births(&self) -> usize {
+        self.last_tick_births
+    }
+
+    pub fn last_tick_deaths(&self) -> usize {
+        self.last_tick_deaths
     }
 }
 
