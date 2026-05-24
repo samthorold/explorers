@@ -238,6 +238,24 @@ impl World {
         let extent = self.params.world_extent;
         let agent_count = self.agents.len();
 
+        let max_sensing_range = self.agents.iter()
+            .map(|a| a.traits.sensing_range)
+            .fold(0.0_f32, f32::max);
+        let max_query_radius = max_sensing_range
+            .max(self.params.light_competition_radius)
+            .max(self.params.contact_radius);
+        let cell_size = max_query_radius.max(1.0);
+
+        let mut agent_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
+        for (i, agent) in self.agents.iter().enumerate() {
+            agent_grid.insert(i as u64, agent.position);
+        }
+
+        let mut carcass_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
+        for (ci, carcass) in self.carcasses.iter().enumerate() {
+            carcass_grid.insert(ci as u64, carcass.position);
+        }
+
         // --- Sense & Decide: compute movement vectors for all agents ---
         let movements: Vec<(f32, f32)> = (0..agent_count)
             .map(|i| {
@@ -250,14 +268,17 @@ impl World {
                 let mut chemotaxis_y = 0.0_f32;
 
                 if agent.traits.consumption_rate > 0.0 {
-                    for (j, other) in self.agents.iter().enumerate() {
+                    let neighbors = agent_grid.query_radius(agent.position, agent.traits.sensing_range);
+                    for j_id in neighbors {
+                        let j = j_id as usize;
                         if j == i {
                             continue;
                         }
+                        let other = &self.agents[j];
                         let (dx, dy) =
                             toroidal_displacement(agent.position, other.position, extent);
                         let dist = (dx * dx + dy * dy).sqrt();
-                        if dist > 0.0 && dist <= agent.traits.sensing_range {
+                        if dist > 0.0 {
                             let signal = agent.traits.consumption_rate / dist;
                             chemotaxis_x += signal * dx / dist;
                             chemotaxis_y += signal * dy / dist;
@@ -266,11 +287,14 @@ impl World {
                 }
 
                 if agent.traits.scavenging_rate > 0.0 {
-                    for carcass in &self.carcasses {
+                    let nearby_carcasses = carcass_grid.query_radius(agent.position, agent.traits.sensing_range);
+                    for ci_id in nearby_carcasses {
+                        let ci = ci_id as usize;
+                        let carcass = &self.carcasses[ci];
                         let (dx, dy) =
                             toroidal_displacement(agent.position, carcass.position, extent);
                         let dist = (dx * dx + dy * dy).sqrt();
-                        if dist > 0.0 && dist <= agent.traits.sensing_range {
+                        if dist > 0.0 {
                             let signal = agent.traits.scavenging_rate / dist;
                             chemotaxis_x += signal * dx / dist;
                             chemotaxis_y += signal * dy / dist;
@@ -311,8 +335,14 @@ impl World {
                     return 1.0;
                 }
                 let mut total_local_absorption = agent.traits.photosynthetic_absorption;
-                for (j, other) in self.agents.iter().enumerate() {
-                    if j == i || other.traits.photosynthetic_absorption <= 0.0 {
+                let neighbors = agent_grid.query_radius(agent.position, competition_radius);
+                for j_id in neighbors {
+                    let j = j_id as usize;
+                    if j == i {
+                        continue;
+                    }
+                    let other = &self.agents[j];
+                    if other.traits.photosynthetic_absorption <= 0.0 {
                         continue;
                     }
                     let dist = toroidal_distance(agent.position, other.position, extent);
@@ -358,6 +388,12 @@ impl World {
             });
         }
 
+        // Rebuild agent grid with post-move positions
+        let mut agent_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
+        for (i, agent) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, agent.position);
+        }
+
         // --- Consumption: agents drain energy from living targets within contact_radius ---
         let contact_radius = self.params.contact_radius;
         let consumption_efficiency = self.params.consumption_efficiency;
@@ -372,7 +408,9 @@ impl World {
             }
             let mut best_target: Option<usize> = None;
             let mut best_dist = f32::MAX;
-            for j in 0..n {
+            let neighbors = agent_grid.query_radius(agents[i].position, contact_radius);
+            for j_id in neighbors {
+                let j = j_id as usize;
                 if j == i {
                     continue;
                 }
@@ -429,7 +467,10 @@ impl World {
             }
             let mut best_carcass: Option<usize> = None;
             let mut best_dist = f32::MAX;
-            for (ci, carcass) in self.carcasses.iter().enumerate() {
+            let nearby_carcasses = carcass_grid.query_radius(agents[i].position, contact_radius);
+            for ci_id in nearby_carcasses {
+                let ci = ci_id as usize;
+                let carcass = &self.carcasses[ci];
                 let dist = toroidal_distance(agents[i].position, carcass.position, extent);
                 if dist < contact_radius && dist < best_dist {
                     best_dist = dist;
@@ -489,12 +530,18 @@ impl World {
             .collect();
 
         // Phase 1: collect all compatible candidate pairs
+        let max_effective_radius = effective_radii.iter().copied().fold(0.0_f32, f32::max);
         let mut candidate_pairs: Vec<(f32, usize, usize)> = Vec::new();
         for i in 0..n {
             if agents[i].energy <= reproduction_threshold {
                 continue;
             }
-            for j in (i + 1)..n {
+            let neighbors = agent_grid.query_radius(agents[i].position, max_effective_radius);
+            for j_id in neighbors {
+                let j = j_id as usize;
+                if j <= i {
+                    continue;
+                }
                 if agents[j].energy <= reproduction_threshold {
                     continue;
                 }
@@ -3098,6 +3145,106 @@ mod tests {
         assert_eq!(
             world.agents().len(), 3,
             "sessile agents within sensing_range should reproduce via spore dispersal"
+        );
+    }
+
+    #[test]
+    fn spatial_index_produces_identical_outcomes_to_brute_force_reference() {
+        let params = WorldParameters {
+            world_extent: 100.0,
+            contact_radius: 5.0,
+            light_competition_radius: 10.0,
+            initial_population_size: 50,
+            reproduction_energy_threshold: 30.0,
+            mutation_rate: 0.1,
+            mutation_magnitude: 0.05,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                consumption_rate: 0.3,
+                scavenging_rate: 0.2,
+                mobility: 0.4,
+                chemotaxis_sensitivity: 0.3,
+                mate_selectivity: 0.5,
+                sensing_range: 8.0,
+                reproductive_investment: 15.0,
+            },
+            trait_covariance: 0.1,
+            initial_cluster_count: 3,
+            initial_energy_per_agent: 80.0,
+        };
+
+        // Run two identical worlds to confirm determinism
+        let mut world1 = World::new(params.clone(), dist.clone(), 12345);
+        let mut world2 = World::new(params, dist, 12345);
+        for _ in 0..20 {
+            world1.step();
+            world2.step();
+        }
+
+        assert_eq!(world1.agents().len(), world2.agents().len());
+        assert_eq!(world1.carcasses().len(), world2.carcasses().len());
+        for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.position, b.position);
+            assert_eq!(a.energy, b.energy);
+        }
+
+        // Energy conservation
+        let total_agent_energy: f32 = world1.agents().iter().map(|a| a.energy).sum();
+        let total_carcass_energy: f32 = world1.carcasses().iter().map(|c| c.energy).sum();
+        let initial_energy = 50.0 * 80.0;
+        let expected = initial_energy + world1.total_solar_input();
+        let actual = total_agent_energy + total_carcass_energy + world1.dissipated_energy();
+
+        assert!(
+            (actual - expected).abs() < 1.0,
+            "energy conservation violated: actual={actual}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn spatial_index_handles_500_agents_within_reasonable_time() {
+        let params = WorldParameters {
+            world_extent: 200.0,
+            contact_radius: 5.0,
+            light_competition_radius: 10.0,
+            initial_population_size: 500,
+            reproduction_energy_threshold: 50.0,
+            mutation_rate: 0.1,
+            mutation_magnitude: 0.05,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                consumption_rate: 0.3,
+                scavenging_rate: 0.2,
+                mobility: 0.4,
+                chemotaxis_sensitivity: 0.3,
+                mate_selectivity: 0.5,
+                sensing_range: 8.0,
+                reproductive_investment: 15.0,
+            },
+            trait_covariance: 0.1,
+            initial_cluster_count: 3,
+            initial_energy_per_agent: 80.0,
+        };
+
+        let mut world = World::new(params, dist, 42);
+        let start = std::time::Instant::now();
+        let ticks = 10;
+        for _ in 0..ticks {
+            world.step();
+        }
+        let elapsed = start.elapsed();
+        let per_tick = elapsed / ticks;
+
+        assert!(
+            per_tick.as_millis() < 50,
+            "500-agent tick took {per_tick:?}, expected < 50ms with spatial index"
         );
     }
 }
