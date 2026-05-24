@@ -84,6 +84,7 @@ impl TraitVector {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct WorldParameters {
     pub solar_flux_magnitude: f32,
     pub consumption_efficiency: f32,
@@ -100,6 +101,7 @@ pub struct WorldParameters {
     pub initial_population_size: u32,
 }
 
+#[derive(Clone, Debug)]
 pub struct InitialDistribution {
     pub mean_traits: TraitVector,
     pub trait_covariance: f32,

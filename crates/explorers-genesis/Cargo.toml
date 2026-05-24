@@ -1,0 +1,8 @@
+[package]
+name = "explorers-genesis"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+explorers-sim = { path = "../explorers-sim" }
+explorers-genesis-eval = { path = "../explorers-genesis-eval" }
