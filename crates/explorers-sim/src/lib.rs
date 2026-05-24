@@ -30,7 +30,7 @@ fn wrap_position(pos: (f32, f32), extent: f32) -> (f32, f32) {
     (x, y)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct TraitVector {
     pub photosynthetic_absorption: f32,
     pub consumption_rate: f32,
@@ -40,6 +40,48 @@ pub struct TraitVector {
     pub mate_selectivity: f32,
     pub sensing_range: f32,
     pub reproductive_investment: f32,
+}
+
+impl TraitVector {
+    pub fn distance(&self, other: &TraitVector) -> f32 {
+        let d0 = self.photosynthetic_absorption - other.photosynthetic_absorption;
+        let d1 = self.consumption_rate - other.consumption_rate;
+        let d2 = self.scavenging_rate - other.scavenging_rate;
+        let d3 = self.mobility - other.mobility;
+        let d4 = self.chemotaxis_sensitivity - other.chemotaxis_sensitivity;
+        let d5 = self.mate_selectivity - other.mate_selectivity;
+        let d6 = self.sensing_range - other.sensing_range;
+        let d7 = self.reproductive_investment - other.reproductive_investment;
+        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5 + d6 * d6 + d7 * d7).sqrt()
+    }
+
+    fn get(&self, index: usize) -> f32 {
+        match index {
+            0 => self.photosynthetic_absorption,
+            1 => self.consumption_rate,
+            2 => self.scavenging_rate,
+            3 => self.mobility,
+            4 => self.chemotaxis_sensitivity,
+            5 => self.mate_selectivity,
+            6 => self.sensing_range,
+            7 => self.reproductive_investment,
+            _ => unreachable!(),
+        }
+    }
+
+    fn set(&mut self, index: usize, value: f32) {
+        match index {
+            0 => self.photosynthetic_absorption = value,
+            1 => self.consumption_rate = value,
+            2 => self.scavenging_rate = value,
+            3 => self.mobility = value,
+            4 => self.chemotaxis_sensitivity = value,
+            5 => self.mate_selectivity = value,
+            6 => self.sensing_range = value,
+            7 => self.reproductive_investment = value,
+            _ => unreachable!(),
+        }
+    }
 }
 
 pub struct WorldParameters {
@@ -306,6 +348,97 @@ impl World {
         }
         self.carcasses.retain(|c| c.energy > 0.0);
 
+        // --- Reproduction: find compatible mates and produce offspring ---
+        let mut reproduced = vec![false; n];
+        let mut reproduction_investments = vec![0.0_f32; n];
+        let mut offspring: Vec<Agent> = Vec::new();
+        let reproduction_threshold = self.params.reproduction_energy_threshold;
+        let reproduction_efficiency = self.params.reproduction_efficiency;
+        let mutation_rate = self.params.mutation_rate;
+        let mutation_magnitude = self.params.mutation_magnitude;
+
+        for i in 0..n {
+            if reproduced[i] || agents[i].energy <= reproduction_threshold {
+                continue;
+            }
+            let mut best_mate: Option<usize> = None;
+            let mut best_dist = f32::MAX;
+            for j in 0..n {
+                if j == i || reproduced[j] || agents[j].energy <= reproduction_threshold {
+                    continue;
+                }
+                let spatial_dist =
+                    toroidal_distance(agents[i].position, agents[j].position, extent);
+                if spatial_dist > contact_radius {
+                    continue;
+                }
+                let trait_dist = agents[i].traits.distance(&agents[j].traits);
+                if trait_dist < agents[i].traits.mate_selectivity
+                    && trait_dist < agents[j].traits.mate_selectivity
+                    && spatial_dist < best_dist
+                {
+                    best_dist = spatial_dist;
+                    best_mate = Some(j);
+                }
+            }
+            if let Some(j) = best_mate {
+                reproduced[i] = true;
+                reproduced[j] = true;
+
+                let inv_a = agents[i].traits.reproductive_investment;
+                let inv_b = agents[j].traits.reproductive_investment;
+                agents[i].energy -= inv_a;
+                agents[j].energy -= inv_b;
+                reproduction_investments[i] = inv_a;
+                reproduction_investments[j] = inv_b;
+
+                let offspring_energy = (inv_a + inv_b) * reproduction_efficiency;
+                self.dissipated_energy += (inv_a + inv_b) * (1.0 - reproduction_efficiency);
+
+                let mut child_traits = TraitVector {
+                    photosynthetic_absorption: 0.0,
+                    consumption_rate: 0.0,
+                    scavenging_rate: 0.0,
+                    mobility: 0.0,
+                    chemotaxis_sensitivity: 0.0,
+                    mate_selectivity: 0.0,
+                    sensing_range: 0.0,
+                    reproductive_investment: 0.0,
+                };
+                for dim in 0..8 {
+                    let from_a: bool = rand::distr::Uniform::new(0u32, 2)
+                        .unwrap()
+                        .sample(&mut self.rng)
+                        == 0;
+                    let val = if from_a {
+                        agents[i].traits.get(dim)
+                    } else {
+                        agents[j].traits.get(dim)
+                    };
+                    child_traits.set(dim, val);
+                }
+
+                if mutation_rate > 0.0 {
+                    let mutation_dist = Normal::new(0.0_f32, mutation_magnitude).unwrap();
+                    for dim in 0..8 {
+                        let r: f32 = rand::distr::Uniform::new(0.0_f32, 1.0)
+                            .unwrap()
+                            .sample(&mut self.rng);
+                        if r < mutation_rate {
+                            let perturbation = mutation_dist.sample(&mut self.rng);
+                            child_traits.set(dim, child_traits.get(dim) + perturbation);
+                        }
+                    }
+                }
+
+                offspring.push(Agent {
+                    position: agents[i].position,
+                    energy: offspring_energy,
+                    traits: child_traits,
+                });
+            }
+        }
+
         // --- Death check and carcass creation ---
         let mut next_agents: Vec<Agent> = Vec::with_capacity(n);
         let mut next_carcasses: Vec<Carcass> = self.carcasses.drain(..).collect();
@@ -320,12 +453,14 @@ impl World {
                 self.dissipated_energy += solar_gains[i] + decomposition_gains[i];
             } else {
                 let total_input = solar_gains[i] + consumption_deltas[i] + decomposition_gains[i];
-                let costs = pre_tick_energies[i] + total_input - agent.energy;
+                let costs =
+                    pre_tick_energies[i] + total_input - agent.energy - reproduction_investments[i];
                 self.dissipated_energy += costs;
                 next_agents.push(agent);
             }
         }
 
+        next_agents.extend(offspring);
         self.agents = next_agents;
         self.carcasses = next_carcasses;
     }
@@ -1384,6 +1519,558 @@ mod tests {
         world.step();
         assert_eq!(world.agents()[0].energy, 50.0);
         assert_eq!(world.agents()[1].energy, 50.0);
+    }
+
+    #[test]
+    fn compatible_agents_produce_one_offspring() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let shared_traits = TraitVector {
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: shared_traits,
+        });
+        world.add_agent(Agent {
+            position: (2.0, 0.0),
+            energy: 50.0,
+            traits: shared_traits,
+        });
+        world.step();
+        assert_eq!(
+            world.agents().len(),
+            3,
+            "two compatible agents should produce one offspring"
+        );
+    }
+
+    #[test]
+    fn parents_lose_energy_equal_to_reproductive_investment() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                mate_selectivity: 10.0,
+                reproductive_investment: 15.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (2.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                mate_selectivity: 10.0,
+                reproductive_investment: 8.0,
+                ..zero_traits()
+            },
+        });
+        world.step();
+        assert_eq!(world.agents().len(), 3);
+        assert!((world.agents()[0].energy - 35.0).abs() < 1e-5, "parent A: {}", world.agents()[0].energy);
+        assert!((world.agents()[1].energy - 42.0).abs() < 1e-5, "parent B: {}", world.agents()[1].energy);
+    }
+
+    #[test]
+    fn offspring_energy_is_lossy() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                mate_selectivity: 10.0,
+                reproductive_investment: 15.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (2.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                mate_selectivity: 10.0,
+                reproductive_investment: 8.0,
+                ..zero_traits()
+            },
+        });
+        world.step();
+        // Offspring energy = (15 + 8) * 0.7 = 16.1
+        let offspring = &world.agents()[2];
+        assert!(
+            (offspring.energy - 16.1).abs() < 1e-5,
+            "offspring energy: {}",
+            offspring.energy
+        );
+    }
+
+    #[test]
+    fn below_energy_threshold_no_reproduction() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let shared_traits = TraitVector {
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 40.0, // below threshold of 50
+            traits: shared_traits,
+        });
+        world.add_agent(Agent {
+            position: (2.0, 0.0),
+            energy: 100.0,
+            traits: shared_traits,
+        });
+        world.step();
+        assert_eq!(world.agents().len(), 2, "no reproduction when one parent below threshold");
+    }
+
+    #[test]
+    fn no_reproduction_outside_contact_radius() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let shared_traits = TraitVector {
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: shared_traits,
+        });
+        world.add_agent(Agent {
+            position: (20.0, 0.0), // far outside contact_radius of 5
+            energy: 50.0,
+            traits: shared_traits,
+        });
+        world.step();
+        assert_eq!(world.agents().len(), 2, "no reproduction when outside contact radius");
+    }
+
+    #[test]
+    fn asymmetric_mate_selectivity_prevents_reproduction() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Agent A has high selectivity (accepts B), agent B has low selectivity (rejects A)
+        // Trait distance between them = sqrt((10-0.5)^2) = 9.5 (via mate_selectivity difference)
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                mate_selectivity: 10.0, // accepts trait dist < 10
+                reproductive_investment: 10.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (2.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                mate_selectivity: 0.5, // rejects trait dist >= 0.5
+                reproductive_investment: 10.0,
+                ..zero_traits()
+            },
+        });
+        world.step();
+        assert_eq!(world.agents().len(), 2, "asymmetric selectivity should prevent reproduction");
+    }
+
+    #[test]
+    fn agent_reproduces_at_most_once_per_tick() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let shared_traits = TraitVector {
+            mate_selectivity: 5.0,
+            reproductive_investment: 5.0,
+            ..zero_traits()
+        };
+        // Three compatible agents all in contact — should produce at most 1 offspring (one pair)
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: shared_traits,
+        });
+        world.add_agent(Agent {
+            position: (1.0, 0.0),
+            energy: 100.0,
+            traits: shared_traits,
+        });
+        world.add_agent(Agent {
+            position: (2.0, 0.0),
+            energy: 100.0,
+            traits: shared_traits,
+        });
+        world.step();
+        // One pair reproduces, one agent left out → 3 + 1 = 4
+        assert_eq!(world.agents().len(), 4, "three agents should produce exactly one offspring");
+    }
+
+    #[test]
+    fn uniform_crossover_draws_each_dimension_from_one_parent() {
+        let mut from_a_counts = [0u32; 8];
+        let total_offspring = 200;
+
+        for seed in 0..total_offspring {
+            let params = WorldParameters {
+                solar_flux_magnitude: 0.0,
+                base_metabolic_rate: 0.0,
+                sensing_cost_coefficient: 0.0,
+                movement_cost_coefficient: 0.0,
+                contact_radius: 5.0,
+                reproduction_efficiency: 0.7,
+                reproduction_energy_threshold: 10.0,
+                mutation_rate: 0.0,
+                mutation_magnitude: 0.0,
+                initial_population_size: 0,
+                ..test_params()
+            };
+            let dist = InitialDistribution {
+                mean_traits: zero_traits(),
+                trait_covariance: 0.0,
+                initial_cluster_count: 1,
+                initial_energy_per_agent: 100.0,
+            };
+            let mut world = World::new(params, dist, seed);
+            // Parents with distinct trait values per dimension so we can tell who contributed
+            world.add_agent(Agent {
+                position: (0.0, 0.0),
+                energy: 100.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 1.0,
+                    consumption_rate: 1.0,
+                    scavenging_rate: 1.0,
+                    mobility: 1.0,
+                    chemotaxis_sensitivity: 1.0,
+                    mate_selectivity: 100.0,
+                    sensing_range: 1.0,
+                    reproductive_investment: 10.0,
+                },
+            });
+            world.add_agent(Agent {
+                position: (1.0, 0.0),
+                energy: 100.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 2.0,
+                    consumption_rate: 2.0,
+                    scavenging_rate: 2.0,
+                    mobility: 2.0,
+                    chemotaxis_sensitivity: 2.0,
+                    mate_selectivity: 101.0,
+                    sensing_range: 2.0,
+                    reproductive_investment: 20.0,
+                },
+            });
+            world.step();
+            assert_eq!(world.agents().len(), 3);
+            let child = &world.agents()[2];
+            let parent_a_vals = [1.0, 1.0, 1.0, 1.0, 1.0, 100.0, 1.0, 10.0];
+            for dim in 0..8 {
+                let val = child.traits.get(dim);
+                if (val - parent_a_vals[dim]).abs() < 1e-5 {
+                    from_a_counts[dim] += 1;
+                }
+            }
+        }
+
+        // Each dimension should be ~50% from parent A (binomial, p=0.5, n=200)
+        // 99% CI is roughly [78, 122] for 200 trials
+        for dim in 0..8 {
+            let count = from_a_counts[dim];
+            assert!(
+                count > 60 && count < 140,
+                "dim {dim}: from_a={count}/{total_offspring}, expected ~50%"
+            );
+        }
+    }
+
+    #[test]
+    fn mutation_perturbs_offspring_traits() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 1.0, // mutate every dimension
+            mutation_magnitude: 0.5,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let shared_traits = TraitVector {
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: shared_traits,
+        });
+        world.add_agent(Agent {
+            position: (1.0, 0.0),
+            energy: 100.0,
+            traits: shared_traits,
+        });
+        world.step();
+        assert_eq!(world.agents().len(), 3);
+        let child = &world.agents()[2];
+        // With mutation_rate=1.0, every dimension should be perturbed
+        // At least some dimensions should differ from both parents
+        let mut any_mutated = false;
+        for dim in 0..8 {
+            let val = child.traits.get(dim);
+            let parent_val = shared_traits.get(dim);
+            if (val - parent_val).abs() > 1e-10 {
+                any_mutated = true;
+            }
+        }
+        assert!(any_mutated, "mutation_rate=1.0 should perturb at least one dimension");
+    }
+
+    #[test]
+    fn reproduction_is_deterministic_given_seed() {
+        let make_world = |seed| {
+            let params = WorldParameters {
+                solar_flux_magnitude: 0.0,
+                base_metabolic_rate: 0.0,
+                sensing_cost_coefficient: 0.0,
+                movement_cost_coefficient: 0.0,
+                contact_radius: 5.0,
+                reproduction_efficiency: 0.7,
+                reproduction_energy_threshold: 10.0,
+                mutation_rate: 0.5,
+                mutation_magnitude: 0.3,
+                initial_population_size: 0,
+                ..test_params()
+            };
+            let dist = InitialDistribution {
+                mean_traits: zero_traits(),
+                trait_covariance: 0.0,
+                initial_cluster_count: 1,
+                initial_energy_per_agent: 100.0,
+            };
+            let mut world = World::new(params, dist, seed);
+            let shared_traits = TraitVector {
+                mate_selectivity: 5.0,
+                reproductive_investment: 10.0,
+                ..zero_traits()
+            };
+            world.add_agent(Agent {
+                position: (0.0, 0.0),
+                energy: 100.0,
+                traits: shared_traits,
+            });
+            world.add_agent(Agent {
+                position: (1.0, 0.0),
+                energy: 100.0,
+                traits: shared_traits,
+            });
+            world.step();
+            world
+        };
+        let w1 = make_world(42);
+        let w2 = make_world(42);
+        assert_eq!(w1.agents().len(), w2.agents().len());
+        for (a, b) in w1.agents().iter().zip(w2.agents().iter()) {
+            assert_eq!(a.energy, b.energy);
+            for dim in 0..8 {
+                assert_eq!(a.traits.get(dim), b.traits.get(dim));
+            }
+        }
+    }
+
+    #[test]
+    fn energy_accounting_holds_with_reproduction() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 2.0,
+            base_metabolic_rate: 0.3,
+            sensing_cost_coefficient: 0.05,
+            movement_cost_coefficient: 0.02,
+            contact_radius: 8.0,
+            consumption_efficiency: 0.6,
+            decomposition_efficiency: 0.4,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 15.0,
+            mutation_rate: 0.1,
+            mutation_magnitude: 0.05,
+            initial_population_size: 10,
+            world_extent: 50.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                consumption_rate: 0.3,
+                scavenging_rate: 0.2,
+                mobility: 0.3,
+                chemotaxis_sensitivity: 0.3,
+                mate_selectivity: 2.0,
+                sensing_range: 5.0,
+                reproductive_investment: 5.0,
+            },
+            trait_covariance: 0.1,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 30.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let initial_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        for _ in 0..50 {
+            world.step();
+        }
+        let living_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        let carcass_energy: f32 = world.carcasses().iter().map(|c| c.energy).sum();
+        let total = living_energy + carcass_energy + world.dissipated_energy();
+        let expected = initial_energy + world.total_solar_input();
+        let diff = (total - expected).abs();
+        assert!(
+            diff < 1e-1,
+            "energy accounting off by {diff}: total={total}, expected={expected}, \
+             living={living_energy}, carcass={carcass_energy}, dissipated={}, solar={}, \
+             agents={}, carcasses={}",
+            world.dissipated_energy(),
+            world.total_solar_input(),
+            world.agents().len(),
+            world.carcasses().len()
+        );
     }
 
     #[test]
