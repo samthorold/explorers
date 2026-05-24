@@ -17,6 +17,7 @@ pub struct Event {
     pub source: u64,
     pub target: Option<u64>,
     pub energy_delta: f32,
+    pub position: Option<(f32, f32)>,
 }
 
 pub struct EventLog {
@@ -85,6 +86,7 @@ mod tests {
             source: 1,
             target: None,
             energy_delta: 10.0,
+            position: None,
         }
     }
 
@@ -145,15 +147,15 @@ mod tests {
         let mut log = EventLog::new();
         log.append(Event {
             tick: 1, seq: 0, kind: EventKind::Consumed,
-            source: 10, target: Some(20), energy_delta: 5.0,
+            source: 10, target: Some(20), energy_delta: 5.0, position: None,
         }).unwrap();
         log.append(Event {
             tick: 1, seq: 1, kind: EventKind::Born,
-            source: 30, target: None, energy_delta: 8.0,
+            source: 30, target: None, energy_delta: 8.0, position: None,
         }).unwrap();
         log.append(Event {
             tick: 2, seq: 2, kind: EventKind::Decomposed,
-            source: 40, target: Some(10), energy_delta: 3.0,
+            source: 40, target: Some(10), energy_delta: 3.0, position: None,
         }).unwrap();
 
         let for_10: Vec<_> = log.by_agent(10);

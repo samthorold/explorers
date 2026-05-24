@@ -89,6 +89,8 @@ fn main() {
                 photo_maintenance_cost: 0.01,
                 consumption_maintenance_cost: 0.01,
                 scavenging_maintenance_cost: 0.01,
+spatial_decay_rate: 0.5,
+
             },
             initial_distribution: InitialDistribution {
                 mean_traits: TraitVector {
@@ -372,6 +374,8 @@ mod tests {
                 photo_maintenance_cost: 0.0,
                 consumption_maintenance_cost: 0.0,
                 scavenging_maintenance_cost: 0.0,
+spatial_decay_rate: 0.5,
+
             },
             InitialDistribution {
                 mean_traits: TraitVector {
