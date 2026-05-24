@@ -2,6 +2,34 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal};
 
+pub fn toroidal_distance(a: (f32, f32), b: (f32, f32), extent: f32) -> f32 {
+    let (dx, dy) = toroidal_displacement(a, b, extent);
+    (dx * dx + dy * dy).sqrt()
+}
+
+fn toroidal_displacement(from: (f32, f32), to: (f32, f32), extent: f32) -> (f32, f32) {
+    let mut dx = to.0 - from.0;
+    let mut dy = to.1 - from.1;
+    if dx > extent / 2.0 {
+        dx -= extent;
+    } else if dx < -extent / 2.0 {
+        dx += extent;
+    }
+    if dy > extent / 2.0 {
+        dy -= extent;
+    } else if dy < -extent / 2.0 {
+        dy += extent;
+    }
+    (dx, dy)
+}
+
+fn wrap_position(pos: (f32, f32), extent: f32) -> (f32, f32) {
+    let half = extent / 2.0;
+    let x = (pos.0 + half).rem_euclid(extent) - half;
+    let y = (pos.1 + half).rem_euclid(extent) - half;
+    (x, y)
+}
+
 #[derive(Clone, Copy)]
 pub struct TraitVector {
     pub photosynthetic_absorption: f32,
@@ -54,6 +82,7 @@ pub struct World {
     carcasses: Vec<Carcass>,
     dissipated_energy: f32,
     total_solar_input: f32,
+    rng: ChaCha8Rng,
 }
 
 impl World {
@@ -96,29 +125,115 @@ impl World {
             carcasses: Vec::new(),
             dissipated_energy: 0.0,
             total_solar_input: 0.0,
+            rng,
         }
     }
 
+    pub fn add_agent(&mut self, agent: Agent) {
+        self.agents.push(agent);
+    }
+
+    pub fn add_carcass(&mut self, carcass: Carcass) {
+        self.carcasses.push(carcass);
+    }
+
     pub fn step(&mut self) {
-        let mut next_agents: Vec<Agent> = Vec::with_capacity(self.agents.len());
+        let extent = self.params.world_extent;
+        let agent_count = self.agents.len();
+
+        // --- Sense & Decide: compute movement vectors for all agents ---
+        let movements: Vec<(f32, f32)> = (0..agent_count)
+            .map(|i| {
+                let agent = &self.agents[i];
+                if agent.traits.mobility <= 0.0 {
+                    return (0.0, 0.0);
+                }
+
+                let mut chemotaxis_x = 0.0_f32;
+                let mut chemotaxis_y = 0.0_f32;
+
+                if agent.traits.consumption_rate > 0.0 {
+                    for (j, other) in self.agents.iter().enumerate() {
+                        if j == i {
+                            continue;
+                        }
+                        let (dx, dy) =
+                            toroidal_displacement(agent.position, other.position, extent);
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist > 0.0 && dist <= agent.traits.sensing_range {
+                            let signal = agent.traits.consumption_rate / dist;
+                            chemotaxis_x += signal * dx / dist;
+                            chemotaxis_y += signal * dy / dist;
+                        }
+                    }
+                }
+
+                if agent.traits.scavenging_rate > 0.0 {
+                    for carcass in &self.carcasses {
+                        let (dx, dy) =
+                            toroidal_displacement(agent.position, carcass.position, extent);
+                        let dist = (dx * dx + dy * dy).sqrt();
+                        if dist > 0.0 && dist <= agent.traits.sensing_range {
+                            let signal = agent.traits.scavenging_rate / dist;
+                            chemotaxis_x += signal * dx / dist;
+                            chemotaxis_y += signal * dy / dist;
+                        }
+                    }
+                }
+
+                // Scale by chemotaxis sensitivity
+                chemotaxis_x *= agent.traits.chemotaxis_sensitivity;
+                chemotaxis_y *= agent.traits.chemotaxis_sensitivity;
+
+                // Random exploration component
+                let angle_dist = rand::distr::Uniform::new(0.0_f32, std::f32::consts::TAU).unwrap();
+                let angle = angle_dist.sample(&mut self.rng);
+                let explore_x = angle.cos();
+                let explore_y = angle.sin();
+
+                let mut move_x = chemotaxis_x + explore_x;
+                let mut move_y = chemotaxis_y + explore_y;
+
+                // Normalize and scale by mobility
+                let mag = (move_x * move_x + move_y * move_y).sqrt();
+                if mag > 0.0 {
+                    move_x = move_x / mag * agent.traits.mobility;
+                    move_y = move_y / mag * agent.traits.mobility;
+                }
+
+                (move_x, move_y)
+            })
+            .collect();
+
+        // --- Act: apply movement, energy, death ---
+        let mut next_agents: Vec<Agent> = Vec::with_capacity(agent_count);
         let mut next_carcasses: Vec<Carcass> = self.carcasses.drain(..).collect();
-        for agent in &self.agents {
+
+        for (i, agent) in self.agents.iter().enumerate() {
+            let (mx, my) = movements[i];
+            let new_pos = wrap_position(
+                (agent.position.0 + mx, agent.position.1 + my),
+                extent,
+            );
+            let distance_moved = (mx * mx + my * my).sqrt();
+            let movement_cost = distance_moved * self.params.movement_cost_coefficient;
+
             let solar_gain =
                 agent.traits.photosynthetic_absorption * self.params.solar_flux_magnitude;
             let metabolic_cost = self.params.base_metabolic_rate
                 + agent.traits.sensing_range * self.params.sensing_cost_coefficient;
             self.total_solar_input += solar_gain;
-            let energy = agent.energy + solar_gain - metabolic_cost;
+            let energy = agent.energy + solar_gain - metabolic_cost - movement_cost;
             if energy <= 0.0 {
                 next_carcasses.push(Carcass {
-                    position: agent.position,
+                    position: new_pos,
                     energy: agent.energy,
                 });
                 self.dissipated_energy += solar_gain;
             } else {
-                self.dissipated_energy += metabolic_cost;
+                self.dissipated_energy += metabolic_cost + movement_cost;
                 next_agents.push(Agent {
-                    position: agent.position,
+                    position: new_pos,
                     energy,
                     traits: agent.traits,
                 });
@@ -439,6 +554,340 @@ mod tests {
         world.step();
         let expected_cost = 0.5 + sensing_range * 0.1;
         assert_eq!(world.agents()[0].energy, 100.0 - expected_cost);
+    }
+
+    #[test]
+    fn toroidal_distance_wraps_across_edges() {
+        let extent = 100.0;
+        // Two points near opposite edges: (-48, 0) and (48, 0)
+        // Direct distance = 96, but toroidal distance = 4 (wrapping around)
+        let a = (-48.0_f32, 0.0_f32);
+        let b = (48.0_f32, 0.0_f32);
+        let dist = toroidal_distance(a, b, extent);
+        assert!((dist - 4.0).abs() < 1e-5, "expected ~4.0 but got {dist}");
+    }
+
+    #[test]
+    fn toroidal_distance_same_point_is_zero() {
+        let p = (10.0_f32, 20.0_f32);
+        assert_eq!(toroidal_distance(p, p, 100.0), 0.0);
+    }
+
+    #[test]
+    fn toroidal_distance_non_wrapping_is_euclidean() {
+        let a = (0.0_f32, 0.0_f32);
+        let b = (3.0_f32, 4.0_f32);
+        let dist = toroidal_distance(a, b, 100.0);
+        assert!((dist - 5.0).abs() < 1e-5);
+    }
+
+    fn zero_traits() -> TraitVector {
+        TraitVector {
+            photosynthetic_absorption: 0.0,
+            consumption_rate: 0.0,
+            scavenging_rate: 0.0,
+            mobility: 0.0,
+            chemotaxis_sensitivity: 0.0,
+            mate_selectivity: 0.0,
+            sensing_range: 0.0,
+            reproductive_investment: 0.0,
+        }
+    }
+
+    #[test]
+    fn consumer_moves_toward_living_agent() {
+        let extent = 100.0;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Manually place two agents: consumer at (0,0), food at (20,0)
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 1.0,
+                mobility: 5.0,
+                chemotaxis_sensitivity: 1.0,
+                sensing_range: 50.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (20.0, 0.0),
+            energy: 100.0,
+            traits: zero_traits(),
+        });
+        let initial_dist = toroidal_distance(
+            world.agents()[0].position,
+            world.agents()[1].position,
+            extent,
+        );
+        world.step();
+        let final_dist = toroidal_distance(
+            world.agents()[0].position,
+            world.agents()[1].position,
+            extent,
+        );
+        assert!(
+            final_dist < initial_dist,
+            "consumer should move closer: initial={initial_dist}, final={final_dist}"
+        );
+    }
+
+    #[test]
+    fn scavenger_moves_toward_carcass() {
+        let extent = 100.0;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                scavenging_rate: 1.0,
+                mobility: 5.0,
+                chemotaxis_sensitivity: 1.0,
+                sensing_range: 50.0,
+                ..zero_traits()
+            },
+        });
+        world.add_carcass(Carcass {
+            position: (20.0, 0.0),
+            energy: 50.0,
+        });
+        let initial_dist = toroidal_distance(
+            world.agents()[0].position,
+            world.carcasses()[0].position,
+            extent,
+        );
+        world.step();
+        let final_dist = toroidal_distance(
+            world.agents()[0].position,
+            world.carcasses()[0].position,
+            extent,
+        );
+        assert!(
+            final_dist < initial_dist,
+            "scavenger should move closer to carcass: initial={initial_dist}, final={final_dist}"
+        );
+    }
+
+    #[test]
+    fn sensing_detects_across_toroidal_boundary() {
+        let extent = 100.0;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Consumer at -48, food at +48 → toroidal distance = 4
+        world.add_agent(Agent {
+            position: (-48.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 1.0,
+                mobility: 5.0,
+                chemotaxis_sensitivity: 1.0,
+                sensing_range: 10.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (48.0, 0.0),
+            energy: 100.0,
+            traits: zero_traits(),
+        });
+        let initial_pos = world.agents()[0].position;
+        world.step();
+        let final_pos = world.agents()[0].position;
+        // Should move in the negative-x direction (toward the boundary, wrapping to +48)
+        assert!(
+            final_pos.0 < initial_pos.0 || final_pos.0 > 45.0,
+            "consumer should move toward food across boundary, not away: initial_x={}, final_x={}",
+            initial_pos.0,
+            final_pos.0
+        );
+    }
+
+    #[test]
+    fn same_seed_produces_identical_movement() {
+        let params_fn = || WorldParameters {
+            initial_population_size: 5,
+            ..test_params()
+        };
+        let dist_fn = || test_distribution();
+        let seed = 42;
+
+        let mut world1 = World::new(params_fn(), dist_fn(), seed);
+        let mut world2 = World::new(params_fn(), dist_fn(), seed);
+        for _ in 0..10 {
+            world1.step();
+            world2.step();
+        }
+        for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
+            assert_eq!(a.position, b.position);
+            assert_eq!(a.energy, b.energy);
+        }
+    }
+
+    #[test]
+    fn agent_wraps_around_world_edge_after_movement() {
+        let extent = 100.0;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Place consumer near edge, food just across boundary
+        // Consumer at (48, 0), food at (-48, 0) → toroidal dist = 4
+        world.add_agent(Agent {
+            position: (48.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 1.0,
+                mobility: 5.0,
+                chemotaxis_sensitivity: 10.0, // strong chemotaxis to dominate random
+                sensing_range: 50.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            position: (-48.0, 0.0),
+            energy: 100.0,
+            traits: zero_traits(),
+        });
+        world.step();
+        let pos = world.agents()[0].position;
+        let half = extent / 2.0;
+        assert!(
+            pos.0 >= -half && pos.0 < half && pos.1 >= -half && pos.1 < half,
+            "position should be within world bounds: ({}, {})",
+            pos.0,
+            pos.1
+        );
+    }
+
+    #[test]
+    fn movement_costs_energy_proportional_to_distance() {
+        let extent = 100.0;
+        let movement_cost_coefficient = 0.5;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let mobility = 3.0;
+        world.add_agent(Agent {
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                mobility,
+                ..zero_traits()
+            },
+        });
+        world.step();
+        let pos = world.agents()[0].position;
+        let distance_moved = (pos.0 * pos.0 + pos.1 * pos.1).sqrt();
+        let expected_cost = distance_moved * movement_cost_coefficient;
+        let expected_energy = 100.0 - expected_cost;
+        assert!(
+            (world.agents()[0].energy - expected_energy).abs() < 1e-5,
+            "energy={}, expected={}",
+            world.agents()[0].energy,
+            expected_energy
+        );
+    }
+
+    #[test]
+    fn zero_mobility_agent_does_not_move_or_pay_movement_cost() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.5,
+            initial_population_size: 1,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let initial_pos = world.agents()[0].position;
+        let initial_energy = world.agents()[0].energy;
+        world.step();
+        assert_eq!(world.agents()[0].position, initial_pos);
+        assert_eq!(world.agents()[0].energy, initial_energy);
     }
 
     #[test]
