@@ -2,6 +2,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal};
 
+#[derive(Clone, Copy)]
 pub struct TraitVector {
     pub photosynthetic_absorption: f32,
     pub consumption_rate: f32,
@@ -42,9 +43,17 @@ pub struct Agent {
     pub traits: TraitVector,
 }
 
+pub struct Carcass {
+    pub position: (f32, f32),
+    pub energy: f32,
+}
+
 pub struct World {
     params: WorldParameters,
     agents: Vec<Agent>,
+    carcasses: Vec<Carcass>,
+    dissipated_energy: f32,
+    total_solar_input: f32,
 }
 
 impl World {
@@ -81,10 +90,43 @@ impl World {
             })
             .collect();
 
-        Self { params, agents }
+        Self {
+            params,
+            agents,
+            carcasses: Vec::new(),
+            dissipated_energy: 0.0,
+            total_solar_input: 0.0,
+        }
     }
 
-    pub fn step(&mut self) {}
+    pub fn step(&mut self) {
+        let mut next_agents: Vec<Agent> = Vec::with_capacity(self.agents.len());
+        let mut next_carcasses: Vec<Carcass> = self.carcasses.drain(..).collect();
+        for agent in &self.agents {
+            let solar_gain =
+                agent.traits.photosynthetic_absorption * self.params.solar_flux_magnitude;
+            let metabolic_cost = self.params.base_metabolic_rate
+                + agent.traits.sensing_range * self.params.sensing_cost_coefficient;
+            self.total_solar_input += solar_gain;
+            let energy = agent.energy + solar_gain - metabolic_cost;
+            if energy <= 0.0 {
+                next_carcasses.push(Carcass {
+                    position: agent.position,
+                    energy: agent.energy,
+                });
+                self.dissipated_energy += solar_gain;
+            } else {
+                self.dissipated_energy += metabolic_cost;
+                next_agents.push(Agent {
+                    position: agent.position,
+                    energy,
+                    traits: agent.traits,
+                });
+            }
+        }
+        self.agents = next_agents;
+        self.carcasses = next_carcasses;
+    }
 
     pub fn params(&self) -> &WorldParameters {
         &self.params
@@ -92,6 +134,18 @@ impl World {
 
     pub fn agents(&self) -> &[Agent] {
         &self.agents
+    }
+
+    pub fn carcasses(&self) -> &[Carcass] {
+        &self.carcasses
+    }
+
+    pub fn dissipated_energy(&self) -> f32 {
+        self.dissipated_energy
+    }
+
+    pub fn total_solar_input(&self) -> f32 {
+        self.total_solar_input
     }
 }
 
@@ -201,5 +255,221 @@ mod tests {
             world.step();
         }
         assert_eq!(world.agents().len(), 10);
+    }
+
+    #[test]
+    fn agent_at_zero_energy_becomes_carcass() {
+        let params = WorldParameters {
+            base_metabolic_rate: 100.0,
+            sensing_cost_coefficient: 0.0,
+            solar_flux_magnitude: 0.0,
+            initial_population_size: 1,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.step();
+        assert_eq!(world.agents().len(), 0);
+        assert_eq!(world.carcasses().len(), 1);
+        assert_eq!(world.carcasses()[0].energy, 100.0);
+    }
+
+    #[test]
+    fn energy_accounting_balances_over_many_ticks() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 2.0,
+            base_metabolic_rate: 0.5,
+            sensing_cost_coefficient: 0.1,
+            initial_population_size: 5,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.3,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.5,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.1,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 10.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let initial_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        for _ in 0..50 {
+            world.step();
+        }
+        let living_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        let carcass_energy: f32 = world.carcasses().iter().map(|c| c.energy).sum();
+        let total = living_energy + carcass_energy + world.dissipated_energy();
+        let expected = initial_energy + world.total_solar_input();
+        let diff = (total - expected).abs();
+        assert!(
+            diff < 1e-3,
+            "energy accounting off by {diff}: total={total}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn non_photosynthesiser_dies_in_predictable_ticks() {
+        let base_metabolic_rate: f32 = 0.5;
+        let sensing_cost_coefficient: f32 = 0.1;
+        let sensing_range: f32 = 2.0;
+        let initial_energy: f32 = 10.0;
+        let metabolic_cost = base_metabolic_rate + sensing_range * sensing_cost_coefficient;
+        let expected_ticks = (initial_energy / metabolic_cost).floor() as u32;
+        let params = WorldParameters {
+            base_metabolic_rate,
+            sensing_cost_coefficient,
+            solar_flux_magnitude: 0.0,
+            initial_population_size: 1,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: initial_energy,
+        };
+        let mut world = World::new(params, dist, 42);
+        for tick in 1..=expected_ticks + 1 {
+            world.step();
+            if tick < expected_ticks {
+                assert_eq!(world.agents().len(), 1, "agent should be alive at tick {tick}");
+            }
+        }
+        assert_eq!(world.agents().len(), 0, "agent should be dead");
+        assert_eq!(world.carcasses().len(), 1);
+    }
+
+    #[test]
+    fn carcasses_persist_without_energy_decay() {
+        let params = WorldParameters {
+            base_metabolic_rate: 50.0,
+            sensing_cost_coefficient: 0.0,
+            solar_flux_magnitude: 0.0,
+            initial_population_size: 1,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Tick 1: energy 100 - 50 = 50
+        world.step();
+        assert_eq!(world.agents().len(), 1);
+        // Tick 2: energy 50 - 50 = 0 → carcass
+        world.step();
+        assert_eq!(world.agents().len(), 0);
+        assert_eq!(world.carcasses().len(), 1);
+        let carcass_energy = world.carcasses()[0].energy;
+        // Tick 3-12: carcass should not decay
+        for _ in 0..10 {
+            world.step();
+        }
+        assert_eq!(world.carcasses().len(), 1);
+        assert_eq!(world.carcasses()[0].energy, carcass_energy);
+    }
+
+    #[test]
+    fn agents_pay_metabolic_cost_per_tick() {
+        let params = WorldParameters {
+            base_metabolic_rate: 0.5,
+            sensing_cost_coefficient: 0.1,
+            solar_flux_magnitude: 0.0,
+            initial_population_size: 1,
+            ..test_params()
+        };
+        let sensing_range = 3.0;
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.step();
+        let expected_cost = 0.5 + sensing_range * 0.1;
+        assert_eq!(world.agents()[0].energy, 100.0 - expected_cost);
+    }
+
+    #[test]
+    fn agents_gain_energy_from_solar_flux() {
+        let params = WorldParameters {
+            initial_population_size: 1,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.8,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let initial_energy = world.agents()[0].energy;
+        world.step();
+        let photosynthesis = world.agents()[0].traits.photosynthetic_absorption
+            * world.params().solar_flux_magnitude;
+        let metabolic_cost = world.params().base_metabolic_rate
+            + world.agents()[0].traits.sensing_range * world.params().sensing_cost_coefficient;
+        let expected = initial_energy + photosynthesis - metabolic_cost;
+        assert_eq!(world.agents()[0].energy, expected);
     }
 }
