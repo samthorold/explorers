@@ -79,6 +79,10 @@ fn main() {
                 contact_radius: 5.0,
                 world_extent: 200.0,
                 initial_population_size: 3,
+                light_competition_radius: 20.0,
+                photo_maintenance_cost: 0.01,
+                consumption_maintenance_cost: 0.01,
+                scavenging_maintenance_cost: 0.01,
             },
             initial_distribution: InitialDistribution {
                 mean_traits: TraitVector {
@@ -344,6 +348,10 @@ mod tests {
                 contact_radius: 5.0,
                 world_extent,
                 initial_population_size: 0,
+                light_competition_radius: 1000.0,
+                photo_maintenance_cost: 0.0,
+                consumption_maintenance_cost: 0.0,
+                scavenging_maintenance_cost: 0.0,
             },
             InitialDistribution {
                 mean_traits: TraitVector {

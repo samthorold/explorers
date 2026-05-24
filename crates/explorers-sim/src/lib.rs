@@ -100,6 +100,10 @@ pub struct WorldParameters {
     pub contact_radius: f32,
     pub world_extent: f32,
     pub initial_population_size: u32,
+    pub light_competition_radius: f32,
+    pub photo_maintenance_cost: f32,
+    pub consumption_maintenance_cost: f32,
+    pub scavenging_maintenance_cost: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -268,6 +272,28 @@ impl World {
             })
             .collect();
 
+        // --- Compute local light competition shares ---
+        let competition_radius = self.params.light_competition_radius;
+        let light_shares: Vec<f32> = (0..agent_count)
+            .map(|i| {
+                let agent = &self.agents[i];
+                if agent.traits.photosynthetic_absorption <= 0.0 {
+                    return 1.0;
+                }
+                let mut total_local_absorption = agent.traits.photosynthetic_absorption;
+                for (j, other) in self.agents.iter().enumerate() {
+                    if j == i || other.traits.photosynthetic_absorption <= 0.0 {
+                        continue;
+                    }
+                    let dist = toroidal_distance(agent.position, other.position, extent);
+                    if dist < competition_radius {
+                        total_local_absorption += other.traits.photosynthetic_absorption;
+                    }
+                }
+                agent.traits.photosynthetic_absorption / total_local_absorption
+            })
+            .collect();
+
         // --- Act: apply movement, energy ---
         let mut agents: Vec<Agent> = Vec::with_capacity(agent_count);
         let mut pre_tick_energies: Vec<f32> = Vec::with_capacity(agent_count);
@@ -282,10 +308,14 @@ impl World {
             let distance_moved = (mx * mx + my * my).sqrt();
             let movement_cost = distance_moved * self.params.movement_cost_coefficient;
 
+            let mobility_gate = 1.0 / (1.0 + (20.0_f32 * (agent.traits.mobility - 0.3)).exp());
             let solar_gain =
-                agent.traits.photosynthetic_absorption * self.params.solar_flux_magnitude;
+                agent.traits.photosynthetic_absorption * self.params.solar_flux_magnitude * mobility_gate * light_shares[i];
             let metabolic_cost = self.params.base_metabolic_rate
-                + agent.traits.sensing_range * self.params.sensing_cost_coefficient;
+                + agent.traits.sensing_range * self.params.sensing_cost_coefficient
+                + agent.traits.photosynthetic_absorption * self.params.photo_maintenance_cost
+                + agent.traits.consumption_rate * self.params.consumption_maintenance_cost
+                + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost;
             self.total_solar_input += solar_gain;
             let energy = agent.energy + solar_gain - metabolic_cost - movement_cost;
             pre_tick_energies.push(agent.energy);
@@ -630,6 +660,10 @@ mod tests {
             contact_radius: 5.0,
             world_extent: 100.0,
             initial_population_size: 10,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
         }
     }
 
@@ -2250,8 +2284,11 @@ mod tests {
         let mut world = World::new(params, dist, 42);
         let initial_energy = world.agents()[0].energy;
         world.step();
+        let mobility = world.agents()[0].traits.mobility;
+        let mobility_gate = 1.0 / (1.0 + (20.0_f32 * (mobility - 0.3)).exp());
         let photosynthesis = world.agents()[0].traits.photosynthetic_absorption
-            * world.params().solar_flux_magnitude;
+            * world.params().solar_flux_magnitude
+            * mobility_gate;
         let metabolic_cost = world.params().base_metabolic_rate
             + world.agents()[0].traits.sensing_range * world.params().sensing_cost_coefficient;
         let expected = initial_energy + photosynthesis - metabolic_cost;
@@ -2538,5 +2575,294 @@ mod tests {
         let carcass_ids_a: Vec<u64> = world_a.carcasses().iter().map(|c| c.id).collect();
         let carcass_ids_b: Vec<u64> = world_b.carcasses().iter().map(|c| c.id).collect();
         assert_eq!(carcass_ids_a, carcass_ids_b, "same seed must produce identical carcass IDs");
+    }
+
+    #[test]
+    fn lone_producer_gets_full_flux_colocated_producers_share() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            light_competition_radius: 5.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        let producer = TraitVector {
+            photosynthetic_absorption: 1.0,
+            mobility: 0.0,
+            ..zero_traits()
+        };
+
+        // Lone producer gets full flux
+        let mut world_lone = World::new(params.clone(), dist.clone(), 42);
+        world_lone.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
+        });
+        world_lone.step();
+        let lone_energy = world_lone.agents()[0].energy;
+        let gate = 1.0_f32 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
+        let expected_full = 100.0 + 1.0 * 10.0 * gate;
+        assert!(
+            (lone_energy - expected_full).abs() < 0.1,
+            "lone producer should get full flux, energy={lone_energy}, expected={expected_full}"
+        );
+
+        // Two co-located producers with equal absorption share equally
+        let mut world_two = World::new(params.clone(), dist.clone(), 42);
+        world_two.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
+        });
+        world_two.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
+        });
+        world_two.step();
+        let energy_a = world_two.agents()[0].energy;
+        let energy_b = world_two.agents()[1].energy;
+        let expected_half = 100.0 + 1.0 * 10.0 * gate * 0.5;
+        assert!(
+            (energy_a - expected_half).abs() < 0.1,
+            "co-located producer should get half flux, energy={energy_a}, expected={expected_half}"
+        );
+        assert!(
+            (energy_b - expected_half).abs() < 0.1,
+            "co-located producer should get half flux, energy={energy_b}, expected={expected_half}"
+        );
+    }
+
+    #[test]
+    fn producers_outside_competition_radius_dont_compete() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            light_competition_radius: 5.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        let producer = TraitVector {
+            photosynthetic_absorption: 1.0,
+            mobility: 0.0,
+            ..zero_traits()
+        };
+
+        // Two producers far apart (> competition radius) don't compete
+        let mut world = World::new(params.clone(), dist.clone(), 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
+        });
+        world.add_agent(Agent {
+            id: 0, position: (40.0, 40.0), energy: 100.0, traits: producer,
+        });
+        world.step();
+        let gate = 1.0_f32 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
+        let expected_full = 100.0 + 1.0 * 10.0 * gate;
+        let energy_a = world.agents()[0].energy;
+        let energy_b = world.agents()[1].energy;
+        assert!(
+            (energy_a - expected_full).abs() < 0.1,
+            "distant producer should get full flux, energy={energy_a}, expected={expected_full}"
+        );
+        assert!(
+            (energy_b - expected_full).abs() < 0.1,
+            "distant producer should get full flux, energy={energy_b}, expected={expected_full}"
+        );
+    }
+
+    #[test]
+    fn sessile_agent_gets_full_solar_gain_mobile_agent_gets_near_zero() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        let sessile_traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            mobility: 0.0,
+            ..zero_traits()
+        };
+        let mobile_traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            mobility: 1.0,
+            ..zero_traits()
+        };
+
+        let mut world_sessile = World::new(params.clone(), dist.clone(), 42);
+        world_sessile.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 100.0, traits: sessile_traits,
+        });
+        world_sessile.step();
+        let sessile_energy = world_sessile.agents()[0].energy;
+        // Sessile agent: gate ≈ 1.0, solar gain ≈ 1.0 * 10.0 = 10.0
+        assert!(
+            (sessile_energy - 110.0).abs() < 0.1,
+            "sessile agent should get full solar gain, energy={sessile_energy}"
+        );
+
+        let mut world_mobile = World::new(params.clone(), dist.clone(), 42);
+        world_mobile.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 100.0, traits: mobile_traits,
+        });
+        world_mobile.step();
+        let mobile_energy = world_mobile.agents()[0].energy;
+        // Mobile agent: gate ≈ 0.0, solar gain ≈ 0.0
+        assert!(
+            mobile_energy < 100.5,
+            "mobile agent should get near-zero solar gain, energy={mobile_energy}"
+        );
+    }
+
+    #[test]
+    fn trait_maintenance_costs_scale_with_trait_magnitude() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            photo_maintenance_cost: 0.1,
+            consumption_maintenance_cost: 0.2,
+            scavenging_maintenance_cost: 0.3,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        // Agent with high consumption_rate pays more than one with low
+        let high_consumption = TraitVector {
+            consumption_rate: 5.0,
+            ..zero_traits()
+        };
+        let low_consumption = TraitVector {
+            consumption_rate: 1.0,
+            ..zero_traits()
+        };
+
+        let mut world_high = World::new(params.clone(), dist.clone(), 42);
+        world_high.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 100.0, traits: high_consumption,
+        });
+        world_high.step();
+
+        let mut world_low = World::new(params.clone(), dist.clone(), 42);
+        world_low.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 100.0, traits: low_consumption,
+        });
+        world_low.step();
+
+        let high_energy = world_high.agents()[0].energy;
+        let low_energy = world_low.agents()[0].energy;
+
+        // consumption_maintenance_cost = 0.2
+        // high: 100 - 5.0*0.2 = 99.0, low: 100 - 1.0*0.2 = 99.8
+        assert!(
+            high_energy < low_energy,
+            "high consumption_rate should drain more energy: high={high_energy}, low={low_energy}"
+        );
+        assert!(
+            (high_energy - 99.0).abs() < 0.01,
+            "expected 99.0 for high consumption agent, got {high_energy}"
+        );
+        assert!(
+            (low_energy - 99.8).abs() < 0.01,
+            "expected 99.8 for low consumption agent, got {low_energy}"
+        );
+    }
+
+    #[test]
+    fn crowded_generalist_drains_faster_than_lean_specialist() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            light_competition_radius: 5.0,
+            photo_maintenance_cost: 0.05,
+            consumption_maintenance_cost: 0.1,
+            scavenging_maintenance_cost: 0.1,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        let generalist = TraitVector {
+            photosynthetic_absorption: 1.0,
+            consumption_rate: 3.0,
+            scavenging_rate: 2.0,
+            mobility: 0.0,
+            ..zero_traits()
+        };
+        let specialist = TraitVector {
+            photosynthetic_absorption: 1.0,
+            mobility: 0.0,
+            ..zero_traits()
+        };
+
+        // Crowded generalist: two generalists near each other share light + pay maintenance
+        let mut world_gen = World::new(params.clone(), dist.clone(), 42);
+        world_gen.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 100.0, traits: generalist,
+        });
+        world_gen.add_agent(Agent {
+            id: 0, position: (1.0, 0.0), energy: 100.0, traits: generalist,
+        });
+        world_gen.step();
+        let gen_energy = world_gen.agents()[0].energy;
+
+        // Lone specialist: no competition, no maintenance for unused traits
+        let mut world_spec = World::new(params.clone(), dist.clone(), 42);
+        world_spec.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 100.0, traits: specialist,
+        });
+        world_spec.step();
+        let spec_energy = world_spec.agents()[0].energy;
+
+        assert!(
+            gen_energy < spec_energy,
+            "crowded generalist ({gen_energy}) should have less energy than lone specialist ({spec_energy})"
+        );
     }
 }

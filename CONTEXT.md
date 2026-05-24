@@ -7,7 +7,7 @@ An ecology-driven game where a foreign entity navigates an alien world of interc
 ### Core
 
 **Agent**:
-The fundamental unit of the simulation. Everything in the world is an agent: organisms, carcasses, the player. There is no inert backdrop and no fixed types — an agent's role (producer, herbivore, decomposer) is a human interpretation of its position in trait space.
+The fundamental unit of the simulation. Everything in the world is an agent: organisms, carcasses, the player. There is no inert backdrop and no fixed types — an agent's role (producer, consumer, decomposer) is derived from its position in trait space. The derivation has mechanical consequences: trait values determine which capabilities an agent can exercise (e.g. photosynthesis is gated by low mobility), but the labels are always a reading of the trait vector, never an assigned type.
 _Avoid_: entity, creature, organism (when referring to the simulation abstraction)
 
 **Trait vector**:
@@ -24,7 +24,7 @@ The discrete time step of the simulation. Each tick, all agents sense their neig
 ### Energy flow
 
 **Solar flux**:
-A continuous, uniform energy field that all agents are exposed to. The sole external energy input to the world. An agent's photosynthetic absorption trait determines how much flux it converts to energy.
+The sole external energy input to the world. Agents compete locally for flux — each producer shares available light with other producers within a **light competition radius**, weighted by photosynthetic absorption. An isolated producer receives full flux; a producer in a crowded area receives a fraction. Photosynthetic gain is attenuated by mobility via a steep sigmoid: near-sessile agents receive full gain, mobile agents receive negligible gain. The sigmoid constants are fixed laws of the world, not tunable parameters. This creates carrying capacity for producers and enforces the producer/consumer divide.
 _Avoid_: sunlight, light level, radiation
 
 **Consumption**:
@@ -40,7 +40,7 @@ An agent draining energy from a **carcass**. Functionally identical to **consump
 _Avoid_: recycling, decay (decay implies passive process)
 
 **Metabolic cost**:
-The energy an agent expends per **tick**. Derived from activity, not fixed: base cost scales with body size, plus costs for movement, sensing, and environmental mismatch (dormant until spatial gradients are added).
+The energy an agent expends per **tick**. Comprises a base rate, plus costs for movement, sensing, and **trait maintenance** — each energy-acquisition trait (photosynthetic absorption, consumption rate, scavenging rate) costs energy to maintain whether used or not. Agents that carry traits they never exercise pay for the biological machinery, creating selection pressure toward specialisation. When agent size enters the model, metabolic cost should also scale with body mass (Kleiber's law).
 _Avoid_: upkeep, energy drain, maintenance
 
 ### Movement and sensing
@@ -84,7 +84,10 @@ _Avoid_: species (as a designed concept — there are no species definitions, on
 The constants that define the physics of the simulation. Searched by genesis across ensemble runs. Not visible to agents, not evolvable. Distinct from the trait vector, which evolves within a run.
 
 **Solar flux magnitude**:
-Energy input rate per tick per unit photosynthetic absorption. The sole tap — controls how much energy enters the system.
+Total energy available per tick within a **light competition radius**. Divided among local producers proportional to their photosynthetic absorption. The sole tap — controls how much energy enters the system.
+
+**Light competition radius**:
+The radius within which producers compete for solar flux. Producers outside this radius do not affect each other's energy intake. A world parameter searched by genesis. Interacts with world extent and population density to determine how crowded the light environment is.
 
 **Consumption efficiency**:
 Energy transferred per tick per unit consumption rate on sustained contact with a living agent.
@@ -93,7 +96,10 @@ Energy transferred per tick per unit consumption rate on sustained contact with 
 Energy transferred per tick per unit scavenging rate on contact with a carcass.
 
 **Base metabolic rate**:
-Energy cost per tick, scaled by activity (body size, movement, sensing). The sole drain alongside reproduction.
+Fixed energy cost per tick, independent of traits or activity. The floor of metabolic cost — trait maintenance, movement, and sensing costs are added on top.
+
+**Trait maintenance cost**:
+Energy cost per tick per unit of each energy-acquisition trait. Three coefficients (one each for photosynthetic absorption, consumption rate, scavenging rate) are world parameters searched by genesis. An agent with high consumption rate pays for maintaining the machinery to consume whether or not it finds prey. Drives evolutionary specialisation — generalists pay more overhead than specialists.
 
 **Movement cost coefficient**:
 Energy cost per unit distance moved per tick. Makes mobility expensive — creates the core trade-off between sessile photosynthesis and mobile consumption.
@@ -196,7 +202,7 @@ When an agent's energy reaches zero. The agent becomes a **carcass**.
 
 > **Dev:** An agent with high photosynthetic absorption and low mobility — is that a plant?
 >
-> **Domain:** We'd say it's occupying a producer-like niche in trait space. There are no plants. If it also has moderate scavenging rate, it's a producer that supplements with decomposition — something that doesn't map to any Earth category.
+> **Domain:** It's a producer — its low mobility means it gets full photosynthetic gain from the sigmoid gate. We derive that label from its traits, not assign it. If it also has moderate scavenging rate, it's a producer that supplements with decomposition — something that doesn't map to any Earth category. It pays trait maintenance cost for the scavenging machinery whether or not carcasses are nearby.
 >
 > **Dev:** What happens when a herbivore eats a producer?
 >
