@@ -2354,6 +2354,11 @@ dependencies = [
 [[package]]
 name = "explorers-sim"
 version = "0.1.0"
+dependencies = [
+ "rand",
+ "rand_chacha",
+ "rand_distr",
+]
 
 [[package]]
 name = "fastrand"
