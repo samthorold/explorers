@@ -450,6 +450,14 @@ impl World {
         let mutation_rate = self.params.mutation_rate;
         let mutation_magnitude = self.params.mutation_magnitude;
 
+        // Compute per-agent effective reproduction radius (spore dispersal)
+        let effective_radii: Vec<f32> = (0..n)
+            .map(|i| {
+                let gate = 1.0 / (1.0 + (20.0_f32 * (agents[i].traits.mobility - 0.3)).exp());
+                gate * agents[i].traits.sensing_range + (1.0 - gate) * contact_radius
+            })
+            .collect();
+
         // Phase 1: collect all compatible candidate pairs
         let mut candidate_pairs: Vec<(f32, usize, usize)> = Vec::new();
         for i in 0..n {
@@ -462,7 +470,7 @@ impl World {
                 }
                 let spatial_dist =
                     toroidal_distance(agents[i].position, agents[j].position, extent);
-                if spatial_dist > contact_radius {
+                if spatial_dist > effective_radii[i].max(effective_radii[j]) {
                     continue;
                 }
                 let trait_dist = agents[i].traits.distance(&agents[j].traits);
@@ -1710,6 +1718,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         let shared_traits = TraitVector {
+            mobility: 1.0,
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             ..zero_traits()
@@ -1761,6 +1770,7 @@ mod tests {
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
+                mobility: 1.0,
                 mate_selectivity: 10.0,
                 reproductive_investment: 15.0,
                 ..zero_traits()
@@ -1771,6 +1781,7 @@ mod tests {
             position: (2.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
+                mobility: 1.0,
                 mate_selectivity: 10.0,
                 reproductive_investment: 8.0,
                 ..zero_traits()
@@ -1809,6 +1820,7 @@ mod tests {
             position: (0.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
+                mobility: 1.0,
                 mate_selectivity: 10.0,
                 reproductive_investment: 15.0,
                 ..zero_traits()
@@ -1819,6 +1831,7 @@ mod tests {
             position: (2.0, 0.0),
             energy: 50.0,
             traits: TraitVector {
+                mobility: 1.0,
                 mate_selectivity: 10.0,
                 reproductive_investment: 8.0,
                 ..zero_traits()
@@ -1988,6 +2001,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         let shared_traits = TraitVector {
+            mobility: 1.0,
             mate_selectivity: 5.0,
             reproductive_investment: 5.0,
             ..zero_traits()
@@ -2119,6 +2133,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         let shared_traits = TraitVector {
+            mobility: 1.0,
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             ..zero_traits()
@@ -2863,6 +2878,196 @@ mod tests {
         assert!(
             gen_energy < spec_energy,
             "crowded generalist ({gen_energy}) should have less energy than lone specialist ({spec_energy})"
+        );
+    }
+
+    #[test]
+    fn midpoint_mobility_agent_has_blended_reproduction_radius() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        let midpoint_traits = TraitVector {
+            mobility: 0.3,
+            sensing_range: 15.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+
+        // gate at mobility=0.3: 1/(1+exp(0)) = 0.5
+        // effective_radius = 0.5 * 15.0 + 0.5 * 5.0 = 10.0
+        // Two agents at distance 9.0 should reproduce (within 10.0)
+        let mut world_near = World::new(params.clone(), dist.clone(), 42);
+        world_near.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 50.0, traits: midpoint_traits,
+        });
+        world_near.add_agent(Agent {
+            id: 0, position: (9.0, 0.0), energy: 50.0, traits: midpoint_traits,
+        });
+        world_near.step();
+        assert_eq!(
+            world_near.agents().len(), 3,
+            "midpoint agents within blended radius (10.0) should reproduce at distance 9.0"
+        );
+
+        // Two agents at distance 11.0 should NOT reproduce (beyond 10.0)
+        let mut world_far = World::new(params.clone(), dist.clone(), 42);
+        world_far.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 50.0, traits: midpoint_traits,
+        });
+        world_far.add_agent(Agent {
+            id: 0, position: (11.0, 0.0), energy: 50.0, traits: midpoint_traits,
+        });
+        world_far.step();
+        assert_eq!(
+            world_far.agents().len(), 2,
+            "midpoint agents beyond blended radius (10.0) should not reproduce at distance 11.0"
+        );
+    }
+
+    #[test]
+    fn cross_type_reproduction_via_sessile_spore_dispersal() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let sessile_traits = TraitVector {
+            mobility: 0.0,
+            sensing_range: 15.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        let mobile_traits = TraitVector {
+            mobility: 1.0,
+            sensing_range: 15.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 50.0, traits: sessile_traits,
+        });
+        world.add_agent(Agent {
+            id: 0, position: (10.0, 0.0), energy: 50.0, traits: mobile_traits,
+        });
+        world.step();
+        assert_eq!(
+            world.agents().len(), 3,
+            "sessile producer's spore should reach mobile consumer via max-of-both radii"
+        );
+    }
+
+    #[test]
+    fn mobile_agents_cannot_reproduce_beyond_contact_radius() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let mobile_traits = TraitVector {
+            mobility: 1.0,
+            sensing_range: 15.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 50.0, traits: mobile_traits,
+        });
+        world.add_agent(Agent {
+            id: 0, position: (10.0, 0.0), energy: 50.0, traits: mobile_traits,
+        });
+        world.step();
+        assert_eq!(
+            world.agents().len(), 2,
+            "mobile agents beyond contact_radius should not reproduce despite large sensing_range"
+        );
+    }
+
+    #[test]
+    fn sessile_agents_reproduce_via_spore_dispersal_beyond_contact_radius() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let sessile_traits = TraitVector {
+            mobility: 0.0,
+            sensing_range: 15.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 50.0, traits: sessile_traits,
+        });
+        world.add_agent(Agent {
+            id: 0, position: (10.0, 0.0), energy: 50.0, traits: sessile_traits,
+        });
+        world.step();
+        assert_eq!(
+            world.agents().len(), 3,
+            "sessile agents within sensing_range should reproduce via spore dispersal"
         );
     }
 }
