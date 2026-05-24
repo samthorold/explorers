@@ -214,12 +214,7 @@ impl RunObserver {
             &self.last_energies,
         );
 
-        let product = os * cs * cd * ts * tb;
-        let fitness = if product > 0.0 {
-            product.powf(1.0 / 5.0)
-        } else {
-            0.0
-        };
+        let fitness = 0.2 * os + 0.2 * cs + 0.2 * cd + 0.2 * ts + 0.2 * tb;
 
         FitnessBreakdown {
             fitness,
@@ -969,13 +964,13 @@ mod tests {
     }
 
     #[test]
-    fn fitness_is_geometric_mean_of_five_criteria() {
+    fn fitness_is_weighted_sum_of_five_criteria() {
         let os = 0.8_f32;
         let cs = 0.6;
         let cd = 0.7;
         let ts = 0.5;
         let tb = 0.9;
-        let expected = (os * cs * cd * ts * tb).powf(1.0 / 5.0);
+        let expected = 0.2 * os + 0.2 * cs + 0.2 * cd + 0.2 * ts + 0.2 * tb;
         let result = FitnessBreakdown {
             fitness: expected,
             failure: None,
@@ -1106,7 +1101,7 @@ mod tests {
     }
 
     #[test]
-    fn geometric_mean_of_five_equal_values() {
+    fn weighted_sum_of_five_equal_values() {
         let breakdown = FitnessBreakdown {
             fitness: 0.5,
             failure: None,
@@ -1307,7 +1302,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_population_scores_via_geometric_mean_not_hard_failure() {
+    fn frozen_population_scores_low_not_hard_failure() {
         let max_ticks: u64 = 100;
         let config = EvalConfig {
             grace_period_fraction: 0.0,
@@ -1357,12 +1352,11 @@ mod tests {
             }
         }
         let result = observer.evaluate();
-        // No hard failure — frozen dynamics is no longer a failure mode
         assert!(result.failure.is_none(),
             "frozen population should not be a hard failure, got {:?}", result.failure);
-        // turnover_score=0 zeros the geometric mean
         assert_eq!(result.turnover_score, 0.0);
-        assert_eq!(result.fitness, 0.0,
-            "geometric mean with turnover_score=0 should be 0");
+        // Weighted sum: zero turnover drags fitness down but doesn't zero it
+        assert!(result.fitness < 0.5,
+            "frozen population should score low, got {}", result.fitness);
     }
 }
