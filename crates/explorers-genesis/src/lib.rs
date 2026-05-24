@@ -197,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn ensemble_all_degenerate_returns_survival_floor() {
+    fn ensemble_all_degenerate_returns_zero_fitness() {
         let params = WorldParameters {
             solar_flux_magnitude: 0.0,
             base_metabolic_rate: 100.0,
@@ -217,12 +217,10 @@ mod tests {
 
         let result = run_ensemble(&params, &distribution, &config, 42);
 
-        assert!(result.median_fitness > 0.0, "degenerate runs should get nonzero survival floor");
-        assert!(result.median_fitness <= 0.01, "survival floor capped at 0.01");
+        assert_eq!(result.median_fitness, 0.0);
         assert_eq!(result.run_results.len(), 5);
         for run in &result.run_results {
-            assert!(run.fitness > 0.0);
-            assert!(run.fitness <= 0.01);
+            assert_eq!(run.fitness, 0.0);
             assert!(run.failure.is_some());
         }
     }
@@ -264,8 +262,7 @@ mod tests {
 
         assert!(result.termination_tick < 1000);
         assert_eq!(result.failure, Some(FailureMode::Extinction));
-        assert!(result.fitness > 0.0, "failed run should get nonzero survival floor");
-        assert!(result.fitness <= 0.01);
+        assert_eq!(result.fitness, 0.0);
     }
 
     #[test]

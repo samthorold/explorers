@@ -40,7 +40,7 @@ A uniform grace period of 20% of max_ticks applies to all non-catastrophic detec
 
 Frozen dynamics (zero births and deaths) was originally a hard failure mode but is now handled entirely by the demographic turnover criterion in the geometric mean. A frozen population gets turnover_score=0, which zeros the geometric mean — no hard termination needed. Removing the hard gate avoids the perverse incentive where the survival floor rewarded frozen populations (long survival, no activity) over populations with active reproduction that exploded (short survival, high activity).
 
-Failed runs score `(ticks_survived / max_ticks) * 0.01` — a survival-fraction floor. This gives the optimiser gradient signal across failures (surviving 80 ticks is strictly better than dying on tick 3) while ensuring no failed run can outscore a legitimate success.
+Failed runs score 0. The geometric mean of the five criteria provides the gradient signal for the search — runs that develop ecological structure score higher than those that don't. The survival-fraction floor was removed because it created a perverse incentive: failed runs (with nonzero floor) outscored successful-but-ecologically-dead runs (geometric mean = 0 due to no turnover).
 
 All checks are external observers — the simulation has no knowledge of genesis.
 
@@ -58,7 +58,7 @@ Five criteria, all normalised to [0,1]:
 
 ```
 fitness(run) =
-  (ticks_survived / max_ticks) * 0.01        if any failure mode detected
+  0                                           if any failure mode detected
   geometric_mean(oscillation, clustering,
                  coexistence, turnover,
                  trophic_balance)             otherwise
@@ -81,7 +81,6 @@ Latin hypercube sampling (Thiele et al. 2014) maps the landscape first — ident
 
 - Genesis tooling lives outside the simulation crate (consistent with ADR-0001). The simulation exposes state; genesis observes and evaluates.
 - The geometric mean means a parameterisation cannot score well by excelling at one criterion — all must contribute. But unlike the product, a single weak (but nonzero) criterion doesn't obliterate the signal from strong criteria.
-- The survival-fraction floor means the optimiser always has gradient signal, even in regions where all runs fail. This enables the search to navigate toward the feasible region.
 - Grace periods mean the search can explore parameterisations that start uniform but evolve diversity — consistent with genesis testing whether differentiation emerges spontaneously.
 - Cluster labelling (DBSCAN) is required for oscillation and coexistence measurement. The dip test gates whether labelling is attempted.
 - The median across ensemble runs means outlier runs (one lucky or unlucky seed) don't dominate. A parameterisation must reliably produce sensible worlds.

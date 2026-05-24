@@ -187,13 +187,8 @@ impl RunObserver {
         let ticks_survived = self.tick;
 
         if let Some(failure) = &self.failed {
-            let survival_fraction = if self.max_ticks > 0 {
-                ticks_survived as f32 / self.max_ticks as f32
-            } else {
-                0.0
-            };
             return FitnessBreakdown {
-                fitness: survival_fraction * 0.01,
+                fitness: 0.0,
                 failure: Some(failure.clone()),
                 oscillation_strength: 0.0,
                 clustering_strength: 0.0,
@@ -925,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn fitness_survival_floor_on_extinction() {
+    fn fitness_zero_on_extinction() {
         let config = EvalConfig::default();
         let max_ticks = 100;
         let mut observer = RunObserver::new(config, max_ticks);
@@ -965,8 +960,7 @@ mod tests {
             observer.observe(&world);
         }
         let result = observer.evaluate();
-        assert!(result.fitness > 0.0, "failed run should have nonzero survival floor");
-        assert!(result.fitness <= 0.01, "survival floor capped at 0.01");
+        assert_eq!(result.fitness, 0.0);
         assert_eq!(result.failure, Some(FailureMode::Extinction));
     }
 
@@ -1032,7 +1026,7 @@ mod tests {
         observer.observe(&world);
         let result = observer.evaluate();
         assert_eq!(result.failure, Some(FailureMode::PopulationExplosion));
-        assert!(result.fitness > 0.0, "failed run should have nonzero survival floor");
+        assert_eq!(result.fitness, 0.0);
     }
 
     #[test]
@@ -1104,56 +1098,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_run_gets_survival_floor_not_zero() {
-        let config = EvalConfig::default();
-        let max_ticks = 100;
-        let mut observer = RunObserver::new(config, max_ticks);
-        let params = explorers_sim::WorldParameters {
-            solar_flux_magnitude: 0.0,
-            base_metabolic_rate: 100.0,
-            sensing_cost_coefficient: 0.0,
-            consumption_efficiency: 0.5,
-            decomposition_efficiency: 0.5,
-            reproduction_efficiency: 0.7,
-            movement_cost_coefficient: 0.0,
-            reproduction_energy_threshold: 50.0,
-            mutation_rate: 0.0,
-            mutation_magnitude: 0.0,
-            contact_radius: 5.0,
-            world_extent: 100.0,
-            initial_population_size: 1,
-        };
-        let dist = explorers_sim::InitialDistribution {
-            mean_traits: explorers_sim::TraitVector {
-                photosynthetic_absorption: 0.0,
-                consumption_rate: 0.0,
-                scavenging_rate: 0.0,
-                mobility: 0.0,
-                chemotaxis_sensitivity: 0.0,
-                mate_selectivity: 0.0,
-                sensing_range: 0.0,
-                reproductive_investment: 0.0,
-            },
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 50.0,
-        };
-        let mut world = explorers_sim::World::new(params, dist, 42);
-        for _ in 0..max_ticks {
-            world.step();
-            observer.observe(&world);
-            if observer.failed().is_some() {
-                break;
-            }
-        }
-        let result = observer.evaluate();
-        assert!(result.failure.is_some());
-        assert!(result.fitness > 0.0, "failed run should get nonzero survival floor: {}", result.fitness);
-        assert!(result.fitness <= 0.01, "survival floor should be at most 0.01: {}", result.fitness);
-        assert!(result.ticks_survived > 0);
-    }
-
-    #[test]
     fn geometric_mean_of_five_equal_values() {
         let breakdown = FitnessBreakdown {
             fitness: 0.5,
@@ -1166,15 +1110,6 @@ mod tests {
             ticks_survived: 100,
         };
         assert!((breakdown.fitness - 0.5).abs() < 1e-5);
-    }
-
-    #[test]
-    fn survival_floor_strictly_below_any_legitimate_geometric_mean() {
-        let max_floor = 0.01;
-        let min_factor = 0.05_f32;
-        let geometric_mean = (min_factor.powi(5)).powf(1.0 / 5.0);
-        assert!(max_floor < geometric_mean,
-            "survival floor {max_floor} should be less than geometric mean of five 0.05 factors: {geometric_mean}");
     }
 
     #[test]
