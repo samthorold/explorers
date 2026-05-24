@@ -1,3 +1,4 @@
+pub mod event;
 pub mod spatial;
 
 use rand::seq::SliceRandom;
