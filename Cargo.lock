@@ -2349,6 +2349,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "explorers-sim",
+ "rand",
+ "serde_json",
 ]
 
 [[package]]
@@ -2388,6 +2390,8 @@ dependencies = [
  "rand",
  "rand_chacha",
  "rand_distr",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
