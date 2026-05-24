@@ -1,5 +1,6 @@
 pub mod event;
 pub mod spatial;
+pub mod topology;
 
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
