@@ -35,9 +35,10 @@ A uniform grace period of 20% of max_ticks applies to all non-catastrophic detec
 
 **Non-catastrophic (fire only after grace period):**
 - **Energy death** (periodic): total free energy in living agents trending monotonically downward over a window.
-- **Frozen dynamics** (periodic): zero births and zero deaths over a window.
 - **Monoculture** (periodic): dip test on trait-distance distribution indicates unimodality.
 - **Generalist dominance** (periodic): cluster(s) with high values across multiple energy-acquisition traits dominate the population.
+
+Frozen dynamics (zero births and deaths) was originally a hard failure mode but is now handled entirely by the demographic turnover criterion in the geometric mean. A frozen population gets turnover_score=0, which zeros the geometric mean — no hard termination needed. Removing the hard gate avoids the perverse incentive where the survival floor rewarded frozen populations (long survival, no activity) over populations with active reproduction that exploded (short survival, high activity).
 
 Failed runs score `(ticks_survived / max_ticks) * 0.01` — a survival-fraction floor. This gives the optimiser gradient signal across failures (surviving 80 ticks is strictly better than dying on tick 3) while ensuring no failed run can outscore a legitimate success.
 
