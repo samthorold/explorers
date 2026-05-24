@@ -18,7 +18,7 @@ An ecology-driven game where a foreign entity navigates an alien world of interc
 - **Death** — when an agent's energy reaches zero. Dead agents become resources available to other agents (recycling).
 - **Reproduction** — when an agent's energy exceeds a threshold and conditions are met (e.g. compatible partner nearby). Offspring inherit parent traits with mutation, enabling evolution.
 - **Tick** — the discrete time step of the simulation. Each tick, all agents evaluate their neighbourhood, select actions, and update state.
-- **World genesis** — the process of generating a playable world. A random initial population is simulated forward (off-screen) until it reaches a quasi-stable attractor. Degenerate configurations are discarded. The player drops into a world with history.
+- **World genesis** — the process of generating a playable world. A random initial population is simulated forward (off-screen) until it reaches a quasi-stable attractor. Degenerate configurations are discarded automatically by validation rules that inspect the resulting ecology. The player drops into a world with history.
 
 ## Design decisions
 
