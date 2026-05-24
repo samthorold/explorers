@@ -24,6 +24,7 @@ pub struct FitnessBreakdown {
     pub coexistence_duration: f32,
 }
 
+#[derive(Clone, Debug)]
 pub struct EvalConfig {
     pub max_population: usize,
     pub energy_death_window: usize,
