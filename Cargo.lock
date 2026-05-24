@@ -2370,6 +2370,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "explorers-search"
+version = "0.1.0"
+dependencies = [
+ "explorers-genesis",
+ "explorers-sim",
+ "rand",
+ "rand_chacha",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "explorers-sim"
 version = "0.1.0"
 dependencies = [

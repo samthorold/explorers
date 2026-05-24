@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/explorers-sim", "crates/explorers-app", "crates/explorers-genesis-eval", "crates/explorers-genesis"]
+members = ["crates/explorers-sim", "crates/explorers-app", "crates/explorers-genesis-eval", "crates/explorers-genesis", "crates/explorers-search"]
 resolver = "3"
 
 [profile.dev]
