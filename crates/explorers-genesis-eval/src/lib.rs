@@ -34,7 +34,7 @@ pub struct EvalConfig {
 impl Default for EvalConfig {
     fn default() -> Self {
         Self {
-            max_population: 1000,
+            max_population: 10_000,
             energy_death_window: 50,
             clustering_threshold: 0.5,
             dbscan_eps: 1.0,
@@ -938,6 +938,10 @@ mod tests {
             contact_radius: 5.0,
             world_extent: 100.0,
             initial_population_size: 1,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
@@ -1006,6 +1010,10 @@ mod tests {
             contact_radius: 100.0,
             world_extent: 10.0,
             initial_population_size: 6,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
@@ -1164,6 +1172,10 @@ mod tests {
             contact_radius: 5.0,
             world_extent: 100.0,
             initial_population_size: 5,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
@@ -1211,6 +1223,10 @@ mod tests {
             contact_radius: 5.0,
             world_extent: 100.0,
             initial_population_size: 1,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
@@ -1261,6 +1277,10 @@ mod tests {
             contact_radius: 5.0,
             world_extent: 100.0,
             initial_population_size: 5,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
@@ -1308,6 +1328,10 @@ mod tests {
             contact_radius: 5.0,
             world_extent: 100.0,
             initial_population_size: 5,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {

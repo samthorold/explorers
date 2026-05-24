@@ -108,6 +108,10 @@ pub fn default_ranges() -> Vec<ParameterRange> {
         ParameterRange { name: "contact_radius".into(), min: 0.5, max: 5.0 },
         ParameterRange { name: "world_extent".into(), min: 20.0, max: 100.0 },
         ParameterRange { name: "initial_population_size".into(), min: 5.0, max: 50.0 },
+        ParameterRange { name: "light_competition_radius".into(), min: 1.0, max: 20.0 },
+        ParameterRange { name: "photo_maintenance_cost".into(), min: 0.001, max: 0.1 },
+        ParameterRange { name: "consumption_maintenance_cost".into(), min: 0.001, max: 0.1 },
+        ParameterRange { name: "scavenging_maintenance_cost".into(), min: 0.001, max: 0.1 },
         ParameterRange { name: "mean_photosynthetic_absorption".into(), min: 0.0, max: 1.0 },
         ParameterRange { name: "mean_consumption_rate".into(), min: 0.0, max: 1.0 },
         ParameterRange { name: "mean_scavenging_rate".into(), min: 0.0, max: 1.0 },
@@ -142,22 +146,26 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         contact_radius: v(10) as f32,
         world_extent: v(11) as f32,
         initial_population_size: v(12).round() as u32,
+        light_competition_radius: v(13) as f32,
+        photo_maintenance_cost: v(14) as f32,
+        consumption_maintenance_cost: v(15) as f32,
+        scavenging_maintenance_cost: v(16) as f32,
     };
 
     let dist = InitialDistribution {
         mean_traits: TraitVector {
-            photosynthetic_absorption: v(13) as f32,
-            consumption_rate: v(14) as f32,
-            scavenging_rate: v(15) as f32,
-            mobility: v(16) as f32,
-            chemotaxis_sensitivity: v(17) as f32,
-            mate_selectivity: v(18) as f32,
-            sensing_range: v(19) as f32,
-            reproductive_investment: v(20) as f32,
+            photosynthetic_absorption: v(17) as f32,
+            consumption_rate: v(18) as f32,
+            scavenging_rate: v(19) as f32,
+            mobility: v(20) as f32,
+            chemotaxis_sensitivity: v(21) as f32,
+            mate_selectivity: v(22) as f32,
+            sensing_range: v(23) as f32,
+            reproductive_investment: v(24) as f32,
         },
-        trait_covariance: v(21) as f32,
-        initial_cluster_count: v(22).round() as u32,
-        initial_energy_per_agent: v(23) as f32,
+        trait_covariance: v(25) as f32,
+        initial_cluster_count: v(26).round() as u32,
+        initial_energy_per_agent: v(27) as f32,
     };
 
     (params, dist)

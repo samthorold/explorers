@@ -108,6 +108,10 @@ mod tests {
             contact_radius: 2.0,
             world_extent: 50.0,
             initial_population_size: 10,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
         }
     }
 
