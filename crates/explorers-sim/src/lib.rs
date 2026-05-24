@@ -150,6 +150,8 @@ pub struct World {
     last_tick_births: usize,
     last_tick_deaths: usize,
     next_agent_id: u64,
+    event_log: event::EventLog,
+    next_seq: u64,
 }
 
 impl World {
@@ -227,6 +229,8 @@ impl World {
             last_tick_births: 0,
             last_tick_deaths: 0,
             next_agent_id: pop_size as u64,
+            event_log: event::EventLog::new(),
+            next_seq: 0,
         }
     }
 
@@ -452,6 +456,12 @@ impl World {
                     let consumer_drain = drain * share;
                     consumption_deltas[consumer] += consumer_drain * consumption_efficiency;
                     self.dissipated_energy += consumer_drain * (1.0 - consumption_efficiency);
+                    self.emit(
+                        event::EventKind::Consumed,
+                        agents[consumer].id,
+                        Some(agents[*target].id),
+                        consumer_drain,
+                    );
                 }
                 consumption_deltas[*target] -= drain;
             }
@@ -503,12 +513,19 @@ impl World {
                 .sum();
             let drain = total_demand.min(available);
             if drain > 0.0 {
+                let carcass_id = self.carcasses[*ci].id;
                 for &scavenger in scavengers {
                     let share = agents[scavenger].traits.scavenging_rate / total_demand;
                     let scavenger_drain = drain * share;
                     decomposition_gains[scavenger] = scavenger_drain * decomposition_efficiency;
                     agents[scavenger].energy += decomposition_gains[scavenger];
                     self.dissipated_energy += scavenger_drain * (1.0 - decomposition_efficiency);
+                    self.emit(
+                        event::EventKind::Decomposed,
+                        agents[scavenger].id,
+                        Some(carcass_id),
+                        scavenger_drain,
+                    );
                 }
                 carcass_drains[*ci] = drain;
             }
@@ -516,6 +533,13 @@ impl World {
 
         for (ci, carcass) in self.carcasses.iter_mut().enumerate() {
             carcass.energy -= carcass_drains[ci];
+        }
+        let depleted_carcasses: Vec<u64> = self.carcasses.iter()
+            .filter(|c| c.energy <= 0.0)
+            .map(|c| c.id)
+            .collect();
+        for carcass_id in depleted_carcasses {
+            self.emit(event::EventKind::CarcassDepleted, carcass_id, None, 0.0);
         }
         self.carcasses.retain(|c| c.energy > 0.0);
 
@@ -596,6 +620,7 @@ impl World {
             }
             reproduced[i] = true;
             reproduced[j] = true;
+            self.emit(event::EventKind::MateSelected, agents[i].id, Some(agents[j].id), 0.0);
 
             let inv_a = agents[i].traits.reproductive_investment;
             let inv_b = agents[j].traits.reproductive_investment;
@@ -645,6 +670,7 @@ impl World {
 
             let offspring_id = self.next_agent_id;
             self.next_agent_id += 1;
+            self.emit(event::EventKind::Born, offspring_id, None, offspring_energy);
             offspring.push(Agent {
                 id: offspring_id,
                 position: agents[i].position,
@@ -660,6 +686,8 @@ impl World {
         for (i, agent) in agents.into_iter().enumerate() {
             if agent.energy <= 0.0 {
                 let carcass_energy = (pre_tick_energies[i] + consumption_deltas[i]).max(0.0);
+                self.emit(event::EventKind::Died, agent.id, None, 0.0);
+                self.emit(event::EventKind::CarcassCreated, agent.id, None, carcass_energy);
                 next_carcasses.push(Carcass {
                     id: agent.id,
                     position: agent.position,
@@ -713,6 +741,23 @@ impl World {
 
     pub fn tick(&self) -> u64 {
         self.tick
+    }
+
+    pub fn event_log(&self) -> &event::EventLog {
+        &self.event_log
+    }
+
+    fn emit(&mut self, kind: event::EventKind, source: u64, target: Option<u64>, energy_delta: f32) {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        let _ = self.event_log.append(event::Event {
+            tick: self.tick,
+            seq,
+            kind,
+            source,
+            target,
+            energy_delta,
+        });
     }
 }
 
@@ -3328,5 +3373,189 @@ mod tests {
         let any_differ = ids1.iter().zip(ids2.iter()).any(|(a, b)| a != b)
             || world1.agents().iter().zip(world2.agents().iter()).any(|(a, b)| a.energy != b.energy);
         assert!(any_differ, "different seeds should produce different outcomes");
+    }
+
+    #[test]
+    fn new_world_has_empty_event_log() {
+        let world = World::new(test_params(), test_distribution(), 42);
+        assert!(world.event_log().is_empty());
+    }
+
+    fn event_test_params() -> WorldParameters {
+        WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 50.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            contact_radius: 5.0,
+            world_extent: 100.0,
+            initial_population_size: 0,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
+        }
+    }
+
+    fn event_test_dist() -> InitialDistribution {
+        InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        }
+    }
+
+    #[test]
+    fn step_emits_consumed_event_when_consumer_drains_victim() {
+        use crate::event::EventKind;
+        let mut world = World::new(event_test_params(), event_test_dist(), 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 2.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0),
+            energy: 50.0,
+            traits: zero_traits(),
+        });
+        world.step();
+        let consumed = world.event_log().by_kind(&EventKind::Consumed);
+        assert_eq!(consumed.len(), 1);
+        assert_eq!(consumed[0].tick, 0);
+        assert!(consumed[0].energy_delta > 0.0);
+    }
+
+    #[test]
+    fn step_emits_decomposed_and_carcass_depleted_events() {
+        use crate::event::EventKind;
+        let mut world = World::new(event_test_params(), event_test_dist(), 42);
+        // Scavenger adjacent to a low-energy carcass
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                scavenging_rate: 10.0,
+                ..zero_traits()
+            },
+        });
+        world.add_carcass(Carcass {
+            id: 99,
+            position: (1.0, 0.0),
+            energy: 3.0, // will be fully drained (scavenging_rate 10 > 3)
+        });
+        world.step();
+        let decomposed = world.event_log().by_kind(&EventKind::Decomposed);
+        assert_eq!(decomposed.len(), 1);
+        assert!(decomposed[0].energy_delta > 0.0);
+        assert_eq!(decomposed[0].target, Some(99));
+
+        let depleted = world.event_log().by_kind(&EventKind::CarcassDepleted);
+        assert_eq!(depleted.len(), 1);
+        assert_eq!(depleted[0].source, 99);
+    }
+
+    #[test]
+    fn step_emits_died_and_carcass_created_events() {
+        use crate::event::EventKind;
+        let params = WorldParameters {
+            base_metabolic_rate: 200.0, // will kill on first tick
+            ..event_test_params()
+        };
+        let mut world = World::new(params, event_test_dist(), 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: zero_traits(),
+        });
+        let agent_id = world.agents()[0].id;
+        world.step();
+        let died = world.event_log().by_kind(&EventKind::Died);
+        assert_eq!(died.len(), 1);
+        assert_eq!(died[0].source, agent_id);
+
+        let created = world.event_log().by_kind(&EventKind::CarcassCreated);
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].source, agent_id);
+        assert!(created[0].energy_delta > 0.0);
+    }
+
+    #[test]
+    fn step_emits_mate_selected_and_born_events() {
+        use crate::event::EventKind;
+        let mut world = World::new(event_test_params(), event_test_dist(), 42);
+        // Two compatible agents with high energy, adjacent, identical traits
+        let repro_traits = TraitVector {
+            reproductive_investment: 20.0,
+            mate_selectivity: 10.0, // very permissive
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: repro_traits,
+        });
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0),
+            energy: 100.0,
+            traits: repro_traits,
+        });
+        world.step();
+        let mates = world.event_log().by_kind(&EventKind::MateSelected);
+        assert_eq!(mates.len(), 1);
+
+        let born = world.event_log().by_kind(&EventKind::Born);
+        assert_eq!(born.len(), 1);
+        assert!(born[0].energy_delta > 0.0);
+    }
+
+    #[test]
+    fn multi_tick_events_have_monotonic_seq_and_correct_ticks() {
+        use crate::event::EventKind;
+        let params = WorldParameters {
+            base_metabolic_rate: 10.0,
+            ..event_test_params()
+        };
+        let mut world = World::new(params, event_test_dist(), 42);
+        // Agent that will die on tick 10 (energy 100 / metabolic 10)
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: zero_traits(),
+        });
+        for _ in 0..15 {
+            world.step();
+        }
+        let log = world.event_log();
+        assert!(!log.is_empty());
+        // Verify monotonic seq
+        let events = log.by_tick_range(0, 100);
+        for window in events.windows(2) {
+            assert!(window[1].seq > window[0].seq,
+                "seq must increase: {} vs {}", window[0].seq, window[1].seq);
+        }
+        // Verify Died event has correct tick
+        let died = log.by_kind(&EventKind::Died);
+        assert_eq!(died.len(), 1);
+        assert!(died[0].tick > 0, "should die after tick 0");
+        assert!(died[0].tick <= 10);
     }
 }
