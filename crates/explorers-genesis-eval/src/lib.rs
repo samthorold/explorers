@@ -8,20 +8,16 @@ pub enum FailureMode {
     GeneralistDominance,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum SanityCheckFailure {
-    NoDemographicTurnover,
-    NoTrophicPyramid,
-}
-
 #[derive(Debug, Clone)]
 pub struct FitnessBreakdown {
     pub fitness: f32,
     pub failure: Option<FailureMode>,
-    pub sanity_check_failed: Option<SanityCheckFailure>,
     pub oscillation_strength: f32,
     pub clustering_strength: f32,
     pub coexistence_duration: f32,
+    pub turnover_score: f32,
+    pub trophic_balance_score: f32,
+    pub ticks_survived: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -34,6 +30,7 @@ pub struct EvalConfig {
     pub dbscan_min_points: usize,
     pub generalist_threshold: f32,
     pub generalist_dominance_fraction: f32,
+    pub grace_period_fraction: f32,
 }
 
 impl Default for EvalConfig {
@@ -47,12 +44,16 @@ impl Default for EvalConfig {
             dbscan_min_points: 5,
             generalist_threshold: 0.3,
             generalist_dominance_fraction: 0.5,
+            grace_period_fraction: 0.2,
         }
     }
 }
 
 pub struct RunObserver {
     config: EvalConfig,
+    max_ticks: u64,
+    tick: u64,
+    grace_ticks: u64,
     energy_history: Vec<f32>,
     birth_history: Vec<usize>,
     death_history: Vec<usize>,
@@ -67,9 +68,13 @@ pub struct RunObserver {
 }
 
 impl RunObserver {
-    pub fn new(config: EvalConfig) -> Self {
+    pub fn new(config: EvalConfig, max_ticks: u64) -> Self {
+        let grace_ticks = (max_ticks as f32 * config.grace_period_fraction) as u64;
         Self {
             config,
+            max_ticks,
+            tick: 0,
+            grace_ticks,
             energy_history: Vec::new(),
             birth_history: Vec::new(),
             death_history: Vec::new(),
@@ -95,13 +100,17 @@ impl RunObserver {
 
         let agents = world.agents();
         let agent_count = agents.len();
+        let in_grace_period = self.tick < self.grace_ticks;
 
+        // Catastrophic detectors always fire
         if is_extinct(agent_count) {
             self.failed = Some(FailureMode::Extinction);
+            self.tick += 1;
             return;
         }
         if is_population_explosion(agent_count, self.config.max_population) {
             self.failed = Some(FailureMode::PopulationExplosion);
+            self.tick += 1;
             return;
         }
 
@@ -112,25 +121,31 @@ impl RunObserver {
         self.total_births += world.last_tick_births();
         self.total_deaths += world.last_tick_deaths();
 
-        if is_energy_death(&self.energy_history, self.config.energy_death_window) {
-            self.failed = Some(FailureMode::EnergyDeath);
-            return;
-        }
-        if is_frozen_dynamics(
-            &self.birth_history,
-            &self.death_history,
-            self.config.frozen_dynamics_window,
-        ) {
-            self.failed = Some(FailureMode::FrozenDynamics);
-            return;
+        // Non-catastrophic detectors suppressed during grace period
+        if !in_grace_period {
+            if is_energy_death(&self.energy_history, self.config.energy_death_window) {
+                self.failed = Some(FailureMode::EnergyDeath);
+                self.tick += 1;
+                return;
+            }
+            if is_frozen_dynamics(
+                &self.birth_history,
+                &self.death_history,
+                self.config.frozen_dynamics_window,
+            ) {
+                self.failed = Some(FailureMode::FrozenDynamics);
+                self.tick += 1;
+                return;
+            }
         }
 
         let trait_vectors: Vec<_> = agents.iter().map(|a| a.traits).collect();
         let energies: Vec<_> = agents.iter().map(|a| a.energy).collect();
 
         if agent_count >= 20 {
-            if is_monoculture(&trait_vectors, self.config.clustering_threshold) {
+            if !in_grace_period && is_monoculture(&trait_vectors, self.config.clustering_threshold) {
                 self.failed = Some(FailureMode::Monoculture);
+                self.tick += 1;
                 return;
             }
 
@@ -146,7 +161,6 @@ impl RunObserver {
                 .len();
             self.cluster_counts.push(num_clusters);
 
-            // Track per-cluster populations
             if num_clusters > 0 {
                 while self.cluster_populations.len() < num_clusters {
                     let backfill = vec![0; self.cluster_counts.len() - 1];
@@ -158,35 +172,49 @@ impl RunObserver {
                 }
             }
 
-            if is_generalist_dominant(
-                &trait_vectors,
-                &labels,
-                &energies,
-                self.config.generalist_threshold,
-                self.config.generalist_dominance_fraction,
-            ) {
+            if !in_grace_period
+                && is_generalist_dominant(
+                    &trait_vectors,
+                    &labels,
+                    &energies,
+                    self.config.generalist_threshold,
+                    self.config.generalist_dominance_fraction,
+                )
+            {
                 self.failed = Some(FailureMode::GeneralistDominance);
+                self.tick += 1;
                 return;
             }
 
             self.last_labels = labels;
         } else {
             self.cluster_counts.push(0);
+            self.last_labels.clear();
         }
 
         self.last_trait_vectors = trait_vectors;
         self.last_energies = energies;
+        self.tick += 1;
     }
 
     pub fn evaluate(&self) -> FitnessBreakdown {
+        let ticks_survived = self.tick;
+
         if let Some(failure) = &self.failed {
+            let survival_fraction = if self.max_ticks > 0 {
+                ticks_survived as f32 / self.max_ticks as f32
+            } else {
+                0.0
+            };
             return FitnessBreakdown {
-                fitness: 0.0,
+                fitness: survival_fraction * 0.01,
                 failure: Some(failure.clone()),
-                sanity_check_failed: None,
                 oscillation_strength: 0.0,
                 clustering_strength: 0.0,
                 coexistence_duration: 0.0,
+                turnover_score: 0.0,
+                trophic_balance_score: 0.0,
+                ticks_survived,
             };
         }
 
@@ -198,38 +226,29 @@ impl RunObserver {
 
         let os = oscillation_strength(&self.cluster_populations);
         let cd = coexistence_duration(&self.cluster_counts);
+        let ts = turnover_score(self.total_births, self.total_deaths, self.max_ticks);
+        let tb = trophic_balance_score(
+            &self.last_trait_vectors,
+            &self.last_labels,
+            &self.last_energies,
+        );
 
-        if !has_demographic_turnover(self.total_births, self.total_deaths) {
-            return FitnessBreakdown {
-                fitness: 0.0,
-                failure: None,
-                sanity_check_failed: Some(SanityCheckFailure::NoDemographicTurnover),
-                oscillation_strength: os,
-                clustering_strength: cs,
-                coexistence_duration: cd,
-            };
-        }
-
-        if !self.last_labels.is_empty()
-            && !has_trophic_pyramid(&self.last_trait_vectors, &self.last_labels, &self.last_energies)
-        {
-            return FitnessBreakdown {
-                fitness: 0.0,
-                failure: None,
-                sanity_check_failed: Some(SanityCheckFailure::NoTrophicPyramid),
-                oscillation_strength: os,
-                clustering_strength: cs,
-                coexistence_duration: cd,
-            };
-        }
+        let product = os * cs * cd * ts * tb;
+        let fitness = if product > 0.0 {
+            product.powf(1.0 / 5.0)
+        } else {
+            0.0
+        };
 
         FitnessBreakdown {
-            fitness: os * cs * cd,
+            fitness,
             failure: None,
-            sanity_check_failed: None,
             oscillation_strength: os,
             clustering_strength: cs,
             coexistence_duration: cd,
+            turnover_score: ts,
+            trophic_balance_score: tb,
+            ticks_survived,
         }
     }
 }
@@ -431,6 +450,14 @@ pub fn has_demographic_turnover(total_births: usize, total_deaths: usize) -> boo
     total_births > 0 && total_deaths > 0
 }
 
+pub fn turnover_score(total_births: usize, total_deaths: usize, max_ticks: u64) -> f32 {
+    if max_ticks == 0 {
+        return 0.0;
+    }
+    let min_events = total_births.min(total_deaths) as f32;
+    (min_events / max_ticks as f32).clamp(0.0, 1.0)
+}
+
 pub fn has_trophic_pyramid(
     trait_vectors: &[explorers_sim::TraitVector],
     labels: &[Option<usize>],
@@ -475,6 +502,56 @@ pub fn has_trophic_pyramid(
     }
 
     producer_energy > consumer_energy
+}
+
+pub fn trophic_balance_score(
+    trait_vectors: &[explorers_sim::TraitVector],
+    labels: &[Option<usize>],
+    energies: &[f32],
+) -> f32 {
+    let max_cluster = labels.iter().filter_map(|l| *l).max();
+    let Some(max_cluster) = max_cluster else {
+        return 0.0;
+    };
+
+    let mut producer_energy = 0.0_f32;
+    let mut consumer_energy = 0.0_f32;
+
+    for cluster_id in 0..=max_cluster {
+        let members: Vec<usize> = labels
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| **l == Some(cluster_id))
+            .map(|(i, _)| i)
+            .collect();
+        if members.is_empty() {
+            continue;
+        }
+
+        let mut avg_photo = 0.0_f32;
+        let mut avg_cons = 0.0_f32;
+        for &i in &members {
+            let (p, c, _) = trophic_coordinates(&trait_vectors[i]);
+            avg_photo += p;
+            avg_cons += c;
+        }
+        let n = members.len() as f32;
+        avg_photo /= n;
+        avg_cons /= n;
+
+        let cluster_energy: f32 = members.iter().map(|&i| energies[i]).sum();
+        if avg_photo > avg_cons {
+            producer_energy += cluster_energy;
+        } else {
+            consumer_energy += cluster_energy;
+        }
+    }
+
+    let total = producer_energy + consumer_energy;
+    if total <= 0.0 {
+        return 0.0;
+    }
+    producer_energy / total
 }
 
 pub fn coexistence_duration(cluster_counts_per_tick: &[usize]) -> f32 {
@@ -899,9 +976,10 @@ mod tests {
     }
 
     #[test]
-    fn fitness_zero_on_extinction() {
+    fn fitness_survival_floor_on_extinction() {
         let config = EvalConfig::default();
-        let mut observer = RunObserver::new(config);
+        let max_ticks = 100;
+        let mut observer = RunObserver::new(config, max_ticks);
         let params = explorers_sim::WorldParameters {
             solar_flux_magnitude: 0.0,
             base_metabolic_rate: 100.0,
@@ -938,36 +1016,28 @@ mod tests {
             observer.observe(&world);
         }
         let result = observer.evaluate();
-        assert_eq!(result.fitness, 0.0);
+        assert!(result.fitness > 0.0, "failed run should have nonzero survival floor");
+        assert!(result.fitness <= 0.01, "survival floor capped at 0.01");
         assert_eq!(result.failure, Some(FailureMode::Extinction));
     }
 
     #[test]
-    fn fitness_zero_on_sanity_check_failure() {
-        let result = FitnessBreakdown {
-            fitness: 0.0,
-            failure: None,
-            sanity_check_failed: Some(SanityCheckFailure::NoDemographicTurnover),
-            oscillation_strength: 0.5,
-            clustering_strength: 0.5,
-            coexistence_duration: 0.5,
-        };
-        assert_eq!(result.fitness, 0.0);
-    }
-
-    #[test]
-    fn fitness_is_product_of_three_criteria() {
-        let os = 0.8;
+    fn fitness_is_geometric_mean_of_five_criteria() {
+        let os = 0.8_f32;
         let cs = 0.6;
         let cd = 0.7;
-        let expected = os * cs * cd;
+        let ts = 0.5;
+        let tb = 0.9;
+        let expected = (os * cs * cd * ts * tb).powf(1.0 / 5.0);
         let result = FitnessBreakdown {
             fitness: expected,
             failure: None,
-            sanity_check_failed: None,
             oscillation_strength: os,
             clustering_strength: cs,
             coexistence_duration: cd,
+            turnover_score: ts,
+            trophic_balance_score: tb,
+            ticks_survived: 100,
         };
         assert!((result.fitness - expected).abs() < 1e-5);
     }
@@ -978,7 +1048,7 @@ mod tests {
             max_population: 5,
             ..EvalConfig::default()
         };
-        let mut observer = RunObserver::new(config);
+        let mut observer = RunObserver::new(config, 100);
         let params = explorers_sim::WorldParameters {
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.01,
@@ -1013,6 +1083,326 @@ mod tests {
         observer.observe(&world);
         let result = observer.evaluate();
         assert_eq!(result.failure, Some(FailureMode::PopulationExplosion));
-        assert_eq!(result.fitness, 0.0);
+        assert!(result.fitness > 0.0, "failed run should have nonzero survival floor");
+    }
+
+    #[test]
+    fn turnover_score_zero_when_no_births_or_deaths() {
+        assert_eq!(turnover_score(0, 0, 100), 0.0);
+        assert_eq!(turnover_score(5, 0, 100), 0.0);
+        assert_eq!(turnover_score(0, 5, 100), 0.0);
+    }
+
+    #[test]
+    fn turnover_score_increases_with_more_turnover() {
+        let low = turnover_score(10, 10, 100);
+        let high = turnover_score(50, 50, 100);
+        assert!(low > 0.0);
+        assert!(high > low);
+    }
+
+    #[test]
+    fn turnover_score_clamps_to_one() {
+        let score = turnover_score(200, 200, 100);
+        assert_eq!(score, 1.0);
+    }
+
+    #[test]
+    fn trophic_balance_high_when_producers_dominate() {
+        let mut traits = Vec::new();
+        let mut labels = Vec::new();
+        let mut energies = Vec::new();
+        for _ in 0..10 {
+            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            labels.push(Some(0));
+            energies.push(100.0);
+        }
+        for _ in 0..5 {
+            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            labels.push(Some(1));
+            energies.push(50.0);
+        }
+        let score = trophic_balance_score(&traits, &labels, &energies);
+        assert!(score > 0.5, "producers dominating should score > 0.5: {score}");
+    }
+
+    #[test]
+    fn trophic_balance_low_when_consumers_dominate() {
+        let mut traits = Vec::new();
+        let mut labels = Vec::new();
+        let mut energies = Vec::new();
+        for _ in 0..5 {
+            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            labels.push(Some(0));
+            energies.push(10.0);
+        }
+        for _ in 0..10 {
+            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            labels.push(Some(1));
+            energies.push(100.0);
+        }
+        let score = trophic_balance_score(&traits, &labels, &energies);
+        assert!(score < 0.5, "consumers dominating should score < 0.5: {score}");
+    }
+
+    #[test]
+    fn trophic_balance_zero_when_no_labelled_clusters() {
+        let traits = vec![make_trait_vector([0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])];
+        let labels = vec![None];
+        let energies = vec![100.0];
+        let score = trophic_balance_score(&traits, &labels, &energies);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn failed_run_gets_survival_floor_not_zero() {
+        let config = EvalConfig::default();
+        let max_ticks = 100;
+        let mut observer = RunObserver::new(config, max_ticks);
+        let params = explorers_sim::WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 100.0,
+            sensing_cost_coefficient: 0.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            reproduction_efficiency: 0.7,
+            movement_cost_coefficient: 0.0,
+            reproduction_energy_threshold: 50.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            contact_radius: 5.0,
+            world_extent: 100.0,
+            initial_population_size: 1,
+        };
+        let dist = explorers_sim::InitialDistribution {
+            mean_traits: explorers_sim::TraitVector {
+                photosynthetic_absorption: 0.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        for _ in 0..max_ticks {
+            world.step();
+            observer.observe(&world);
+            if observer.failed().is_some() {
+                break;
+            }
+        }
+        let result = observer.evaluate();
+        assert!(result.failure.is_some());
+        assert!(result.fitness > 0.0, "failed run should get nonzero survival floor: {}", result.fitness);
+        assert!(result.fitness <= 0.01, "survival floor should be at most 0.01: {}", result.fitness);
+        assert!(result.ticks_survived > 0);
+    }
+
+    #[test]
+    fn geometric_mean_of_five_equal_values() {
+        let breakdown = FitnessBreakdown {
+            fitness: 0.5,
+            failure: None,
+            oscillation_strength: 0.5,
+            clustering_strength: 0.5,
+            coexistence_duration: 0.5,
+            turnover_score: 0.5,
+            trophic_balance_score: 0.5,
+            ticks_survived: 100,
+        };
+        assert!((breakdown.fitness - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn survival_floor_strictly_below_any_legitimate_geometric_mean() {
+        let max_floor = 0.01;
+        let min_factor = 0.05_f32;
+        let geometric_mean = (min_factor.powi(5)).powf(1.0 / 5.0);
+        assert!(max_floor < geometric_mean,
+            "survival floor {max_floor} should be less than geometric mean of five 0.05 factors: {geometric_mean}");
+    }
+
+    #[test]
+    fn fitness_breakdown_includes_all_five_criteria() {
+        let breakdown = FitnessBreakdown {
+            fitness: 0.0,
+            failure: None,
+            oscillation_strength: 0.1,
+            clustering_strength: 0.2,
+            coexistence_duration: 0.3,
+            turnover_score: 0.4,
+            trophic_balance_score: 0.5,
+            ticks_survived: 50,
+        };
+        assert_eq!(breakdown.oscillation_strength, 0.1);
+        assert_eq!(breakdown.clustering_strength, 0.2);
+        assert_eq!(breakdown.coexistence_duration, 0.3);
+        assert_eq!(breakdown.turnover_score, 0.4);
+        assert_eq!(breakdown.trophic_balance_score, 0.5);
+        assert_eq!(breakdown.ticks_survived, 50);
+    }
+
+    #[test]
+    fn grace_period_defaults_to_twenty_percent() {
+        let config = EvalConfig::default();
+        assert!((config.grace_period_fraction - 0.2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn non_catastrophic_detectors_suppressed_during_grace_period() {
+        let config = EvalConfig {
+            grace_period_fraction: 1.0,
+            energy_death_window: 3,
+            frozen_dynamics_window: 3,
+            ..EvalConfig::default()
+        };
+        let max_ticks = 10;
+        let mut observer = RunObserver::new(config, max_ticks);
+        let energy_history = vec![100.0, 90.0, 80.0, 70.0];
+        assert!(is_energy_death(&energy_history, 3));
+        let birth_history = vec![0, 0, 0, 0];
+        let death_history = vec![0, 0, 0, 0];
+        assert!(is_frozen_dynamics(&birth_history, &death_history, 3));
+
+        let params = explorers_sim::WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.01,
+            sensing_cost_coefficient: 0.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            reproduction_efficiency: 0.7,
+            movement_cost_coefficient: 0.0,
+            reproduction_energy_threshold: 500.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            contact_radius: 5.0,
+            world_extent: 100.0,
+            initial_population_size: 5,
+        };
+        let dist = explorers_sim::InitialDistribution {
+            mean_traits: explorers_sim::TraitVector {
+                photosynthetic_absorption: 1.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        for _ in 0..max_ticks {
+            world.step();
+            observer.observe(&world);
+        }
+        assert!(observer.failed().is_none(),
+            "non-catastrophic detectors should not fire during grace period");
+    }
+
+    #[test]
+    fn catastrophic_detectors_fire_during_grace_period() {
+        let config = EvalConfig {
+            grace_period_fraction: 1.0,
+            ..EvalConfig::default()
+        };
+        let max_ticks = 100;
+        let mut observer = RunObserver::new(config, max_ticks);
+        let params = explorers_sim::WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 100.0,
+            sensing_cost_coefficient: 0.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            reproduction_efficiency: 0.7,
+            movement_cost_coefficient: 0.0,
+            reproduction_energy_threshold: 50.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            contact_radius: 5.0,
+            world_extent: 100.0,
+            initial_population_size: 1,
+        };
+        let dist = explorers_sim::InitialDistribution {
+            mean_traits: explorers_sim::TraitVector {
+                photosynthetic_absorption: 0.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        for _ in 0..max_ticks {
+            world.step();
+            observer.observe(&world);
+            if observer.failed().is_some() {
+                break;
+            }
+        }
+        assert_eq!(observer.failed(), Some(&FailureMode::Extinction),
+            "extinction should fire even during grace period");
+    }
+
+    #[test]
+    fn data_recorded_during_grace_period() {
+        let config = EvalConfig {
+            grace_period_fraction: 1.0,
+            ..EvalConfig::default()
+        };
+        let max_ticks = 10;
+        let mut observer = RunObserver::new(config, max_ticks);
+        let params = explorers_sim::WorldParameters {
+            solar_flux_magnitude: 5.0,
+            base_metabolic_rate: 0.01,
+            sensing_cost_coefficient: 0.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            reproduction_efficiency: 0.7,
+            movement_cost_coefficient: 0.0,
+            reproduction_energy_threshold: 500.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            contact_radius: 5.0,
+            world_extent: 100.0,
+            initial_population_size: 5,
+        };
+        let dist = explorers_sim::InitialDistribution {
+            mean_traits: explorers_sim::TraitVector {
+                photosynthetic_absorption: 1.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        for _ in 0..max_ticks {
+            world.step();
+            observer.observe(&world);
+        }
+        let result = observer.evaluate();
+        assert_eq!(result.ticks_survived, max_ticks as u64);
     }
 }

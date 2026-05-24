@@ -99,7 +99,7 @@ pub fn default_ranges() -> Vec<ParameterRange> {
         ParameterRange { name: "consumption_efficiency".into(), min: 0.1, max: 0.9 },
         ParameterRange { name: "decomposition_efficiency".into(), min: 0.1, max: 0.9 },
         ParameterRange { name: "reproduction_efficiency".into(), min: 0.1, max: 0.9 },
-        ParameterRange { name: "base_metabolic_rate".into(), min: 0.01, max: 1.0 },
+        ParameterRange { name: "base_metabolic_rate".into(), min: 0.01, max: 0.5 },
         ParameterRange { name: "movement_cost_coefficient".into(), min: 0.001, max: 0.1 },
         ParameterRange { name: "sensing_cost_coefficient".into(), min: 0.001, max: 0.1 },
         ParameterRange { name: "reproduction_energy_threshold".into(), min: 5.0, max: 50.0 },
@@ -116,7 +116,7 @@ pub fn default_ranges() -> Vec<ParameterRange> {
         ParameterRange { name: "mean_mate_selectivity".into(), min: 0.0, max: 1.0 },
         ParameterRange { name: "mean_sensing_range".into(), min: 0.5, max: 10.0 },
         ParameterRange { name: "mean_reproductive_investment".into(), min: 0.0, max: 1.0 },
-        ParameterRange { name: "trait_covariance".into(), min: 0.01, max: 0.5 },
+        ParameterRange { name: "trait_covariance".into(), min: 0.1, max: 1.0 },
         ParameterRange { name: "initial_cluster_count".into(), min: 1.0, max: 5.0 },
         ParameterRange { name: "initial_energy_per_agent".into(), min: 1.0, max: 50.0 },
     ]
@@ -370,5 +370,21 @@ mod tests {
         assert_eq!(recipe, recovered);
         assert!(recipe.parameters.solar_flux_magnitude > 0.0);
         assert!(recipe.parameters.initial_population_size > 0);
+    }
+
+    #[test]
+    fn base_metabolic_rate_range_capped_at_half() {
+        let ranges = default_ranges();
+        let bmr = ranges.iter().find(|r| r.name == "base_metabolic_rate").unwrap();
+        assert!((bmr.min - 0.01).abs() < 1e-10);
+        assert!((bmr.max - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn trait_covariance_range_widened() {
+        let ranges = default_ranges();
+        let tc = ranges.iter().find(|r| r.name == "trait_covariance").unwrap();
+        assert!((tc.min - 0.1).abs() < 1e-10);
+        assert!((tc.max - 1.0).abs() < 1e-10);
     }
 }

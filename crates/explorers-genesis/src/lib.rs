@@ -32,7 +32,7 @@ pub fn run_single(
     let mut world =
         explorers_sim::World::new(params.clone(), distribution.clone(), seed);
     let mut observer =
-        explorers_genesis_eval::RunObserver::new(run_config.eval_config.clone());
+        explorers_genesis_eval::RunObserver::new(run_config.eval_config.clone(), run_config.max_ticks);
 
     let mut tick = 0;
     for t in 0..run_config.max_ticks {
@@ -145,29 +145,34 @@ mod tests {
     }
 
     #[test]
-    fn ensemble_uses_different_seeds_per_run() {
-        let params = test_params();
-        let distribution = test_distribution();
-        let config = EnsembleConfig {
-            ensemble_size: 3,
-            run_config: RunConfig {
-                max_ticks: 50,
-                eval_config: EvalConfig::default(),
+    fn different_seeds_produce_different_runs() {
+        let params = WorldParameters {
+            initial_population_size: 30,
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 10.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            trait_covariance: 0.5,
+            initial_energy_per_agent: 30.0,
+            ..test_distribution()
+        };
+        let config = RunConfig {
+            max_ticks: 200,
+            eval_config: EvalConfig {
+                frozen_dynamics_window: 100,
+                ..EvalConfig::default()
             },
         };
-
-        let result = run_ensemble(&params, &distribution, &config, 42);
-
-        // With different seeds, at least some runs should differ in fitness
-        // (extremely unlikely all 3 produce identical results with different seeds)
-        let all_same = result
-            .run_results
-            .windows(2)
-            .all(|w| w[0].fitness == w[1].fitness);
-        // This is a probabilistic assertion — if it flakes, the seed derivation is broken
+        let result_a = run_single(&params, &dist, &config, 42);
+        let result_b = run_single(&params, &dist, &config, 999);
         assert!(
-            !all_same || result.run_results[0].fitness == 0.0,
-            "all runs produced identical non-zero fitness, seeds may not be varying"
+            result_a.termination_tick != result_b.termination_tick
+                || result_a.fitness != result_b.fitness,
+            "different seeds should produce different trajectories \
+             (a: tick={} fit={}, b: tick={} fit={})",
+            result_a.termination_tick, result_a.fitness,
+            result_b.termination_tick, result_b.fitness,
         );
     }
 
@@ -195,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn ensemble_all_degenerate_returns_zero_fitness() {
+    fn ensemble_all_degenerate_returns_survival_floor() {
         let params = WorldParameters {
             solar_flux_magnitude: 0.0,
             base_metabolic_rate: 100.0,
@@ -215,10 +220,12 @@ mod tests {
 
         let result = run_ensemble(&params, &distribution, &config, 42);
 
-        assert_eq!(result.median_fitness, 0.0);
+        assert!(result.median_fitness > 0.0, "degenerate runs should get nonzero survival floor");
+        assert!(result.median_fitness <= 0.01, "survival floor capped at 0.01");
         assert_eq!(result.run_results.len(), 5);
         for run in &result.run_results {
-            assert_eq!(run.fitness, 0.0);
+            assert!(run.fitness > 0.0);
+            assert!(run.fitness <= 0.01);
             assert!(run.failure.is_some());
         }
     }
@@ -260,7 +267,8 @@ mod tests {
 
         assert!(result.termination_tick < 1000);
         assert_eq!(result.failure, Some(FailureMode::Extinction));
-        assert_eq!(result.fitness, 0.0);
+        assert!(result.fitness > 0.0, "failed run should get nonzero survival floor");
+        assert!(result.fitness <= 0.01);
     }
 
     #[test]
