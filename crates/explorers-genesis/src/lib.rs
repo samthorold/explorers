@@ -159,10 +159,7 @@ mod tests {
         };
         let config = RunConfig {
             max_ticks: 200,
-            eval_config: EvalConfig {
-                frozen_dynamics_window: 100,
-                ..EvalConfig::default()
-            },
+            eval_config: EvalConfig::default(),
         };
         let result_a = run_single(&params, &dist, &config, 42);
         let result_b = run_single(&params, &dist, &config, 999);
@@ -273,11 +270,22 @@ mod tests {
 
     #[test]
     fn single_run_completes_at_max_ticks_when_no_failure() {
-        let params = test_params();
-        let distribution = test_distribution();
+        let params = WorldParameters {
+            reproduction_energy_threshold: 5.0,
+            contact_radius: 5.0,
+            ..test_params()
+        };
+        let distribution = InitialDistribution {
+            initial_energy_per_agent: 30.0,
+            trait_covariance: 0.5,
+            ..test_distribution()
+        };
         let config = RunConfig {
             max_ticks: 20,
-            eval_config: EvalConfig::default(),
+            eval_config: EvalConfig {
+                grace_period_fraction: 1.0,
+                ..EvalConfig::default()
+            },
         };
 
         let result = run_single(&params, &distribution, &config, 42);
