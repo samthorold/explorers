@@ -1,6 +1,7 @@
 use std::fs;
 
 use bevy::prelude::*;
+use bevy::camera::ScalingMode;
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe};
 
 #[derive(Resource)]
@@ -106,8 +107,108 @@ fn main() {
         .run();
 }
 
-fn setup_camera(mut commands: Commands) {
-    commands.spawn(Camera2d);
+fn setup_camera(mut commands: Commands, sim: Res<SimWorld>) {
+    let extent = sim.0.params().world_extent;
+    let center = extent / 2.0;
+    commands.spawn((
+        Camera2d,
+        Projection::Orthographic(OrthographicProjection {
+            scaling_mode: ScalingMode::AutoMin {
+                min_width: extent,
+                min_height: extent,
+            },
+            ..OrthographicProjection::default_2d()
+        }),
+        Transform::from_xyz(center, center, 0.0),
+    ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    fn test_world(world_extent: f32) -> World {
+        World::new(
+            WorldParameters {
+                solar_flux_magnitude: 1.0,
+                consumption_efficiency: 0.5,
+                decomposition_efficiency: 0.5,
+                reproduction_efficiency: 0.7,
+                base_metabolic_rate: 0.1,
+                movement_cost_coefficient: 0.05,
+                sensing_cost_coefficient: 0.02,
+                reproduction_energy_threshold: 50.0,
+                mutation_rate: 0.1,
+                mutation_magnitude: 0.05,
+                contact_radius: 5.0,
+                world_extent,
+                initial_population_size: 0,
+            },
+            InitialDistribution {
+                mean_traits: TraitVector {
+                    photosynthetic_absorption: 0.5,
+                    consumption_rate: 0.3,
+                    scavenging_rate: 0.2,
+                    mobility: 0.4,
+                    chemotaxis_sensitivity: 0.3,
+                    mate_selectivity: 0.5,
+                    sensing_range: 0.4,
+                    reproductive_investment: 0.3,
+                },
+                trait_covariance: 0.1,
+                initial_cluster_count: 1,
+                initial_energy_per_agent: 100.0,
+            },
+            42,
+        )
+    }
+
+    #[test]
+    fn camera_is_centered_on_world() {
+        let mut app = App::new();
+        app.insert_resource(SimWorld(test_world(200.0)));
+        let _ = app.world_mut().run_system_once(setup_camera);
+
+        let transform = app
+            .world_mut()
+            .query::<&Transform>()
+            .single(app.world())
+            .unwrap();
+
+        assert_eq!(transform.translation.x, 100.0);
+        assert_eq!(transform.translation.y, 100.0);
+    }
+
+    #[test]
+    fn camera_projection_fits_world_extent() {
+        let mut app = App::new();
+        app.insert_resource(SimWorld(test_world(300.0)));
+        let _ = app.world_mut().run_system_once(setup_camera);
+
+        let projection = app
+            .world_mut()
+            .query::<&Projection>()
+            .single(app.world())
+            .unwrap();
+
+        match projection {
+            Projection::Orthographic(ortho) => {
+                assert!(
+                    matches!(
+                        ortho.scaling_mode,
+                        ScalingMode::AutoMin {
+                            min_width,
+                            min_height,
+                        } if min_width == 300.0 && min_height == 300.0
+                    ),
+                    "expected AutoMin with world_extent 300, got {:?}",
+                    ortho.scaling_mode,
+                );
+            }
+            other => panic!("expected orthographic projection, got {:?}", other),
+        }
+    }
 }
 
 fn spawn_agent_sprites(
