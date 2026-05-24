@@ -1,5 +1,6 @@
 pub mod spatial;
 
+use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal};
@@ -142,7 +143,9 @@ pub struct World {
     carcasses: Vec<Carcass>,
     dissipated_energy: f32,
     total_solar_input: f32,
+    seed: u64,
     rng: ChaCha8Rng,
+    tick: u64,
     last_tick_births: usize,
     last_tick_deaths: usize,
     next_agent_id: u64,
@@ -217,7 +220,9 @@ impl World {
             carcasses: Vec::new(),
             dissipated_energy: 0.0,
             total_solar_input: 0.0,
+            seed,
             rng,
+            tick: 0,
             last_tick_births: 0,
             last_tick_deaths: 0,
             next_agent_id: pop_size as u64,
@@ -238,6 +243,11 @@ impl World {
         let extent = self.params.world_extent;
         let agent_count = self.agents.len();
 
+        let sub_seed = self.seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(self.tick);
+        let mut shuffle_rng = ChaCha8Rng::seed_from_u64(sub_seed);
+        let mut order: Vec<usize> = (0..agent_count).collect();
+        order.shuffle(&mut shuffle_rng);
+
         let max_sensing_range = self.agents.iter()
             .map(|a| a.traits.sensing_range)
             .fold(0.0_f32, f32::max);
@@ -257,74 +267,70 @@ impl World {
         }
 
         // --- Sense & Decide: compute movement vectors for all agents ---
-        let movements: Vec<(f32, f32)> = (0..agent_count)
-            .map(|i| {
-                let agent = &self.agents[i];
-                if agent.traits.mobility <= 0.0 {
-                    return (0.0, 0.0);
-                }
+        let mut movements = vec![(0.0_f32, 0.0_f32); agent_count];
+        for &i in &order {
+            let agent = &self.agents[i];
+            if agent.traits.mobility <= 0.0 {
+                continue;
+            }
 
-                let mut chemotaxis_x = 0.0_f32;
-                let mut chemotaxis_y = 0.0_f32;
+            let mut chemotaxis_x = 0.0_f32;
+            let mut chemotaxis_y = 0.0_f32;
 
-                if agent.traits.consumption_rate > 0.0 {
-                    let neighbors = agent_grid.query_radius(agent.position, agent.traits.sensing_range);
-                    for j_id in neighbors {
-                        let j = j_id as usize;
-                        if j == i {
-                            continue;
-                        }
-                        let other = &self.agents[j];
-                        let (dx, dy) =
-                            toroidal_displacement(agent.position, other.position, extent);
-                        let dist = (dx * dx + dy * dy).sqrt();
-                        if dist > 0.0 {
-                            let signal = agent.traits.consumption_rate / dist;
-                            chemotaxis_x += signal * dx / dist;
-                            chemotaxis_y += signal * dy / dist;
-                        }
+            if agent.traits.consumption_rate > 0.0 {
+                let neighbors = agent_grid.query_radius(agent.position, agent.traits.sensing_range);
+                for j_id in neighbors {
+                    let j = j_id as usize;
+                    if j == i {
+                        continue;
+                    }
+                    let other = &self.agents[j];
+                    let (dx, dy) =
+                        toroidal_displacement(agent.position, other.position, extent);
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist > 0.0 {
+                        let signal = agent.traits.consumption_rate / dist;
+                        chemotaxis_x += signal * dx / dist;
+                        chemotaxis_y += signal * dy / dist;
                     }
                 }
+            }
 
-                if agent.traits.scavenging_rate > 0.0 {
-                    let nearby_carcasses = carcass_grid.query_radius(agent.position, agent.traits.sensing_range);
-                    for ci_id in nearby_carcasses {
-                        let ci = ci_id as usize;
-                        let carcass = &self.carcasses[ci];
-                        let (dx, dy) =
-                            toroidal_displacement(agent.position, carcass.position, extent);
-                        let dist = (dx * dx + dy * dy).sqrt();
-                        if dist > 0.0 {
-                            let signal = agent.traits.scavenging_rate / dist;
-                            chemotaxis_x += signal * dx / dist;
-                            chemotaxis_y += signal * dy / dist;
-                        }
+            if agent.traits.scavenging_rate > 0.0 {
+                let nearby_carcasses = carcass_grid.query_radius(agent.position, agent.traits.sensing_range);
+                for ci_id in nearby_carcasses {
+                    let ci = ci_id as usize;
+                    let carcass = &self.carcasses[ci];
+                    let (dx, dy) =
+                        toroidal_displacement(agent.position, carcass.position, extent);
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist > 0.0 {
+                        let signal = agent.traits.scavenging_rate / dist;
+                        chemotaxis_x += signal * dx / dist;
+                        chemotaxis_y += signal * dy / dist;
                     }
                 }
+            }
 
-                // Scale by chemotaxis sensitivity
-                chemotaxis_x *= agent.traits.chemotaxis_sensitivity;
-                chemotaxis_y *= agent.traits.chemotaxis_sensitivity;
+            chemotaxis_x *= agent.traits.chemotaxis_sensitivity;
+            chemotaxis_y *= agent.traits.chemotaxis_sensitivity;
 
-                // Random exploration component
-                let angle_dist = rand::distr::Uniform::new(0.0_f32, std::f32::consts::TAU).unwrap();
-                let angle = angle_dist.sample(&mut self.rng);
-                let explore_x = angle.cos();
-                let explore_y = angle.sin();
+            let angle_dist = rand::distr::Uniform::new(0.0_f32, std::f32::consts::TAU).unwrap();
+            let angle = angle_dist.sample(&mut self.rng);
+            let explore_x = angle.cos();
+            let explore_y = angle.sin();
 
-                let mut move_x = chemotaxis_x + explore_x;
-                let mut move_y = chemotaxis_y + explore_y;
+            let mut move_x = chemotaxis_x + explore_x;
+            let mut move_y = chemotaxis_y + explore_y;
 
-                // Normalize and scale by mobility
-                let mag = (move_x * move_x + move_y * move_y).sqrt();
-                if mag > 0.0 {
-                    move_x = move_x / mag * agent.traits.mobility;
-                    move_y = move_y / mag * agent.traits.mobility;
-                }
+            let mag = (move_x * move_x + move_y * move_y).sqrt();
+            if mag > 0.0 {
+                move_x = move_x / mag * agent.traits.mobility;
+                move_y = move_y / mag * agent.traits.mobility;
+            }
 
-                (move_x, move_y)
-            })
-            .collect();
+            movements[i] = (move_x, move_y);
+        }
 
         // --- Compute local light competition shares ---
         let competition_radius = self.params.light_competition_radius;
@@ -402,7 +408,7 @@ impl World {
 
         // Phase 1: collect intentions — each consumer picks its closest target
         let mut intentions: Vec<(usize, usize)> = Vec::new();
-        for i in 0..n {
+        for &i in &order {
             if agents[i].traits.consumption_rate <= 0.0 {
                 continue;
             }
@@ -461,7 +467,7 @@ impl World {
 
         // Phase 1: collect intentions
         let mut decomp_intentions: Vec<(usize, usize)> = Vec::new();
-        for i in 0..n {
+        for &i in &order {
             if agents[i].traits.scavenging_rate <= 0.0 {
                 continue;
             }
@@ -673,6 +679,7 @@ impl World {
         next_agents.extend(offspring);
         self.agents = next_agents;
         self.carcasses = next_carcasses;
+        self.tick += 1;
     }
 
     pub fn params(&self) -> &WorldParameters {
@@ -701,6 +708,10 @@ impl World {
 
     pub fn last_tick_deaths(&self) -> usize {
         self.last_tick_deaths
+    }
+
+    pub fn tick(&self) -> u64 {
+        self.tick
     }
 }
 
@@ -3246,5 +3257,75 @@ mod tests {
             per_tick.as_millis() < 50,
             "500-agent tick took {per_tick:?}, expected < 50ms with spatial index"
         );
+    }
+
+    #[test]
+    fn tick_counter_increments_each_step() {
+        let mut world = World::new(test_params(), test_distribution(), 42);
+        assert_eq!(world.tick(), 0);
+        world.step();
+        assert_eq!(world.tick(), 1);
+        world.step();
+        assert_eq!(world.tick(), 2);
+    }
+
+    #[test]
+    fn shuffled_processing_order_is_deterministic_given_same_seed() {
+        let params = || WorldParameters {
+            initial_population_size: 20,
+            ..test_params()
+        };
+        let dist = || test_distribution();
+        let seed = 123;
+
+        let mut world1 = World::new(params(), dist(), seed);
+        let mut world2 = World::new(params(), dist(), seed);
+        for _ in 0..10 {
+            world1.step();
+            world2.step();
+        }
+        for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
+            assert_eq!(a.id, b.id, "agent IDs diverged");
+            assert_eq!(a.position, b.position, "positions diverged for agent {}", a.id);
+            assert_eq!(a.energy, b.energy, "energies diverged for agent {}", a.id);
+        }
+    }
+
+    #[test]
+    fn shuffle_produces_non_identity_permutation() {
+        let n = 20;
+        let seed = 42_u64;
+        let mut any_shuffled = false;
+        for tick in 0..5_u64 {
+            let sub_seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(tick);
+            let mut rng = ChaCha8Rng::seed_from_u64(sub_seed);
+            let mut order: Vec<usize> = (0..n).collect();
+            let identity: Vec<usize> = (0..n).collect();
+            order.shuffle(&mut rng);
+            if order != identity {
+                any_shuffled = true;
+                break;
+            }
+        }
+        assert!(any_shuffled, "shuffle should produce non-identity order within 5 ticks");
+    }
+
+    #[test]
+    fn different_seeds_produce_different_agent_order_after_step() {
+        let params = || WorldParameters {
+            initial_population_size: 20,
+            ..test_params()
+        };
+        let dist = || test_distribution();
+
+        let mut world1 = World::new(params(), dist(), 1);
+        let mut world2 = World::new(params(), dist(), 2);
+        world1.step();
+        world2.step();
+        let ids1: Vec<u64> = world1.agents().iter().map(|a| a.id).collect();
+        let ids2: Vec<u64> = world2.agents().iter().map(|a| a.id).collect();
+        let any_differ = ids1.iter().zip(ids2.iter()).any(|(a, b)| a != b)
+            || world1.agents().iter().zip(world2.agents().iter()).any(|(a, b)| a.energy != b.energy);
+        assert!(any_differ, "different seeds should produce different outcomes");
     }
 }
