@@ -32,9 +32,9 @@ impl Default for SearchConfig {
     fn default() -> Self {
         SearchConfig {
             ranges: default_ranges(),
-            ensemble_size: 3,
-            lhs_samples: 20,
-            max_ticks: 100,
+            ensemble_size: 5,
+            lhs_samples: 50,
+            max_ticks: 500,
             bayesopt_iterations: 10,
             sensitivity_threshold: 0.05,
         }

@@ -9,9 +9,9 @@ use explorers_search::search::{SearchConfig, default_ranges, run_search};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    let mut lhs_samples = 20;
-    let mut ensemble_size = 3;
-    let mut max_ticks = 100;
+    let mut lhs_samples = 50;
+    let mut ensemble_size = 5;
+    let mut max_ticks = 500;
     let mut bayesopt_iterations = 10;
     let mut seed = 42u64;
     let mut output_path = PathBuf::from("search_results.json");
@@ -88,9 +88,9 @@ fn print_usage() {
     eprintln!("Usage: explorers-search [OPTIONS]");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --samples N              LHS sample count (default: 20)");
-    eprintln!("  --ensemble N             Ensemble size per parameterisation (default: 3)");
-    eprintln!("  --max-ticks N            Max simulation ticks per run (default: 100)");
+    eprintln!("  --samples N              LHS sample count (default: 50)");
+    eprintln!("  --ensemble N             Ensemble size per parameterisation (default: 5)");
+    eprintln!("  --max-ticks N            Max simulation ticks per run (default: 500)");
     eprintln!("  --bayesopt-iterations N  Bayesian optimisation iterations (default: 10)");
     eprintln!("  --seed N                 Random seed (default: 42)");
     eprintln!("  --output PATH            Output JSON path (default: search_results.json)");
