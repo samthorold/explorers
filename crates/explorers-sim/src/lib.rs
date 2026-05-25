@@ -251,12 +251,17 @@ impl World {
         let extent = self.params.world_extent;
         let agent_count = self.agents.len();
 
-        let sub_seed = self.seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(self.tick);
+        let sub_seed = self
+            .seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(self.tick);
         let mut shuffle_rng = ChaCha8Rng::seed_from_u64(sub_seed);
         let mut order: Vec<usize> = (0..agent_count).collect();
         order.shuffle(&mut shuffle_rng);
 
-        let max_sensing_range = self.agents.iter()
+        let max_sensing_range = self
+            .agents
+            .iter()
             .map(|a| a.traits.sensing_range)
             .fold(0.0_f32, f32::max);
         let max_query_radius = max_sensing_range
@@ -286,7 +291,8 @@ impl World {
             let mut chemotaxis_y = 0.0_f32;
 
             if agent.traits.consumption_rate > 0.0 {
-                let neighbors = agent_grid.query_radius(agent.position, agent.traits.sensing_range);
+                let neighbors =
+                    agent_grid.query_radius(agent.position, agent.traits.sensing_range);
                 for j_id in neighbors {
                     let j = j_id as usize;
                     if j == i {
@@ -305,7 +311,8 @@ impl World {
             }
 
             if agent.traits.scavenging_rate > 0.0 {
-                let nearby_carcasses = carcass_grid.query_radius(agent.position, agent.traits.sensing_range);
+                let nearby_carcasses =
+                    carcass_grid.query_radius(agent.position, agent.traits.sensing_range);
                 for ci_id in nearby_carcasses {
                     let ci = ci_id as usize;
                     let carcass = &self.carcasses[ci];
@@ -323,7 +330,8 @@ impl World {
             chemotaxis_x *= agent.traits.chemotaxis_sensitivity;
             chemotaxis_y *= agent.traits.chemotaxis_sensitivity;
 
-            let angle_dist = rand::distr::Uniform::new(0.0_f32, std::f32::consts::TAU).unwrap();
+            let angle_dist =
+                rand::distr::Uniform::new(0.0_f32, std::f32::consts::TAU).unwrap();
             let angle = angle_dist.sample(&mut self.rng);
             let explore_x = angle.cos();
             let explore_y = angle.sin();
@@ -368,348 +376,380 @@ impl World {
             })
             .collect();
 
-        // --- Act: apply movement, energy ---
-        let mut agents: Vec<Agent> = Vec::with_capacity(agent_count);
-        let mut pre_tick_energies: Vec<f32> = Vec::with_capacity(agent_count);
-        let mut solar_gains: Vec<f32> = Vec::with_capacity(agent_count);
+        // --- Apply movement and metabolic costs ---
+        let pre_tick_energies: Vec<f32> = self.agents.iter().map(|a| a.energy).collect();
 
-        for (i, agent) in self.agents.iter().enumerate() {
+        for (i, agent) in self.agents.iter_mut().enumerate() {
             let (mx, my) = movements[i];
-            let new_pos = wrap_position(
+            agent.position = wrap_position(
                 (agent.position.0 + mx, agent.position.1 + my),
                 extent,
             );
             let distance_moved = (mx * mx + my * my).sqrt();
             let movement_cost = distance_moved * self.params.movement_cost_coefficient;
-
-            let mobility_gate = 1.0 / (1.0 + (20.0_f32 * (agent.traits.mobility - 0.3)).exp());
-            let solar_gain =
-                agent.traits.photosynthetic_absorption * self.params.solar_flux_magnitude * mobility_gate * light_shares[i];
             let metabolic_cost = self.params.base_metabolic_rate
                 + agent.traits.sensing_range * self.params.sensing_cost_coefficient
                 + agent.traits.photosynthetic_absorption * self.params.photo_maintenance_cost
                 + agent.traits.consumption_rate * self.params.consumption_maintenance_cost
                 + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost;
-            self.total_solar_input += solar_gain;
-            let energy = agent.energy + solar_gain - metabolic_cost - movement_cost;
-            pre_tick_energies.push(agent.energy);
-            solar_gains.push(solar_gain);
-            agents.push(Agent {
-                id: agent.id,
-                position: new_pos,
-                energy,
-                traits: agent.traits,
-            });
+
+            agent.energy -= metabolic_cost + movement_cost;
         }
 
-        // Rebuild agent grid with post-move positions
+        // Rebuild grids with post-move positions
         let mut agent_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
-        for (i, agent) in agents.iter().enumerate() {
+        for (i, agent) in self.agents.iter().enumerate() {
             agent_grid.insert(i as u64, agent.position);
         }
 
-        // --- Consumption: agents drain energy from living targets within contact_radius ---
+        // --- DES: sequential agent processing with consequence cascading ---
         let contact_radius = self.params.contact_radius;
         let consumption_efficiency = self.params.consumption_efficiency;
-        let n = agents.len();
-        let mut consumption_deltas = vec![0.0_f32; n];
-
-        // Phase 1: collect intentions — each consumer picks its closest target
-        let mut intentions: Vec<(usize, usize)> = Vec::new();
-        for &i in &order {
-            if agents[i].traits.consumption_rate <= 0.0 {
-                continue;
-            }
-            let mut best_target: Option<usize> = None;
-            let mut best_dist = f32::MAX;
-            let neighbors = agent_grid.query_radius(agents[i].position, contact_radius);
-            for j_id in neighbors {
-                let j = j_id as usize;
-                if j == i {
-                    continue;
-                }
-                let dist = toroidal_distance(agents[i].position, agents[j].position, extent);
-                if dist < contact_radius && dist < best_dist {
-                    best_dist = dist;
-                    best_target = Some(j);
-                }
-            }
-            if let Some(target) = best_target {
-                intentions.push((i, target));
-            }
-        }
-
-        // Phase 2: resolve — split each victim's energy proportionally among claimants
-        // Group demands by target
-        let mut demands_by_target: std::collections::HashMap<usize, Vec<usize>> =
-            std::collections::HashMap::new();
-        for &(consumer, target) in &intentions {
-            demands_by_target.entry(target).or_default().push(consumer);
-        }
-        for (target, consumers) in &demands_by_target {
-            let available = agents[*target].energy.max(0.0);
-            let total_demand: f32 = consumers
-                .iter()
-                .map(|&c| agents[c].traits.consumption_rate)
-                .sum();
-            let drain = total_demand.min(available);
-            if drain > 0.0 {
-                for &consumer in consumers {
-                    let share = agents[consumer].traits.consumption_rate / total_demand;
-                    let consumer_drain = drain * share;
-                    consumption_deltas[consumer] += consumer_drain * consumption_efficiency;
-                    self.dissipated_energy += consumer_drain * (1.0 - consumption_efficiency);
-                    self.emit(
-                        event::EventKind::Consumed,
-                        agents[consumer].id,
-                        Some(agents[*target].id),
-                        consumer_drain,
-                        Some(agents[consumer].position),
-                    );
-                }
-                consumption_deltas[*target] -= drain;
-            }
-        }
-
-        for i in 0..n {
-            agents[i].energy += consumption_deltas[i];
-        }
-
-        // --- Decomposition: agents drain energy from carcasses within contact_radius ---
         let decomposition_efficiency = self.params.decomposition_efficiency;
-        let mut carcass_drains = vec![0.0_f32; self.carcasses.len()];
-        let mut decomposition_gains = vec![0.0_f32; n];
-
-        // Phase 1: collect intentions
-        let mut decomp_intentions: Vec<(usize, usize)> = Vec::new();
-        for &i in &order {
-            if agents[i].traits.scavenging_rate <= 0.0 {
-                continue;
-            }
-            let mut best_carcass: Option<usize> = None;
-            let mut best_dist = f32::MAX;
-            let nearby_carcasses = carcass_grid.query_radius(agents[i].position, contact_radius);
-            for ci_id in nearby_carcasses {
-                let ci = ci_id as usize;
-                let carcass = &self.carcasses[ci];
-                let dist = toroidal_distance(agents[i].position, carcass.position, extent);
-                if dist < contact_radius && dist < best_dist {
-                    best_dist = dist;
-                    best_carcass = Some(ci);
-                }
-            }
-            if let Some(ci) = best_carcass {
-                decomp_intentions.push((i, ci));
-            }
-        }
-
-        // Phase 2: resolve — split each carcass's energy proportionally among claimants
-        let mut decomp_by_carcass: std::collections::HashMap<usize, Vec<usize>> =
-            std::collections::HashMap::new();
-        for &(scavenger, carcass) in &decomp_intentions {
-            decomp_by_carcass.entry(carcass).or_default().push(scavenger);
-        }
-        for (ci, scavengers) in &decomp_by_carcass {
-            let available = self.carcasses[*ci].energy.max(0.0);
-            let total_demand: f32 = scavengers
-                .iter()
-                .map(|&s| agents[s].traits.scavenging_rate)
-                .sum();
-            let drain = total_demand.min(available);
-            if drain > 0.0 {
-                let carcass_id = self.carcasses[*ci].id;
-                for &scavenger in scavengers {
-                    let share = agents[scavenger].traits.scavenging_rate / total_demand;
-                    let scavenger_drain = drain * share;
-                    decomposition_gains[scavenger] = scavenger_drain * decomposition_efficiency;
-                    agents[scavenger].energy += decomposition_gains[scavenger];
-                    self.dissipated_energy += scavenger_drain * (1.0 - decomposition_efficiency);
-                    self.emit(
-                        event::EventKind::Decomposed,
-                        agents[scavenger].id,
-                        Some(carcass_id),
-                        scavenger_drain,
-                        Some(agents[scavenger].position),
-                    );
-                }
-                carcass_drains[*ci] = drain;
-            }
-        }
-
-        for (ci, carcass) in self.carcasses.iter_mut().enumerate() {
-            carcass.energy -= carcass_drains[ci];
-        }
-        let depleted_carcasses: Vec<(u64, (f32, f32))> = self.carcasses.iter()
-            .filter(|c| c.energy <= 0.0)
-            .map(|c| (c.id, c.position))
-            .collect();
-        for (carcass_id, pos) in depleted_carcasses {
-            self.emit(event::EventKind::CarcassDepleted, carcass_id, None, 0.0, Some(pos));
-        }
-        self.carcasses.retain(|c| c.energy > 0.0);
-
-        // --- Reproduction: find compatible mates and produce offspring ---
-        let mut reproduced = vec![false; n];
-        let mut reproduction_investments = vec![0.0_f32; n];
-        let mut offspring: Vec<Agent> = Vec::new();
         let reproduction_threshold = self.params.reproduction_energy_threshold;
         let reproduction_efficiency = self.params.reproduction_efficiency;
         let mutation_rate = self.params.mutation_rate;
         let mutation_magnitude = self.params.mutation_magnitude;
+        let n = agent_count;
 
-        // Compute per-agent effective reproduction radius (spore dispersal)
+        let mut dead_agents: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+        let mut depleted_carcasses: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+        let mut reproduced = vec![false; n];
+        let mut consumption_gains = vec![0.0_f32; n];
+        let mut consumption_losses = vec![0.0_f32; n];
+        let mut decomposition_gains = vec![0.0_f32; n];
+        let mut solar_gains = vec![0.0_f32; n];
+        let mut reproduction_investments = vec![0.0_f32; n];
+        let mut offspring: Vec<Agent> = Vec::new();
+
         let effective_radii: Vec<f32> = (0..n)
             .map(|i| {
-                let gate = 1.0 / (1.0 + (20.0_f32 * (agents[i].traits.mobility - 0.3)).exp());
-                gate * agents[i].traits.sensing_range + (1.0 - gate) * contact_radius
+                let gate =
+                    1.0 / (1.0 + (20.0_f32 * (self.agents[i].traits.mobility - 0.3)).exp());
+                gate * self.agents[i].traits.sensing_range + (1.0 - gate) * contact_radius
             })
             .collect();
-
-        // Phase 1: collect all compatible candidate pairs
         let max_effective_radius = effective_radii.iter().copied().fold(0.0_f32, f32::max);
-        let mut candidate_pairs: Vec<(f32, usize, usize)> = Vec::new();
-        for i in 0..n {
-            if agents[i].energy <= reproduction_threshold {
+
+        for &i in &order {
+            if dead_agents.contains(&i) || self.agents[i].energy <= 0.0 {
                 continue;
             }
-            let neighbors = agent_grid.query_radius(agents[i].position, max_effective_radius);
-            for j_id in neighbors {
-                let j = j_id as usize;
-                if j <= i {
-                    continue;
-                }
-                if agents[j].energy <= reproduction_threshold {
-                    continue;
-                }
-                let spatial_dist =
-                    toroidal_distance(agents[i].position, agents[j].position, extent);
-                if spatial_dist > effective_radii[i].max(effective_radii[j]) {
-                    continue;
-                }
-                let trait_dist = agents[i].traits.distance(&agents[j].traits);
-                if trait_dist < agents[i].traits.mate_selectivity
-                    && trait_dist < agents[j].traits.mate_selectivity
-                {
-                    candidate_pairs.push((spatial_dist, i, j));
-                }
-            }
-        }
 
-        // Phase 2: sort by spatial distance, then deterministic tiebreak by position
-        candidate_pairs.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0)
-                .unwrap()
-                .then_with(|| {
-                    let pos_a = (
-                        agents[a.1].position.0.min(agents[a.2].position.0),
-                        agents[a.1].position.1.min(agents[a.2].position.1),
+            // --- Energy acquisition (mutually exclusive) ---
+            let mut acquired = false;
+
+            // Try consumption first
+            if !acquired && self.agents[i].traits.consumption_rate > 0.0 {
+                let mut best_target: Option<usize> = None;
+                let mut best_dist = f32::MAX;
+                let neighbors =
+                    agent_grid.query_radius(self.agents[i].position, contact_radius);
+                for j_id in neighbors {
+                    let j = j_id as usize;
+                    if j == i || dead_agents.contains(&j) || self.agents[j].energy <= 0.0 {
+                        continue;
+                    }
+                    let dist = toroidal_distance(
+                        self.agents[i].position,
+                        self.agents[j].position,
+                        extent,
                     );
-                    let pos_b = (
-                        agents[b.1].position.0.min(agents[b.2].position.0),
-                        agents[b.1].position.1.min(agents[b.2].position.1),
-                    );
-                    pos_a
-                        .0
-                        .partial_cmp(&pos_b.0)
-                        .unwrap()
-                        .then_with(|| pos_a.1.partial_cmp(&pos_b.1).unwrap())
-                })
-        });
+                    if dist < contact_radius && dist < best_dist {
+                        best_dist = dist;
+                        best_target = Some(j);
+                    }
+                }
+                if let Some(target) = best_target {
+                    let available = self.agents[target].energy.max(0.0);
+                    let drain = self.agents[i].traits.consumption_rate.min(available);
+                    if drain > 0.0 {
+                        let gain = drain * consumption_efficiency;
+                        self.agents[i].energy += gain;
+                        self.agents[target].energy -= drain;
+                        consumption_gains[i] += gain;
+                        consumption_losses[target] += drain;
+                        self.dissipated_energy += drain * (1.0 - consumption_efficiency);
+                        self.emit(
+                            event::EventKind::Consumed,
+                            self.agents[i].id,
+                            Some(self.agents[target].id),
+                            drain,
+                            Some(self.agents[i].position),
+                        );
 
-        // Phase 3: greedily match closest pairs first
-        for (_, i, j) in &candidate_pairs {
-            let i = *i;
-            let j = *j;
-            if reproduced[i] || reproduced[j] {
-                continue;
-            }
-            reproduced[i] = true;
-            reproduced[j] = true;
-            self.emit(event::EventKind::MateSelected, agents[i].id, Some(agents[j].id), 0.0, Some(agents[i].position));
-
-            let inv_a = agents[i].traits.reproductive_investment;
-            let inv_b = agents[j].traits.reproductive_investment;
-            agents[i].energy -= inv_a;
-            agents[j].energy -= inv_b;
-            reproduction_investments[i] = inv_a;
-            reproduction_investments[j] = inv_b;
-
-            let offspring_energy = (inv_a + inv_b) * reproduction_efficiency;
-            self.dissipated_energy += (inv_a + inv_b) * (1.0 - reproduction_efficiency);
-
-            let mut child_traits = TraitVector {
-                photosynthetic_absorption: 0.0,
-                consumption_rate: 0.0,
-                scavenging_rate: 0.0,
-                mobility: 0.0,
-                chemotaxis_sensitivity: 0.0,
-                mate_selectivity: 0.0,
-                sensing_range: 0.0,
-                reproductive_investment: 0.0,
-            };
-            for dim in 0..8 {
-                let from_a: bool = rand::distr::Uniform::new(0u32, 2)
-                    .unwrap()
-                    .sample(&mut self.rng)
-                    == 0;
-                let val = if from_a {
-                    agents[i].traits.get(dim)
-                } else {
-                    agents[j].traits.get(dim)
-                };
-                child_traits.set(dim, val);
-            }
-
-            if mutation_rate > 0.0 {
-                let mutation_dist = Normal::new(0.0_f32, mutation_magnitude).unwrap();
-                for dim in 0..8 {
-                    let r: f32 = rand::distr::Uniform::new(0.0_f32, 1.0)
-                        .unwrap()
-                        .sample(&mut self.rng);
-                    if r < mutation_rate {
-                        let perturbation = mutation_dist.sample(&mut self.rng);
-                        child_traits.set(dim, child_traits.get(dim) + perturbation);
+                        // Cascade: target death → carcass creation
+                        if self.agents[target].energy <= 0.0 {
+                            let carcass_energy =
+                                (pre_tick_energies[target] - consumption_losses[target])
+                                    .max(0.0);
+                            self.emit(
+                                event::EventKind::Died,
+                                self.agents[target].id,
+                                None,
+                                0.0,
+                                Some(self.agents[target].position),
+                            );
+                            self.emit(
+                                event::EventKind::CarcassCreated,
+                                self.agents[target].id,
+                                None,
+                                carcass_energy,
+                                Some(self.agents[target].position),
+                            );
+                            let ci = self.carcasses.len();
+                            self.carcasses.push(Carcass {
+                                id: self.agents[target].id,
+                                position: self.agents[target].position,
+                                energy: carcass_energy,
+                            });
+                            carcass_grid.insert(ci as u64, self.agents[target].position);
+                            dead_agents.insert(target);
+                            agent_grid.remove(target as u64);
+                        }
+                        acquired = true;
                     }
                 }
             }
 
-            let offspring_id = self.next_agent_id;
-            self.next_agent_id += 1;
-            self.emit(event::EventKind::Born, offspring_id, None, offspring_energy, Some(agents[i].position));
-            offspring.push(Agent {
-                id: offspring_id,
-                position: agents[i].position,
-                energy: offspring_energy,
-                traits: child_traits,
-            });
+            // Try decomposition
+            if !acquired && self.agents[i].traits.scavenging_rate > 0.0 {
+                let mut best_carcass: Option<usize> = None;
+                let mut best_dist = f32::MAX;
+                let nearby =
+                    carcass_grid.query_radius(self.agents[i].position, contact_radius);
+                for ci_id in nearby {
+                    let ci = ci_id as usize;
+                    if self.carcasses[ci].energy <= 0.0 {
+                        continue;
+                    }
+                    let dist = toroidal_distance(
+                        self.agents[i].position,
+                        self.carcasses[ci].position,
+                        extent,
+                    );
+                    if dist < contact_radius && dist < best_dist {
+                        best_dist = dist;
+                        best_carcass = Some(ci);
+                    }
+                }
+                if let Some(ci) = best_carcass {
+                    let available = self.carcasses[ci].energy.max(0.0);
+                    let drain = self.agents[i].traits.scavenging_rate.min(available);
+                    if drain > 0.0 {
+                        let gain = drain * decomposition_efficiency;
+                        self.agents[i].energy += gain;
+                        self.carcasses[ci].energy -= drain;
+                        decomposition_gains[i] = gain;
+                        self.dissipated_energy += drain * (1.0 - decomposition_efficiency);
+                        self.emit(
+                            event::EventKind::Decomposed,
+                            self.agents[i].id,
+                            Some(self.carcasses[ci].id),
+                            drain,
+                            Some(self.agents[i].position),
+                        );
+
+                        // Cascade: carcass depletion
+                        if self.carcasses[ci].energy <= 0.0 {
+                            self.emit(
+                                event::EventKind::CarcassDepleted,
+                                self.carcasses[ci].id,
+                                None,
+                                0.0,
+                                Some(self.carcasses[ci].position),
+                            );
+                            depleted_carcasses.insert(ci);
+                            carcass_grid.remove(ci as u64);
+                        }
+                        acquired = true;
+                    }
+                }
+            }
+
+            // Photosynthesise (fallback)
+            if !acquired {
+                let mobility_gate = 1.0
+                    / (1.0
+                        + (20.0_f32 * (self.agents[i].traits.mobility - 0.3)).exp());
+                let solar_gain = self.agents[i].traits.photosynthetic_absorption
+                    * self.params.solar_flux_magnitude
+                    * mobility_gate
+                    * light_shares[i];
+                self.agents[i].energy += solar_gain;
+                self.total_solar_input += solar_gain;
+                solar_gains[i] = solar_gain;
+            }
+
+            // --- Reproduction signaling ---
+            if !reproduced[i] && self.agents[i].energy > reproduction_threshold {
+                let mut best_mate: Option<(f32, usize)> = None;
+                let neighbors = agent_grid
+                    .query_radius(self.agents[i].position, max_effective_radius);
+                for j_id in neighbors {
+                    let j = j_id as usize;
+                    if j == i
+                        || dead_agents.contains(&j)
+                        || reproduced[j]
+                        || self.agents[j].energy <= reproduction_threshold
+                    {
+                        continue;
+                    }
+                    let spatial_dist = toroidal_distance(
+                        self.agents[i].position,
+                        self.agents[j].position,
+                        extent,
+                    );
+                    if spatial_dist > effective_radii[i].max(effective_radii[j]) {
+                        continue;
+                    }
+                    let trait_dist = self.agents[i].traits.distance(&self.agents[j].traits);
+                    if trait_dist < self.agents[i].traits.mate_selectivity
+                        && trait_dist < self.agents[j].traits.mate_selectivity
+                    {
+                        if best_mate.is_none() || spatial_dist < best_mate.unwrap().0 {
+                            best_mate = Some((spatial_dist, j));
+                        }
+                    }
+                }
+
+                if let Some((_, j)) = best_mate {
+                    reproduced[i] = true;
+                    reproduced[j] = true;
+                    self.emit(
+                        event::EventKind::MateSelected,
+                        self.agents[i].id,
+                        Some(self.agents[j].id),
+                        0.0,
+                        Some(self.agents[i].position),
+                    );
+
+                    let inv_a = self.agents[i].traits.reproductive_investment;
+                    let inv_b = self.agents[j].traits.reproductive_investment;
+                    self.agents[i].energy -= inv_a;
+                    self.agents[j].energy -= inv_b;
+                    reproduction_investments[i] = inv_a;
+                    reproduction_investments[j] = inv_b;
+
+                    let offspring_energy = (inv_a + inv_b) * reproduction_efficiency;
+                    self.dissipated_energy +=
+                        (inv_a + inv_b) * (1.0 - reproduction_efficiency);
+
+                    let mut child_traits = TraitVector {
+                        photosynthetic_absorption: 0.0,
+                        consumption_rate: 0.0,
+                        scavenging_rate: 0.0,
+                        mobility: 0.0,
+                        chemotaxis_sensitivity: 0.0,
+                        mate_selectivity: 0.0,
+                        sensing_range: 0.0,
+                        reproductive_investment: 0.0,
+                    };
+                    for dim in 0..8 {
+                        let from_a: bool = rand::distr::Uniform::new(0u32, 2)
+                            .unwrap()
+                            .sample(&mut self.rng)
+                            == 0;
+                        let val = if from_a {
+                            self.agents[i].traits.get(dim)
+                        } else {
+                            self.agents[j].traits.get(dim)
+                        };
+                        child_traits.set(dim, val);
+                    }
+
+                    if mutation_rate > 0.0 {
+                        let mutation_dist =
+                            Normal::new(0.0_f32, mutation_magnitude).unwrap();
+                        for dim in 0..8 {
+                            let r: f32 = rand::distr::Uniform::new(0.0_f32, 1.0)
+                                .unwrap()
+                                .sample(&mut self.rng);
+                            if r < mutation_rate {
+                                let perturbation = mutation_dist.sample(&mut self.rng);
+                                child_traits
+                                    .set(dim, child_traits.get(dim) + perturbation);
+                            }
+                        }
+                    }
+
+                    let offspring_id = self.next_agent_id;
+                    self.next_agent_id += 1;
+                    self.emit(
+                        event::EventKind::Born,
+                        offspring_id,
+                        None,
+                        offspring_energy,
+                        Some(self.agents[i].position),
+                    );
+                    offspring.push(Agent {
+                        id: offspring_id,
+                        position: self.agents[i].position,
+                        energy: offspring_energy,
+                        traits: child_traits,
+                    });
+                }
+            }
         }
 
-        // --- Death check and carcass creation ---
+        // --- End-of-tick death check and energy accounting ---
         let mut next_agents: Vec<Agent> = Vec::with_capacity(n);
-        let mut next_carcasses: Vec<Carcass> = self.carcasses.drain(..).collect();
+        let mut next_carcasses: Vec<Carcass> = self
+            .carcasses
+            .drain(..)
+            .enumerate()
+            .filter(|(ci, _)| !depleted_carcasses.contains(ci))
+            .map(|(_, c)| c)
+            .collect();
 
-        for (i, agent) in agents.into_iter().enumerate() {
+        let remaining_agents: Vec<(usize, Agent)> = self
+            .agents
+            .drain(..)
+            .enumerate()
+            .filter(|(i, _)| !dead_agents.contains(i))
+            .collect();
+
+        for (i, agent) in remaining_agents {
             if agent.energy <= 0.0 {
-                let carcass_energy = (pre_tick_energies[i] + consumption_deltas[i]).max(0.0);
-                self.emit(event::EventKind::Died, agent.id, None, 0.0, Some(agent.position));
-                self.emit(event::EventKind::CarcassCreated, agent.id, None, carcass_energy, Some(agent.position));
+                let carcass_energy =
+                    (pre_tick_energies[i] - consumption_losses[i]).max(0.0);
+                self.emit(
+                    event::EventKind::Died,
+                    agent.id,
+                    None,
+                    0.0,
+                    Some(agent.position),
+                );
+                self.emit(
+                    event::EventKind::CarcassCreated,
+                    agent.id,
+                    None,
+                    carcass_energy,
+                    Some(agent.position),
+                );
                 next_carcasses.push(Carcass {
                     id: agent.id,
                     position: agent.position,
                     energy: carcass_energy,
                 });
-                self.dissipated_energy += solar_gains[i] + decomposition_gains[i];
+                self.dissipated_energy +=
+                    solar_gains[i] + consumption_gains[i] + decomposition_gains[i];
             } else {
-                let total_input = solar_gains[i] + consumption_deltas[i] + decomposition_gains[i];
-                let costs =
-                    pre_tick_energies[i] + total_input - agent.energy - reproduction_investments[i];
+                let total_input = solar_gains[i] + consumption_gains[i]
+                    + decomposition_gains[i]
+                    - consumption_losses[i];
+                let costs = pre_tick_energies[i] + total_input
+                    - agent.energy
+                    - reproduction_investments[i];
                 self.dissipated_energy += costs;
                 next_agents.push(agent);
             }
         }
 
         self.last_tick_births = offspring.len();
-        self.last_tick_deaths = n - next_agents.len();
+        self.last_tick_deaths = dead_agents.len() + (n - dead_agents.len() - next_agents.len());
         next_agents.extend(offspring);
         self.agents = next_agents;
         self.carcasses = next_carcasses;
@@ -1619,58 +1659,6 @@ spatial_decay_rate: 0.5,
     }
 
     #[test]
-    fn agent_with_both_traits_consumes_and_decomposes_in_one_tick() {
-        let params = WorldParameters {
-            solar_flux_magnitude: 0.0,
-            base_metabolic_rate: 0.0,
-            sensing_cost_coefficient: 0.0,
-            movement_cost_coefficient: 0.0,
-            contact_radius: 5.0,
-            consumption_efficiency: 0.5,
-            decomposition_efficiency: 0.5,
-            initial_population_size: 0,
-            ..test_params()
-        };
-        let dist = InitialDistribution {
-            mean_traits: zero_traits(),
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 100.0,
-        };
-        let mut world = World::new(params, dist, 42);
-        // Agent with both consumption and scavenging
-        world.add_agent(Agent {
-            id: 0,
-            position: (0.0, 0.0),
-            energy: 50.0,
-            traits: TraitVector {
-                consumption_rate: 2.0,
-                scavenging_rate: 3.0,
-                ..zero_traits()
-            },
-        });
-        // Living target
-        world.add_agent(Agent {
-            id: 0,
-            position: (1.0, 0.0),
-            energy: 50.0,
-            traits: zero_traits(),
-        });
-        // Carcass
-        world.add_carcass(Carcass {
-            id: 0,
-            position: (0.0, 1.0),
-            energy: 20.0,
-        });
-        world.step();
-        // Consumption: drain 2.0 from living, gain 1.0
-        // Decomposition: drain 3.0 from carcass, gain 1.5
-        assert!((world.agents()[0].energy - 52.5).abs() < 1e-5);
-        assert!((world.agents()[1].energy - 48.0).abs() < 1e-5);
-        assert!((world.carcasses()[0].energy - 17.0).abs() < 1e-5);
-    }
-
-    #[test]
     fn zero_rate_agent_does_not_drain_even_in_contact() {
         let params = WorldParameters {
             solar_flux_magnitude: 0.0,
@@ -2450,159 +2438,6 @@ spatial_decay_rate: 0.5,
             + world.agents()[0].traits.sensing_range * world.params().sensing_cost_coefficient;
         let expected = initial_energy + photosynthesis - metabolic_cost;
         assert_eq!(world.agents()[0].energy, expected);
-    }
-
-    fn sorted_energies(world: &World) -> Vec<f32> {
-        let mut energies: Vec<f32> = world.agents().iter().map(|a| a.energy).collect();
-        energies.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        energies
-    }
-
-    #[test]
-    fn consumption_outcome_is_independent_of_agent_order() {
-        let make_params = || WorldParameters {
-            solar_flux_magnitude: 0.0,
-            base_metabolic_rate: 0.0,
-            sensing_cost_coefficient: 0.0,
-            movement_cost_coefficient: 0.0,
-            contact_radius: 5.0,
-            consumption_efficiency: 0.5,
-            initial_population_size: 0,
-            ..test_params()
-        };
-        let empty_dist = || InitialDistribution {
-            mean_traits: zero_traits(),
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 100.0,
-        };
-
-        let consumer_traits = TraitVector {
-            consumption_rate: 3.0,
-            ..zero_traits()
-        };
-
-        // Victim has only 4.0 energy — not enough for two consumers each wanting 3.0
-        // Consumers have different starting energy so sorted results differ if order matters
-        // World A: consumer1 first, then consumer2, then victim
-        let mut world_a = World::new(make_params(), empty_dist(), 42);
-        world_a.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits: consumer_traits });
-        world_a.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 30.0, traits: consumer_traits });
-        world_a.add_agent(Agent { id: 0, position: (0.5, 0.0), energy: 4.0, traits: zero_traits() });
-        world_a.step();
-
-        // World B: consumer2 first, then consumer1, then victim
-        let mut world_b = World::new(make_params(), empty_dist(), 42);
-        world_b.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 30.0, traits: consumer_traits });
-        world_b.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits: consumer_traits });
-        world_b.add_agent(Agent { id: 0, position: (0.5, 0.0), energy: 4.0, traits: zero_traits() });
-        world_b.step();
-
-        assert_eq!(
-            sorted_energies(&world_a),
-            sorted_energies(&world_b),
-            "consumption outcome should not depend on agent insertion order"
-        );
-    }
-
-    #[test]
-    fn decomposition_outcome_is_independent_of_agent_order() {
-        let make_params = || WorldParameters {
-            solar_flux_magnitude: 0.0,
-            base_metabolic_rate: 0.0,
-            sensing_cost_coefficient: 0.0,
-            movement_cost_coefficient: 0.0,
-            contact_radius: 5.0,
-            decomposition_efficiency: 0.5,
-            initial_population_size: 0,
-            ..test_params()
-        };
-        let empty_dist = || InitialDistribution {
-            mean_traits: zero_traits(),
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 100.0,
-        };
-
-        let scavenger_traits = TraitVector {
-            scavenging_rate: 3.0,
-            ..zero_traits()
-        };
-
-        // Carcass has only 4.0 energy — not enough for two scavengers each wanting 3.0
-        // World A: scavenger1 first, then scavenger2
-        let mut world_a = World::new(make_params(), empty_dist(), 42);
-        world_a.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits: scavenger_traits });
-        world_a.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 30.0, traits: scavenger_traits });
-        world_a.add_carcass(Carcass { id: 0, position: (0.5, 0.0), energy: 4.0 });
-        world_a.step();
-
-        // World B: scavenger2 first, then scavenger1
-        let mut world_b = World::new(make_params(), empty_dist(), 42);
-        world_b.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 30.0, traits: scavenger_traits });
-        world_b.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits: scavenger_traits });
-        world_b.add_carcass(Carcass { id: 0, position: (0.5, 0.0), energy: 4.0 });
-        world_b.step();
-
-        assert_eq!(
-            sorted_energies(&world_a),
-            sorted_energies(&world_b),
-            "decomposition outcome should not depend on agent insertion order"
-        );
-    }
-
-    #[test]
-    fn reproduction_pairing_is_independent_of_agent_order() {
-        let make_params = || WorldParameters {
-            solar_flux_magnitude: 0.0,
-            base_metabolic_rate: 0.0,
-            sensing_cost_coefficient: 0.0,
-            movement_cost_coefficient: 0.0,
-            contact_radius: 5.0,
-            reproduction_efficiency: 0.7,
-            reproduction_energy_threshold: 10.0,
-            mutation_rate: 0.0,
-            mutation_magnitude: 0.0,
-            initial_population_size: 0,
-            ..test_params()
-        };
-        let empty_dist = || InitialDistribution {
-            mean_traits: zero_traits(),
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 100.0,
-        };
-
-        // Three agents: A at (0,0), B at (1,0), C at (2,0). All compatible.
-        // A-B dist=1, B-C dist=1, A-C dist=2. B is closest to both A and C.
-        // If order-dependent: iterating A first → A pairs with B, C unpaired.
-        // Iterating C first → C pairs with B, A unpaired.
-        // Give A and C different energies so sorted results differ.
-        let traits = TraitVector {
-            mate_selectivity: 10.0,
-            reproductive_investment: 5.0,
-            ..zero_traits()
-        };
-
-        // World A: agent order is A, B, C
-        let mut world_a = World::new(make_params(), empty_dist(), 42);
-        world_a.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits });
-        world_a.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 40.0, traits });
-        world_a.add_agent(Agent { id: 0, position: (2.0, 0.0), energy: 30.0, traits });
-        world_a.step();
-
-        // World B: agent order is C, B, A
-        let mut world_b = World::new(make_params(), empty_dist(), 42);
-        world_b.add_agent(Agent { id: 0, position: (2.0, 0.0), energy: 30.0, traits });
-        world_b.add_agent(Agent { id: 0, position: (1.0, 0.0), energy: 40.0, traits });
-        world_b.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 50.0, traits });
-        world_b.step();
-
-        assert_eq!(
-            sorted_energies(&world_a),
-            sorted_energies(&world_b),
-            "reproduction pairing should not depend on agent insertion order"
-        );
     }
 
     #[test]
@@ -3577,5 +3412,163 @@ spatial_decay_rate: 0.5,
         assert_eq!(died.len(), 1);
         assert!(died[0].tick > 0, "should die after tick 0");
         assert!(died[0].tick <= 10);
+    }
+
+    #[test]
+    fn consequence_cascade_consumption_to_death_to_carcass() {
+        use crate::event::EventKind;
+        let mut world = World::new(event_test_params(), event_test_dist(), 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 20.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0),
+            energy: 5.0,
+            traits: zero_traits(),
+        });
+        world.step();
+        let log = world.event_log();
+        let events = log.by_tick_range(0, 1);
+        let kinds: Vec<&EventKind> = events.iter().map(|e| &e.kind).collect();
+        assert!(
+            kinds.contains(&&EventKind::Consumed),
+            "should have Consumed event"
+        );
+        assert!(
+            kinds.contains(&&EventKind::Died),
+            "should have Died event"
+        );
+        assert!(
+            kinds.contains(&&EventKind::CarcassCreated),
+            "should have CarcassCreated event"
+        );
+        // Consumed must come before Died, Died before CarcassCreated
+        let consumed_seq = events.iter().find(|e| e.kind == EventKind::Consumed).unwrap().seq;
+        let died_seq = events.iter().find(|e| e.kind == EventKind::Died).unwrap().seq;
+        let carcass_seq = events.iter().find(|e| e.kind == EventKind::CarcassCreated).unwrap().seq;
+        assert!(consumed_seq < died_seq, "Consumed must precede Died");
+        assert!(died_seq < carcass_seq, "Died must precede CarcassCreated");
+        // Target should be dead and a carcass should exist
+        assert_eq!(world.agents().len(), 1);
+        assert_eq!(world.carcasses().len(), 1);
+    }
+
+    #[test]
+    fn carcass_from_cascade_available_for_decomposition_same_tick() {
+        use crate::event::EventKind;
+        // Metabolic costs weaken the target so consumption kills it without
+        // fully draining its biomass — the carcass retains pre-tick energy
+        // minus consumption losses, leaving something for the scavenger.
+        let params = WorldParameters {
+            base_metabolic_rate: 90.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            ..event_test_params()
+        };
+        let mut found = false;
+        for seed in 0..20u64 {
+            let mut world = World::new(params.clone(), event_test_dist(), seed);
+            // Consumer: consumption_rate=15, kills target weakened by metabolism
+            world.add_agent(Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 200.0,
+                traits: TraitVector {
+                    consumption_rate: 15.0,
+                    ..zero_traits()
+                },
+            });
+            // Target: energy=100, after metabolic(90) → 10, drained 10 → dead
+            // Carcass energy = max(0, 100 - 10) = 90 (biomass minus consumed)
+            world.add_agent(Agent {
+                id: 0,
+                position: (1.0, 0.0),
+                energy: 100.0,
+                traits: zero_traits(),
+            });
+            // Scavenger: decomposes the newly-created carcass
+            world.add_agent(Agent {
+                id: 0,
+                position: (2.0, 0.0),
+                energy: 200.0,
+                traits: TraitVector {
+                    scavenging_rate: 10.0,
+                    ..zero_traits()
+                },
+            });
+            world.step();
+            let log = world.event_log();
+            let consumed = log.by_kind(&EventKind::Consumed);
+            let decomposed = log.by_kind(&EventKind::Decomposed);
+            if !consumed.is_empty() && !decomposed.is_empty() {
+                assert_eq!(
+                    consumed[0].tick, decomposed[0].tick,
+                    "both events should be in the same tick"
+                );
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "at least one seed should produce same-tick cascade: consumption → carcass → decomposition"
+        );
+    }
+
+    #[test]
+    fn energy_acquisition_is_mutually_exclusive() {
+        let params = WorldParameters {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            ..event_test_params()
+        };
+        let mut world = World::new(params, event_test_dist(), 42);
+        // Agent with both consumption and scavenging, plus a living target and a carcass
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                consumption_rate: 2.0,
+                scavenging_rate: 3.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0),
+            energy: 50.0,
+            traits: zero_traits(),
+        });
+        world.add_carcass(Carcass {
+            id: 99,
+            position: (0.0, 1.0),
+            energy: 20.0,
+        });
+        world.step();
+        use crate::event::EventKind;
+        let consumed = world.event_log().by_kind(&EventKind::Consumed);
+        let decomposed = world.event_log().by_kind(&EventKind::Decomposed);
+        // Agent should have consumed OR decomposed, not both
+        let agent_consumed = consumed.iter().any(|e| e.source == world.agents()[0].id);
+        let agent_decomposed = decomposed.iter().any(|e| e.source == world.agents()[0].id);
+        assert!(
+            !(agent_consumed && agent_decomposed),
+            "agent should not both consume and decompose in the same tick (mutually exclusive)"
+        );
+        // But at least one should have happened
+        assert!(
+            agent_consumed || agent_decomposed,
+            "agent should have done at least one energy acquisition"
+        );
     }
 }
