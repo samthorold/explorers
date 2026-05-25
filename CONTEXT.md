@@ -75,7 +75,7 @@ A trait dimension controlling how much energy a parent transfers to offspring at
 _Avoid_: brood size, litter size
 
 **Spore dispersal**:
-The reproduction mechanism for sessile agents. Instead of requiring physical contact, a sessile agent broadcasts reproductive material over its **sensing range**. The effective reproduction radius is interpolated by the mobility gate: sessile agents (gate ≈ 1) use sensing range, mobile agents (gate ≈ 0) use contact radius. This is a law of the world, not a tunable parameter — the same sigmoid that gates photosynthesis gates the reproduction mechanism.
+The reproduction mechanism for sessile agents. Instead of requiring physical contact, a sessile agent disperses reproductive material over its **sensing range**. The effective reproduction radius is interpolated by the mobility gate: sessile agents (gate ≈ 1) use sensing range, mobile agents (gate ≈ 0) use contact radius. This is a law of the world, not a tunable parameter — the same sigmoid that gates photosynthesis gates the reproduction mechanism.
 _Avoid_: pollination (implies a specific biological mechanism), asexual reproduction (spore dispersal is still sexual — both parents contribute traits)
 
 **Speciation**:
@@ -160,6 +160,20 @@ _Avoid_: cluster count (the question during genesis is whether clustering exists
 
 **Cluster labelling**:
 Identifying and tracking specific clusters in trait space over time. Performed via DBSCAN (density-based, no preset cluster count; Ester et al. 1996) once the dip test confirms clustering exists. Required for all downstream measurements: oscillation detection per cluster, coexistence duration between clusters, trophic pyramid by cluster energy. Variance-ratio / gap statistic (scalar measure of clustering strength vs. uniform expectation) is an alternative approach.
+
+### Infrastructure
+
+**Event**:
+A record of something that happened in the simulation. Events are defined by a single enumeration — the vocabulary of the entire system. The event log is the source of truth for the simulation's causal history. Events record topology changes: births, deaths, trophic transfers, mate selections. Not a complete state record — full energy reconstruction requires replaying from seed.
+_Avoid_: message, signal (events are facts, not communications)
+
+**Broadcast**:
+The notification mechanism of the discrete event simulation. When an event occurs, the DES delivers it individually to each agent within sensing range. Broadcast is infrastructure — the dispatch protocol, not an ecological concept. Two filtering layers: spatial (sensing range) and subscription (agents may NACK an event type to unsubscribe). Each agent responds with a struct containing an ACK/NACK and a vector of events. On ACK, the DES queues the returned events. On NACK, the DES ignores returned events and stops delivering that event type to that agent. NACKs are per-agent and do not inherit to offspring.
+_Avoid_: using "broadcast" to describe ecological phenomena like spore dispersal
+
+**Projection**:
+A left fold over the event log that produces derived data for a specific consumer. Multiple projections can exist for different purposes (agent perception, genesis evaluation, replay tooling). Spatial projections decay over time and provide agents with navigational context. The DES computes projections and hands the data to agents alongside broadcasts — agents do not query projections themselves.
+_Avoid_: view, cache (a projection is a derived model, not a performance optimisation)
 
 ### Player
 

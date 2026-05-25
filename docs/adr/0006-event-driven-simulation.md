@@ -12,17 +12,17 @@ The current simulation uses a rigid six-phase step function where all agents pas
 
 **Event log** — source of truth, immutable, append-only. Stores only topology changes: events that alter the agent graph or energy flow network. Not a complete state record — full energy reconstruction requires replaying from seed. Queryable by genesis evaluation for food web structure, lineage graphs, and population dynamics.
 
-**Projections** — read models derived from the event log. Multiple projections can exist for different consumers (agent perception, genesis evaluation, replay tooling). Spatial projections decay over time and are what agents read for navigation and context. A projection only presents valid options — agent decisions are valid by construction.
+**Projections** — left folds over the event log that produce derived data for specific consumers. Multiple projections can exist (agent perception, genesis evaluation, replay tooling). Spatial projections decay over time and provide navigational context. The DES computes projections and hands the data to agents alongside broadcasts — agents do not query projections themselves. A projection only presents valid options — agent decisions are valid by construction.
 
-**Ephemeral broadcasts** — the DES pushes events to agents within sensing range. These are stimuli that agents react to. Includes intermediary signals (e.g., mating availability) that don't persist in the log. Only the resolved outcome (e.g., MateSelected) enters the log.
+**Broadcasts** — the DES notification mechanism. When an event occurs, the DES delivers it to agents within sensing range. Broadcast is infrastructure — the dispatch protocol, not an ecological concept. Two filtering layers: spatial (sensing range) and subscription (agents may NACK an event type to stop receiving it). NACKs are per-agent and do not inherit to offspring. Includes intermediary signals (e.g., mating availability) that don't persist in the log. Only the resolved outcome (e.g., MateSelected) enters the log.
 
-**Agent decisions** — one action per category per tick (not multiple moves, but can move and photosynthesise and signal for mating). Agents respond to broadcasts and consult projections. Decisions produce events; the DES resolves consequences.
+**Agent responses** — an agent receives a single triggering event (the broadcast) plus relevant projection data. It returns a `Response` struct with two fields: an `Ack` (ACK or NACK) and a `Vec<Event>`. ACK means the agent received the event; the DES queues any returned events. NACK means unsubscribe from this event type; the DES ignores any events in the response and stops delivering that type to this agent. NACKs are per-agent and do not inherit to offspring. The DES queues returned events without validation — correctness is a testing concern. Agents pattern-match on broadcast events and act only on relevant types. Multiple broadcasts may reach the same agent within a tick; each is delivered and responded to individually.
 
 **Consequence cascading** — when an interaction resolves (consumption drains energy), the DES propagates state changes (drain → death → carcass creation) until the world is quiescent before the next agent's decision is processed. Decisions are made by agents; consequences are resolved by the DES.
 
 ## Laws of the world
 
-- All perception is local — sensing range is the sole broadcast boundary.
+- All perception is local — sensing range is the sole spatial filtering boundary for broadcasts.
 - Agents are processed in ID order within a tick (deterministic for a given seed; randomised ordering is a future option).
 - Event processing within a tick is FIFO, with consequence events inserted at higher priority than pending agent decisions.
 - Interactions resolve within the tick (agents see depleted targets); field projections update between ticks (navigation uses last tick's state).
@@ -32,7 +32,7 @@ The current simulation uses a rigid six-phase step function where all agents pas
 ## Consequences
 
 - The six-phase `World::step()` is replaced by a priority event queue with two levels: consequence resolution (high) and agent decisions (normal).
-- Direct agent-to-agent sensing (iterating over nearby agents and reading their traits) is removed. Agents perceive only through projections and broadcasts.
+- Direct agent-to-agent sensing (iterating over nearby agents and reading their traits) is removed. Agents perceive only through broadcast events and projection data, both delivered by the DES.
 - The event log gives genesis evaluation direct access to food web structure and lineage graphs without re-running simulations. Aggregate metrics (oscillation, clustering) can be computed from log queries rather than tick-by-tick observation.
 - Stigmergy emerges: agents respond to traces of past activity rather than live state. This enables richer ecological dynamics (trail following, predator avoidance from death traces, attraction to productive zones).
 - The simulation remains deterministic for a given seed. Reproducibility is preserved.
