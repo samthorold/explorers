@@ -8,7 +8,19 @@ The ADRs describe how the system design gets implemented in code. They are close
 
 ## Documents
 
-- [Dynamic Stability](dynamic-stability.md) — the simulation as a stability problem; feedback mechanisms, trade-off pressure, energy flow, and the regime we're designing for
+- [World Rules](world-rules.md) — the immutable physics of the simulation: stocks (energy and nutrients), flows, topologies, channels, conservation laws, and the cost structure that creates trade-offs
+- [Expected Properties](expected-properties.md) — the emergent properties we expect from those rules, the failure modes that indicate miscalibration, and the initial conditions that enable or prevent healthy ecology
+
+## How the ecology layer maps here
+
+The cross-cutting topics in the ecology layer each illuminate a different aspect of the world rules:
+
+- **Energy flow** and **nutrient cycling** → what the world is made of. Stocks, flows, conservation laws, multi-currency dynamics, and stoichiometric constraints.
+- **Spatial ecology** → the two topologies (physical surface and emergent network) and the two channel types (perception and physical).
+- **Life history theory** → the cost structure and trade-offs that agents face within the world rules.
+- **Disturbance and succession** → emergent patterns that arise from the rules playing out across different timescales and spatial scales. Not separate mechanisms — consequences of the same physics.
+
+The taxa documents (plants, animals, fungi, bacteria) illustrate how specific lineages exploit the constraints the cross-cutting topics describe. They are not directly referenced here but inform intuition about what kinds of agent strategies the rules should support.
 
 ## Relationship to other layers
 
@@ -18,9 +30,9 @@ docs/ecology/          Ground truth. Observable Earth ecology.
                        Taxa illustrate agents within those systems.
         │
         ▼
-docs/system-design/    Our opinion. What the game should look like.
-                       Stocks, flows, feedback loops we include.
-                       Which simplifications we make and why.
+docs/system-design/    Our opinion. What the game world looks like.
+                       World rules (immutable physics).
+                       Expected properties (what a working world exhibits).
         │
         ▼
 docs/adr/              Implementation choices. Close to code.

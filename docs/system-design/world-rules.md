@@ -1,0 +1,190 @@
+# World Rules
+
+The immutable physics of the simulation. These define what the world is made of and how it behaves before any agent strategy, population dynamic, or emergent pattern is considered. An agent dropped into this world faces these constraints unconditionally.
+
+This document is built on the ecological ground truths in [docs/ecology/](../ecology/) — observable properties of real ecosystems that we take as given. It informs but does not prescribe the architectural decisions in [docs/adr/](../adr/).
+
+## Stocks
+
+The world has multiple currencies. Energy is the primary currency — it powers all processes and is the currency of metabolism. In addition, the world has multiple fundamental nutrients that agents require in different ratios depending on their traits and strategies. Together, energy and nutrients are the building blocks of every agent.
+
+### Energy stocks
+
+Energy flows through the system in one direction: from source to sink. It does not cycle.
+
+| Stock | Type | Description |
+|---|---|---|
+| **Solar flux** | Source (inexhaustible) | Energy enters the system here. The flux is constant — the same amount of energy is available every tick. All temporal variation in the system is endogenous. |
+| **Living agents** | Internal | Energy held by living organisms. Every living agent carries an energy balance that increases through acquisition and decreases through costs. |
+| **Carcasses** | Internal | Energy held by dead organisms. When an agent dies, its remaining energy becomes a carcass at the same location on the surface. Carcasses hold energy indefinitely — there is no passive decay. |
+| **Heat** | Sink (inexhaustible) | Energy leaves the system here, permanently. Every lossy process — metabolism, trophic transfer, reproduction inefficiency — sends energy to this sink. It does not return. |
+
+### Nutrients
+
+Unlike energy, nutrients cycle. They are not consumed and lost — they pass through agents and return to the environment when agents die and are decomposed. The total amount of each nutrient in the system is conserved across all pools (substrate, living agents, carcasses).
+
+Nutrients differ from each other in three properties:
+
+**Source accessibility.** Some nutrients enter the biological system easily — they are abundant in the environment and cheap to fix. Others are expensive to fix (available in the environment but require significant energy investment to convert into biologically usable form). Others have no easy source at all — they enter only through slow geological processes like substrate weathering, making them fundamentally non-renewable on ecological timescales.
+
+**Cycling speed.** Nutrients cycle at different rates through the biological system. Some turn over quickly — rapid uptake by agents, rapid release through decomposition. Others cycle slowly — locked into long-lived agents or recalcitrant dead matter, released only through slow decomposition. The cycling speed of a nutrient determines how quickly it becomes available again after being used.
+
+**Stoichiometric demand.** Different agents need nutrients in different ratios depending on their traits and strategies. A producer building structural tissue needs a different nutrient mix than a consumer building muscle. When the nutrient ratio in food does not match the consumer's demand, the consumer must process excess material to extract the limiting nutrient — excreting waste that is rich in the non-limiting nutrients. This stoichiometric mismatch between what agents eat and what they need drives consumption rates, waste composition, and the nutrient ratio of recycled material.
+
+These three properties interact to create **differential limitation**: at any given time and place, a different nutrient may be the one limiting an agent's growth. Producers may be limited by one nutrient while decomposers are limited by another, creating cross-trophic competition for different resources. The identity of the limiting nutrient can shift over time and space as agents draw down different stocks at different rates.
+
+### Nutrient pools
+
+Nutrients exist in four pools, analogous to the energy stocks:
+
+| Pool | Description |
+|---|---|
+| **Substrate** | Nutrients in the environment — in the surface, dissolved, or atmospheric. This is the abiotic reservoir from which agents acquire nutrients. Different nutrients have different substrate distributions and accessibility. |
+| **Living agents** | Nutrients incorporated into living agent biomass. Each agent holds nutrients in a ratio determined by its traits. |
+| **Carcasses** | Nutrients locked in dead matter. Released back to the substrate through decomposition. The nutrient ratio of a carcass reflects the ratio of the agent that died. |
+| **Unavailable** | Nutrients locked in forms that are not biologically accessible — bound in rock, occluded in soil chemistry, or in chemical states that no agent can process. These pools change only through geological-timescale processes. |
+
+### Conservation laws
+
+**Energy conservation.** At any point in time:
+
+> Total system energy = Σ(living agent energy) + Σ(carcass energy)
+
+The change in total system energy per tick equals:
+
+> ΔE = photosynthetic input − total dissipation to heat
+
+Energy is neither created nor destroyed within the system. Every flow is accounted for.
+
+**Nutrient conservation.** For each nutrient:
+
+> Total nutrient = substrate pool + Σ(living agent nutrient) + Σ(carcass nutrient) + unavailable pool
+
+Nutrients are neither created nor destroyed. They cycle between pools. The unavailable pool changes only through geological-timescale processes (weathering, deposition), not through biological activity.
+
+If either conservation law fails, the world is broken.
+
+### No passive decay
+
+Carcasses do not lose energy or nutrients on their own. Decomposition is always an agentic process — a living agent must actively consume a carcass to return its energy and nutrients to the living system and substrate. This makes decomposer strategies structurally necessary for the world's nutrient cycles. A world without decomposers accumulates resources in the dead pool until the living system starves.
+
+This is not a fragility to be patched with a safety valve. In real ecosystems, what appears to be passive decay is always decomposition by organisms at a finer resolution — bacteria, fungi, invertebrates. The principle is: **all resource transformation requires an agent**.
+
+## Flows
+
+Eight flows move energy and nutrients between stocks. Each flow is a rate — resources per tick — and each is subject to constraints described below. Energy and nutrients travel together through most flows (an agent that eats another agent acquires both energy and nutrients), but they have different fates: energy is progressively dissipated to heat, while nutrients cycle back through decomposition.
+
+### Input flows
+
+**1. Photosynthesis.** Solar → Living agent. The only way energy enters the living system. Producers absorb energy from the constant solar flux. This flow is attenuated by local competition (producers near other producers share the available flux) and by the fundamental trade-off between sessile and mobile strategies (the ecology establishes that photosynthesis requires being stationary). Photosynthesis moves energy only — nutrients must be acquired separately from the substrate.
+
+**2. Nutrient uptake.** Substrate → Living agent. Agents acquire nutrients from the substrate at their location. Different nutrients are acquired through different mechanisms — some are freely available, some require energy investment to fix, some require physical access to substrate deposits. The rate and cost of uptake varies by nutrient and by agent traits. Nutrient uptake is the only way nutrients enter the living system.
+
+### Flows between living agents
+
+**3. Consumption.** Living agent → Living agent. A consumer drains energy and nutrients from a living target through sustained physical contact. The transfer is lossy — only a fraction of the drained energy reaches the consumer; the remainder dissipates to heat (flow 8). Nutrients transfer with higher efficiency than energy but may not match the consumer's stoichiometric demand — excess nutrients are excreted back to the substrate, and the limiting nutrient constrains how much of the consumed material the consumer can actually use. Consumption is non-lethal by default; the target survives unless its energy reaches zero.
+
+**4. Reproduction.** Living agent → Living agent. Parents invest energy and nutrients to create offspring. The offspring receives a fraction of the invested resources; the energy remainder dissipates to heat (flow 8). Both parents survive. Offspring traits are derived from parental traits with variation.
+
+**5. Network redistribution.** Living agent ↔ Living agent. Energy and nutrients move between living agents through network connections (see Topologies below). This flow is cooperative, not adversarial — it is distinct from consumption. It is bidirectional: resources can flow in either direction through a connection, governed by the states of the connected agents. This is the mechanism by which mutualistic relationships become possible. Like all transfers, the energy component is lossy (flow 8).
+
+### Flows from living to dead
+
+**6. Death.** Living agent → Carcass. When a living agent's energy reaches zero, it becomes a carcass. All remaining energy and nutrients transfer to the carcass at the agent's location on the surface. The nutrient ratio of the carcass reflects the ratio of the agent that died.
+
+### Flows from dead to living
+
+**7. Decomposition.** Carcass → Living agent + Substrate. A decomposer drains energy and nutrients from a carcass through sustained physical contact. The energy transfer is lossy — only a fraction reaches the decomposer; the remainder dissipates to heat (flow 8). Nutrients that the decomposer cannot use (due to stoichiometric mismatch) are released back to the substrate, closing the nutrient cycle. The carcass is depleted as resources are extracted.
+
+### Dissipation
+
+**8. Trophic transfer loss.** Accompanies flows 3, 4, 5, and 7. At every energy transfer between agents, a fraction is lost to heat. This is not a separate event — it is the inefficiency inherent in every transfer. It is what makes trophic pyramids inevitable: each level of transfer dissipates energy, so less is available at each successive level. Nutrients are not lost to heat — they are either incorporated into the receiving agent or returned to the substrate.
+
+**9. Metabolism.** Living agent → Heat + Substrate. Every living agent pays a continuous energy cost simply to exist. This cost has two components:
+- A base rate — the minimum cost of being alive, independent of traits or activity.
+- Trait-dependent costs — each energy-acquisition capability (photosynthesis, consumption, decomposition) costs energy to maintain whether or not it is currently in use. Sensing and movement also cost energy. These costs are the mechanism behind the specialist-generalist trade-off: an agent investing in multiple capabilities pays overhead for all of them.
+
+Metabolism dissipates energy to heat. It also releases nutrients back to the substrate as metabolic waste — the rate depending on the agent's stoichiometric balance and metabolic activity.
+
+### Flow summary
+
+Energy flows one way: source → living system → heat. Nutrients cycle: substrate → living agents → carcasses → (via decomposition) → substrate.
+
+```
+Solar ──photosynthesis──▶ Living Agents ──death──▶ Carcasses
+  (source)                 ▲  │  ▲  ↕                │
+                           │  │  │  │                 │
+              nutrient     │  │  │  network           │
+              uptake       │  │  │  redistribution    │
+                ▲          │  │  │                    │
+                │   decomposition consumption    metabolism
+             Substrate     │  │  reproduction         │
+                ▲          │  ▼                       │
+                │       Carcasses              Heat (sink)
+                │                          ◀── trophic loss
+                └──── nutrient release ◀── metabolism
+                      (from decomposition,
+                       metabolism, excretion)
+```
+
+## Topologies
+
+The world has two topologies. Different flows operate on different topologies.
+
+### Physical surface
+
+A two-dimensional continuous surface. Movement happens here. Every agent and every carcass has a position on this surface.
+
+The surface is the topology for all spatially-local interactions. Agents can only physically contact other agents that are nearby on the surface. Photosynthesis, consumption, decomposition, death, and reproduction all require surface proximity.
+
+### Emergent network
+
+A graph that agents build through their behaviour. Nodes are agents; edges are connections that agents create and maintain. The network is not constrained by surface distance — two agents far apart on the surface can be adjacent on the network if they have built a connection between them.
+
+Network-building is a general capability: any agent can invest in creating connections. The cost structure makes it only worthwhile for certain trait configurations. In real ecosystems, this role is filled by organisms with specific morphology — fungal hyphae, root systems — but in a universal-agent system, which agents build network infrastructure is emergent, not prescribed.
+
+The network enables flows and perception that bypass surface locality. Its topology, density, and reach are all emergent properties.
+
+## Channels
+
+Each topology carries two kinds of channel, distinguished by whether they can carry energy.
+
+### Perception channels (information only)
+
+Perception channels carry information about the state of other agents and carcasses. They do not move energy. Looking at food does not feed you; detecting a chemical signal does not transfer resources. Perception enables decision-making — it tells an agent what is nearby and in what direction — but it has no direct effect on stocks.
+
+Both topologies carry perception channels:
+- **Surface perception** — detecting agents and carcasses within a range on the surface (vision, chemotaxis, vibration).
+- **Network perception** — detecting signals propagated through network connections (chemical alerts, resource-state information).
+
+### Physical channels (information + energy)
+
+Physical channels can carry energy between agents. They are the pathways through which flows 2, 3, 4, and 6 operate.
+
+Both topologies carry physical channels:
+- **Surface contact** — direct physical proximity on the surface. Required for consumption, decomposition, and reproduction.
+- **Network transfer** — resource movement through network connections. Required for network redistribution (flow 4). This is what makes the network more than a signaling system — it is infrastructure that moves energy.
+
+### The perception-physical distinction as a world rule
+
+This distinction is a law of physics, not a strategy choice. No amount of trait investment can make a perception channel carry energy. An agent cannot feed through vision or acquire resources through chemotaxis alone. Energy transfer always requires a physical channel — either surface contact or a network connection.
+
+## Cost structure (trade-offs)
+
+The cost structure is what prevents any agent from being good at everything. It is not a rule imposed on agents — it is an emergent consequence of the fact that capabilities cost energy to maintain and that nutrient requirements constrain what agents can efficiently process. Seven fundamental trade-offs arise from this cost structure:
+
+**1. Acquire vs. maintain.** Every energy-acquisition capability costs energy to maintain whether or not it is currently in use. More capability means more overhead.
+
+**2. Sessile vs. mobile.** Sessile and mobile strategies face fundamentally different energy budgets and interaction constraints. The ecology establishes this as a universal property: photosynthesis requires being stationary; consumption requires being mobile (or at least requires prey to come to you). This is the most fundamental differentiation in the system.
+
+**3. Reproduce vs. survive.** Energy invested in offspring is energy not available for self-maintenance. Reproduction is a cost to the parent.
+
+**4. Few quality vs. many fragile offspring.** A fixed reproductive energy budget can produce few well-provisioned offspring (K-strategy) or many poorly-provisioned offspring (r-strategy). Neither dominates — their relative success depends on environmental context.
+
+**5. Specialist vs. generalist.** Investing in one acquisition strategy costs less overhead than investing in multiple. Specialists pay less and outcompete generalists within their niche; generalists pay more overhead but can exploit multiple niches. The cost structure penalises breadth.
+
+**6. Sense vs. save.** Wider sensing range enables better decisions but costs energy. Agents must balance the value of information against its metabolic price.
+
+**7. Stoichiometric constraint.** Agents need nutrients in specific ratios determined by their traits. Food sources rarely match those ratios. An agent consuming nutrient-poor food must process more material to extract the limiting nutrient, excreting excess of the non-limiting nutrients. This mismatch imposes a real cost: consumption rate is constrained not just by energy but by the least-available nutrient. Stoichiometric mismatch is an additional mechanism that penalises generalism — an agent that eats everything faces variable nutrient ratios, while a specialist can optimise for the stoichiometry of its preferred food source.
+
+These trade-offs are the differentiation engine. They do not prescribe what roles emerge — they create the selection pressure that makes role differentiation advantageous.
