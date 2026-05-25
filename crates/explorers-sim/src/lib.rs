@@ -573,15 +573,6 @@ impl World {
         let mut reproduction_investments = vec![0.0_f32; n];
         let mut offspring: Vec<Agent> = Vec::new();
 
-        let effective_radii: Vec<f32> = (0..n)
-            .map(|i| {
-                let gate =
-                    1.0 / (1.0 + (20.0_f32 * (self.agents[i].traits.mobility - 0.3)).exp());
-                gate * self.agents[i].traits.sensing_range + (1.0 - gate) * contact_radius
-            })
-            .collect();
-
-
         for &i in &order {
             if dead_agents.contains(&i) || self.agents[i].energy <= 0.0 {
                 continue;
@@ -590,163 +581,179 @@ impl World {
             // --- Energy acquisition (mutually exclusive) ---
             let mut acquired = false;
 
-            // Try consumption first
+            // Try consumption via broadcast-response
             if !acquired && self.agents[i].traits.consumption_rate > 0.0 {
-                let mut best_target: Option<usize> = None;
-                let mut best_dist = f32::MAX;
                 let neighbors =
                     agent_grid.query_radius(self.agents[i].position, contact_radius);
-                for j_id in neighbors {
-                    let j = j_id as usize;
-                    if j == i || dead_agents.contains(&j) || self.agents[j].energy <= 0.0 {
-                        continue;
-                    }
-                    let dist = toroidal_distance(
+                let nearby_agents: Vec<NearbyAgent> = neighbors.iter()
+                    .filter_map(|&j_id| {
+                        let j = j_id as usize;
+                        if j == i || dead_agents.contains(&j) || self.agents[j].energy <= 0.0 {
+                            return None;
+                        }
+                        let dist = toroidal_distance(
+                            self.agents[i].position, self.agents[j].position, extent,
+                        );
+                        Some(NearbyAgent {
+                            id: self.agents[j].id, distance: dist,
+                            energy: self.agents[j].energy, traits: self.agents[j].traits,
+                        })
+                    })
+                    .collect();
+                let data = ProjectionData {
+                    feeding_gradient: (0.0, 0.0), carcass_gradient: (0.0, 0.0),
+                    nearby_agents, nearby_carcasses: vec![],
+                    contact_radius, reproduction_energy_threshold: reproduction_threshold,
+                };
+                let trigger = event::Event {
+                    tick: self.tick, seq: 0, kind: event::EventKind::Consumed,
+                    source: 0, target: None, energy_delta: 0.0,
+                    position: Some(self.agents[i].position),
+                };
+                let response = self.agents[i].receive(&trigger, &data);
+                if let Some(consumed) = response.events.first() {
+                    let target_id = consumed.target.unwrap();
+                    let target = (0..n).find(|&j| self.agents[j].id == target_id).unwrap();
+                    let drain = consumed.energy_delta;
+                    let gain = drain * consumption_efficiency;
+                    self.agents[i].energy += gain;
+                    self.agents[target].energy -= drain;
+                    consumption_gains[i] += gain;
+                    consumption_losses[target] += drain;
+                    self.dissipated_energy += drain * (1.0 - consumption_efficiency);
+                    self.emit(
+                        event::EventKind::Consumed,
+                        self.agents[i].id,
+                        Some(self.agents[target].id),
+                        drain,
+                        Some(self.agents[i].position),
+                    );
+                    emit_broadcasts(
+                        &mut broadcasts,
+                        &event::EventKind::Consumed,
                         self.agents[i].position,
-                        self.agents[j].position,
+                        &self.agents,
+                        &dead_agents,
                         extent,
                     );
-                    if dist < contact_radius && dist < best_dist {
-                        best_dist = dist;
-                        best_target = Some(j);
-                    }
-                }
-                if let Some(target) = best_target {
-                    let available = self.agents[target].energy.max(0.0);
-                    let drain = self.agents[i].traits.consumption_rate.min(available);
-                    if drain > 0.0 {
-                        let gain = drain * consumption_efficiency;
-                        self.agents[i].energy += gain;
-                        self.agents[target].energy -= drain;
-                        consumption_gains[i] += gain;
-                        consumption_losses[target] += drain;
-                        self.dissipated_energy += drain * (1.0 - consumption_efficiency);
+
+                    // Cascade: target death → carcass creation
+                    if self.agents[target].energy <= 0.0 {
+                        let carcass_energy =
+                            (pre_tick_energies[target] - consumption_losses[target])
+                                .max(0.0);
                         self.emit(
-                            event::EventKind::Consumed,
-                            self.agents[i].id,
-                            Some(self.agents[target].id),
-                            drain,
-                            Some(self.agents[i].position),
+                            event::EventKind::Died,
+                            self.agents[target].id,
+                            None,
+                            0.0,
+                            Some(self.agents[target].position),
                         );
+                        self.emit(
+                            event::EventKind::CarcassCreated,
+                            self.agents[target].id,
+                            None,
+                            carcass_energy,
+                            Some(self.agents[target].position),
+                        );
+                        let ci = self.carcasses.len();
+                        self.carcasses.push(Carcass {
+                            id: self.agents[target].id,
+                            position: self.agents[target].position,
+                            energy: carcass_energy,
+                        });
+                        carcass_grid.insert(ci as u64, self.agents[target].position);
                         emit_broadcasts(
                             &mut broadcasts,
-                            &event::EventKind::Consumed,
-                            self.agents[i].position,
+                            &event::EventKind::Died,
+                            self.agents[target].position,
                             &self.agents,
                             &dead_agents,
                             extent,
                         );
-
-                        // Cascade: target death → carcass creation
-                        if self.agents[target].energy <= 0.0 {
-                            let carcass_energy =
-                                (pre_tick_energies[target] - consumption_losses[target])
-                                    .max(0.0);
-                            self.emit(
-                                event::EventKind::Died,
-                                self.agents[target].id,
-                                None,
-                                0.0,
-                                Some(self.agents[target].position),
-                            );
-                            self.emit(
-                                event::EventKind::CarcassCreated,
-                                self.agents[target].id,
-                                None,
-                                carcass_energy,
-                                Some(self.agents[target].position),
-                            );
-                            let ci = self.carcasses.len();
-                            self.carcasses.push(Carcass {
-                                id: self.agents[target].id,
-                                position: self.agents[target].position,
-                                energy: carcass_energy,
-                            });
-                            carcass_grid.insert(ci as u64, self.agents[target].position);
-                            emit_broadcasts(
-                                &mut broadcasts,
-                                &event::EventKind::Died,
-                                self.agents[target].position,
-                                &self.agents,
-                                &dead_agents,
-                                extent,
-                            );
-                            emit_broadcasts(
-                                &mut broadcasts,
-                                &event::EventKind::CarcassCreated,
-                                self.agents[target].position,
-                                &self.agents,
-                                &dead_agents,
-                                extent,
-                            );
-                            dead_agents.insert(target);
-                            agent_grid.remove(target as u64);
-                        }
-                        acquired = true;
+                        emit_broadcasts(
+                            &mut broadcasts,
+                            &event::EventKind::CarcassCreated,
+                            self.agents[target].position,
+                            &self.agents,
+                            &dead_agents,
+                            extent,
+                        );
+                        dead_agents.insert(target);
+                        agent_grid.remove(target as u64);
                     }
+                    acquired = true;
                 }
             }
 
-            // Try decomposition
+            // Try decomposition via broadcast-response
             if !acquired && self.agents[i].traits.scavenging_rate > 0.0 {
-                let mut best_carcass: Option<usize> = None;
-                let mut best_dist = f32::MAX;
-                let nearby =
-                    carcass_grid.query_radius(self.agents[i].position, contact_radius);
-                for ci_id in nearby {
-                    let ci = ci_id as usize;
-                    if self.carcasses[ci].energy <= 0.0 {
-                        continue;
-                    }
-                    let dist = toroidal_distance(
+                let nearby_carcasses: Vec<NearbyCarcass> = carcass_grid
+                    .query_radius(self.agents[i].position, contact_radius)
+                    .iter()
+                    .filter_map(|&ci_id| {
+                        let ci = ci_id as usize;
+                        if self.carcasses[ci].energy <= 0.0 {
+                            return None;
+                        }
+                        let dist = toroidal_distance(
+                            self.agents[i].position, self.carcasses[ci].position, extent,
+                        );
+                        Some(NearbyCarcass {
+                            id: self.carcasses[ci].id, distance: dist,
+                            energy: self.carcasses[ci].energy,
+                        })
+                    })
+                    .collect();
+                let data = ProjectionData {
+                    feeding_gradient: (0.0, 0.0), carcass_gradient: (0.0, 0.0),
+                    nearby_agents: vec![], nearby_carcasses,
+                    contact_radius, reproduction_energy_threshold: reproduction_threshold,
+                };
+                let trigger = event::Event {
+                    tick: self.tick, seq: 0, kind: event::EventKind::CarcassCreated,
+                    source: 0, target: None, energy_delta: 0.0,
+                    position: Some(self.agents[i].position),
+                };
+                let response = self.agents[i].receive(&trigger, &data);
+                if let Some(decomposed) = response.events.first() {
+                    let carcass_id = decomposed.target.unwrap();
+                    let ci = self.carcasses.iter().position(|c| c.id == carcass_id).unwrap();
+                    let drain = decomposed.energy_delta;
+                    let gain = drain * decomposition_efficiency;
+                    self.agents[i].energy += gain;
+                    self.carcasses[ci].energy -= drain;
+                    decomposition_gains[i] = gain;
+                    self.dissipated_energy += drain * (1.0 - decomposition_efficiency);
+                    self.emit(
+                        event::EventKind::Decomposed,
+                        self.agents[i].id,
+                        Some(self.carcasses[ci].id),
+                        drain,
+                        Some(self.agents[i].position),
+                    );
+                    emit_broadcasts(
+                        &mut broadcasts,
+                        &event::EventKind::Decomposed,
                         self.agents[i].position,
-                        self.carcasses[ci].position,
+                        &self.agents,
+                        &dead_agents,
                         extent,
                     );
-                    if dist < contact_radius && dist < best_dist {
-                        best_dist = dist;
-                        best_carcass = Some(ci);
-                    }
-                }
-                if let Some(ci) = best_carcass {
-                    let available = self.carcasses[ci].energy.max(0.0);
-                    let drain = self.agents[i].traits.scavenging_rate.min(available);
-                    if drain > 0.0 {
-                        let gain = drain * decomposition_efficiency;
-                        self.agents[i].energy += gain;
-                        self.carcasses[ci].energy -= drain;
-                        decomposition_gains[i] = gain;
-                        self.dissipated_energy += drain * (1.0 - decomposition_efficiency);
-                        self.emit(
-                            event::EventKind::Decomposed,
-                            self.agents[i].id,
-                            Some(self.carcasses[ci].id),
-                            drain,
-                            Some(self.agents[i].position),
-                        );
-                        emit_broadcasts(
-                            &mut broadcasts,
-                            &event::EventKind::Decomposed,
-                            self.agents[i].position,
-                            &self.agents,
-                            &dead_agents,
-                            extent,
-                        );
 
-                        // Cascade: carcass depletion
-                        if self.carcasses[ci].energy <= 0.0 {
-                            self.emit(
-                                event::EventKind::CarcassDepleted,
-                                self.carcasses[ci].id,
-                                None,
-                                0.0,
-                                Some(self.carcasses[ci].position),
-                            );
-                            depleted_carcasses.insert(ci);
-                            carcass_grid.remove(ci as u64);
-                        }
-                        acquired = true;
+                    // Cascade: carcass depletion
+                    if self.carcasses[ci].energy <= 0.0 {
+                        self.emit(
+                            event::EventKind::CarcassDepleted,
+                            self.carcasses[ci].id,
+                            None,
+                            0.0,
+                            Some(self.carcasses[ci].position),
+                        );
+                        depleted_carcasses.insert(ci);
+                        carcass_grid.remove(ci as u64);
                     }
+                    acquired = true;
                 }
             }
 
@@ -764,9 +771,8 @@ impl World {
                 solar_gains[i] = solar_gain;
             }
 
-            // --- Reproduction via ephemeral broadcast ---
+            // --- Reproduction via broadcast-response ---
             if !reproduced[i] && self.agents[i].energy > reproduction_threshold {
-                // Broadcast mating readiness (ephemeral — not logged)
                 emit_broadcasts(
                     &mut broadcasts,
                     &event::EventKind::MatingReadiness,
@@ -776,35 +782,37 @@ impl World {
                     extent,
                 );
 
-                // Evaluate compatible responders within effective radius
-                let mut best_mate: Option<(f32, usize)> = None;
-                for j in 0..n {
-                    if j == i
-                        || dead_agents.contains(&j)
-                        || reproduced[j]
-                        || self.agents[j].energy <= reproduction_threshold
-                    {
-                        continue;
-                    }
-                    let spatial_dist = toroidal_distance(
-                        self.agents[i].position,
-                        self.agents[j].position,
-                        extent,
-                    );
-                    if spatial_dist > effective_radii[i].max(effective_radii[j]) {
-                        continue;
-                    }
-                    let trait_dist = self.agents[i].traits.distance(&self.agents[j].traits);
-                    if trait_dist < self.agents[i].traits.mate_selectivity
-                        && trait_dist < self.agents[j].traits.mate_selectivity
-                    {
-                        if best_mate.is_none() || spatial_dist < best_mate.unwrap().0 {
-                            best_mate = Some((spatial_dist, j));
+                // Build nearby agents for mate selection via receive()
+                let nearby_mates: Vec<NearbyAgent> = (0..n)
+                    .filter_map(|j| {
+                        if j == i || dead_agents.contains(&j) || reproduced[j]
+                            || self.agents[j].energy <= reproduction_threshold
+                        {
+                            return None;
                         }
-                    }
-                }
-
-                if let Some((_, j)) = best_mate {
+                        let dist = toroidal_distance(
+                            self.agents[i].position, self.agents[j].position, extent,
+                        );
+                        Some(NearbyAgent {
+                            id: self.agents[j].id, distance: dist,
+                            energy: self.agents[j].energy, traits: self.agents[j].traits,
+                        })
+                    })
+                    .collect();
+                let data = ProjectionData {
+                    feeding_gradient: (0.0, 0.0), carcass_gradient: (0.0, 0.0),
+                    nearby_agents: nearby_mates, nearby_carcasses: vec![],
+                    contact_radius, reproduction_energy_threshold: reproduction_threshold,
+                };
+                let trigger = event::Event {
+                    tick: self.tick, seq: 0, kind: event::EventKind::MatingReadiness,
+                    source: self.agents[i].id, target: None, energy_delta: 0.0,
+                    position: Some(self.agents[i].position),
+                };
+                let response = self.agents[i].receive(&trigger, &data);
+                if let Some(mate_event) = response.events.first() {
+                    let mate_id = mate_event.target.unwrap();
+                    let j = (0..n).find(|&k| self.agents[k].id == mate_id).unwrap();
                     reproduced[i] = true;
                     reproduced[j] = true;
                     self.emit(
@@ -4360,5 +4368,62 @@ spatial_decay_rate: 0.5,
         let response = agent.receive(&trigger, &data);
         assert_eq!(response.ack, event::Ack::Ack);
         assert!(response.events.is_empty());
+    }
+
+    #[test]
+    fn step_delegates_consumption_to_receive() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 50.0,
+            traits: TraitVector { consumption_rate: 2.0, ..zero_traits() },
+        });
+        world.add_agent(Agent {
+            id: 0, position: (3.0, 0.0), energy: 50.0,
+            traits: zero_traits(),
+        });
+
+        // Before step: construct what receive() would return
+        let consumer = &world.agents()[0];
+        let target = &world.agents()[1];
+        let dist_between = toroidal_distance(consumer.position, target.position, 100.0);
+        let data = ProjectionData {
+            feeding_gradient: (0.0, 0.0), carcass_gradient: (0.0, 0.0),
+            nearby_agents: vec![NearbyAgent {
+                id: target.id, distance: dist_between,
+                energy: target.energy, traits: target.traits,
+            }],
+            nearby_carcasses: vec![],
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+        };
+        let trigger = event::Event {
+            tick: 0, seq: 0, kind: event::EventKind::Consumed,
+            source: 0, target: None, energy_delta: 0.0,
+            position: Some(consumer.position),
+        };
+        let expected = consumer.receive(&trigger, &data);
+        let expected_drain = expected.events[0].energy_delta;
+
+        // Now run step() — should produce the same outcome
+        world.step();
+
+        assert_eq!(world.agents()[0].energy, 50.0 + expected_drain * 0.5);
+        assert_eq!(world.agents()[1].energy, 50.0 - expected_drain);
     }
 }
