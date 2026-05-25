@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy::camera::ScalingMode;
-use bevy_egui::{EguiContexts, EguiPlugin};
+use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe};
 
 #[derive(Resource)]
@@ -144,6 +144,10 @@ fn main() {
             ..default()
         }))
         .add_plugins(EguiPlugin::default())
+        .insert_resource(EguiGlobalSettings {
+            enable_absorb_bevy_input_system: true,
+            ..default()
+        })
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(SimWorld(world))
         .insert_resource(TickCount(ticks))
