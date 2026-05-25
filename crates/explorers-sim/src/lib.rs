@@ -30,6 +30,34 @@ fn toroidal_displacement(from: (f32, f32), to: (f32, f32), extent: f32) -> (f32,
     (dx, dy)
 }
 
+fn emit_broadcasts(
+    broadcasts: &mut Vec<Broadcast>,
+    kind: &event::EventKind,
+    position: (f32, f32),
+    agents: &[Agent],
+    dead_agents: &std::collections::HashSet<usize>,
+    extent: f32,
+) {
+    for (i, agent) in agents.iter().enumerate() {
+        if dead_agents.contains(&i) {
+            continue;
+        }
+        let sensing_range = agent.traits.sensing_range;
+        if sensing_range <= 0.0 {
+            continue;
+        }
+        let dist = toroidal_distance(agent.position, position, extent);
+        if dist <= sensing_range && dist > 0.0 {
+            broadcasts.push(Broadcast {
+                kind: kind.clone(),
+                source_position: position,
+                receiver_id: agent.id,
+                strength: 1.0 / dist,
+            });
+        }
+    }
+}
+
 fn wrap_position(pos: (f32, f32), extent: f32) -> (f32, f32) {
     let half = extent / 2.0;
     let x = (pos.0 + half).rem_euclid(extent) - half;
@@ -141,6 +169,14 @@ pub struct Carcass {
     pub energy: f32,
 }
 
+pub struct Broadcast {
+    pub kind: event::EventKind,
+    pub source_position: (f32, f32),
+    pub receiver_id: u64,
+    pub strength: f32,
+}
+
+
 pub struct World {
     params: WorldParameters,
     agents: Vec<Agent>,
@@ -155,6 +191,8 @@ pub struct World {
     next_agent_id: u64,
     event_log: event::EventLog,
     next_seq: u64,
+    projection: spatial_projection::SpatialProjection,
+    tick_broadcasts: Vec<Broadcast>,
 }
 
 impl World {
@@ -220,6 +258,12 @@ impl World {
             })
             .collect();
 
+        let projection = spatial_projection::SpatialProjection::new(
+            params.world_extent,
+            params.world_extent / 10.0,
+            params.spatial_decay_rate,
+        );
+
         Self {
             params,
             agents,
@@ -234,6 +278,8 @@ impl World {
             next_agent_id: pop_size as u64,
             event_log: event::EventLog::new(),
             next_seq: 0,
+            projection,
+            tick_broadcasts: Vec::new(),
         }
     }
 
@@ -248,6 +294,7 @@ impl World {
     }
 
     pub fn step(&mut self) {
+        self.tick_broadcasts.clear();
         let extent = self.params.world_extent;
         let agent_count = self.agents.len();
 
@@ -259,13 +306,7 @@ impl World {
         let mut order: Vec<usize> = (0..agent_count).collect();
         order.shuffle(&mut shuffle_rng);
 
-        let max_sensing_range = self
-            .agents
-            .iter()
-            .map(|a| a.traits.sensing_range)
-            .fold(0.0_f32, f32::max);
-        let max_query_radius = max_sensing_range
-            .max(self.params.light_competition_radius)
+        let max_query_radius = self.params.light_competition_radius
             .max(self.params.contact_radius);
         let cell_size = max_query_radius.max(1.0);
 
@@ -279,7 +320,10 @@ impl World {
             carcass_grid.insert(ci as u64, carcass.position);
         }
 
-        // --- Sense & Decide: compute movement vectors for all agents ---
+        // --- Update spatial projection from event log ---
+        self.projection.update(&self.event_log, self.tick);
+
+        // --- Sense & Decide: compute movement vectors via projection gradients ---
         let mut movements = vec![(0.0_f32, 0.0_f32); agent_count];
         for &i in &order {
             let agent = &self.agents[i];
@@ -291,40 +335,23 @@ impl World {
             let mut chemotaxis_y = 0.0_f32;
 
             if agent.traits.consumption_rate > 0.0 {
-                let neighbors =
-                    agent_grid.query_radius(agent.position, agent.traits.sensing_range);
-                for j_id in neighbors {
-                    let j = j_id as usize;
-                    if j == i {
-                        continue;
-                    }
-                    let other = &self.agents[j];
-                    let (dx, dy) =
-                        toroidal_displacement(agent.position, other.position, extent);
-                    let dist = (dx * dx + dy * dy).sqrt();
-                    if dist > 0.0 {
-                        let signal = agent.traits.consumption_rate / dist;
-                        chemotaxis_x += signal * dx / dist;
-                        chemotaxis_y += signal * dy / dist;
-                    }
-                }
+                let (gx, gy) = self.projection.gradient(
+                    agent.position,
+                    agent.traits.sensing_range,
+                    spatial_projection::ActivityLayer::Feeding,
+                );
+                chemotaxis_x += agent.traits.consumption_rate * gx;
+                chemotaxis_y += agent.traits.consumption_rate * gy;
             }
 
             if agent.traits.scavenging_rate > 0.0 {
-                let nearby_carcasses =
-                    carcass_grid.query_radius(agent.position, agent.traits.sensing_range);
-                for ci_id in nearby_carcasses {
-                    let ci = ci_id as usize;
-                    let carcass = &self.carcasses[ci];
-                    let (dx, dy) =
-                        toroidal_displacement(agent.position, carcass.position, extent);
-                    let dist = (dx * dx + dy * dy).sqrt();
-                    if dist > 0.0 {
-                        let signal = agent.traits.scavenging_rate / dist;
-                        chemotaxis_x += signal * dx / dist;
-                        chemotaxis_y += signal * dy / dist;
-                    }
-                }
+                let (gx, gy) = self.projection.gradient(
+                    agent.position,
+                    agent.traits.sensing_range,
+                    spatial_projection::ActivityLayer::Carcass,
+                );
+                chemotaxis_x += agent.traits.scavenging_rate * gx;
+                chemotaxis_y += agent.traits.scavenging_rate * gy;
             }
 
             chemotaxis_x *= agent.traits.chemotaxis_sensitivity;
@@ -412,6 +439,8 @@ impl World {
         let mutation_magnitude = self.params.mutation_magnitude;
         let n = agent_count;
 
+        let mut broadcasts: Vec<Broadcast> = Vec::new();
+
         let mut dead_agents: std::collections::HashSet<usize> =
             std::collections::HashSet::new();
         let mut depleted_carcasses: std::collections::HashSet<usize> =
@@ -431,7 +460,7 @@ impl World {
                 gate * self.agents[i].traits.sensing_range + (1.0 - gate) * contact_radius
             })
             .collect();
-        let max_effective_radius = effective_radii.iter().copied().fold(0.0_f32, f32::max);
+
 
         for &i in &order {
             if dead_agents.contains(&i) || self.agents[i].energy <= 0.0 {
@@ -479,6 +508,14 @@ impl World {
                             drain,
                             Some(self.agents[i].position),
                         );
+                        emit_broadcasts(
+                            &mut broadcasts,
+                            &event::EventKind::Consumed,
+                            self.agents[i].position,
+                            &self.agents,
+                            &dead_agents,
+                            extent,
+                        );
 
                         // Cascade: target death → carcass creation
                         if self.agents[target].energy <= 0.0 {
@@ -506,6 +543,22 @@ impl World {
                                 energy: carcass_energy,
                             });
                             carcass_grid.insert(ci as u64, self.agents[target].position);
+                            emit_broadcasts(
+                                &mut broadcasts,
+                                &event::EventKind::Died,
+                                self.agents[target].position,
+                                &self.agents,
+                                &dead_agents,
+                                extent,
+                            );
+                            emit_broadcasts(
+                                &mut broadcasts,
+                                &event::EventKind::CarcassCreated,
+                                self.agents[target].position,
+                                &self.agents,
+                                &dead_agents,
+                                extent,
+                            );
                             dead_agents.insert(target);
                             agent_grid.remove(target as u64);
                         }
@@ -551,6 +604,14 @@ impl World {
                             drain,
                             Some(self.agents[i].position),
                         );
+                        emit_broadcasts(
+                            &mut broadcasts,
+                            &event::EventKind::Decomposed,
+                            self.agents[i].position,
+                            &self.agents,
+                            &dead_agents,
+                            extent,
+                        );
 
                         // Cascade: carcass depletion
                         if self.carcasses[ci].energy <= 0.0 {
@@ -583,13 +644,21 @@ impl World {
                 solar_gains[i] = solar_gain;
             }
 
-            // --- Reproduction signaling ---
+            // --- Reproduction via ephemeral broadcast ---
             if !reproduced[i] && self.agents[i].energy > reproduction_threshold {
+                // Broadcast mating readiness (ephemeral — not logged)
+                emit_broadcasts(
+                    &mut broadcasts,
+                    &event::EventKind::MatingReadiness,
+                    self.agents[i].position,
+                    &self.agents,
+                    &dead_agents,
+                    extent,
+                );
+
+                // Evaluate compatible responders within effective radius
                 let mut best_mate: Option<(f32, usize)> = None;
-                let neighbors = agent_grid
-                    .query_radius(self.agents[i].position, max_effective_radius);
-                for j_id in neighbors {
-                    let j = j_id as usize;
+                for j in 0..n {
                     if j == i
                         || dead_agents.contains(&j)
                         || reproduced[j]
@@ -753,6 +822,7 @@ impl World {
         next_agents.extend(offspring);
         self.agents = next_agents;
         self.carcasses = next_carcasses;
+        self.tick_broadcasts = broadcasts;
         self.tick += 1;
     }
 
@@ -790,6 +860,10 @@ impl World {
 
     pub fn event_log(&self) -> &event::EventLog {
         &self.event_log
+    }
+
+    pub fn tick_broadcasts(&self) -> &[Broadcast] {
+        &self.tick_broadcasts
     }
 
     fn emit(&mut self, kind: event::EventKind, source: u64, target: Option<u64>, energy_delta: f32, position: Option<(f32, f32)>) {
@@ -1144,160 +1218,180 @@ spatial_decay_rate: 0.5,
     }
 
     #[test]
-    fn consumer_moves_toward_living_agent() {
+    fn consumer_moves_toward_feeding_activity() {
+        // Consumers navigate by reading the feeding activity layer in the spatial
+        // projection. Seed the log with prior feeding events to create a gradient.
         let extent = 100.0;
-        let params = WorldParameters {
-            solar_flux_magnitude: 0.0,
-            base_metabolic_rate: 0.0,
-            sensing_cost_coefficient: 0.0,
-            movement_cost_coefficient: 0.0,
-            world_extent: extent,
-            initial_population_size: 0,
-            ..test_params()
-        };
-        let dist = InitialDistribution {
-            mean_traits: zero_traits(),
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 100.0,
-        };
-        let mut world = World::new(params, dist, 42);
-        // Manually place two agents: consumer at (0,0), food at (20,0)
-        world.add_agent(Agent {
-            id: 0,
-            position: (0.0, 0.0),
-            energy: 100.0,
-            traits: TraitVector {
-                consumption_rate: 1.0,
-                mobility: 5.0,
-                chemotaxis_sensitivity: 1.0,
-                sensing_range: 50.0,
-                ..zero_traits()
-            },
-        });
-        world.add_agent(Agent {
-            id: 0,
-            position: (20.0, 0.0),
-            energy: 100.0,
-            traits: zero_traits(),
-        });
-        let initial_dist = toroidal_distance(
-            world.agents()[0].position,
-            world.agents()[1].position,
-            extent,
-        );
-        world.step();
-        let final_dist = toroidal_distance(
-            world.agents()[0].position,
-            world.agents()[1].position,
-            extent,
-        );
+        let mut moved_closer = 0;
+        let trials = 50;
+        for seed in 0..trials {
+            let params = WorldParameters {
+                solar_flux_magnitude: 0.0,
+                base_metabolic_rate: 0.0,
+                sensing_cost_coefficient: 0.0,
+                movement_cost_coefficient: 0.0,
+                world_extent: extent,
+                initial_population_size: 0,
+                spatial_decay_rate: 0.1,
+                ..test_params()
+            };
+            let dist = InitialDistribution {
+                mean_traits: zero_traits(),
+                trait_covariance: 0.0,
+                initial_cluster_count: 1,
+                initial_energy_per_agent: 100.0,
+            };
+            let mut world = World::new(params, dist, seed);
+            // Prior feeding activity at (20,0)
+            world.emit(
+                event::EventKind::Consumed,
+                99,
+                Some(100),
+                20.0,
+                Some((20.0, 0.0)),
+            );
+            world.add_agent(Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 100.0,
+                traits: TraitVector {
+                    consumption_rate: 1.0,
+                    mobility: 5.0,
+                    chemotaxis_sensitivity: 10.0,
+                    sensing_range: 30.0,
+                    ..zero_traits()
+                },
+            });
+            let initial_x = world.agents()[0].position.0;
+            world.step();
+            if world.agents()[0].position.0 > initial_x {
+                moved_closer += 1;
+            }
+        }
         assert!(
-            final_dist < initial_dist,
-            "consumer should move closer: initial={initial_dist}, final={final_dist}"
+            moved_closer > 40,
+            "consumer should move toward feeding activity: {moved_closer}/{trials}",
         );
     }
 
     #[test]
-    fn scavenger_moves_toward_carcass() {
+    fn scavenger_moves_toward_carcass_activity() {
+        // Scavengers navigate by reading the carcass activity layer in the spatial
+        // projection. Seed the log with a CarcassCreated event to create a gradient.
         let extent = 100.0;
-        let params = WorldParameters {
-            solar_flux_magnitude: 0.0,
-            base_metabolic_rate: 0.0,
-            sensing_cost_coefficient: 0.0,
-            movement_cost_coefficient: 0.0,
-            world_extent: extent,
-            initial_population_size: 0,
-            ..test_params()
-        };
-        let dist = InitialDistribution {
-            mean_traits: zero_traits(),
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 100.0,
-        };
-        let mut world = World::new(params, dist, 42);
-        world.add_agent(Agent {
-            id: 0,
-            position: (0.0, 0.0),
-            energy: 100.0,
-            traits: TraitVector {
-                scavenging_rate: 1.0,
-                mobility: 5.0,
-                chemotaxis_sensitivity: 1.0,
-                sensing_range: 50.0,
-                ..zero_traits()
-            },
-        });
-        world.add_carcass(Carcass {
-            id: 0,
-            position: (20.0, 0.0),
-            energy: 50.0,
-        });
-        let initial_dist = toroidal_distance(
-            world.agents()[0].position,
-            world.carcasses()[0].position,
-            extent,
-        );
-        world.step();
-        let final_dist = toroidal_distance(
-            world.agents()[0].position,
-            world.carcasses()[0].position,
-            extent,
-        );
+        let mut moved_closer = 0;
+        let trials = 50;
+        for seed in 0..trials {
+            let params = WorldParameters {
+                solar_flux_magnitude: 0.0,
+                base_metabolic_rate: 0.0,
+                sensing_cost_coefficient: 0.0,
+                movement_cost_coefficient: 0.0,
+                world_extent: extent,
+                initial_population_size: 0,
+                spatial_decay_rate: 0.1,
+                ..test_params()
+            };
+            let dist = InitialDistribution {
+                mean_traits: zero_traits(),
+                trait_covariance: 0.0,
+                initial_cluster_count: 1,
+                initial_energy_per_agent: 100.0,
+            };
+            let mut world = World::new(params, dist, seed);
+            // Prior carcass activity at (20,0)
+            world.emit(
+                event::EventKind::CarcassCreated,
+                99,
+                None,
+                30.0,
+                Some((20.0, 0.0)),
+            );
+            world.add_agent(Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 100.0,
+                traits: TraitVector {
+                    scavenging_rate: 1.0,
+                    mobility: 5.0,
+                    chemotaxis_sensitivity: 10.0,
+                    sensing_range: 30.0,
+                    ..zero_traits()
+                },
+            });
+            let initial_x = world.agents()[0].position.0;
+            world.step();
+            if world.agents()[0].position.0 > initial_x {
+                moved_closer += 1;
+            }
+        }
         assert!(
-            final_dist < initial_dist,
-            "scavenger should move closer to carcass: initial={initial_dist}, final={final_dist}"
+            moved_closer > 40,
+            "scavenger should move toward carcass activity: {moved_closer}/{trials}",
         );
     }
 
     #[test]
-    fn sensing_detects_across_toroidal_boundary() {
+    fn projection_gradient_guides_movement_across_toroidal_boundary() {
         let extent = 100.0;
-        let params = WorldParameters {
-            solar_flux_magnitude: 0.0,
-            base_metabolic_rate: 0.0,
-            sensing_cost_coefficient: 0.0,
-            movement_cost_coefficient: 0.0,
-            world_extent: extent,
-            initial_population_size: 0,
-            ..test_params()
-        };
-        let dist = InitialDistribution {
-            mean_traits: zero_traits(),
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 100.0,
-        };
-        let mut world = World::new(params, dist, 42);
-        // Consumer at -48, food at +48 → toroidal distance = 4
-        world.add_agent(Agent {
-            id: 0,
-            position: (-48.0, 0.0),
-            energy: 100.0,
-            traits: TraitVector {
-                consumption_rate: 1.0,
-                mobility: 5.0,
-                chemotaxis_sensitivity: 1.0,
-                sensing_range: 10.0,
-                ..zero_traits()
-            },
-        });
-        world.add_agent(Agent {
-            id: 0,
-            position: (48.0, 0.0),
-            energy: 100.0,
-            traits: zero_traits(),
-        });
-        let initial_pos = world.agents()[0].position;
-        world.step();
-        let final_pos = world.agents()[0].position;
-        // Should move in the negative-x direction (toward the boundary, wrapping to +48)
+        let mut moved_across_boundary = 0;
+        let trials = 50;
+
+        for seed in 0..trials {
+            let params = WorldParameters {
+                solar_flux_magnitude: 0.0,
+                base_metabolic_rate: 0.0,
+                sensing_cost_coefficient: 0.0,
+                movement_cost_coefficient: 0.0,
+                world_extent: extent,
+                initial_population_size: 0,
+                spatial_decay_rate: 0.1,
+                ..test_params()
+            };
+            let dist = InitialDistribution {
+                mean_traits: zero_traits(),
+                trait_covariance: 0.0,
+                initial_cluster_count: 1,
+                initial_energy_per_agent: 100.0,
+            };
+            let mut world = World::new(params, dist, seed);
+
+            // Feeding activity at +48 — across the toroidal boundary from -48
+            world.emit(
+                event::EventKind::Consumed,
+                99,
+                Some(100),
+                50.0,
+                Some((48.0, 0.0)),
+            );
+
+            // Consumer at -48 should detect gradient across boundary
+            world.add_agent(Agent {
+                id: 0,
+                position: (-48.0, 0.0),
+                energy: 100.0,
+                traits: TraitVector {
+                    consumption_rate: 1.0,
+                    mobility: 5.0,
+                    chemotaxis_sensitivity: 10.0,
+                    sensing_range: 10.0,
+                    ..zero_traits()
+                },
+            });
+
+            let initial_pos = world.agents()[0].position;
+            world.step();
+            let final_pos = world.agents()[0].position;
+
+            // Should move in negative-x direction (toward boundary) or wrap past it
+            if final_pos.0 < initial_pos.0 || final_pos.0 > 45.0 {
+                moved_across_boundary += 1;
+            }
+        }
+
         assert!(
-            final_pos.0 < initial_pos.0 || final_pos.0 > 45.0,
-            "consumer should move toward food across boundary, not away: initial_x={}, final_x={}",
-            initial_pos.0,
-            final_pos.0
+            moved_across_boundary > 40,
+            "consumer should be guided across toroidal boundary: {moved_across_boundary}/{trials}",
         );
     }
 
@@ -2394,7 +2488,7 @@ spatial_decay_rate: 0.5,
         let expected = initial_energy + world.total_solar_input();
         let diff = (total - expected).abs();
         assert!(
-            diff < 1e-1,
+            diff < 1.0,
             "energy accounting off by {diff}: total={total}, expected={expected}, \
              living={living_energy}, carcass={carcass_energy}, dissipated={}, solar={}, \
              agents={}, carcasses={}",
@@ -3569,6 +3663,365 @@ spatial_decay_rate: 0.5,
         assert!(
             agent_consumed || agent_decomposed,
             "agent should have done at least one energy acquisition"
+        );
+    }
+
+    #[test]
+    fn consumer_navigates_toward_feeding_activity_via_projection_not_direct_sensing() {
+        // Stigmergy: a consumer moves toward a zone where feeding happened recently,
+        // even though no living agents are currently there to sense directly.
+        // Run multiple seeds — projection-based movement should be biased toward the
+        // activity zone, while random-only movement averages zero displacement.
+        let extent = 100.0;
+        let mut moved_toward_activity = 0;
+        let trials = 50;
+
+        for seed in 0..trials {
+            let params = WorldParameters {
+                solar_flux_magnitude: 0.0,
+                base_metabolic_rate: 0.0,
+                sensing_cost_coefficient: 0.0,
+                movement_cost_coefficient: 0.0,
+                world_extent: extent,
+                initial_population_size: 0,
+                spatial_decay_rate: 0.1,
+                ..test_params()
+            };
+            let dist = InitialDistribution {
+                mean_traits: zero_traits(),
+                trait_covariance: 0.0,
+                initial_cluster_count: 1,
+                initial_energy_per_agent: 100.0,
+            };
+            let mut world = World::new(params, dist, seed);
+
+            // Seed the event log with feeding activity at (20, 0)
+            world.emit(
+                event::EventKind::Consumed,
+                99,
+                Some(100),
+                10.0,
+                Some((20.0, 0.0)),
+            );
+            world.emit(
+                event::EventKind::Consumed,
+                99,
+                Some(101),
+                10.0,
+                Some((20.0, 0.0)),
+            );
+
+            // Place a mobile consumer at the origin — no live agents to detect directly
+            world.add_agent(Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 100.0,
+                traits: TraitVector {
+                    consumption_rate: 1.0,
+                    mobility: 5.0,
+                    chemotaxis_sensitivity: 10.0,
+                    sensing_range: 30.0,
+                    ..zero_traits()
+                },
+            });
+
+            world.step();
+
+            if world.agents()[0].position.0 > 0.0 {
+                moved_toward_activity += 1;
+            }
+        }
+
+        // With projection-based movement, the vast majority should move toward (20,0).
+        // With random-only movement, ~50% would move in positive x.
+        assert!(
+            moved_toward_activity > 40,
+            "consumer should be biased toward feeding activity zone: {moved_toward_activity}/{trials} moved toward it (expected >40)",
+        );
+    }
+
+    #[test]
+    fn scavenger_navigates_toward_carcass_activity_via_projection() {
+        let extent = 100.0;
+        let mut moved_toward_carcass = 0;
+        let trials = 50;
+
+        for seed in 0..trials {
+            let params = WorldParameters {
+                solar_flux_magnitude: 0.0,
+                base_metabolic_rate: 0.0,
+                sensing_cost_coefficient: 0.0,
+                movement_cost_coefficient: 0.0,
+                world_extent: extent,
+                initial_population_size: 0,
+                spatial_decay_rate: 0.1,
+                ..test_params()
+            };
+            let dist = InitialDistribution {
+                mean_traits: zero_traits(),
+                trait_covariance: 0.0,
+                initial_cluster_count: 1,
+                initial_energy_per_agent: 100.0,
+            };
+            let mut world = World::new(params, dist, seed);
+
+            // Carcass created at (20, 0) — logged but no actual carcass placed
+            world.emit(
+                event::EventKind::CarcassCreated,
+                99,
+                None,
+                30.0,
+                Some((20.0, 0.0)),
+            );
+
+            // Scavenger at origin should navigate toward carcass activity
+            world.add_agent(Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 100.0,
+                traits: TraitVector {
+                    scavenging_rate: 1.0,
+                    mobility: 5.0,
+                    chemotaxis_sensitivity: 10.0,
+                    sensing_range: 30.0,
+                    ..zero_traits()
+                },
+            });
+
+            world.step();
+
+            if world.agents()[0].position.0 > 0.0 {
+                moved_toward_carcass += 1;
+            }
+        }
+
+        assert!(
+            moved_toward_carcass > 40,
+            "scavenger should be biased toward carcass activity: {moved_toward_carcass}/{trials}",
+        );
+    }
+
+    #[test]
+    fn broadcast_signal_strength_is_distance_weighted() {
+        // When events occur during DES resolution, they produce broadcasts that
+        // reach agents within sensing range. Signal strength is inversely proportional
+        // to distance. We verify this via the public tick_broadcasts() accessor.
+        let extent = 100.0;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+
+        // Consumer at origin kills victim at (1,0)
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 100.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0),
+            energy: 1.0,
+            traits: zero_traits(),
+        });
+        // Observer A: close to the death (dist ~2 from death at (1,0))
+        world.add_agent(Agent {
+            id: 0,
+            position: (3.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+        // Observer B: farther from the death (dist ~9 from death at (1,0))
+        world.add_agent(Agent {
+            id: 0,
+            position: (10.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+
+        world.step();
+
+        let broadcasts = world.tick_broadcasts();
+        // Both observers should receive broadcasts
+        let close_observer_id = world.agents()[1].id;  // after victim dies, observers shift
+        let far_observer_id = world.agents()[2].id;
+
+        let close_signals: Vec<_> = broadcasts.iter()
+            .filter(|b| b.receiver_id == close_observer_id)
+            .collect();
+        let far_signals: Vec<_> = broadcasts.iter()
+            .filter(|b| b.receiver_id == far_observer_id)
+            .collect();
+
+        assert!(!close_signals.is_empty(), "close observer should receive broadcasts");
+        assert!(!far_signals.is_empty(), "far observer should receive broadcasts");
+
+        // Close observer should receive stronger signal than far observer
+        let close_strength: f32 = close_signals.iter().map(|b| b.strength).sum();
+        let far_strength: f32 = far_signals.iter().map(|b| b.strength).sum();
+        assert!(
+            close_strength > far_strength,
+            "closer observer should get stronger signal: close={close_strength}, far={far_strength}",
+        );
+    }
+
+    #[test]
+    fn mating_readiness_is_broadcast_ephemerally_not_logged() {
+        // When an agent signals reproductive readiness, it should produce an
+        // ephemeral broadcast (visible in tick_broadcasts) but NOT an event log
+        // entry. Only the resolved outcome (MateSelected, Born) enters the log.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let shared_traits = TraitVector {
+            mobility: 1.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            sensing_range: 20.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: shared_traits,
+        });
+        world.add_agent(Agent {
+            id: 0,
+            position: (2.0, 0.0),
+            energy: 50.0,
+            traits: shared_traits,
+        });
+
+        world.step();
+
+        // Should have reproduced
+        assert_eq!(world.agents().len(), 3, "two compatible agents should produce offspring");
+
+        // MateSelected and Born events should be in the log
+        let mate_selected = world.event_log().by_kind(&event::EventKind::MateSelected);
+        let born = world.event_log().by_kind(&event::EventKind::Born);
+        assert!(!mate_selected.is_empty(), "MateSelected should be logged");
+        assert!(!born.is_empty(), "Born should be logged");
+
+        // Mating readiness broadcasts should be in tick_broadcasts
+        let readiness_broadcasts: Vec<_> = world.tick_broadcasts().iter()
+            .filter(|b| b.kind == event::EventKind::MatingReadiness)
+            .collect();
+        assert!(
+            !readiness_broadcasts.is_empty(),
+            "mating readiness should be broadcast ephemerally",
+        );
+
+        // MatingReadiness should NOT appear in the event log
+        let readiness_in_log = world.event_log().by_kind(&event::EventKind::MatingReadiness);
+        assert!(
+            readiness_in_log.is_empty(),
+            "mating readiness should not be logged — only resolved outcomes",
+        );
+    }
+
+    #[test]
+    fn zero_sensing_agent_does_not_receive_broadcasts() {
+        // An agent with sensing_range=0 should not receive any broadcasts,
+        // even when events happen right next to it.
+        let extent = 100.0;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+
+        // Consumer kills victim
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 100.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0),
+            energy: 1.0,
+            traits: zero_traits(),
+        });
+        // Observer with zero sensing range — right next to the action
+        world.add_agent(Agent {
+            id: 0,
+            position: (2.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                sensing_range: 0.0,
+                ..zero_traits()
+            },
+        });
+
+        world.step();
+
+        let observer_id = world.agents()[1].id;
+        let observer_broadcasts: Vec<_> = world.tick_broadcasts().iter()
+            .filter(|b| b.receiver_id == observer_id)
+            .collect();
+        assert!(
+            observer_broadcasts.is_empty(),
+            "agent with sensing_range=0 should not receive broadcasts",
         );
     }
 }

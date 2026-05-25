@@ -7,6 +7,7 @@ pub enum EventKind {
     MateSelected,
     CarcassCreated,
     CarcassDepleted,
+    MatingReadiness,
 }
 
 #[derive(Clone, Debug, PartialEq)]
