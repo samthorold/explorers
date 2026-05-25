@@ -2,7 +2,7 @@ use std::fs;
 use std::time::Duration;
 
 use bevy::prelude::*;
-use bevy::camera::ScalingMode;
+use bevy::camera::{ScalingMode, Viewport};
 use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe};
 
@@ -35,6 +35,8 @@ impl Default for DebugPanelOpen {
         Self(true)
     }
 }
+
+const DEBUG_PANEL_WIDTH: f32 = 300.0;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -155,7 +157,7 @@ fn main() {
         .init_resource::<DebugPanelOpen>()
         .add_systems(Startup, (setup_camera, setup_meshes, setup_grid, configure_timestep))
         .add_systems(FixedUpdate, (step_simulation, reconcile_entities).chain())
-        .add_systems(Update, (tick_rate_control, debug_panel_ui, click_to_inspect).chain())
+        .add_systems(Update, (tick_rate_control, debug_panel_ui, sync_camera_viewport, click_to_inspect).chain())
         .run();
 }
 
@@ -799,6 +801,33 @@ fn setup_grid(
     }
 }
 
+fn sync_camera_viewport(
+    windows: Query<&Window>,
+    mut cameras: Query<&mut Camera, With<Camera2d>>,
+    panel_open: Res<DebugPanelOpen>,
+) {
+    let Ok(window) = windows.single() else { return };
+    let Ok(mut camera) = cameras.single_mut() else { return };
+
+    let physical_width = window.physical_width();
+    let physical_height = window.physical_height();
+    let scale_factor = window.scale_factor();
+
+    if panel_open.0 {
+        let panel_physical = (DEBUG_PANEL_WIDTH * scale_factor) as u32;
+        let viewport_width = physical_width.saturating_sub(panel_physical);
+        if viewport_width > 0 {
+            camera.viewport = Some(Viewport {
+                physical_position: UVec2::ZERO,
+                physical_size: UVec2::new(viewport_width, physical_height),
+                ..default()
+            });
+        }
+    } else {
+        camera.viewport = None;
+    }
+}
+
 fn click_to_inspect(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
@@ -856,8 +885,8 @@ fn debug_panel_ui(
     }
 
     bevy_egui::egui::SidePanel::right("debug_panel")
-        .default_width(280.0)
-        .resizable(true)
+        .exact_width(DEBUG_PANEL_WIDTH)
+        .resizable(false)
         .show(ctx, |ui| {
             ui.heading("Debug Panel");
             ui.separator();
