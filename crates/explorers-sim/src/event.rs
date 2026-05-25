@@ -21,6 +21,18 @@ pub struct Event {
     pub position: Option<(f32, f32)>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Ack {
+    Ack,
+    Nack,
+}
+
+#[derive(Clone, Debug)]
+pub struct Response {
+    pub ack: Ack,
+    pub events: Vec<Event>,
+}
+
 pub struct EventLog {
     events: Vec<Event>,
 }
@@ -98,6 +110,25 @@ mod tests {
             "Event is {} bytes, must be ≤128",
             mem::size_of::<Event>()
         );
+    }
+
+    #[test]
+    fn response_fits_within_128_bytes() {
+        assert!(
+            mem::size_of::<Response>() <= 128,
+            "Response is {} bytes, must be ≤128",
+            mem::size_of::<Response>()
+        );
+    }
+
+    #[test]
+    fn nack_with_events_is_representable() {
+        let response = Response {
+            ack: Ack::Nack,
+            events: vec![make_event(1, 0, EventKind::Consumed)],
+        };
+        assert_eq!(response.ack, Ack::Nack);
+        assert_eq!(response.events.len(), 1);
     }
 
     #[test]
