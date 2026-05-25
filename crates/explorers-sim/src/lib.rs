@@ -78,6 +78,8 @@ pub struct TraitVector {
     pub photosynthetic_absorption: f32,
     pub consumption_rate: f32,
     pub scavenging_rate: f32,
+    #[serde(default)]
+    pub nutrient_absorption: f32,
     pub mobility: f32,
     pub chemotaxis_sensitivity: f32,
     pub mate_selectivity: f32,
@@ -90,24 +92,26 @@ impl TraitVector {
         let d0 = self.photosynthetic_absorption - other.photosynthetic_absorption;
         let d1 = self.consumption_rate - other.consumption_rate;
         let d2 = self.scavenging_rate - other.scavenging_rate;
-        let d3 = self.mobility - other.mobility;
-        let d4 = self.chemotaxis_sensitivity - other.chemotaxis_sensitivity;
-        let d5 = self.mate_selectivity - other.mate_selectivity;
-        let d6 = self.sensing_range - other.sensing_range;
-        let d7 = self.reproductive_investment - other.reproductive_investment;
-        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5 + d6 * d6 + d7 * d7).sqrt()
+        let d3 = self.nutrient_absorption - other.nutrient_absorption;
+        let d4 = self.mobility - other.mobility;
+        let d5 = self.chemotaxis_sensitivity - other.chemotaxis_sensitivity;
+        let d6 = self.mate_selectivity - other.mate_selectivity;
+        let d7 = self.sensing_range - other.sensing_range;
+        let d8 = self.reproductive_investment - other.reproductive_investment;
+        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5 + d6 * d6 + d7 * d7 + d8 * d8).sqrt()
     }
 
-    fn get(&self, index: usize) -> f32 {
+    pub fn get(&self, index: usize) -> f32 {
         match index {
             0 => self.photosynthetic_absorption,
             1 => self.consumption_rate,
             2 => self.scavenging_rate,
-            3 => self.mobility,
-            4 => self.chemotaxis_sensitivity,
-            5 => self.mate_selectivity,
-            6 => self.sensing_range,
-            7 => self.reproductive_investment,
+            3 => self.nutrient_absorption,
+            4 => self.mobility,
+            5 => self.chemotaxis_sensitivity,
+            6 => self.mate_selectivity,
+            7 => self.sensing_range,
+            8 => self.reproductive_investment,
             _ => unreachable!(),
         }
     }
@@ -117,14 +121,18 @@ impl TraitVector {
             0 => self.photosynthetic_absorption = value,
             1 => self.consumption_rate = value,
             2 => self.scavenging_rate = value,
-            3 => self.mobility = value,
-            4 => self.chemotaxis_sensitivity = value,
-            5 => self.mate_selectivity = value,
-            6 => self.sensing_range = value,
-            7 => self.reproductive_investment = value,
+            3 => self.nutrient_absorption = value,
+            4 => self.mobility = value,
+            5 => self.chemotaxis_sensitivity = value,
+            6 => self.mate_selectivity = value,
+            7 => self.sensing_range = value,
+            8 => self.reproductive_investment = value,
             _ => unreachable!(),
         }
     }
+
+    /// Number of trait dimensions.
+    pub const NUM_DIMS: usize = 9;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -147,6 +155,10 @@ pub struct WorldParameters {
     pub consumption_maintenance_cost: f32,
     pub scavenging_maintenance_cost: f32,
     pub spatial_decay_rate: f32,
+    #[serde(default)]
+    pub nutrient_absorption_maintenance_cost: f32,
+    #[serde(default)]
+    pub initial_nutrient_pool: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -201,6 +213,7 @@ pub struct Agent {
     pub id: u64,
     pub position: (f32, f32),
     pub energy: f32,
+    pub nutrient: f32,
     pub traits: TraitVector,
     pub contact_time: u64,
 }
@@ -209,6 +222,7 @@ pub struct Carcass {
     pub id: u64,
     pub position: (f32, f32),
     pub energy: f32,
+    pub nutrient: f32,
 }
 
 pub struct NearbyAgent {
@@ -369,12 +383,25 @@ impl Agent {
     }
 }
 
+/// Stoichiometric nutrient demand: number of non-zero trait dimensions.
+/// Agents with more active traits require more nutrient.
+pub fn stoichiometric_demand(traits: &TraitVector) -> f32 {
+    let mut count = 0.0_f32;
+    for dim in 0..TraitVector::NUM_DIMS {
+        if traits.get(dim).abs() > 1e-10 {
+            count += 1.0;
+        }
+    }
+    count
+}
+
 pub struct World {
     params: WorldParameters,
     agents: Vec<Agent>,
     carcasses: Vec<Carcass>,
     dissipated_energy: f32,
     total_solar_input: f32,
+    nutrient_pool: f32,
     seed: u64,
     rng: ChaCha8Rng,
     tick: u64,
@@ -416,6 +443,7 @@ impl World {
                     photosynthetic_absorption: photo,
                     consumption_rate: cons,
                     scavenging_rate: scav,
+                    nutrient_absorption: mean.nutrient_absorption,
                     mobility: mean.mobility,
                     chemotaxis_sensitivity: mean.chemotaxis_sensitivity,
                     mate_selectivity: mean.mate_selectivity,
@@ -434,11 +462,14 @@ impl World {
                     id: id as u64,
                     position: (x, y),
                     energy: distribution.initial_energy_per_agent,
+                    nutrient: 0.0,
                     traits: TraitVector {
                         photosynthetic_absorption: centroid.photosynthetic_absorption
                             + trait_dist.sample(&mut rng),
                         consumption_rate: centroid.consumption_rate + trait_dist.sample(&mut rng),
                         scavenging_rate: centroid.scavenging_rate + trait_dist.sample(&mut rng),
+                        nutrient_absorption: centroid.nutrient_absorption
+                            + trait_dist.sample(&mut rng),
                         mobility: centroid.mobility + trait_dist.sample(&mut rng),
                         chemotaxis_sensitivity: centroid.chemotaxis_sensitivity
                             + trait_dist.sample(&mut rng),
@@ -458,12 +489,14 @@ impl World {
             params.spatial_decay_rate,
         );
 
+        let nutrient_pool = params.initial_nutrient_pool;
         Self {
             params,
             agents,
             carcasses: Vec::new(),
             dissipated_energy: 0.0,
             total_solar_input: 0.0,
+            nutrient_pool,
             seed,
             rng,
             tick: 0,
@@ -496,16 +529,19 @@ impl World {
                     id: i as u64,
                     position: spec.position,
                     energy: spec.energy,
+                    nutrient: 0.0,
                     traits: spec.traits,
                     contact_time: 0,
                 })
                 .collect();
+            let nutrient_pool = params.initial_nutrient_pool;
             Self {
                 params,
                 agents: sim_agents,
                 carcasses: Vec::new(),
                 dissipated_energy: 0.0,
                 total_solar_input: 0.0,
+                nutrient_pool,
                 seed,
                 rng,
                 tick: 0,
@@ -570,6 +606,9 @@ impl World {
         let light_shares = self.compute_light_shares(n, &agent_grid);
         let pre_tick_energies: Vec<f32> = self.agents.iter().map(|a| a.energy).collect();
         self.apply_movement_and_metabolism(&movements);
+
+        // (5b) Nutrient uptake from available pool
+        self.apply_nutrient_uptake();
 
         // (6) Rebuild grids with post-move positions
         agent_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
@@ -709,8 +748,37 @@ impl World {
                 + agent.traits.sensing_range * self.params.sensing_cost_coefficient
                 + agent.traits.photosynthetic_absorption * self.params.photo_maintenance_cost
                 + agent.traits.consumption_rate * self.params.consumption_maintenance_cost
-                + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost;
+                + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost
+                + agent.traits.nutrient_absorption * self.params.nutrient_absorption_maintenance_cost;
             agent.energy -= metabolic_cost + movement_cost;
+        }
+    }
+
+    fn apply_nutrient_uptake(&mut self) {
+        if self.nutrient_pool <= 0.0 {
+            return;
+        }
+        // Compute total demand from all agents
+        let demands: Vec<f32> = self.agents.iter().map(|a| {
+            a.traits.nutrient_absorption * (a.contact_time as f32)
+        }).collect();
+        let total_demand: f32 = demands.iter().sum();
+        if total_demand <= 0.0 {
+            return;
+        }
+        // Agents share proportionally if demand exceeds supply
+        let available = self.nutrient_pool;
+        for (i, agent) in self.agents.iter_mut().enumerate() {
+            if demands[i] <= 0.0 {
+                continue;
+            }
+            let uptake = if total_demand <= available {
+                demands[i]
+            } else {
+                demands[i] / total_demand * available
+            };
+            agent.nutrient += uptake;
+            self.nutrient_pool -= uptake;
         }
     }
 
@@ -733,6 +801,7 @@ impl World {
             reproduction_efficiency: self.params.reproduction_efficiency,
             mutation_rate: self.params.mutation_rate,
             mutation_magnitude: self.params.mutation_magnitude,
+            nutrient_gate_active: self.params.initial_nutrient_pool > 0.0,
         };
         let dead_agents = std::collections::HashSet::new();
         interaction_resolver::resolve_interactions(
@@ -772,14 +841,33 @@ impl World {
             carcass_grid.insert(ci as u64, carcass.position);
             self.carcasses.push(Carcass {
                 id: carcass.id, position: carcass.position, energy: carcass.energy,
+                nutrient: carcass.nutrient,
             });
         }
 
-        // Sync carcass energy drains from decomposition
+        // Sync carcass energy drains from decomposition and release nutrient to pool
         for ev in result.events.iter().filter(|e| e.kind == event::EventKind::Decomposed) {
             let carcass_id = ev.target.unwrap();
             if let Some(ci) = self.carcasses.iter().position(|c| c.id == carcass_id) {
-                self.carcasses[ci].energy -= ev.energy_delta;
+                let carcass = &mut self.carcasses[ci];
+                let energy_before = carcass.energy;
+                carcass.energy -= ev.energy_delta;
+                // Release proportional nutrient to pool
+                if energy_before > 0.0 {
+                    let fraction = ev.energy_delta / energy_before;
+                    let nutrient_released = carcass.nutrient * fraction;
+                    // Decomposer retains nutrient per stoichiometric demand
+                    let decomposer_idx = (0..n).find(|&j| self.agents[j].id == ev.source);
+                    if let Some(di) = decomposer_idx {
+                        let demand = stoichiometric_demand(&self.agents[di].traits);
+                        let retained = nutrient_released.min(demand - self.agents[di].nutrient).max(0.0);
+                        self.agents[di].nutrient += retained;
+                        self.nutrient_pool += nutrient_released - retained;
+                    } else {
+                        self.nutrient_pool += nutrient_released;
+                    }
+                    carcass.nutrient -= nutrient_released;
+                }
             }
         }
 
@@ -850,6 +938,7 @@ impl World {
                     carcass_energy, Some(agent.position));
                 next_carcasses.push(Carcass {
                     id: agent.id, position: agent.position, energy: carcass_energy,
+                    nutrient: agent.nutrient,
                 });
                 let gains_dissipated = result.solar_gains[i]
                     + result.consumption_gains[i]
@@ -908,8 +997,8 @@ impl World {
         self.last_tick_deaths = dead_agents.len() + (n - dead_agents.len() - next_agents.len());
         for o in &result.offspring {
             next_agents.push(Agent {
-                id: o.id, position: o.position, energy: o.energy, traits: o.traits,
-                contact_time: 0,
+                id: o.id, position: o.position, energy: o.energy, nutrient: o.nutrient,
+                traits: o.traits, contact_time: 0,
             });
         }
 
@@ -939,6 +1028,10 @@ impl World {
 
     pub fn carcasses(&self) -> &[Carcass] {
         &self.carcasses
+    }
+
+    pub fn nutrient_pool(&self) -> f32 {
+        self.nutrient_pool
     }
 
     pub fn dissipated_energy(&self) -> f32 {
@@ -1000,6 +1093,7 @@ mod tests {
             photosynthetic_absorption: 0.1,
             consumption_rate: 0.2,
             scavenging_rate: 0.3,
+            nutrient_absorption: 0.35,
             mobility: 0.4,
             chemotaxis_sensitivity: 0.5,
             mate_selectivity: 0.6,
@@ -1009,11 +1103,14 @@ mod tests {
         assert_eq!(traits.photosynthetic_absorption, 0.1);
         assert_eq!(traits.consumption_rate, 0.2);
         assert_eq!(traits.scavenging_rate, 0.3);
+        assert_eq!(traits.nutrient_absorption, 0.35);
         assert_eq!(traits.mobility, 0.4);
         assert_eq!(traits.chemotaxis_sensitivity, 0.5);
         assert_eq!(traits.mate_selectivity, 0.6);
         assert_eq!(traits.sensing_range, 0.7);
         assert_eq!(traits.reproductive_investment, 0.8);
+        // nutrient_absorption is index 3 in get/set
+        assert_eq!(traits.get(3), 0.35);
     }
 
     fn test_params() -> WorldParameters {
@@ -1035,8 +1132,9 @@ mod tests {
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
-spatial_decay_rate: 0.5,
-
+            spatial_decay_rate: 0.5,
+            nutrient_absorption_maintenance_cost: 0.0,
+            initial_nutrient_pool: 0.0,
         }
     }
 
@@ -1046,6 +1144,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.5,
                 consumption_rate: 0.3,
                 scavenging_rate: 0.2,
+                nutrient_absorption: 0.0,
                 mobility: 0.4,
                 chemotaxis_sensitivity: 0.3,
                 mate_selectivity: 0.5,
@@ -1062,6 +1161,340 @@ spatial_decay_rate: 0.5,
     fn world_created_with_params_has_correct_population_size() {
         let world = World::new(test_params(), test_distribution(), 42);
         assert_eq!(world.agents().len(), 10);
+    }
+
+    #[test]
+    fn agent_and_carcass_have_nutrient_field() {
+        let agent = Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            nutrient: 5.0,
+            traits: zero_traits(),
+            contact_time: 0,
+        };
+        assert_eq!(agent.nutrient, 5.0);
+
+        let carcass = Carcass {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            nutrient: 3.0,
+        };
+        assert_eq!(carcass.nutrient, 3.0);
+    }
+
+    #[test]
+    fn world_has_nutrient_pool() {
+        let mut params = test_params();
+        params.initial_nutrient_pool = 100.0;
+        let world = World::new(params, test_distribution(), 42);
+        assert_eq!(world.nutrient_pool(), 100.0);
+    }
+
+    #[test]
+    fn reproduction_blocked_when_nutrient_below_demand() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            initial_nutrient_pool: 100.0, // activates nutrient gate
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        // Both agents have enough energy but insufficient nutrient
+        let shared_traits = TraitVector {
+            mobility: 1.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        // stoichiometric_demand for these traits: 3 non-zero dims
+        // (mobility=1, mate_selectivity=5, reproductive_investment=10)
+        let demand = stoichiometric_demand(&shared_traits);
+        assert_eq!(demand, 3.0);
+
+        // Nutrient below demand: should NOT reproduce
+        let mut world_low = World::new(params.clone(), dist.clone(), 42);
+        world_low.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 1.0,
+            traits: shared_traits, contact_time: 0,
+        });
+        world_low.add_agent(Agent {
+            id: 0, position: (2.0, 0.0), energy: 50.0, nutrient: 1.0,
+            traits: shared_traits, contact_time: 0,
+        });
+        world_low.step();
+        assert_eq!(
+            world_low.agents().len(), 2,
+            "should NOT reproduce when nutrient below stoichiometric demand"
+        );
+
+        // Nutrient above demand: should reproduce
+        let mut world_high = World::new(params.clone(), dist.clone(), 42);
+        world_high.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 10.0,
+            traits: shared_traits, contact_time: 0,
+        });
+        world_high.add_agent(Agent {
+            id: 0, position: (2.0, 0.0), energy: 50.0, nutrient: 10.0,
+            traits: shared_traits, contact_time: 0,
+        });
+        world_high.step();
+        assert_eq!(
+            world_high.agents().len(), 3,
+            "should reproduce when nutrient above stoichiometric demand"
+        );
+    }
+
+    #[test]
+    fn nutrient_conserved_across_many_ticks() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 2.0,
+            base_metabolic_rate: 0.3,
+            sensing_cost_coefficient: 0.05,
+            movement_cost_coefficient: 0.02,
+            contact_radius: 8.0,
+            consumption_efficiency: 0.6,
+            decomposition_efficiency: 0.4,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 15.0,
+            mutation_rate: 0.1,
+            mutation_magnitude: 0.05,
+            initial_population_size: 10,
+            world_extent: 50.0,
+            initial_nutrient_pool: 500.0,
+            nutrient_absorption_maintenance_cost: 0.01,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.3,
+                consumption_rate: 0.3,
+                scavenging_rate: 0.2,
+                nutrient_absorption: 0.2,
+                mobility: 0.3,
+                chemotaxis_sensitivity: 0.3,
+                mate_selectivity: 2.0,
+                sensing_range: 5.0,
+                reproductive_investment: 5.0,
+            },
+            trait_covariance: 0.1,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 30.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let initial_nutrient = world.nutrient_pool()
+            + world.agents().iter().map(|a| a.nutrient).sum::<f32>()
+            + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
+        for _ in 0..50 {
+            world.step();
+        }
+        let agent_nutrient: f32 = world.agents().iter().map(|a| a.nutrient).sum();
+        let carcass_nutrient: f32 = world.carcasses().iter().map(|c| c.nutrient).sum();
+        let total = world.nutrient_pool() + agent_nutrient + carcass_nutrient;
+        let diff = (total - initial_nutrient).abs();
+        assert!(
+            diff < 1e-2,
+            "nutrient conservation violated: total={}, initial={}, diff={}, \
+             pool={}, agents={}, carcasses={}",
+            total, initial_nutrient, diff,
+            world.nutrient_pool(), agent_nutrient, carcass_nutrient
+        );
+    }
+
+    #[test]
+    fn decomposition_returns_carcass_nutrient_to_pool() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            initial_nutrient_pool: 10.0,
+            contact_radius: 5.0,
+            decomposition_efficiency: 0.5,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                scavenging_rate: 100.0, // high enough to fully decompose
+                ..zero_traits()
+            },
+            contact_time: 0,
+        });
+        world.add_carcass(Carcass {
+            id: 99,
+            position: (2.0, 0.0),
+            energy: 10.0,
+            nutrient: 5.0,
+        });
+        let initial_pool = world.nutrient_pool();
+        world.step();
+        // Carcass should be fully decomposed, its nutrient returned to pool
+        // minus what decomposer retains per stoichiometric demand
+        let final_pool = world.nutrient_pool();
+        let agent_nutrient: f32 = world.agents().iter().map(|a| a.nutrient).sum();
+        let carcass_nutrient: f32 = world.carcasses().iter().map(|c| c.nutrient).sum();
+        let total = final_pool + agent_nutrient + carcass_nutrient;
+        assert!(
+            (total - (initial_pool + 5.0)).abs() < 1e-3,
+            "nutrient should be conserved: pool={}, agents={}, carcasses={}, total={}, expected={}",
+            final_pool, agent_nutrient, carcass_nutrient, total, initial_pool + 5.0
+        );
+    }
+
+    #[test]
+    fn death_transfers_nutrient_to_carcass() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 100.0, // kills the agent quickly
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            initial_nutrient_pool: 0.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            nutrient: 7.5,
+            traits: zero_traits(),
+            contact_time: 0,
+        });
+        world.step();
+        assert_eq!(world.agents().len(), 0, "agent should have died");
+        assert_eq!(world.carcasses().len(), 1);
+        assert!(
+            (world.carcasses()[0].nutrient - 7.5).abs() < 1e-5,
+            "carcass should inherit agent nutrient: {}",
+            world.carcasses()[0].nutrient
+        );
+    }
+
+    #[test]
+    fn nutrient_uptake_scales_with_absorption_and_contact_time() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            initial_nutrient_pool: 100.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                nutrient_absorption: 0.5,
+                ..zero_traits()
+            },
+            contact_time: 0,
+        });
+        // Tick 1: contact_time was 0 at start, agent is stationary so contact_time becomes 1
+        // Uptake = nutrient_absorption * contact_time = 0.5 * 1 = 0.5
+        world.step();
+        let uptake_1 = world.agents()[0].nutrient;
+        assert!(
+            uptake_1 > 0.0,
+            "agent should absorb some nutrient in first tick: {}",
+            uptake_1
+        );
+        // Tick 2: contact_time is now 1 -> becomes 2 after stationary
+        // Uptake should be higher
+        world.step();
+        let uptake_2 = world.agents()[0].nutrient - uptake_1;
+        assert!(
+            uptake_2 > uptake_1,
+            "uptake should increase with contact_time: tick1={}, tick2={}",
+            uptake_1, uptake_2
+        );
+        // Pool should decrease by total uptake
+        assert!(
+            (world.nutrient_pool() + world.agents()[0].nutrient - 100.0).abs() < 1e-3,
+            "nutrient conservation: pool={}, agent={}, initial=100.0",
+            world.nutrient_pool(),
+            world.agents()[0].nutrient
+        );
+    }
+
+    #[test]
+    fn nutrient_absorption_maintenance_cost_is_charged() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            nutrient_absorption_maintenance_cost: 0.5,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                nutrient_absorption: 2.0,
+                ..zero_traits()
+            },
+            contact_time: 0,
+        });
+        world.step();
+        // cost = nutrient_absorption * nutrient_absorption_maintenance_cost = 2.0 * 0.5 = 1.0
+        assert!(
+            (world.agents()[0].energy - 99.0).abs() < 1e-5,
+            "energy after maintenance cost: {}",
+            world.agents()[0].energy
+        );
     }
 
     #[test]
@@ -1118,6 +1551,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.0,
                 consumption_rate: 0.0,
                 scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
@@ -1149,6 +1583,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.3,
                 consumption_rate: 0.0,
                 scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
@@ -1195,6 +1630,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.0,
                 consumption_rate: 0.0,
                 scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
@@ -1230,6 +1666,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.0,
                 consumption_rate: 0.0,
                 scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
@@ -1272,6 +1709,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.0,
                 consumption_rate: 0.0,
                 scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
@@ -1318,6 +1756,7 @@ spatial_decay_rate: 0.5,
             photosynthetic_absorption: 0.0,
             consumption_rate: 0.0,
             scavenging_rate: 0.0,
+            nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
             mate_selectivity: 0.0,
@@ -1363,6 +1802,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 1.0,
                     mobility: 5.0,
@@ -1421,8 +1861,10 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     scavenging_rate: 1.0,
+                nutrient_absorption: 0.0,
                     mobility: 5.0,
                     chemotaxis_sensitivity: 10.0,
                     sensing_range: 30.0,
@@ -1481,6 +1923,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (-48.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 1.0,
                     mobility: 5.0,
@@ -1553,6 +1996,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (48.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 1.0,
                 mobility: 5.0,
@@ -1566,6 +2010,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (-48.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -1605,6 +2050,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 mobility,
                 ..zero_traits()
@@ -1639,6 +2085,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.0,
                 consumption_rate: 0.0,
                 scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
@@ -1681,6 +2128,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 ..zero_traits()
@@ -1691,6 +2139,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (3.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -1726,6 +2175,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 3.0,
                 ..zero_traits()
@@ -1736,6 +2186,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -1769,6 +2220,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 10.0,
                 ..zero_traits()
@@ -1779,6 +2231,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 5.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -1815,6 +2268,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 4.0,
                 ..zero_traits()
@@ -1825,6 +2279,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (3.0, 0.0),
             energy: 20.0,
+            nutrient: 0.0,
         });
         world.step();
         // Drain = 4.0, gained = 4.0 * 0.6 = 2.4, dissipated = 4.0 * 0.4 = 1.6
@@ -1856,6 +2311,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 10.0,
                 ..zero_traits()
@@ -1866,6 +2322,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 6.0,
+            nutrient: 0.0,
         });
         world.step();
         // Drain capped at carcass energy = 6.0
@@ -1897,6 +2354,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -1904,6 +2362,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -1911,6 +2370,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 1.0),
             energy: 20.0,
+            nutrient: 0.0,
         });
         world.step();
         assert_eq!(world.agents()[0].energy, 50.0);
@@ -1943,6 +2403,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (-48.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 ..zero_traits()
@@ -1953,6 +2414,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (48.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -1980,6 +2442,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.3,
                 consumption_rate: 0.5,
                 scavenging_rate: 0.3,
+                nutrient_absorption: 0.0,
                 mobility: 0.4,
                 chemotaxis_sensitivity: 0.3,
                 mate_selectivity: 0.0,
@@ -2030,6 +2493,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 ..zero_traits()
@@ -2040,6 +2504,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (10.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -2080,6 +2545,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2087,6 +2553,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2124,6 +2591,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 mobility: 1.0,
                 mate_selectivity: 10.0,
@@ -2136,6 +2604,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 mobility: 1.0,
                 mate_selectivity: 10.0,
@@ -2176,6 +2645,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 mobility: 1.0,
                 mate_selectivity: 10.0,
@@ -2188,6 +2658,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 mobility: 1.0,
                 mate_selectivity: 10.0,
@@ -2236,6 +2707,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 40.0, // below threshold of 50
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2243,6 +2715,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2280,6 +2753,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2287,6 +2761,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (20.0, 0.0), // far outside contact_radius of 5
             energy: 50.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2321,6 +2796,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 mate_selectivity: 10.0, // accepts trait dist < 10
                 reproductive_investment: 10.0,
@@ -2332,6 +2808,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 mate_selectivity: 0.5, // rejects trait dist >= 0.5
                 reproductive_investment: 10.0,
@@ -2376,6 +2853,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2383,6 +2861,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2390,6 +2869,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2400,7 +2880,7 @@ spatial_decay_rate: 0.5,
 
     #[test]
     fn uniform_crossover_draws_each_dimension_from_one_parent() {
-        let mut from_a_counts = [0u32; 8];
+        let mut from_a_counts = [0u32; TraitVector::NUM_DIMS];
         let total_offspring = 200;
 
         for seed in 0..total_offspring {
@@ -2429,10 +2909,12 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0,
                     consumption_rate: 1.0,
                     scavenging_rate: 1.0,
+                    nutrient_absorption: 1.0,
                     mobility: 1.0,
                     chemotaxis_sensitivity: 1.0,
                     mate_selectivity: 100.0,
@@ -2445,10 +2927,12 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (1.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 2.0,
                     consumption_rate: 2.0,
                     scavenging_rate: 2.0,
+                    nutrient_absorption: 2.0,
                     mobility: 2.0,
                     chemotaxis_sensitivity: 2.0,
                     mate_selectivity: 101.0,
@@ -2460,8 +2944,8 @@ spatial_decay_rate: 0.5,
             world.step();
             assert_eq!(world.agents().len(), 3);
             let child = &world.agents()[2];
-            let parent_a_vals = [1.0, 1.0, 1.0, 1.0, 1.0, 100.0, 1.0, 10.0];
-            for dim in 0..8 {
+            let parent_a_vals = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0, 1.0, 10.0];
+            for dim in 0..TraitVector::NUM_DIMS {
                 let val = child.traits.get(dim);
                 if (val - parent_a_vals[dim]).abs() < 1e-5 {
                     from_a_counts[dim] += 1;
@@ -2471,7 +2955,7 @@ spatial_decay_rate: 0.5,
 
         // Each dimension should be ~50% from parent A (binomial, p=0.5, n=200)
         // 99% CI is roughly [78, 122] for 200 trials
-        for dim in 0..8 {
+        for dim in 0..TraitVector::NUM_DIMS {
             let count = from_a_counts[dim];
             assert!(
                 count > 60 && count < 140,
@@ -2512,6 +2996,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2519,6 +3004,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -2528,7 +3014,7 @@ spatial_decay_rate: 0.5,
         // With mutation_rate=1.0, every dimension should be perturbed
         // At least some dimensions should differ from both parents
         let mut any_mutated = false;
-        for dim in 0..8 {
+        for dim in 0..TraitVector::NUM_DIMS {
             let val = child.traits.get(dim);
             let parent_val = shared_traits.get(dim);
             if (val - parent_val).abs() > 1e-10 {
@@ -2570,6 +3056,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
 });
@@ -2577,6 +3064,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (1.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
 });
@@ -2588,7 +3076,7 @@ spatial_decay_rate: 0.5,
         assert_eq!(w1.agents().len(), w2.agents().len());
         for (a, b) in w1.agents().iter().zip(w2.agents().iter()) {
             assert_eq!(a.energy, b.energy);
-            for dim in 0..8 {
+            for dim in 0..TraitVector::NUM_DIMS {
                 assert_eq!(a.traits.get(dim), b.traits.get(dim));
             }
         }
@@ -2617,6 +3105,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.5,
                 consumption_rate: 0.3,
                 scavenging_rate: 0.2,
+                nutrient_absorption: 0.0,
                 mobility: 0.3,
                 chemotaxis_sensitivity: 0.3,
                 mate_selectivity: 2.0,
@@ -2660,6 +3149,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.8,
                 consumption_rate: 0.0,
                 scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
@@ -2749,8 +3239,8 @@ spatial_decay_rate: 0.5,
             photosynthetic_absorption: 1.0,
             ..zero_traits()
         };
-        world.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 100.0, traits: reproducer_traits, contact_time: 0, });
-        world.add_agent(Agent { id: 0, position: (0.1, 0.0), energy: 100.0, traits: reproducer_traits, contact_time: 0, });
+        world.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: reproducer_traits, contact_time: 0, });
+        world.add_agent(Agent { id: 0, position: (0.1, 0.0), energy: 100.0, nutrient: 0.0, traits: reproducer_traits, contact_time: 0, });
 
         let initial_max_id = world.agents().iter().map(|a| a.id).max().unwrap();
 
@@ -2781,6 +3271,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 0.01,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -2848,7 +3339,7 @@ spatial_decay_rate: 0.5,
         // Lone producer gets full flux
         let mut world_lone = World::new(params.clone(), dist.clone(), 42);
         world_lone.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
+            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
 });
         world_lone.step();
@@ -2863,11 +3354,11 @@ spatial_decay_rate: 0.5,
         // Two co-located producers with equal absorption share equally
         let mut world_two = World::new(params.clone(), dist.clone(), 42);
         world_two.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
+            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
 });
         world_two.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
+            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
 });
         world_two.step();
@@ -2916,11 +3407,11 @@ spatial_decay_rate: 0.5,
         // Two producers far apart (> competition radius) don't compete
         let mut world = World::new(params.clone(), dist.clone(), 42);
         world.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
+            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
 });
         world.add_agent(Agent {
-            id: 0, position: (40.0, 40.0), energy: 100.0, traits: producer,
+            id: 0, position: (40.0, 40.0), energy: 100.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
 });
         world.step();
@@ -2973,7 +3464,7 @@ spatial_decay_rate: 0.5,
 
         let mut world_sessile = World::new(params.clone(), dist.clone(), 42);
         world_sessile.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, traits: sessile_traits,
+            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
 });
         world_sessile.step();
@@ -2986,7 +3477,7 @@ spatial_decay_rate: 0.5,
 
         let mut world_mobile = World::new(params.clone(), dist.clone(), 42);
         world_mobile.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, traits: mobile_traits,
+            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
 });
         world_mobile.step();
@@ -3032,14 +3523,14 @@ spatial_decay_rate: 0.5,
 
         let mut world_high = World::new(params.clone(), dist.clone(), 42);
         world_high.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, traits: high_consumption,
+            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: high_consumption,
                     contact_time: 0,
 });
         world_high.step();
 
         let mut world_low = World::new(params.clone(), dist.clone(), 42);
         world_low.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, traits: low_consumption,
+            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: low_consumption,
                     contact_time: 0,
 });
         world_low.step();
@@ -3090,6 +3581,7 @@ spatial_decay_rate: 0.5,
             photosynthetic_absorption: 1.0,
             consumption_rate: 3.0,
             scavenging_rate: 2.0,
+                nutrient_absorption: 0.0,
             mobility: 0.0,
             ..zero_traits()
         };
@@ -3102,11 +3594,11 @@ spatial_decay_rate: 0.5,
         // Crowded generalist: two generalists near each other share light + pay maintenance
         let mut world_gen = World::new(params.clone(), dist.clone(), 42);
         world_gen.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, traits: generalist,
+            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: generalist,
                     contact_time: 0,
 });
         world_gen.add_agent(Agent {
-            id: 0, position: (1.0, 0.0), energy: 100.0, traits: generalist,
+            id: 0, position: (1.0, 0.0), energy: 100.0, nutrient: 0.0, traits: generalist,
                     contact_time: 0,
 });
         world_gen.step();
@@ -3115,7 +3607,7 @@ spatial_decay_rate: 0.5,
         // Lone specialist: no competition, no maintenance for unused traits
         let mut world_spec = World::new(params.clone(), dist.clone(), 42);
         world_spec.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, traits: specialist,
+            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: specialist,
                     contact_time: 0,
 });
         world_spec.step();
@@ -3161,11 +3653,11 @@ spatial_decay_rate: 0.5,
         // Two agents at distance 9.0 should reproduce (within 10.0)
         let mut world_near = World::new(params.clone(), dist.clone(), 42);
         world_near.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, traits: midpoint_traits,
+            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
 });
         world_near.add_agent(Agent {
-            id: 0, position: (9.0, 0.0), energy: 50.0, traits: midpoint_traits,
+            id: 0, position: (9.0, 0.0), energy: 50.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
 });
         world_near.step();
@@ -3177,11 +3669,11 @@ spatial_decay_rate: 0.5,
         // Two agents at distance 11.0 should NOT reproduce (beyond 10.0)
         let mut world_far = World::new(params.clone(), dist.clone(), 42);
         world_far.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, traits: midpoint_traits,
+            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
 });
         world_far.add_agent(Agent {
-            id: 0, position: (11.0, 0.0), energy: 50.0, traits: midpoint_traits,
+            id: 0, position: (11.0, 0.0), energy: 50.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
 });
         world_far.step();
@@ -3227,11 +3719,11 @@ spatial_decay_rate: 0.5,
             ..zero_traits()
         };
         world.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, traits: sessile_traits,
+            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
 });
         world.add_agent(Agent {
-            id: 0, position: (10.0, 0.0), energy: 50.0, traits: mobile_traits,
+            id: 0, position: (10.0, 0.0), energy: 50.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
 });
         world.step();
@@ -3270,11 +3762,11 @@ spatial_decay_rate: 0.5,
             ..zero_traits()
         };
         world.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, traits: mobile_traits,
+            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
 });
         world.add_agent(Agent {
-            id: 0, position: (10.0, 0.0), energy: 50.0, traits: mobile_traits,
+            id: 0, position: (10.0, 0.0), energy: 50.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
 });
         world.step();
@@ -3313,11 +3805,11 @@ spatial_decay_rate: 0.5,
             ..zero_traits()
         };
         world.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, traits: sessile_traits,
+            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
 });
         world.add_agent(Agent {
-            id: 0, position: (10.0, 0.0), energy: 50.0, traits: sessile_traits,
+            id: 0, position: (10.0, 0.0), energy: 50.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
 });
         world.step();
@@ -3344,6 +3836,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.5,
                 consumption_rate: 0.3,
                 scavenging_rate: 0.2,
+                nutrient_absorption: 0.0,
                 mobility: 0.4,
                 chemotaxis_sensitivity: 0.3,
                 mate_selectivity: 0.5,
@@ -3401,6 +3894,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 0.5,
                 consumption_rate: 0.3,
                 scavenging_rate: 0.2,
+                nutrient_absorption: 0.0,
                 mobility: 0.4,
                 chemotaxis_sensitivity: 0.3,
                 mate_selectivity: 0.5,
@@ -3522,8 +4016,9 @@ spatial_decay_rate: 0.5,
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
-spatial_decay_rate: 0.5,
-
+            spatial_decay_rate: 0.5,
+            nutrient_absorption_maintenance_cost: 0.0,
+            initial_nutrient_pool: 0.0,
         }
     }
 
@@ -3544,6 +4039,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 ..zero_traits()
@@ -3554,6 +4050,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -3573,6 +4070,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 10.0,
                 ..zero_traits()
@@ -3583,6 +4081,7 @@ spatial_decay_rate: 0.5,
             id: 99,
             position: (1.0, 0.0),
             energy: 3.0, // will be fully drained (scavenging_rate 10 > 3)
+            nutrient: 0.0,
         });
         world.step();
         let decomposed = world.event_log().by_kind(&EventKind::Decomposed);
@@ -3607,6 +4106,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -3637,6 +4137,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: repro_traits,
                     contact_time: 0,
 });
@@ -3644,6 +4145,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: repro_traits,
                     contact_time: 0,
 });
@@ -3669,6 +4171,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -3698,6 +4201,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 20.0,
                 ..zero_traits()
@@ -3708,6 +4212,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 5.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -3759,6 +4264,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 200.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 15.0,
                     ..zero_traits()
@@ -3771,6 +4277,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (1.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
 });
@@ -3779,6 +4286,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (2.0, 0.0),
                 energy: 200.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     scavenging_rate: 10.0,
                     ..zero_traits()
@@ -3818,6 +4326,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 scavenging_rate: 3.0,
@@ -3829,6 +4338,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -3836,6 +4346,7 @@ spatial_decay_rate: 0.5,
             id: 99,
             position: (0.0, 1.0),
             energy: 20.0,
+            nutrient: 0.0,
         });
         world.step();
         use crate::event::EventKind;
@@ -3905,6 +4416,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 1.0,
                     mobility: 5.0,
@@ -3969,8 +4481,10 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     scavenging_rate: 1.0,
+                nutrient_absorption: 0.0,
                     mobility: 5.0,
                     chemotaxis_sensitivity: 10.0,
                     sensing_range: 30.0,
@@ -4022,6 +4536,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 100.0,
                 ..zero_traits()
@@ -4032,6 +4547,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 1.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -4040,6 +4556,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (3.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
@@ -4051,6 +4568,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (10.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
@@ -4120,6 +4638,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -4127,6 +4646,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
 });
@@ -4188,6 +4708,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 100.0,
                 ..zero_traits()
@@ -4198,6 +4719,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 1.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -4206,6 +4728,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 0.0,
                 ..zero_traits()
@@ -4231,6 +4754,7 @@ spatial_decay_rate: 0.5,
             id: 1,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 ..zero_traits()
@@ -4268,6 +4792,7 @@ spatial_decay_rate: 0.5,
             id: 1,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 };
@@ -4297,6 +4822,7 @@ spatial_decay_rate: 0.5,
             id: 1,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 4.0,
                 ..zero_traits()
@@ -4334,6 +4860,7 @@ spatial_decay_rate: 0.5,
             id: 1,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 mobility: 1.0,
                 mate_selectivity: 5.0,
@@ -4379,6 +4906,7 @@ spatial_decay_rate: 0.5,
             id: 1,
             position: (0.0, 0.0),
             energy: 30.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 mate_selectivity: 5.0,
                 reproductive_investment: 10.0,
@@ -4419,6 +4947,7 @@ spatial_decay_rate: 0.5,
             id: 1,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 5.0,
                 scavenging_rate: 3.0,
@@ -4469,11 +4998,13 @@ spatial_decay_rate: 0.5,
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector { consumption_rate: 2.0, ..zero_traits() },
                     contact_time: 0,
 });
         world.add_agent(Agent {
             id: 0, position: (3.0, 0.0), energy: 50.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -4515,6 +5046,7 @@ spatial_decay_rate: 0.5,
             id: 1,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 1.0,
                 chemotaxis_sensitivity: 2.0,
@@ -4557,6 +5089,7 @@ spatial_decay_rate: 0.5,
             id: 1,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 1.0,
                 chemotaxis_sensitivity: 2.0,
@@ -4587,6 +5120,7 @@ spatial_decay_rate: 0.5,
             id: 1,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 0.5,
                 scavenging_rate: 0.5,
@@ -4680,6 +5214,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 sensing_range: 20.0,
@@ -4692,6 +5227,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
@@ -4703,6 +5239,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (4.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
@@ -4753,6 +5290,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 200.0, // high enough to kill in one tick
                 sensing_range: 20.0,
@@ -4765,6 +5303,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 10.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
@@ -4776,6 +5315,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (4.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
@@ -4826,6 +5366,7 @@ spatial_decay_rate: 0.5,
             photosynthetic_absorption: 0.0,
             consumption_rate: 0.0,
             scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
             mate_selectivity: 10.0, // wide compatibility
@@ -4836,6 +5377,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: parent_traits,
                     contact_time: 0,
 });
@@ -4843,6 +5385,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: parent_traits,
                     contact_time: 0,
 });
@@ -4852,6 +5395,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (3.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 sensing_range: 20.0,
@@ -4864,6 +5408,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (4.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
@@ -4917,6 +5462,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 1000.0, // enough to survive
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 sensing_range: 20.0,
@@ -4929,6 +5475,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 1000.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
@@ -4940,6 +5487,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (4.0, 0.0),
             energy: 60.0, // dies after ~1 tick at 50.0 metabolic rate
+            nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
@@ -5006,6 +5554,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 20.0,
                 ..zero_traits()
@@ -5016,6 +5565,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             energy: 5.0,
+            nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
@@ -5053,6 +5603,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 200.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 15.0,
                     ..zero_traits()
@@ -5063,6 +5614,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (1.0, 0.0),
                 energy: 100.0,
+            nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
 });
@@ -5070,6 +5622,7 @@ spatial_decay_rate: 0.5,
                 id: 0,
                 position: (2.0, 0.0),
                 energy: 200.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     scavenging_rate: 10.0,
                     ..zero_traits()
@@ -5315,6 +5868,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: shared_traits,
             contact_time: 0,
         });
@@ -5322,6 +5876,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
+            nutrient: 0.0,
             traits: shared_traits,
             contact_time: 0,
         });
@@ -5356,6 +5911,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0,
                 mobility: 0.0,
@@ -5395,6 +5951,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 mobility: 5.0,
                 ..zero_traits()
@@ -5430,6 +5987,7 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             energy: 100.0,
+            nutrient: 0.0,
             traits: zero_traits(), // zero mobility = stationary
             contact_time: 0,
         });

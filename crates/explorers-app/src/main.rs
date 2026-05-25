@@ -101,12 +101,15 @@ fn main() {
                 consumption_maintenance_cost: 0.01,
                 scavenging_maintenance_cost: 0.01,
                 spatial_decay_rate: 0.5,
+            nutrient_absorption_maintenance_cost: 0.0,
+            initial_nutrient_pool: 0.0,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
                     photosynthetic_absorption: 0.5,
                     consumption_rate: 0.3,
                     scavenging_rate: 0.2,
+                nutrient_absorption: 0.0,
                     mobility: 0.4,
                     chemotaxis_sensitivity: 0.3,
                     mate_selectivity: 0.5,
@@ -180,6 +183,7 @@ mod tests {
             photosynthetic_absorption: 1.0,
             consumption_rate: 0.0,
             scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
             mate_selectivity: 0.0,
@@ -199,6 +203,7 @@ mod tests {
             photosynthetic_absorption: 0.0,
             consumption_rate: 1.0,
             scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
             mate_selectivity: 0.0,
@@ -218,6 +223,7 @@ mod tests {
             photosynthetic_absorption: 0.0,
             consumption_rate: 0.0,
             scavenging_rate: 1.0,
+                nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
             mate_selectivity: 0.0,
@@ -237,6 +243,7 @@ mod tests {
             photosynthetic_absorption: 1.0,
             consumption_rate: 0.0,
             scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
             mate_selectivity: 0.0,
@@ -253,16 +260,19 @@ mod tests {
     fn dominant_role_classification() {
         let producer = TraitVector {
             photosynthetic_absorption: 0.8, consumption_rate: 0.1, scavenging_rate: 0.1,
+                nutrient_absorption: 0.0,
             mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
             sensing_range: 0.0, reproductive_investment: 0.0,
         };
         let consumer = TraitVector {
             photosynthetic_absorption: 0.1, consumption_rate: 0.8, scavenging_rate: 0.1,
+                nutrient_absorption: 0.0,
             mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
             sensing_range: 0.0, reproductive_investment: 0.0,
         };
         let decomposer = TraitVector {
             photosynthetic_absorption: 0.1, consumption_rate: 0.1, scavenging_rate: 0.8,
+                nutrient_absorption: 0.0,
             mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
             sensing_range: 0.0, reproductive_investment: 0.0,
         };
@@ -388,14 +398,16 @@ mod tests {
                 photo_maintenance_cost: 0.0,
                 consumption_maintenance_cost: 0.0,
                 scavenging_maintenance_cost: 0.0,
-spatial_decay_rate: 0.5,
-
+                spatial_decay_rate: 0.5,
+                nutrient_absorption_maintenance_cost: 0.0,
+                initial_nutrient_pool: 0.0,
             },
             InitialDistribution {
                 mean_traits: TraitVector {
                     photosynthetic_absorption: 0.5,
                     consumption_rate: 0.3,
                     scavenging_rate: 0.2,
+                nutrient_absorption: 0.0,
                     mobility: 0.4,
                     chemotaxis_sensitivity: 0.3,
                     mate_selectivity: 0.5,
@@ -462,24 +474,27 @@ spatial_decay_rate: 0.5,
         // Add some agents with known energy
         world.add_agent(explorers_sim::Agent {
             id: 0, position: (0.0, 0.0), energy: 30.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
             },
             contact_time: 0,
         });
         world.add_agent(explorers_sim::Agent {
             id: 0, position: (10.0, 10.0), energy: 20.0,
+            nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
             },
             contact_time: 0,
         });
         world.add_carcass(explorers_sim::Carcass {
             id: 99, position: (5.0, 5.0), energy: 15.0,
+            nutrient: 0.0,
         });
 
         let budget = compute_energy_budget(&world);
@@ -502,18 +517,20 @@ spatial_decay_rate: 0.5,
         let agents = vec![
             explorers_sim::Agent {
                 id: 1, position: (10.0, 10.0), energy: 50.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                    scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
                 },
                 contact_time: 0,
             },
             explorers_sim::Agent {
                 id: 2, position: (20.0, 20.0), energy: 50.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                    scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
                 },
                 contact_time: 0,
@@ -535,18 +552,20 @@ spatial_decay_rate: 0.5,
         let agents = vec![
             explorers_sim::Agent {
                 id: 1, position: (5.0, 5.0), energy: 50.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                    scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
                 },
                 contact_time: 0,
             },
             explorers_sim::Agent {
                 id: 2, position: (95.0, 95.0), energy: 50.0,
+            nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                    scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
                 },
                 contact_time: 0,
@@ -679,9 +698,9 @@ fn compute_energy_budget(world: &explorers_sim::World) -> EnergyBudget {
         living_energy,
         carcass_energy,
         dissipated_energy: world.dissipated_energy(),
-        nutrient_available: None,
-        nutrient_living: None,
-        nutrient_carcasses: None,
+        nutrient_available: Some(world.nutrient_pool()),
+        nutrient_living: Some(world.agents().iter().map(|a| a.nutrient).sum()),
+        nutrient_carcasses: Some(world.carcasses().iter().map(|c| c.nutrient).sum()),
     }
 }
 
@@ -897,7 +916,7 @@ fn debug_panel_ui(
                                 ui.label(format!("ID: {}", agent.id));
                                 ui.label(format!("Position: ({:.1}, {:.1})", agent.position.0, agent.position.1));
                                 ui.label(format!("Energy: {:.1}", agent.energy));
-                                ui.label("Nutrient: N/A");
+                                ui.label(format!("Nutrient: {:.1}", agent.nutrient));
                                 ui.label(format!("Contact time: {}", agent.contact_time));
                                 ui.label(format!("Dominant role: {}", dominant_role(&agent.traits)));
                                 ui.separator();
@@ -905,6 +924,7 @@ fn debug_panel_ui(
                                 ui.label(format!("  photosynthetic_absorption: {:.3}", agent.traits.photosynthetic_absorption));
                                 ui.label(format!("  consumption_rate: {:.3}", agent.traits.consumption_rate));
                                 ui.label(format!("  scavenging_rate: {:.3}", agent.traits.scavenging_rate));
+                                ui.label(format!("  nutrient_absorption: {:.3}", agent.traits.nutrient_absorption));
                                 ui.label(format!("  mobility: {:.3}", agent.traits.mobility));
                                 ui.label(format!("  chemotaxis_sensitivity: {:.3}", agent.traits.chemotaxis_sensitivity));
                                 ui.label(format!("  mate_selectivity: {:.3}", agent.traits.mate_selectivity));
