@@ -19,7 +19,7 @@
     "scavenging_maintenance_cost": 0.01,
     "spatial_decay_rate": 0.5,
     "nutrient_absorption_maintenance_cost": 0.01,
-    "initial_nutrient_pool": 100.0
+    "initial_nutrient_pool": 5000.0
   },
   "agents": [
     {

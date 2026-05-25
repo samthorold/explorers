@@ -19,11 +19,14 @@
     "scavenging_maintenance_cost": 0.01,
     "spatial_decay_rate": 0.5,
     "nutrient_absorption_maintenance_cost": 0.01,
-    "initial_nutrient_pool": 100.0
+    "initial_nutrient_pool": 5000.0
   },
   "agents": [
     {
-      "position": [50.0, 50.0],
+      "position": [
+        50.0,
+        50.0
+      ],
       "energy": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
@@ -33,9 +36,9 @@
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 0.05,
-        "sensing_range": 0.10,
+        "sensing_range": 0.1,
         "reproductive_investment": 0.15,
-        "fecundity": 0.10
+        "fecundity": 0.1
       }
     }
   ],
