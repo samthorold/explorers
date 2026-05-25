@@ -6073,6 +6073,70 @@ spatial_decay_rate: 0.5,
     }
 
     #[test]
+    fn example1_scenario_loads_and_runs() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{}/../../scenarios/example1.json", manifest_dir);
+        let contents = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read scenario file: {e}"));
+        let recipe: WorldRecipe = serde_json::from_str(&contents)
+            .unwrap_or_else(|e| panic!("Failed to parse scenario file: {e}"));
+
+        assert!(recipe.agents.is_some());
+        assert_eq!(recipe.agents.as_ref().unwrap().len(), 1);
+        assert_eq!(recipe.parameters.world_extent, 100.0);
+
+        let mut world = World::from_recipe(&recipe, 42);
+        assert_eq!(world.agents().len(), 1);
+        for _ in 0..10 {
+            world.step();
+        }
+    }
+
+    #[test]
+    fn example2_scenario_loads_and_runs() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{}/../../scenarios/example2.json", manifest_dir);
+        let contents = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read scenario file: {e}"));
+        let recipe: WorldRecipe = serde_json::from_str(&contents)
+            .unwrap_or_else(|e| panic!("Failed to parse scenario file: {e}"));
+
+        assert!(recipe.agents.is_some());
+        assert_eq!(recipe.agents.as_ref().unwrap().len(), 20);
+        assert_eq!(recipe.parameters.world_extent, 100.0);
+
+        let mut world = World::from_recipe(&recipe, 42);
+        assert_eq!(world.agents().len(), 20);
+        for _ in 0..10 {
+            world.step();
+        }
+    }
+
+    #[test]
+    fn example3_scenario_loads_and_runs() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{}/../../scenarios/example3.json", manifest_dir);
+        let contents = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read scenario file: {e}"));
+        let recipe: WorldRecipe = serde_json::from_str(&contents)
+            .unwrap_or_else(|e| panic!("Failed to parse scenario file: {e}"));
+
+        assert!(recipe.agents.is_some());
+        assert_eq!(recipe.agents.as_ref().unwrap().len(), 3);
+        assert_eq!(recipe.parameters.world_extent, 200.0);
+
+        let mut world = World::from_recipe(&recipe, 42);
+        assert_eq!(world.agents().len(), 3);
+        // Verify agents are far apart
+        assert_eq!(world.agents()[0].position, (-80.0, 0.0));
+        assert_eq!(world.agents()[1].position, (0.0, 0.0));
+        assert_eq!(world.agents()[2].position, (80.0, 0.0));
+        for _ in 0..10 {
+            world.step();
+        }
+    }
+
+    #[test]
     fn params_mut_allows_live_parameter_adjustment() {
         let mut world = World::new(test_params(), test_distribution(), 42);
         let original_flux = world.params().solar_flux_magnitude;
