@@ -199,6 +199,7 @@ pub struct ProjectionData {
     pub reproduction_energy_threshold: f32,
 }
 
+#[derive(Clone)]
 pub struct Broadcast {
     pub kind: event::EventKind,
     pub source_position: (f32, f32),
@@ -453,60 +454,109 @@ impl World {
     }
 
     pub fn step(&mut self) {
+        // (1) Clear tick broadcasts
         self.tick_broadcasts.clear();
         let extent = self.params.world_extent;
-        let agent_count = self.agents.len();
+        let n = self.agents.len();
 
-        let sub_seed = self
-            .seed
+        // (2) Compute sub-seed and shuffle order
+        let sub_seed = self.seed
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(self.tick);
         let mut shuffle_rng = ChaCha8Rng::seed_from_u64(sub_seed);
-        let mut order: Vec<usize> = (0..agent_count).collect();
+        let mut order: Vec<usize> = (0..n).collect();
         order.shuffle(&mut shuffle_rng);
 
-        let max_query_radius = self.params.light_competition_radius
-            .max(self.params.contact_radius);
-        let cell_size = max_query_radius.max(1.0);
-
+        // (3) Build spatial grids
+        let cell_size = self.params.light_competition_radius
+            .max(self.params.contact_radius)
+            .max(1.0);
         let mut agent_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
-        for (i, agent) in self.agents.iter().enumerate() {
-            agent_grid.insert(i as u64, agent.position);
+        for (i, a) in self.agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
         }
-
         let mut carcass_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
-        for (ci, carcass) in self.carcasses.iter().enumerate() {
-            carcass_grid.insert(ci as u64, carcass.position);
+        for (ci, c) in self.carcasses.iter().enumerate() {
+            carcass_grid.insert(ci as u64, c.position);
         }
 
-        // --- Update spatial projection from event log ---
+        // (4) Update projection from event log
         self.projection.update(&self.event_log, self.tick);
 
-        // --- Sense & Decide: DES computes projections and hands data to agents ---
-        let mut movements = vec![(0.0_f32, 0.0_f32); agent_count];
-        for &i in &order {
+        // (5) Compute movement vectors and apply metabolic costs
+        let movements = self.compute_movements(&order, n);
+        let light_shares = self.compute_light_shares(n, &agent_grid);
+        let pre_tick_energies: Vec<f32> = self.agents.iter().map(|a| a.energy).collect();
+        self.apply_movement_and_metabolism(&movements);
+
+        // (6) Rebuild grids with post-move positions
+        agent_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
+        for (i, a) in self.agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+
+        // (7) Create energy ledger: record initial endowments
+        let mut ledger = energy_ledger::EnergyLedger::new();
+        for (i, &pre_energy) in pre_tick_energies.iter().enumerate() {
+            if pre_energy > 0.0 {
+                ledger.record(
+                    energy_ledger::EnergyEndpoint::Endowment,
+                    energy_ledger::EnergyEndpoint::Agent(self.agents[i].id),
+                    pre_energy,
+                );
+            }
+        }
+        for c in self.carcasses.iter() {
+            if c.energy > 0.0 {
+                ledger.record(
+                    energy_ledger::EnergyEndpoint::Endowment,
+                    energy_ledger::EnergyEndpoint::Carcass(c.id),
+                    c.energy,
+                );
+            }
+        }
+
+        // (8) Call resolver — records interaction flows in ledger
+        let resolver_result = self.call_resolver(
+            &agent_grid, &carcass_grid, &order, &pre_tick_energies,
+            &light_shares, &mut ledger,
+        );
+
+        // (9) Apply resolver output
+        let dead_agents = self.apply_resolver_output(
+            &resolver_result, &mut carcass_grid, n,
+        );
+
+        // (10) Deliver broadcasts and register NACKs
+        self.deliver_broadcasts(&resolver_result.broadcasts, &dead_agents);
+
+        // (11) End-of-tick bookkeeping: death check, energy accounting, ledger balance
+        self.end_of_tick(
+            &resolver_result, &pre_tick_energies, &dead_agents,
+            &mut ledger, n,
+        );
+
+        self.tick += 1;
+    }
+
+    fn compute_movements(&mut self, order: &[usize], n: usize) -> Vec<(f32, f32)> {
+        let mut movements = vec![(0.0_f32, 0.0_f32); n];
+        for &i in order {
             let agent = &self.agents[i];
             if agent.traits.mobility <= 0.0 {
                 continue;
             }
-
-            // DES pre-computes projection gradients for this agent
             let feeding_gradient = self.projection.gradient(
-                agent.position,
-                agent.traits.sensing_range,
+                agent.position, agent.traits.sensing_range,
                 spatial_projection::ActivityLayer::Feeding,
             );
             let carcass_gradient = self.projection.gradient(
-                agent.position,
-                agent.traits.sensing_range,
+                agent.position, agent.traits.sensing_range,
                 spatial_projection::ActivityLayer::Carcass,
             );
-
             let data = ProjectionData {
-                feeding_gradient,
-                carcass_gradient,
-                nearby_agents: vec![],
-                nearby_carcasses: vec![],
+                feeding_gradient, carcass_gradient,
+                nearby_agents: vec![], nearby_carcasses: vec![],
                 contact_radius: self.params.contact_radius,
                 reproduction_energy_threshold: self.params.reproduction_energy_threshold,
             };
@@ -516,302 +566,264 @@ impl World {
                 position: Some(agent.position),
             };
             let response = agent.receive(&trigger, &data);
+            let (cx, cy) = response.events.first()
+                .and_then(|e| e.position)
+                .unwrap_or((0.0, 0.0));
 
-            // Extract chemotaxis vector from agent response
-            let (chemotaxis_x, chemotaxis_y) = if let Some(moved) = response.events.first() {
-                moved.position.unwrap_or((0.0, 0.0))
-            } else {
-                (0.0, 0.0)
-            };
-
-            // DES adds exploration noise (requires RNG on World)
-            let angle_dist =
-                rand::distr::Uniform::new(0.0_f32, std::f32::consts::TAU).unwrap();
+            let angle_dist = rand::distr::Uniform::new(0.0_f32, std::f32::consts::TAU).unwrap();
             let angle = angle_dist.sample(&mut self.rng);
-            let explore_x = angle.cos();
-            let explore_y = angle.sin();
-
-            let mut move_x = chemotaxis_x + explore_x;
-            let mut move_y = chemotaxis_y + explore_y;
-
-            // DES normalizes and scales by mobility
-            let mag = (move_x * move_x + move_y * move_y).sqrt();
+            let mut mx = cx + angle.cos();
+            let mut my = cy + angle.sin();
+            let mag = (mx * mx + my * my).sqrt();
             if mag > 0.0 {
-                move_x = move_x / mag * agent.traits.mobility;
-                move_y = move_y / mag * agent.traits.mobility;
+                mx = mx / mag * agent.traits.mobility;
+                my = my / mag * agent.traits.mobility;
             }
-
-            movements[i] = (move_x, move_y);
+            movements[i] = (mx, my);
         }
+        movements
+    }
 
-        // --- Compute local light competition shares ---
+    fn compute_light_shares(&self, n: usize, agent_grid: &crate::spatial::SpatialGrid) -> Vec<f32> {
+        let extent = self.params.world_extent;
         let competition_radius = self.params.light_competition_radius;
-        let light_shares: Vec<f32> = (0..agent_count)
-            .map(|i| {
-                let agent = &self.agents[i];
-                if agent.traits.photosynthetic_absorption <= 0.0 {
-                    return 1.0;
+        (0..n).map(|i| {
+            let agent = &self.agents[i];
+            if agent.traits.photosynthetic_absorption <= 0.0 {
+                return 1.0;
+            }
+            let mut total = agent.traits.photosynthetic_absorption;
+            for j_id in agent_grid.query_radius(agent.position, competition_radius) {
+                let j = j_id as usize;
+                if j == i { continue; }
+                let other = &self.agents[j];
+                if other.traits.photosynthetic_absorption <= 0.0 { continue; }
+                if toroidal_distance(agent.position, other.position, extent) < competition_radius {
+                    total += other.traits.photosynthetic_absorption;
                 }
-                let mut total_local_absorption = agent.traits.photosynthetic_absorption;
-                let neighbors = agent_grid.query_radius(agent.position, competition_radius);
-                for j_id in neighbors {
-                    let j = j_id as usize;
-                    if j == i {
-                        continue;
-                    }
-                    let other = &self.agents[j];
-                    if other.traits.photosynthetic_absorption <= 0.0 {
-                        continue;
-                    }
-                    let dist = toroidal_distance(agent.position, other.position, extent);
-                    if dist < competition_radius {
-                        total_local_absorption += other.traits.photosynthetic_absorption;
-                    }
-                }
-                agent.traits.photosynthetic_absorption / total_local_absorption
-            })
-            .collect();
+            }
+            agent.traits.photosynthetic_absorption / total
+        }).collect()
+    }
 
-        // --- Apply movement and metabolic costs ---
-        let pre_tick_energies: Vec<f32> = self.agents.iter().map(|a| a.energy).collect();
-
+    fn apply_movement_and_metabolism(&mut self, movements: &[(f32, f32)]) {
+        let extent = self.params.world_extent;
         for (i, agent) in self.agents.iter_mut().enumerate() {
             let (mx, my) = movements[i];
             agent.position = wrap_position(
-                (agent.position.0 + mx, agent.position.1 + my),
-                extent,
+                (agent.position.0 + mx, agent.position.1 + my), extent,
             );
-            let distance_moved = (mx * mx + my * my).sqrt();
-            let movement_cost = distance_moved * self.params.movement_cost_coefficient;
+            let distance = (mx * mx + my * my).sqrt();
+            let movement_cost = distance * self.params.movement_cost_coefficient;
             let metabolic_cost = self.params.base_metabolic_rate
                 + agent.traits.sensing_range * self.params.sensing_cost_coefficient
                 + agent.traits.photosynthetic_absorption * self.params.photo_maintenance_cost
                 + agent.traits.consumption_rate * self.params.consumption_maintenance_cost
                 + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost;
-
             agent.energy -= metabolic_cost + movement_cost;
         }
+    }
 
-        // Rebuild grids with post-move positions
-        let mut agent_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
-        for (i, agent) in self.agents.iter().enumerate() {
-            agent_grid.insert(i as u64, agent.position);
-        }
-
-        // --- DES: sequential agent processing with priority event queue ---
-        let contact_radius = self.params.contact_radius;
-        let decomposition_efficiency = self.params.decomposition_efficiency;
-        let reproduction_threshold = self.params.reproduction_energy_threshold;
-        let reproduction_efficiency = self.params.reproduction_efficiency;
-        let mutation_rate = self.params.mutation_rate;
-        let mutation_magnitude = self.params.mutation_magnitude;
-        let n = agent_count;
-
-        let mut broadcasts: Vec<Broadcast> = Vec::new();
-
-        let mut dead_agents: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
-        let mut depleted_carcasses: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
-        let mut consumption_gains = vec![0.0_f32; n];
-        let mut consumption_losses = vec![0.0_f32; n];
-        let mut decomposition_gains = vec![0.0_f32; n];
-        let mut solar_gains = vec![0.0_f32; n];
-        let mut reproduction_investments = vec![0.0_f32; n];
-        let offspring: Vec<Agent>;
-
-        // --- Resolve consumption interactions via resolver ---
+    fn call_resolver(
+        &mut self,
+        agent_grid: &crate::spatial::SpatialGrid,
+        carcass_grid: &crate::spatial::SpatialGrid,
+        order: &[usize],
+        pre_tick_energies: &[f32],
+        light_shares: &[f32],
+        ledger: &mut energy_ledger::EnergyLedger,
+    ) -> interaction_resolver::ResolverResult {
         let resolver_params = interaction_resolver::ResolverParams {
-            contact_radius,
+            contact_radius: self.params.contact_radius,
             consumption_efficiency: self.params.consumption_efficiency,
-            decomposition_efficiency,
-            world_extent: extent,
-            reproduction_energy_threshold: reproduction_threshold,
+            decomposition_efficiency: self.params.decomposition_efficiency,
+            world_extent: self.params.world_extent,
+            reproduction_energy_threshold: self.params.reproduction_energy_threshold,
             solar_flux_magnitude: self.params.solar_flux_magnitude,
-            reproduction_efficiency,
-            mutation_rate,
-            mutation_magnitude,
+            reproduction_efficiency: self.params.reproduction_efficiency,
+            mutation_rate: self.params.mutation_rate,
+            mutation_magnitude: self.params.mutation_magnitude,
         };
-        let resolver_result = interaction_resolver::resolve_interactions(
-            &self.agents,
-            &agent_grid,
-            &carcass_grid,
-            &self.carcasses,
-            &resolver_params,
-            &order,
-            &dead_agents,
-            &self.nack_sets,
-            self.tick,
-            &pre_tick_energies,
-            &light_shares,
-            &mut self.rng,
-            self.next_agent_id,
-        );
+        let dead_agents = std::collections::HashSet::new();
+        interaction_resolver::resolve_interactions(
+            &self.agents, agent_grid, carcass_grid, &self.carcasses,
+            &resolver_params, order, &dead_agents, &self.nack_sets,
+            self.tick, pre_tick_energies, light_shares,
+            &mut self.rng, self.next_agent_id, ledger,
+        )
+    }
 
-        // Apply resolver mutations
+    fn apply_resolver_output(
+        &mut self,
+        result: &interaction_resolver::ResolverResult,
+        carcass_grid: &mut crate::spatial::SpatialGrid,
+        n: usize,
+    ) -> std::collections::HashSet<usize> {
+        // Apply energy deltas from resolver
         for i in 0..n {
-            self.agents[i].energy += resolver_result.consumption_gains[i];
-            self.agents[i].energy -= resolver_result.consumption_losses[i];
-            self.agents[i].energy += resolver_result.decomposition_gains[i];
-            self.agents[i].energy += resolver_result.solar_gains[i];
-            consumption_gains[i] = resolver_result.consumption_gains[i];
-            consumption_losses[i] = resolver_result.consumption_losses[i];
-            decomposition_gains[i] = resolver_result.decomposition_gains[i];
-            solar_gains[i] = resolver_result.solar_gains[i];
+            self.agents[i].energy += result.consumption_gains[i];
+            self.agents[i].energy -= result.consumption_losses[i];
+            self.agents[i].energy += result.decomposition_gains[i];
+            self.agents[i].energy += result.solar_gains[i];
+            self.agents[i].energy -= result.reproduction_investments[i];
         }
-        self.dissipated_energy += resolver_result.dissipated_energy;
-        self.total_solar_input += resolver_result.total_solar_input;
-        dead_agents = resolver_result.dead_agents;
+        self.dissipated_energy += result.dissipated_energy;
+        self.total_solar_input += result.total_solar_input;
+        self.next_agent_id = result.next_agent_id;
 
         // Emit resolver events into the event log
-        for ev in &resolver_result.events {
-            self.emit(
-                ev.kind.clone(),
-                ev.source,
-                ev.target,
-                ev.energy_delta,
-                ev.position,
-            );
+        for ev in &result.events {
+            self.emit(ev.kind.clone(), ev.source, ev.target, ev.energy_delta, ev.position);
         }
-        broadcasts.extend(resolver_result.broadcasts);
 
         // Apply new carcasses from consumption cascade
-        for carcass in resolver_result.new_carcasses {
+        for carcass in &result.new_carcasses {
             let ci = self.carcasses.len();
             carcass_grid.insert(ci as u64, carcass.position);
-            self.carcasses.push(carcass);
+            self.carcasses.push(Carcass {
+                id: carcass.id, position: carcass.position, energy: carcass.energy,
+            });
         }
 
-        // Remove dead agents from the agent grid
-        for &idx in &dead_agents {
-            agent_grid.remove(idx as u64);
-        }
-
-        // Apply depleted carcass indices from resolver
-        for &ci in &resolver_result.depleted_carcass_indices {
-            depleted_carcasses.insert(ci);
-        }
-
-        // Apply carcass energy drains from decomposition
-        // The resolver tracked working carcass energies internally; we need to
-        // sync actual carcass energies for any that were drained but not depleted.
-        // We do this by recomputing drain from decomposition_gains and efficiency.
-        for i in 0..n {
-            if decomposition_gains[i] > 0.0 {
-                // Find the Decomposed event for this agent to get the carcass id and drain
-                if let Some(ev) = resolver_result.events.iter().find(|e| {
-                    e.kind == event::EventKind::Decomposed && e.source == self.agents[i].id
-                }) {
-                    let carcass_id = ev.target.unwrap();
-                    let drain = ev.energy_delta;
-                    if let Some(ci) = self.carcasses.iter().position(|c| c.id == carcass_id) {
-                        self.carcasses[ci].energy -= drain;
-                    }
-                }
+        // Sync carcass energy drains from decomposition
+        for ev in result.events.iter().filter(|e| e.kind == event::EventKind::Decomposed) {
+            let carcass_id = ev.target.unwrap();
+            if let Some(ci) = self.carcasses.iter().position(|c| c.id == carcass_id) {
+                self.carcasses[ci].energy -= ev.energy_delta;
             }
         }
 
-        // Apply reproduction results from resolver
-        for i in 0..n {
-            self.agents[i].energy -= resolver_result.reproduction_investments[i];
-            reproduction_investments[i] = resolver_result.reproduction_investments[i];
-        }
-        self.next_agent_id = resolver_result.next_agent_id;
-        offspring = resolver_result.offspring;
+        result.dead_agents.clone()
+    }
 
-        // --- Deliver broadcasts and register NACKs ---
-        // Build an index from agent id to index for broadcast delivery
+    fn deliver_broadcasts(
+        &mut self,
+        broadcasts: &[Broadcast],
+        dead_agents: &std::collections::HashSet<usize>,
+    ) {
         let agent_id_to_idx: std::collections::HashMap<u64, usize> = self.agents.iter()
-            .enumerate()
-            .map(|(i, a)| (a.id, i))
-            .collect();
-        for broadcast in &broadcasts {
-            if dead_agents.contains(agent_id_to_idx.get(&broadcast.receiver_id).unwrap_or(&usize::MAX)) {
-                continue;
-            }
-            if let Some(&idx) = agent_id_to_idx.get(&broadcast.receiver_id) {
-                let agent = &self.agents[idx];
-                let data = ProjectionData {
-                    feeding_gradient: (0.0, 0.0),
-                    carcass_gradient: (0.0, 0.0),
-                    nearby_agents: vec![],
-                    nearby_carcasses: vec![],
-                    contact_radius,
-                    reproduction_energy_threshold: reproduction_threshold,
-                };
-                let trigger = event::Event {
-                    tick: self.tick, seq: 0, kind: broadcast.kind.clone(),
-                    source: 0, target: None, energy_delta: 0.0,
-                    position: Some(broadcast.source_position),
-                };
-                let response = agent.receive(&trigger, &data);
-                if response.ack == event::Ack::Nack {
-                    self.nack_sets
-                        .entry(agent.id)
-                        .or_insert_with(std::collections::HashSet::new)
-                        .insert(broadcast.kind.clone());
-                }
-                // NACK response events are ignored — only ACK'd events would be queued
+            .enumerate().map(|(i, a)| (a.id, i)).collect();
+        for broadcast in broadcasts {
+            let idx = match agent_id_to_idx.get(&broadcast.receiver_id) {
+                Some(&i) if !dead_agents.contains(&i) => i,
+                _ => continue,
+            };
+            let data = ProjectionData {
+                feeding_gradient: (0.0, 0.0), carcass_gradient: (0.0, 0.0),
+                nearby_agents: vec![], nearby_carcasses: vec![],
+                contact_radius: self.params.contact_radius,
+                reproduction_energy_threshold: self.params.reproduction_energy_threshold,
+            };
+            let trigger = event::Event {
+                tick: self.tick, seq: 0, kind: broadcast.kind.clone(),
+                source: 0, target: None, energy_delta: 0.0,
+                position: Some(broadcast.source_position),
+            };
+            let response = self.agents[idx].receive(&trigger, &data);
+            if response.ack == event::Ack::Nack {
+                self.nack_sets
+                    .entry(self.agents[idx].id)
+                    .or_insert_with(std::collections::HashSet::new)
+                    .insert(broadcast.kind.clone());
             }
         }
+    }
 
-        // --- End-of-tick death check and energy accounting ---
+    fn end_of_tick(
+        &mut self,
+        result: &interaction_resolver::ResolverResult,
+        pre_tick_energies: &[f32],
+        dead_agents: &std::collections::HashSet<usize>,
+        ledger: &mut energy_ledger::EnergyLedger,
+        n: usize,
+    ) {
         let mut next_agents: Vec<Agent> = Vec::with_capacity(n);
-        let mut next_carcasses: Vec<Carcass> = self
-            .carcasses
-            .drain(..)
+        let mut next_carcasses: Vec<Carcass> = self.carcasses.drain(..)
             .enumerate()
-            .filter(|(ci, _)| !depleted_carcasses.contains(ci))
+            .filter(|(ci, _)| !result.depleted_carcass_indices.contains(ci))
             .map(|(_, c)| c)
             .collect();
 
-        let remaining_agents: Vec<(usize, Agent)> = self
-            .agents
-            .drain(..)
+        let remaining: Vec<(usize, Agent)> = self.agents.drain(..)
             .enumerate()
             .filter(|(i, _)| !dead_agents.contains(i))
             .collect();
 
-        for (i, agent) in remaining_agents {
+        for (i, agent) in remaining {
             if agent.energy <= 0.0 {
+                // Metabolic death: agent's pre-tick biomass becomes carcass,
+                // any gains this tick are dissipated along with metabolic costs.
                 let carcass_energy =
-                    (pre_tick_energies[i] - consumption_losses[i]).max(0.0);
-                self.emit(
-                    event::EventKind::Died,
-                    agent.id,
-                    None,
-                    0.0,
-                    Some(agent.position),
-                );
-                self.emit(
-                    event::EventKind::CarcassCreated,
-                    agent.id,
-                    None,
-                    carcass_energy,
-                    Some(agent.position),
-                );
+                    (pre_tick_energies[i] - result.consumption_losses[i]).max(0.0);
+                self.emit(event::EventKind::Died, agent.id, None, 0.0, Some(agent.position));
+                self.emit(event::EventKind::CarcassCreated, agent.id, None,
+                    carcass_energy, Some(agent.position));
                 next_carcasses.push(Carcass {
-                    id: agent.id,
-                    position: agent.position,
-                    energy: carcass_energy,
+                    id: agent.id, position: agent.position, energy: carcass_energy,
                 });
-                self.dissipated_energy +=
-                    solar_gains[i] + consumption_gains[i] + decomposition_gains[i];
+                let gains_dissipated = result.solar_gains[i]
+                    + result.consumption_gains[i]
+                    + result.decomposition_gains[i];
+                self.dissipated_energy += gains_dissipated;
+
+                // Record death flows in ledger: carcass gets biomass,
+                // everything else the agent had is dissipated (metabolic + gains)
+                if carcass_energy > 0.0 {
+                    ledger.record(
+                        energy_ledger::EnergyEndpoint::Agent(agent.id),
+                        energy_ledger::EnergyEndpoint::Carcass(agent.id),
+                        carcass_energy,
+                    );
+                }
+                // Total dissipation = endowment + gains - consumption_outflows
+                //   - reproduction_outflows - carcass
+                // (consumption and reproduction outflows already in resolver ledger)
+                let agent_total_dissipation = pre_tick_energies[i]
+                    + result.solar_gains[i]
+                    + result.consumption_gains[i]
+                    + result.decomposition_gains[i]
+                    - result.consumption_losses[i]
+                    - result.reproduction_investments[i]
+                    - carcass_energy;
+                if agent_total_dissipation > 0.0 {
+                    ledger.record(
+                        energy_ledger::EnergyEndpoint::Agent(agent.id),
+                        energy_ledger::EnergyEndpoint::Dissipation,
+                        agent_total_dissipation,
+                    );
+                }
             } else {
-                let total_input = solar_gains[i] + consumption_gains[i]
-                    + decomposition_gains[i]
-                    - consumption_losses[i];
+                // Surviving agent: metabolic costs = endowment + input - final - repro
+                let total_input = result.solar_gains[i]
+                    + result.consumption_gains[i]
+                    + result.decomposition_gains[i]
+                    - result.consumption_losses[i];
                 let costs = pre_tick_energies[i] + total_input
-                    - agent.energy
-                    - reproduction_investments[i];
+                    - agent.energy - result.reproduction_investments[i];
                 self.dissipated_energy += costs;
+
+                // Record metabolic dissipation in ledger
+                if costs > 0.0 {
+                    ledger.record(
+                        energy_ledger::EnergyEndpoint::Agent(agent.id),
+                        energy_ledger::EnergyEndpoint::Dissipation,
+                        costs,
+                    );
+                }
                 next_agents.push(agent);
             }
         }
 
-        self.last_tick_births = offspring.len();
+        self.last_tick_births = result.offspring.len();
         self.last_tick_deaths = dead_agents.len() + (n - dead_agents.len() - next_agents.len());
-        next_agents.extend(offspring);
+        for o in &result.offspring {
+            next_agents.push(Agent {
+                id: o.id, position: o.position, energy: o.energy, traits: o.traits,
+            });
+        }
+
+        // Assert energy balance at tick boundary
+        ledger.assert_balanced();
 
         // Clean up NACK state for dead agents
         let live_ids: std::collections::HashSet<u64> = next_agents.iter().map(|a| a.id).collect();
@@ -819,8 +831,7 @@ impl World {
 
         self.agents = next_agents;
         self.carcasses = next_carcasses;
-        self.tick_broadcasts = broadcasts;
-        self.tick += 1;
+        self.tick_broadcasts = result.broadcasts.clone();
     }
 
     pub fn params(&self) -> &WorldParameters {

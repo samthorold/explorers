@@ -4,6 +4,7 @@ use rand::distr::Distribution;
 use rand_chacha::ChaCha8Rng;
 use rand_distr::Normal;
 
+use crate::energy_ledger::{EnergyEndpoint, EnergyLedger};
 use crate::event;
 use crate::spatial::SpatialGrid;
 use crate::{
@@ -62,6 +63,7 @@ pub fn resolve_interactions(
     light_shares: &[f32],
     rng: &mut ChaCha8Rng,
     next_agent_id: u64,
+    ledger: &mut EnergyLedger,
 ) -> ResolverResult {
     let n = agents.len();
     let mut working_energies: Vec<f32> = agents.iter().map(|a| a.energy).collect();
@@ -149,6 +151,17 @@ pub fn resolve_interactions(
                 consumption_gains[i] += gain;
                 consumption_losses[target] += drain;
                 dissipated_energy += drain * (1.0 - params.consumption_efficiency);
+
+                ledger.record(
+                    EnergyEndpoint::Agent(agents[target].id),
+                    EnergyEndpoint::Agent(agents[i].id),
+                    gain,
+                );
+                ledger.record(
+                    EnergyEndpoint::Agent(agents[target].id),
+                    EnergyEndpoint::Dissipation,
+                    drain * (1.0 - params.consumption_efficiency),
+                );
 
                 events.push(event::Event {
                     tick,
@@ -263,6 +276,17 @@ pub fn resolve_interactions(
                     decomposition_gains[i] = gain;
                     dissipated_energy += drain * (1.0 - params.decomposition_efficiency);
 
+                    ledger.record(
+                        EnergyEndpoint::Carcass(carcass_id),
+                        EnergyEndpoint::Agent(agents[i].id),
+                        gain,
+                    );
+                    ledger.record(
+                        EnergyEndpoint::Carcass(carcass_id),
+                        EnergyEndpoint::Dissipation,
+                        drain * (1.0 - params.decomposition_efficiency),
+                    );
+
                     events.push(event::Event {
                         tick,
                         seq: 0,
@@ -302,6 +326,17 @@ pub fn resolve_interactions(
                     working_energies[i] += gain;
                     decomposition_gains[i] = gain;
                     dissipated_energy += drain * (1.0 - params.decomposition_efficiency);
+
+                    ledger.record(
+                        EnergyEndpoint::Carcass(carcass_id),
+                        EnergyEndpoint::Agent(agents[i].id),
+                        gain,
+                    );
+                    ledger.record(
+                        EnergyEndpoint::Carcass(carcass_id),
+                        EnergyEndpoint::Dissipation,
+                        drain * (1.0 - params.decomposition_efficiency),
+                    );
 
                     events.push(event::Event {
                         tick,
@@ -353,6 +388,13 @@ pub fn resolve_interactions(
             working_energies[i] += solar_gain;
             solar_gains[i] = solar_gain;
             total_solar_input += solar_gain;
+            if solar_gain > 0.0 {
+                ledger.record(
+                    EnergyEndpoint::SolarTap,
+                    EnergyEndpoint::Agent(agents[i].id),
+                    solar_gain,
+                );
+            }
         }
 
         // Drain consequence queue
@@ -402,6 +444,15 @@ pub fn resolve_interactions(
                     let dead_id = consequence.source;
                     let dead_pos = consequence.position.unwrap();
                     let carcass_energy = consequence.energy_delta;
+
+                    // Record death-to-carcass transfer in ledger
+                    if carcass_energy > 0.0 {
+                        ledger.record(
+                            EnergyEndpoint::Agent(dead_id),
+                            EnergyEndpoint::Carcass(dead_id),
+                            carcass_energy,
+                        );
+                    }
 
                     events.push(event::Event {
                         tick,
@@ -553,8 +604,9 @@ pub fn resolve_interactions(
 
             let offspring_energy =
                 (inv_a + inv_b) * params.reproduction_efficiency;
-            dissipated_energy +=
+            let repro_dissipation =
                 (inv_a + inv_b) * (1.0 - params.reproduction_efficiency);
+            dissipated_energy += repro_dissipation;
 
             // Trait inheritance: uniform crossover
             let mut child_traits = TraitVector {
@@ -598,6 +650,34 @@ pub fn resolve_interactions(
             let offspring_id = next_agent_id;
             next_agent_id += 1;
 
+            // Record reproduction flows in ledger.
+            // Each parent's investment is their outflow; positive investments
+            // transfer to offspring (with efficiency) and dissipation.
+            if inv_a > 0.0 {
+                ledger.record(
+                    EnergyEndpoint::Agent(agents[i].id),
+                    EnergyEndpoint::Agent(offspring_id),
+                    inv_a * params.reproduction_efficiency,
+                );
+                ledger.record(
+                    EnergyEndpoint::Agent(agents[i].id),
+                    EnergyEndpoint::Dissipation,
+                    inv_a * (1.0 - params.reproduction_efficiency),
+                );
+            }
+            if inv_b > 0.0 {
+                ledger.record(
+                    EnergyEndpoint::Agent(agents[j].id),
+                    EnergyEndpoint::Agent(offspring_id),
+                    inv_b * params.reproduction_efficiency,
+                );
+                ledger.record(
+                    EnergyEndpoint::Agent(agents[j].id),
+                    EnergyEndpoint::Dissipation,
+                    inv_b * (1.0 - params.reproduction_efficiency),
+                );
+            }
+
             events.push(event::Event {
                 tick,
                 seq: 0,
@@ -639,6 +719,7 @@ pub fn resolve_interactions(
 mod tests {
     use super::*;
     use crate::TraitVector;
+    use crate::energy_ledger::{EnergyLedger, EnergyEndpoint};
     use rand::SeedableRng;
 
     fn zero_traits() -> TraitVector {
@@ -712,6 +793,7 @@ mod tests {
             &vec![0.0; agents.len()],
             &mut rng,
             100,
+            &mut EnergyLedger::new(),
         );
 
         // drain = 2.0, gain = 2.0 * 0.5 = 1.0
@@ -805,6 +887,7 @@ mod tests {
             &vec![0.0; agents.len()],
         &mut rng,
         100,
+            &mut EnergyLedger::new(),
         );
 
         // drain = 5.0 (capped at target energy), gain = 5.0 * 0.5 = 2.5
@@ -908,6 +991,7 @@ mod tests {
             &vec![0.0; agents.len()],
         &mut rng,
         100,
+            &mut EnergyLedger::new(),
         );
 
         // drain = 4.0 (scavenging_rate, capped at carcass energy 10.0)
@@ -993,6 +1077,7 @@ mod tests {
             &vec![0.0; agents.len()],
         &mut rng,
         100,
+            &mut EnergyLedger::new(),
         );
 
         // drain = 10.0 (capped at carcass energy), gain = 10.0 * 0.8 = 8.0
@@ -1095,6 +1180,7 @@ mod tests {
             &light_shares,
         &mut rng,
         100,
+            &mut EnergyLedger::new(),
         );
 
         // mobility_gate for mobility=0.0: 1/(1+exp(20*(0-0.3))) = 1/(1+exp(-6)) ≈ 0.9975
@@ -1186,6 +1272,7 @@ mod tests {
             &light_shares,
         &mut rng,
         100,
+            &mut EnergyLedger::new(),
         );
 
         let gate_low = 1.0 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
@@ -1275,6 +1362,7 @@ mod tests {
             &light_shares,
         &mut rng,
         100,
+            &mut EnergyLedger::new(),
         );
 
         // Agent 0 consumed, so should have zero solar gain
@@ -1349,6 +1437,7 @@ mod tests {
             &light_shares,
         &mut rng,
         100,
+            &mut EnergyLedger::new(),
         );
 
         assert!(
@@ -1431,6 +1520,7 @@ mod tests {
             &vec![0.0; agents.len()],
         &mut rng,
         100,
+            &mut EnergyLedger::new(),
         );
 
         // Agent 0 should have consumed (gain > 0)
@@ -1522,6 +1612,7 @@ mod tests {
             &vec![0.0; agents.len()],
             &mut rng,
             100,
+            &mut EnergyLedger::new(),
         );
 
         // One offspring should be created
@@ -1618,6 +1709,7 @@ mod tests {
             &vec![0.0; agents.len()],
             &mut rng,
             100,
+            &mut EnergyLedger::new(),
         );
 
         assert_eq!(result.offspring.len(), 1);
@@ -1634,6 +1726,311 @@ mod tests {
             (result.dissipated_energy - 9.2).abs() < 1e-5,
             "dissipated: {}",
             result.dissipated_energy
+        );
+    }
+
+    #[test]
+    fn ledger_records_consumption_flows() {
+        let agents = vec![
+            Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 50.0,
+                traits: TraitVector {
+                    consumption_rate: 2.0,
+                    ..zero_traits()
+                },
+            },
+            Agent {
+                id: 1,
+                position: (3.0, 0.0),
+                energy: 50.0,
+                traits: zero_traits(),
+            },
+        ];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+        };
+
+        let order = vec![0, 1];
+        let pre_tick_energies = vec![50.0, 50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut ledger = EnergyLedger::new();
+
+        let _result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &[],
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &vec![0.0; agents.len()],
+            &mut rng,
+            100,
+            &mut ledger,
+        );
+
+        // drain = 2.0, gain = 2.0 * 0.5 = 1.0, dissipated = 2.0 * 0.5 = 1.0
+        // Ledger should have: Agent(1) -> Agent(0) = 1.0, Agent(1) -> Dissipation = 1.0
+        let consumer_received = ledger.net_received(&EnergyEndpoint::Agent(0));
+        assert!(
+            (consumer_received - 1.0).abs() < 1e-5,
+            "consumer should receive 1.0 via ledger, got {}",
+            consumer_received
+        );
+        let target_sent = ledger.net_sent(&EnergyEndpoint::Agent(1));
+        assert!(
+            (target_sent - 2.0).abs() < 1e-5,
+            "target should send 2.0 via ledger, got {}",
+            target_sent
+        );
+        let dissipated = ledger.total_dissipated();
+        assert!(
+            (dissipated - 1.0).abs() < 1e-5,
+            "dissipated via ledger: {}",
+            dissipated
+        );
+    }
+
+    #[test]
+    fn ledger_records_decomposition_flows() {
+        let agents = vec![Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                scavenging_rate: 4.0,
+                ..zero_traits()
+            },
+        }];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        agent_grid.insert(0, agents[0].position);
+
+        let carcasses = vec![Carcass {
+            id: 99,
+            position: (2.0, 0.0),
+            energy: 10.0,
+        }];
+        let mut carcass_grid = SpatialGrid::new(extent, cell_size);
+        carcass_grid.insert(0, carcasses[0].position);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.8,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+        };
+
+        let order = vec![0];
+        let pre_tick_energies = vec![50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut ledger = EnergyLedger::new();
+
+        let _result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &carcasses,
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &vec![0.0; agents.len()],
+            &mut rng,
+            100,
+            &mut ledger,
+        );
+
+        // drain = 4.0, gain = 4.0 * 0.8 = 3.2, dissipated = 4.0 * 0.2 = 0.8
+        let agent_received = ledger.net_received(&EnergyEndpoint::Agent(0));
+        assert!(
+            (agent_received - 3.2).abs() < 1e-5,
+            "decomposer should receive 3.2, got {}",
+            agent_received
+        );
+        let carcass_sent = ledger.net_sent(&EnergyEndpoint::Carcass(99));
+        assert!(
+            (carcass_sent - 4.0).abs() < 1e-5,
+            "carcass should send 4.0, got {}",
+            carcass_sent
+        );
+    }
+
+    #[test]
+    fn ledger_records_solar_flows() {
+        let agents = vec![Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 1.0,
+                mobility: 0.0,
+                ..zero_traits()
+            },
+        }];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        agent_grid.insert(0, agents[0].position);
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+        };
+
+        let order = vec![0];
+        let pre_tick_energies = vec![50.0];
+        let light_shares = vec![1.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut ledger = EnergyLedger::new();
+
+        let _result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &[],
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &light_shares,
+            &mut rng,
+            100,
+            &mut ledger,
+        );
+
+        let solar = ledger.total_solar_input();
+        let gate = 1.0 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
+        let expected = 1.0 * 10.0 * gate * 1.0;
+        assert!(
+            (solar - expected).abs() < 1e-4,
+            "solar input via ledger: {}, expected: {}",
+            solar, expected
+        );
+    }
+
+    #[test]
+    fn ledger_records_reproduction_flows() {
+        let shared_traits = TraitVector {
+            mobility: 1.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        let agents = vec![
+            Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 50.0,
+                traits: shared_traits,
+            },
+            Agent {
+                id: 1,
+                position: (2.0, 0.0),
+                energy: 50.0,
+                traits: shared_traits,
+            },
+        ];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 10.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+        };
+
+        let order = vec![0, 1];
+        let pre_tick_energies = vec![50.0, 50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut ledger = EnergyLedger::new();
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &[],
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &vec![0.0; agents.len()],
+            &mut rng,
+            100,
+            &mut ledger,
+        );
+
+        assert_eq!(result.offspring.len(), 1);
+        let offspring_id = result.offspring[0].id;
+
+        // Each parent invests 10.0, offspring gets (10+10)*0.7=14.0, dissipated=(10+10)*0.3=6.0
+        let offspring_received = ledger.net_received(&EnergyEndpoint::Agent(offspring_id));
+        assert!(
+            (offspring_received - 14.0).abs() < 1e-5,
+            "offspring should receive 14.0, got {}",
+            offspring_received
+        );
+        let dissipated = ledger.total_dissipated();
+        assert!(
+            (dissipated - 6.0).abs() < 1e-5,
+            "reproduction dissipation: {}, expected 6.0",
+            dissipated
         );
     }
 }
