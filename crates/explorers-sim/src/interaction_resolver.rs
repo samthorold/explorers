@@ -693,6 +693,7 @@ pub fn resolve_interactions(
                 position: agents[i].position,
                 energy: offspring_energy,
                 traits: child_traits,
+                contact_time: 0,
             });
         }
     }
@@ -746,13 +747,15 @@ mod tests {
                     consumption_rate: 2.0,
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
             Agent {
                 id: 1,
                 position: (3.0, 0.0),
                 energy: 50.0,
                 traits: zero_traits(),
-            },
+                            contact_time: 0,
+},
         ];
 
         let extent = 100.0;
@@ -839,13 +842,15 @@ mod tests {
                     consumption_rate: 20.0,
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
             Agent {
                 id: 11,
                 position: (1.0, 0.0),
                 energy: 5.0,
                 traits: zero_traits(),
-            },
+                            contact_time: 0,
+},
         ];
 
         let extent = 100.0;
@@ -945,7 +950,8 @@ mod tests {
                 scavenging_rate: 4.0,
                 ..zero_traits()
             },
-        }];
+                    contact_time: 0,
+}];
 
         let extent = 100.0;
         let cell_size = 5.0;
@@ -1031,7 +1037,8 @@ mod tests {
                 scavenging_rate: 15.0,
                 ..zero_traits()
             },
-        }];
+                    contact_time: 0,
+}];
 
         let extent = 100.0;
         let cell_size = 5.0;
@@ -1127,7 +1134,8 @@ mod tests {
                     mobility: 0.0, // low mobility => gate ~1.0
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
             Agent {
                 id: 1,
                 position: (10.0, 10.0),
@@ -1137,7 +1145,8 @@ mod tests {
                     mobility: 0.0,
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
         ];
 
         let extent = 100.0;
@@ -1219,7 +1228,8 @@ mod tests {
                     mobility: 0.0, // low mobility
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
             Agent {
                 id: 1,
                 position: (50.0, 50.0),
@@ -1229,7 +1239,8 @@ mod tests {
                     mobility: 0.8, // high mobility
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
         ];
 
         let extent = 100.0;
@@ -1313,13 +1324,15 @@ mod tests {
                     mobility: 0.0,
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
             Agent {
                 id: 1,
                 position: (3.0, 0.0),
                 energy: 50.0,
                 traits: zero_traits(),
-            },
+                            contact_time: 0,
+},
         ];
 
         let extent = 100.0;
@@ -1390,7 +1403,8 @@ mod tests {
                 mobility: 0.0,
                 ..zero_traits()
             },
-        }];
+                    contact_time: 0,
+}];
 
         let extent = 100.0;
         let cell_size = 5.0;
@@ -1465,13 +1479,15 @@ mod tests {
                     scavenging_rate: 4.0,
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
             Agent {
                 id: 1,
                 position: (1.0, 0.0),
                 energy: 50.0,
                 traits: zero_traits(),
-            },
+                            contact_time: 0,
+},
         ];
 
         let extent = 100.0;
@@ -1565,13 +1581,15 @@ mod tests {
                 position: (0.0, 0.0),
                 energy: 50.0,
                 traits: shared_traits,
-            },
+                            contact_time: 0,
+},
             Agent {
                 id: 1,
                 position: (2.0, 0.0),
                 energy: 50.0,
                 traits: shared_traits,
-            },
+                            contact_time: 0,
+},
         ];
 
         let extent = 100.0;
@@ -1657,7 +1675,8 @@ mod tests {
                     reproductive_investment: 15.0,
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
             Agent {
                 id: 1,
                 position: (2.0, 0.0),
@@ -1668,7 +1687,8 @@ mod tests {
                     reproductive_investment: 8.0,
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
         ];
 
         let extent = 100.0;
@@ -1740,13 +1760,15 @@ mod tests {
                     consumption_rate: 2.0,
                     ..zero_traits()
                 },
-            },
+                            contact_time: 0,
+},
             Agent {
                 id: 1,
                 position: (3.0, 0.0),
                 energy: 50.0,
                 traits: zero_traits(),
-            },
+                            contact_time: 0,
+},
         ];
 
         let extent = 100.0;
@@ -1823,7 +1845,8 @@ mod tests {
                 scavenging_rate: 4.0,
                 ..zero_traits()
             },
-        }];
+                    contact_time: 0,
+}];
 
         let extent = 100.0;
         let cell_size = 5.0;
@@ -1898,7 +1921,8 @@ mod tests {
                 mobility: 0.0,
                 ..zero_traits()
             },
-        }];
+                    contact_time: 0,
+}];
 
         let extent = 100.0;
         let cell_size = 5.0;
@@ -1965,13 +1989,15 @@ mod tests {
                 position: (0.0, 0.0),
                 energy: 50.0,
                 traits: shared_traits,
-            },
+                            contact_time: 0,
+},
             Agent {
                 id: 1,
                 position: (2.0, 0.0),
                 energy: 50.0,
                 traits: shared_traits,
-            },
+                            contact_time: 0,
+},
         ];
 
         let extent = 100.0;

@@ -662,9 +662,17 @@ fn update_hud(
     let tps = 1.0 / time.timestep().as_secs_f64();
     let paused = virtual_time.is_paused();
 
+    let avg_contact_time = if total > 0 {
+        agents.iter().map(|a| a.contact_time as f64).sum::<f64>() / total as f64
+    } else {
+        0.0
+    };
+    let max_contact_time = agents.iter().map(|a| a.contact_time).max().unwrap_or(0);
+
     let mut hud = String::new();
     let _ = write!(hud, "Tick {}", tick_count.0);
     let _ = write!(hud, " | {total} agents ({producers} P / {consumers} C / {decomposers} D)");
+    let _ = write!(hud, " | contact time avg {avg_contact_time:.0} max {max_contact_time}");
     let _ = write!(hud, " | {tps:.0} tps");
     if paused {
         let _ = write!(hud, " | PAUSED");
