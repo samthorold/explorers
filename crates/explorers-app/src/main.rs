@@ -193,8 +193,8 @@ mod tests {
         let color = trophic_color(&traits, 100.0);
         let rgba = color.to_srgba();
         assert!(rgba.green > 0.9, "green channel should be high, got {}", rgba.green);
-        assert!(rgba.red < 0.1, "red channel should be low, got {}", rgba.red);
-        assert!(rgba.blue < 0.1, "blue channel should be low, got {}", rgba.blue);
+        assert!(rgba.red < 0.2, "red channel should be low, got {}", rgba.red);
+        assert!(rgba.blue < 0.2, "blue channel should be low, got {}", rgba.blue);
     }
 
     #[test]
@@ -213,8 +213,8 @@ mod tests {
         let color = trophic_color(&traits, 100.0);
         let rgba = color.to_srgba();
         assert!(rgba.red > 0.9, "red channel should be high, got {}", rgba.red);
-        assert!(rgba.green < 0.1, "green channel should be low, got {}", rgba.green);
-        assert!(rgba.blue < 0.1, "blue channel should be low, got {}", rgba.blue);
+        assert!(rgba.green < 0.2, "green channel should be low, got {}", rgba.green);
+        assert!(rgba.blue < 0.2, "blue channel should be low, got {}", rgba.blue);
     }
 
     #[test]
@@ -233,8 +233,8 @@ mod tests {
         let color = trophic_color(&traits, 100.0);
         let rgba = color.to_srgba();
         assert!(rgba.blue > 0.9, "blue channel should be high, got {}", rgba.blue);
-        assert!(rgba.red < 0.1, "red channel should be low, got {}", rgba.red);
-        assert!(rgba.green < 0.1, "green channel should be low, got {}", rgba.green);
+        assert!(rgba.red < 0.2, "red channel should be low, got {}", rgba.red);
+        assert!(rgba.green < 0.2, "green channel should be low, got {}", rgba.green);
     }
 
     #[test]
@@ -309,10 +309,10 @@ mod tests {
     }
 
     #[test]
-    fn default_timestep_is_100ms() {
+    fn default_timestep_is_1s() {
         let app = make_app();
         let timestep = app.world().resource::<Time<Fixed>>().timestep();
-        assert_eq!(timestep, Duration::from_millis(100));
+        assert_eq!(timestep, Duration::from_millis(1000));
     }
 
     #[test]
@@ -320,7 +320,7 @@ mod tests {
         let mut app = make_app();
         press_key(&mut app, KeyCode::ArrowUp);
         app.update();
-        assert_eq!(timestep_secs(&app), 0.05);
+        assert_eq!(timestep_secs(&app), 0.5);
     }
 
     #[test]
@@ -328,7 +328,7 @@ mod tests {
         let mut app = make_app();
         press_key(&mut app, KeyCode::ArrowDown);
         app.update();
-        assert_eq!(timestep_secs(&app), 0.2);
+        assert_eq!(timestep_secs(&app), 2.0);
     }
 
     #[test]
@@ -670,19 +670,20 @@ fn reconcile_entities(
 }
 
 fn trophic_color(traits: &TraitVector, energy: f32) -> Color {
-    let brightness = (energy.max(0.0) / 100.0).clamp(0.3, 1.0);
+    let brightness = (energy.max(0.0) / 100.0).clamp(0.5, 1.0);
     let total = traits.photosynthetic_absorption + traits.consumption_rate + traits.scavenging_rate;
     if total <= 0.0 {
-        return Color::srgb(0.5 * brightness, 0.5 * brightness, 0.5 * brightness);
+        return Color::srgb(0.8 * brightness, 0.8 * brightness, 0.8 * brightness);
     }
-    Color::srgb(
-        (traits.consumption_rate / total) * brightness,
-        (traits.photosynthetic_absorption / total) * brightness,
-        (traits.scavenging_rate / total) * brightness,
-    )
+    // Base color from dominant trophic trait, with a minimum per-channel floor
+    let r = (traits.consumption_rate / total) * brightness;
+    let g = (traits.photosynthetic_absorption / total) * brightness;
+    let b = (traits.scavenging_rate / total) * brightness;
+    // Ensure minimum visibility: add a small baseline so agents are never invisible
+    Color::srgb(r.max(0.15), g.max(0.15), b.max(0.15))
 }
 
-const AGENT_RADIUS: f32 = 1.5;
+const AGENT_RADIUS: f32 = 3.0;
 
 #[derive(Debug, PartialEq)]
 struct EnergyBudget {
@@ -729,7 +730,7 @@ fn dominant_role(traits: &TraitVector) -> &'static str {
 }
 
 fn configure_timestep(mut time: ResMut<Time<Fixed>>) {
-    time.set_timestep(Duration::from_millis(100));
+    time.set_timestep(Duration::from_millis(1000));
 }
 
 fn tick_rate_control(
