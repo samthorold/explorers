@@ -28,7 +28,15 @@ Multiple clusters persist simultaneously over extended periods. No single strate
 
 ### Demographic turnover
 
-Agents are born and die at non-trivial rates. The system is not frozen — new agents enter the population, old agents exit, and the composition of the population changes over time. Turnover is what allows adaptation: new trait combinations are tested through reproduction, and unsuccessful ones are removed through death.
+Agents are born and die at non-trivial rates. The system is not frozen — new agents enter the population, old agents exit, and the composition of the population changes over time. Turnover is what allows adaptation: new trait combinations are tested through reproduction, and unsuccessful ones are removed through death. Death occurs through both extrinsic causes (predation, starvation from competition) and intrinsic causes (somatic wear degrading functional capabilities until the agent can no longer sustain itself). The combination of these mortality sources ensures that no agent persists indefinitely — even in the absence of predation, wear makes eventual death inevitable for agents that invest less in somatic maintenance than the rate of degradation.
+
+### Age structure and survivorship variation
+
+Populations exhibit age distributions, not uniformly young or uniformly old cohorts. Different strategies produce different survivorship patterns: high-fecundity strategies produce many short-lived offspring with high juvenile mortality (most die young, a few survive to reproduce). Low-fecundity strategies produce few long-lived offspring with low juvenile mortality but eventual senescent decline. These patterns emerge from the interaction between fecundity (how much energy each offspring receives), somatic maintenance investment (how fast the agent ages), and extrinsic mortality (predation and competition). The coexistence of different survivorship strategies within the same world is a sign of healthy niche differentiation — r-strategists and K-strategists exploiting different environmental contexts.
+
+### Reproductive mode variation
+
+Both sexual and asexual reproduction occur, with the balance depending on population density and environmental context. In dense populations with coevolutionary pressure, sexual reproduction dominates because the variation it generates is competitively valuable. In sparse populations or for colonisers of empty habitat, asexual reproduction dominates because mate-finding is impossible or too costly. The system does not prescribe which mode wins — the balance shifts dynamically as population density, spatial structure, and selective pressure change.
 
 ### Energy throughput
 
@@ -75,6 +83,8 @@ Agents that invest in all acquisition strategies simultaneously outcompete speci
 | Trait-space clustering | Generalist dominance or monoculture |
 | Coexistence | Monoculture |
 | Demographic turnover | Frozen dynamics or extinction |
+| Age structure and survivorship variation | Immortal agents (no wear) or uniform lifespan (no variation in somatic maintenance) |
+| Reproductive mode variation | Obligate sexuality preventing colonisation, or obligate asexuality preventing adaptation |
 | Energy throughput | Energy death or frozen dynamics |
 | Energy conservation | Implementation bug (not a calibration issue) |
 
