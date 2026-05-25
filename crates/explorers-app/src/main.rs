@@ -670,11 +670,15 @@ fn reconcile_entities(
 }
 
 fn trophic_color(traits: &TraitVector, energy: f32) -> Color {
-    let brightness = (energy.max(0.0) / 100.0).clamp(0.2, 1.0);
+    let brightness = (energy.max(0.0) / 100.0).clamp(0.3, 1.0);
+    let total = traits.photosynthetic_absorption + traits.consumption_rate + traits.scavenging_rate;
+    if total <= 0.0 {
+        return Color::srgb(0.5 * brightness, 0.5 * brightness, 0.5 * brightness);
+    }
     Color::srgb(
-        traits.consumption_rate.clamp(0.0, 1.0) * brightness,
-        traits.photosynthetic_absorption.clamp(0.0, 1.0) * brightness,
-        traits.scavenging_rate.clamp(0.0, 1.0) * brightness,
+        (traits.consumption_rate / total) * brightness,
+        (traits.photosynthetic_absorption / total) * brightness,
+        (traits.scavenging_rate / total) * brightness,
     )
 }
 

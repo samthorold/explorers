@@ -766,8 +766,12 @@ impl World {
             return;
         }
         // Compute total demand from all agents
+        // Uptake saturates with contact time: absorption * ct / (ct + k)
+        // Half-saturation at k=50 ticks — diminishing returns on long residence
+        let k = 50.0_f32;
         let demands: Vec<f32> = self.agents.iter().map(|a| {
-            a.traits.nutrient_absorption * (a.contact_time as f32)
+            let ct = a.contact_time as f32;
+            a.traits.nutrient_absorption * ct / (ct + k)
         }).collect();
         let total_demand: f32 = demands.iter().sum();
         if total_demand <= 0.0 {
