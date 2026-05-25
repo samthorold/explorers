@@ -15,7 +15,7 @@ Energy flows through the system in one direction: from source to sink. It does n
 | Stock | Type | Description |
 |---|---|---|
 | **Solar flux** | Source (inexhaustible) | Energy enters the system here. The flux is constant — the same amount of energy is available every tick. All temporal variation in the system is endogenous. |
-| **Living agents** | Internal | Energy held by living organisms. Every living agent carries an energy balance that increases through acquisition and decreases through costs. |
+| **Living agents** | Internal | Energy held by living organisms. Every living agent carries an energy balance that increases through acquisition and decreases through costs. Living agents also accumulate somatic wear — see below. |
 | **Carcasses** | Internal | Energy held by dead organisms. When an agent dies, its remaining energy becomes a carcass at the same location on the surface. Carcasses hold energy indefinitely — there is no passive decay. |
 | **Heat** | Sink (inexhaustible) | Energy leaves the system here, permanently. Every lossy process — metabolism, trophic transfer, reproduction inefficiency — sends energy to this sink. It does not return. |
 
@@ -70,6 +70,22 @@ Carcasses do not lose energy or nutrients on their own. Decomposition is always 
 
 This is not a fragility to be patched with a safety valve. In real ecosystems, what appears to be passive decay is always decomposition by organisms at a finer resolution — bacteria, fungi, invertebrates. The principle is: **all resource transformation requires an agent**.
 
+### Somatic wear
+
+Living agents degrade over time. Every functional capability — photosynthetic apparatus, locomotion machinery, sensory organs, digestive systems — accumulates wear through use and through the baseline cost of maintaining complex machinery. This is the disposable soma principle (Kirkwood 1977): an organism could theoretically maintain its body indefinitely, but the energy required for perfect repair is energy unavailable for reproduction. The body is disposable because investing in immortality is a losing strategy when extrinsic mortality exists.
+
+Wear accumulates per functional trait, not as a single aggregate. An agent that photosynthesizes heavily wears out its photosynthetic apparatus faster than an agent in shade. An agent that sprints wears out its locomotion faster than a sessile one. Each trait wears at a rate determined by two components: a baseline proportional to the trait's magnitude (complex machinery degrades even when idle) and an additional component proportional to the trait's actual metabolic throughput this tick (active use produces damaging byproducts — the oxidative damage model).
+
+Wear reduces trait effectiveness. The mapping is exponential: a small amount of wear barely affects output (biological systems have redundancy and over-provisioning), but wear compounds — later increments are increasingly catastrophic. An aging producer captures less light. An aging consumer catches prey less efficiently. An aging agent senses less, moves slower, processes food less effectively.
+
+Agents invest in somatic maintenance to counteract wear. The level of investment is a heritable trait — some lineages evolve high repair investment (long-lived, slow-reproducing), others evolve low repair (short-lived, fast-reproducing). Somatic maintenance is a whole-organism investment: an agent does not selectively repair one organ while neglecting another. The energy cost of maintenance competes directly with the energy cost of reproduction — this is the core trade-off that Kirkwood identified.
+
+Behavioural traits — mate selectivity, reproductive investment, fecundity — do not wear. They are allocation parameters, not physical machinery. An old organism is less capable, not less decisive.
+
+Identity-determining thresholds use an agent's nominal (unworn) traits. An agent born mobile is ecologically mobile for its entire life, even as its effective mobility degrades with age. Wear degrades performance, not identity. An aging wolf does not become a plant.
+
+**Offspring are born with zero wear.** This is the evolutionary rationale for reproduction: it resets the soma. The germline is maintained at higher fidelity than the soma. A parent's worn-out body produces a brand-new body. The information (heritable traits) persists in pristine hardware (the offspring). This asymmetry between germline and soma is what makes the disposable soma trade-off coherent — repair your body, or build a new one.
+
 ## Flows
 
 Eight flows move energy and nutrients between stocks. Each flow is a rate — resources per tick — and each is subject to constraints described below. Energy and nutrients travel together through most flows (an agent that eats another agent acquires both energy and nutrients), but they have different fates: energy is progressively dissipated to heat, while nutrients cycle back through decomposition.
@@ -84,13 +100,25 @@ Eight flows move energy and nutrients between stocks. Each flow is a rate — re
 
 **3. Consumption.** Living agent → Living agent. A consumer drains energy and nutrients from a living target through sustained physical contact. The transfer is lossy — only a fraction of the drained energy reaches the consumer; the remainder dissipates to heat (flow 8). Nutrients transfer with higher efficiency than energy but may not match the consumer's stoichiometric demand — excess nutrients are excreted back to the substrate, and the limiting nutrient constrains how much of the consumed material the consumer can actually use. Consumption is non-lethal by default; the target survives unless its energy reaches zero.
 
-**4. Reproduction.** Living agent → Living agent. Parents invest energy and nutrients to create offspring. The offspring receives a fraction of the invested resources; the energy remainder dissipates to heat (flow 8). Both parents survive. Offspring traits are derived from parental traits with variation.
+**4. Reproduction.** Living agent → Living agent. Parents invest energy and nutrients to create offspring. The energy transfer is lossy — a fraction dissipates to heat (flow 8). Both parents survive. Reproduction has two modes, variable fecundity, and spatial dispersal of offspring.
+
+**Sexual reproduction** is the primary mode. Two compatible agents within reproductive range each invest energy. Offspring traits are derived from both parents through crossover (each trait dimension drawn randomly from one parent) with heritable mutation. Compatibility is determined by trait-space distance — agents with similar traits are more likely to mate. This makes reproductive isolation an emergent property of trait divergence.
+
+**Asexual reproduction** is a universal fallback. When an agent has sufficient energy to reproduce but no compatible mate is available, it can reproduce alone. Offspring traits are the parent's traits plus mutation — no crossover, because there is no second parent. The costs of asexual reproduction are inherent: lower offspring variation (no recombination) and a single parent's energy contribution (less total investment per offspring). These costs create selection pressure: in dense populations where mates are available, sexual reproduction is advantageous because it generates more combinatorial diversity. In sparse populations or for isolated colonizers, asexual reproduction is the only option. Whether a lineage relies primarily on sexual or asexual reproduction is not prescribed — it is an emergent outcome of population density, mate availability, and the fitness value of variation in a given environment.
+
+**Fecundity** — the number of offspring per reproductive event — is a heritable trait. A fixed total energy budget is invested per event; fecundity determines how many offspring share that budget. High fecundity produces many poorly-provisioned offspring (r-strategy). Low fecundity produces few well-provisioned offspring (K-strategy). The actual offspring count for a given event is stochastic — drawn from a Poisson distribution with mean equal to the fecundity trait. This stochasticity means reproductive failure (zero offspring despite energy investment) is possible. The energy cost of reproduction is committed before the outcome is determined — failed reproduction is costly, as it is in nature.
+
+For sexual reproduction, the effective fecundity is the average of the two parents' fecundity traits. Because fecundity is part of the trait vector, it contributes to trait-space distance and therefore to mate compatibility — agents with very different reproductive strategies are less likely to mate. This creates reproductive isolation along the r/K axis without any special mechanism.
+
+**Offspring dispersal** follows a Gaussian kernel centred on the parent's position. Most offspring land nearby; a tail of long-distance dispersers enables colonisation of distant habitat. The dispersal radius is scaled by the parent's reproductive range — wide for sessile agents (spore/seed dispersal) and narrow for mobile agents (who can disperse under their own locomotion after birth). Each offspring in a clutch is placed independently, so siblings from the same event scatter across the dispersal range.
 
 **5. Network redistribution.** Living agent ↔ Living agent. Energy and nutrients move between living agents through network connections (see Topologies below). This flow is cooperative, not adversarial — it is distinct from consumption. It is bidirectional: resources can flow in either direction through a connection, governed by the states of the connected agents. This is the mechanism by which mutualistic relationships become possible. Like all transfers, the energy component is lossy (flow 8).
 
 ### Flows from living to dead
 
 **6. Death.** Living agent → Carcass. When a living agent's energy reaches zero, it becomes a carcass. All remaining energy and nutrients transfer to the carcass at the agent's location on the surface. The nutrient ratio of the carcass reflects the ratio of the agent that died.
+
+Death has two proximate causes. **Extrinsic mortality** — predation drains energy below zero, or starvation when metabolic costs exceed energy income. **Intrinsic mortality** — somatic wear degrades functional traits until the agent can no longer acquire enough energy to cover its metabolic costs. In practice these compound: an aging agent with degraded photosynthetic capacity that was previously viable becomes energy-negative when a competitor shades it, or an aging consumer whose effective consumption rate has declined can no longer catch sufficient prey. Somatic wear makes death inevitable on a long enough timeline — even in the absence of predation or competition, an agent that invests less in somatic maintenance than the rate of wear accumulation will eventually degrade to the point of energy bankruptcy.
 
 ### Flows from dead to living
 
@@ -100,9 +128,10 @@ Eight flows move energy and nutrients between stocks. Each flow is a rate — re
 
 **8. Trophic transfer loss.** Accompanies flows 3, 4, 5, and 7. At every energy transfer between agents, a fraction is lost to heat. This is not a separate event — it is the inefficiency inherent in every transfer. It is what makes trophic pyramids inevitable: each level of transfer dissipates energy, so less is available at each successive level. Nutrients are not lost to heat — they are either incorporated into the receiving agent or returned to the substrate.
 
-**9. Metabolism.** Living agent → Heat + Substrate. Every living agent pays a continuous energy cost simply to exist. This cost has two components:
+**9. Metabolism.** Living agent → Heat + Substrate. Every living agent pays a continuous energy cost simply to exist. This cost has three components:
 - A base rate — the minimum cost of being alive, independent of traits or activity.
 - Trait-dependent costs — each energy-acquisition capability (photosynthesis, consumption, decomposition) costs energy to maintain whether or not it is currently in use. Sensing and movement also cost energy. These costs are the mechanism behind the specialist-generalist trade-off: an agent investing in multiple capabilities pays overhead for all of them.
+- Somatic maintenance — the energy cost of repairing accumulated wear. Higher investment in somatic maintenance slows aging but competes directly with the energy available for reproduction and growth. This is the mechanism behind the reproduce-vs-survive trade-off.
 
 Metabolism dissipates energy to heat. It also releases nutrients back to the substrate as metabolic waste — the rate depending on the agent's stoichiometric balance and metabolic activity.
 
@@ -171,20 +200,22 @@ This distinction is a law of physics, not a strategy choice. No amount of trait 
 
 ## Cost structure (trade-offs)
 
-The cost structure is what prevents any agent from being good at everything. It is not a rule imposed on agents — it is an emergent consequence of the fact that capabilities cost energy to maintain and that nutrient requirements constrain what agents can efficiently process. Seven fundamental trade-offs arise from this cost structure:
+The cost structure is what prevents any agent from being good at everything. It is not a rule imposed on agents — it is an emergent consequence of the fact that capabilities cost energy to maintain and that nutrient requirements constrain what agents can efficiently process. Eight fundamental trade-offs arise from this cost structure:
 
 **1. Acquire vs. maintain.** Every energy-acquisition capability costs energy to maintain whether or not it is currently in use. More capability means more overhead.
 
 **2. Sessile vs. mobile.** Sessile and mobile strategies face fundamentally different energy budgets and interaction constraints. The ecology establishes this as a universal property: photosynthesis requires being stationary; consumption requires being mobile (or at least requires prey to come to you). This is the most fundamental differentiation in the system.
 
-**3. Reproduce vs. survive.** Energy invested in offspring is energy not available for self-maintenance. Reproduction is a cost to the parent.
+**3. Reproduce vs. survive.** Energy invested in offspring is energy not available for self-maintenance. Energy invested in somatic maintenance (slowing wear) is energy not available for reproduction. This is the disposable soma trade-off: build a new body or repair the current one. Both achieve the same goal — keeping a lineage alive — through different strategies. High somatic maintenance investment produces long-lived agents that reproduce infrequently. Low investment produces short-lived agents that reproduce early and often. The optimal position on this continuum depends on the extrinsic mortality rate: when predation is high, investing in longevity is wasteful because the agent is likely to be eaten before aging matters.
 
-**4. Few quality vs. many fragile offspring.** A fixed reproductive energy budget can produce few well-provisioned offspring (K-strategy) or many poorly-provisioned offspring (r-strategy). Neither dominates — their relative success depends on environmental context.
+**4. Few quality vs. many fragile offspring.** A fixed reproductive energy budget can produce few well-provisioned offspring (K-strategy) or many poorly-provisioned offspring (r-strategy). Fecundity determines how many offspring share the budget. High-fecundity offspring start with less energy and are closer to metabolic death — they must establish an energy income quickly or die. Low-fecundity offspring start with more energy and can weather adverse conditions. Neither strategy dominates — their relative success depends on environmental context. In stable, competitive environments, few well-provisioned offspring outcompete many fragile ones. In disturbed or empty environments, many fragile offspring colonise faster.
 
 **5. Specialist vs. generalist.** Investing in one acquisition strategy costs less overhead than investing in multiple. Specialists pay less and outcompete generalists within their niche; generalists pay more overhead but can exploit multiple niches. The cost structure penalises breadth.
 
 **6. Sense vs. save.** Wider sensing range enables better decisions but costs energy. Agents must balance the value of information against its metabolic price.
 
 **7. Stoichiometric constraint.** Agents need nutrients in specific ratios determined by their traits. Food sources rarely match those ratios. An agent consuming nutrient-poor food must process more material to extract the limiting nutrient, excreting excess of the non-limiting nutrients. This mismatch imposes a real cost: consumption rate is constrained not just by energy but by the least-available nutrient. Stoichiometric mismatch is an additional mechanism that penalises generalism — an agent that eats everything faces variable nutrient ratios, while a specialist can optimise for the stoichiometry of its preferred food source.
+
+**8. Sexual vs. asexual reproduction.** Sexual reproduction produces more diverse offspring (crossover recombines two parents' traits) but requires a compatible mate — a cost in mate-finding, energy, and the constraint that both parents must be present. Asexual reproduction requires no mate but produces less diverse offspring (parent traits plus mutation only). In dense populations with coevolutionary pressure (predator-prey arms races, competition), variation is valuable and sexual reproduction is favoured. In sparse populations or stable environments, the mate-finding cost outweighs the variation benefit and asexual reproduction is favoured. Which strategy a lineage relies on is emergent, not prescribed.
 
 These trade-offs are the differentiation engine. They do not prescribe what roles emerge — they create the selection pressure that makes role differentiation advantageous.
