@@ -72,7 +72,7 @@ Agents survive but nothing changes. Populations sit at fixed values, no new stra
 
 ### Generalist dominance
 
-Agents that invest in all acquisition strategies simultaneously outcompete specialists. Diversity collapses from above — not because one specialist wins, but because a jack-of-all-trades beats every specialist in their own niche. This occurs when trait maintenance costs are too low, so the overhead of breadth does not outweigh the benefit of flexibility.
+Agents that invest in all acquisition strategies simultaneously outcompete specialists. Diversity collapses from above — not because one specialist wins, but because a jack-of-all-trades beats every specialist in their own niche. The trait budget constraint (L1, sum to 1.0) makes this structurally impossible at the trait level — an agent spreading its budget across all capabilities has lower peak performance in each than a specialist. If generalist dominance is observed despite the budget, the cause is in the cost structure (maintenance costs too low to penalize breadth) or the environment (insufficient niche differentiation in the substrate).
 
 ## Relationship between properties and failure modes
 
@@ -124,5 +124,3 @@ The world rules describe the physics. The expected properties describe what a he
 ### Open questions
 
 **Terrain properties.** The substrate has properties beyond nutrient content — candidates include elevation/topography, accessibility modifiers, light variation, and moisture. Which terrain properties matter and how they affect agent interactions is an open design question.
-
-**Specialization mechanism.** The contact-time mechanism for nutrient uptake creates one axis of producer/consumer specialization (sessile agents extract nutrients efficiently; mobile agents cannot). Whether this, combined with trait maintenance costs, is sufficient to prevent generalist dominance — or whether additional constraints are needed — is an open research question. The ecological ABM literature universally uses some form of constraint beyond linear per-trait costs (geometric budget constraints, superlinear maintenance costs, or hard gates) to ensure specialization.
