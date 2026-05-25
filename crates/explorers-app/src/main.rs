@@ -151,7 +151,7 @@ fn main() {
         .init_resource::<DebugPanelOpen>()
         .add_systems(Startup, (setup_camera, setup_meshes, setup_grid, configure_timestep))
         .add_systems(FixedUpdate, (step_simulation, reconcile_entities).chain())
-        .add_systems(Update, (tick_rate_control, click_to_inspect, debug_panel_ui).chain())
+        .add_systems(Update, (tick_rate_control, debug_panel_ui, click_to_inspect).chain())
         .run();
 }
 
