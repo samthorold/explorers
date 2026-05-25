@@ -169,6 +169,28 @@ pub struct Carcass {
     pub energy: f32,
 }
 
+pub struct NearbyAgent {
+    pub id: u64,
+    pub distance: f32,
+    pub energy: f32,
+    pub traits: TraitVector,
+}
+
+pub struct NearbyCarcass {
+    pub id: u64,
+    pub distance: f32,
+    pub energy: f32,
+}
+
+pub struct ProjectionData {
+    pub feeding_gradient: (f32, f32),
+    pub carcass_gradient: (f32, f32),
+    pub nearby_agents: Vec<NearbyAgent>,
+    pub nearby_carcasses: Vec<NearbyCarcass>,
+    pub contact_radius: f32,
+    pub reproduction_energy_threshold: f32,
+}
+
 pub struct Broadcast {
     pub kind: event::EventKind,
     pub source_position: (f32, f32),
@@ -176,6 +198,104 @@ pub struct Broadcast {
     pub strength: f32,
 }
 
+
+impl Agent {
+    pub fn receive(&self, event: &event::Event, data: &ProjectionData) -> event::Response {
+        match &event.kind {
+            event::EventKind::Consumed if self.traits.consumption_rate > 0.0 => {
+                let best = data.nearby_agents.iter()
+                    .filter(|a| a.distance < data.contact_radius && a.energy > 0.0)
+                    .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+
+                if let Some(target) = best {
+                    let drain = self.traits.consumption_rate.min(target.energy.max(0.0));
+                    if drain > 0.0 {
+                        return event::Response {
+                            ack: event::Ack::Ack,
+                            events: vec![event::Event {
+                                tick: event.tick,
+                                seq: 0,
+                                kind: event::EventKind::Consumed,
+                                source: self.id,
+                                target: Some(target.id),
+                                energy_delta: drain,
+                                position: Some(self.position),
+                            }],
+                        };
+                    }
+                }
+                event::Response { ack: event::Ack::Ack, events: vec![] }
+            }
+            event::EventKind::MatingReadiness => {
+                if self.energy <= data.reproduction_energy_threshold {
+                    return event::Response { ack: event::Ack::Ack, events: vec![] };
+                }
+                let self_gate = 1.0 / (1.0 + (20.0_f32 * (self.traits.mobility - 0.3)).exp());
+                let self_radius = self_gate * self.traits.sensing_range
+                    + (1.0 - self_gate) * data.contact_radius;
+
+                let best = data.nearby_agents.iter()
+                    .filter(|mate| {
+                        if mate.energy <= data.reproduction_energy_threshold {
+                            return false;
+                        }
+                        let mate_gate = 1.0
+                            / (1.0 + (20.0_f32 * (mate.traits.mobility - 0.3)).exp());
+                        let mate_radius = mate_gate * mate.traits.sensing_range
+                            + (1.0 - mate_gate) * data.contact_radius;
+                        if mate.distance > self_radius.max(mate_radius) {
+                            return false;
+                        }
+                        let trait_dist = self.traits.distance(&mate.traits);
+                        trait_dist < self.traits.mate_selectivity
+                            && trait_dist < mate.traits.mate_selectivity
+                    })
+                    .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+
+                match best {
+                    Some(mate) => event::Response {
+                        ack: event::Ack::Ack,
+                        events: vec![event::Event {
+                            tick: event.tick,
+                            seq: 0,
+                            kind: event::EventKind::MateSelected,
+                            source: self.id,
+                            target: Some(mate.id),
+                            energy_delta: 0.0,
+                            position: Some(self.position),
+                        }],
+                    },
+                    None => event::Response { ack: event::Ack::Ack, events: vec![] },
+                }
+            }
+            event::EventKind::CarcassCreated if self.traits.scavenging_rate > 0.0 => {
+                let best = data.nearby_carcasses.iter()
+                    .filter(|c| c.distance < data.contact_radius && c.energy > 0.0)
+                    .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+
+                if let Some(target) = best {
+                    let drain = self.traits.scavenging_rate.min(target.energy.max(0.0));
+                    if drain > 0.0 {
+                        return event::Response {
+                            ack: event::Ack::Ack,
+                            events: vec![event::Event {
+                                tick: event.tick,
+                                seq: 0,
+                                kind: event::EventKind::Decomposed,
+                                source: self.id,
+                                target: Some(target.id),
+                                energy_delta: drain,
+                                position: Some(self.position),
+                            }],
+                        };
+                    }
+                }
+                event::Response { ack: event::Ack::Ack, events: vec![] }
+            }
+            _ => event::Response { ack: event::Ack::Ack, events: vec![] },
+        }
+    }
+}
 
 pub struct World {
     params: WorldParameters,
@@ -4023,5 +4143,222 @@ spatial_decay_rate: 0.5,
             observer_broadcasts.is_empty(),
             "agent with sensing_range=0 should not receive broadcasts",
         );
+    }
+
+    #[test]
+    fn receive_consumer_targets_closest_living_agent() {
+        let agent = Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 2.0,
+                ..zero_traits()
+            },
+        };
+        let trigger = event::Event {
+            tick: 0, seq: 0, kind: event::EventKind::Consumed,
+            source: 99, target: Some(100), energy_delta: 5.0,
+            position: Some((1.0, 0.0)),
+        };
+        let data = ProjectionData {
+            feeding_gradient: (0.0, 0.0),
+            carcass_gradient: (0.0, 0.0),
+            nearby_agents: vec![
+                NearbyAgent { id: 10, distance: 4.0, energy: 50.0, traits: zero_traits() },
+                NearbyAgent { id: 20, distance: 2.0, energy: 30.0, traits: zero_traits() },
+            ],
+            nearby_carcasses: vec![],
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+        };
+        let response = agent.receive(&trigger, &data);
+        assert_eq!(response.ack, event::Ack::Ack);
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(response.events[0].kind, event::EventKind::Consumed);
+        assert_eq!(response.events[0].source, 1);
+        assert_eq!(response.events[0].target, Some(20));
+        assert!((response.events[0].energy_delta - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn receive_agent_without_consumption_acks_with_no_events() {
+        let agent = Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: zero_traits(),
+        };
+        let trigger = event::Event {
+            tick: 0, seq: 0, kind: event::EventKind::Consumed,
+            source: 99, target: Some(100), energy_delta: 5.0,
+            position: Some((1.0, 0.0)),
+        };
+        let data = ProjectionData {
+            feeding_gradient: (0.0, 0.0),
+            carcass_gradient: (0.0, 0.0),
+            nearby_agents: vec![
+                NearbyAgent { id: 10, distance: 2.0, energy: 50.0, traits: zero_traits() },
+            ],
+            nearby_carcasses: vec![],
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+        };
+        let response = agent.receive(&trigger, &data);
+        assert_eq!(response.ack, event::Ack::Ack);
+        assert!(response.events.is_empty());
+    }
+
+    #[test]
+    fn receive_scavenger_targets_closest_carcass() {
+        let agent = Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                scavenging_rate: 4.0,
+                ..zero_traits()
+            },
+        };
+        let trigger = event::Event {
+            tick: 0, seq: 0, kind: event::EventKind::CarcassCreated,
+            source: 99, target: None, energy_delta: 20.0,
+            position: Some((2.0, 0.0)),
+        };
+        let data = ProjectionData {
+            feeding_gradient: (0.0, 0.0),
+            carcass_gradient: (0.0, 0.0),
+            nearby_agents: vec![],
+            nearby_carcasses: vec![
+                NearbyCarcass { id: 50, distance: 4.0, energy: 20.0 },
+                NearbyCarcass { id: 51, distance: 1.5, energy: 6.0 },
+            ],
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+        };
+        let response = agent.receive(&trigger, &data);
+        assert_eq!(response.ack, event::Ack::Ack);
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(response.events[0].kind, event::EventKind::Decomposed);
+        assert_eq!(response.events[0].source, 1);
+        assert_eq!(response.events[0].target, Some(51));
+        assert!((response.events[0].energy_delta - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn receive_mating_readiness_selects_compatible_mate() {
+        let agent = Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                mobility: 1.0,
+                mate_selectivity: 5.0,
+                reproductive_investment: 10.0,
+                ..zero_traits()
+            },
+        };
+        let trigger = event::Event {
+            tick: 0, seq: 0, kind: event::EventKind::MatingReadiness,
+            source: 2, target: None, energy_delta: 0.0,
+            position: Some((1.0, 0.0)),
+        };
+        let data = ProjectionData {
+            feeding_gradient: (0.0, 0.0),
+            carcass_gradient: (0.0, 0.0),
+            nearby_agents: vec![
+                NearbyAgent {
+                    id: 2, distance: 2.0, energy: 100.0,
+                    traits: TraitVector {
+                        mobility: 1.0,
+                        mate_selectivity: 5.0,
+                        reproductive_investment: 10.0,
+                        ..zero_traits()
+                    },
+                },
+            ],
+            nearby_carcasses: vec![],
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+        };
+        let response = agent.receive(&trigger, &data);
+        assert_eq!(response.ack, event::Ack::Ack);
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(response.events[0].kind, event::EventKind::MateSelected);
+        assert_eq!(response.events[0].source, 1);
+        assert_eq!(response.events[0].target, Some(2));
+    }
+
+    #[test]
+    fn receive_mating_below_threshold_returns_no_events() {
+        let agent = Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            energy: 30.0,
+            traits: TraitVector {
+                mate_selectivity: 5.0,
+                reproductive_investment: 10.0,
+                ..zero_traits()
+            },
+        };
+        let trigger = event::Event {
+            tick: 0, seq: 0, kind: event::EventKind::MatingReadiness,
+            source: 2, target: None, energy_delta: 0.0,
+            position: Some((1.0, 0.0)),
+        };
+        let data = ProjectionData {
+            feeding_gradient: (0.0, 0.0),
+            carcass_gradient: (0.0, 0.0),
+            nearby_agents: vec![
+                NearbyAgent {
+                    id: 2, distance: 1.0, energy: 100.0,
+                    traits: TraitVector {
+                        mate_selectivity: 5.0,
+                        reproductive_investment: 10.0,
+                        ..zero_traits()
+                    },
+                },
+            ],
+            nearby_carcasses: vec![],
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+        };
+        let response = agent.receive(&trigger, &data);
+        assert_eq!(response.ack, event::Ack::Ack);
+        assert!(response.events.is_empty());
+    }
+
+    #[test]
+    fn receive_irrelevant_event_acks_with_no_events() {
+        let agent = Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 5.0,
+                scavenging_rate: 3.0,
+                ..zero_traits()
+            },
+        };
+        let trigger = event::Event {
+            tick: 0, seq: 0, kind: event::EventKind::Born,
+            source: 99, target: None, energy_delta: 50.0,
+            position: Some((1.0, 0.0)),
+        };
+        let data = ProjectionData {
+            feeding_gradient: (0.0, 0.0),
+            carcass_gradient: (0.0, 0.0),
+            nearby_agents: vec![
+                NearbyAgent { id: 10, distance: 2.0, energy: 50.0, traits: zero_traits() },
+            ],
+            nearby_carcasses: vec![
+                NearbyCarcass { id: 20, distance: 1.0, energy: 30.0 },
+            ],
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+        };
+        let response = agent.receive(&trigger, &data);
+        assert_eq!(response.ack, event::Ack::Ack);
+        assert!(response.events.is_empty());
     }
 }
