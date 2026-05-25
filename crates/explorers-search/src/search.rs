@@ -173,6 +173,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
             mate_selectivity: v(23) as f32,
             sensing_range: v(24) as f32,
             reproductive_investment: v(25) as f32,
+            fecundity: 0.0,
         },
         trait_covariance: v(26) as f32,
         initial_cluster_count: v(27).round() as u32,

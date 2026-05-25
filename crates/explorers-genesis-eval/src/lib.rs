@@ -595,6 +595,7 @@ mod tests {
                 mate_selectivity: 100.0,
                 sensing_range: 5.0,
                 reproductive_investment: 0.3,
+            fecundity: 0.0,
             },
             trait_covariance: 0.5,
             initial_cluster_count: 2,
@@ -801,6 +802,7 @@ mod tests {
                 mate_selectivity: 0.0,
                 sensing_range: 0.0,
                 reproductive_investment: 0.0,
+            fecundity: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -852,6 +854,7 @@ mod tests {
             mate_selectivity: vals[5],
             sensing_range: vals[6],
             reproductive_investment: vals[7],
+            fecundity: 0.0,
         }
     }
 

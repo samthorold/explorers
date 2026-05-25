@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use rand::distr::Distribution;
 use rand_chacha::ChaCha8Rng;
-use rand_distr::Normal;
+use rand_distr::{Normal, Poisson};
 
 use crate::energy_ledger::{EnergyEndpoint, EnergyLedger};
 use crate::event;
@@ -42,6 +42,22 @@ pub struct ResolverResult {
     pub offspring: Vec<Agent>,
     pub reproduction_investments: Vec<f32>,
     pub next_agent_id: u64,
+}
+
+/// Apply Gaussian mutation to trait vector based on mutation rate and magnitude.
+fn mutate_traits(traits: &mut TraitVector, params: &ResolverParams, rng: &mut ChaCha8Rng) {
+    if params.mutation_rate > 0.0 {
+        let mutation_dist = Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
+        for dim in 0..TraitVector::NUM_DIMS {
+            let r: f32 = rand::distr::Uniform::new(0.0_f32, 1.0)
+                .unwrap()
+                .sample(rng);
+            if r < params.mutation_rate {
+                let perturbation = mutation_dist.sample(rng);
+                traits.set(dim, traits.get(dim) + perturbation);
+            }
+        }
+    }
 }
 
 /// Resolve trophic interactions (consumption and decomposition) and their
@@ -601,6 +617,7 @@ pub fn resolve_interactions(
         let response = agents[i].receive(&trigger, &data);
 
         if let Some(mate_event) = response.events.first() {
+            // --- Sexual reproduction ---
             let mate_id = mate_event.target.unwrap();
             let j = (0..n).find(|&k| agents[k].id == mate_id).unwrap();
             reproduced[i] = true;
@@ -630,17 +647,7 @@ pub fn resolve_interactions(
             dissipated_energy += repro_dissipation;
 
             // Trait inheritance: uniform crossover
-            let mut child_traits = TraitVector {
-                photosynthetic_absorption: 0.0,
-                consumption_rate: 0.0,
-                scavenging_rate: 0.0,
-                nutrient_absorption: 0.0,
-                mobility: 0.0,
-                chemotaxis_sensitivity: 0.0,
-                mate_selectivity: 0.0,
-                sensing_range: 0.0,
-                reproductive_investment: 0.0,
-            };
+            let mut child_traits = agents[i].traits;
             for dim in 0..TraitVector::NUM_DIMS {
                 let from_a: bool = rand::distr::Uniform::new(0u32, 2)
                     .unwrap()
@@ -655,26 +662,12 @@ pub fn resolve_interactions(
             }
 
             // Mutation
-            if params.mutation_rate > 0.0 {
-                let mutation_dist =
-                    Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
-                for dim in 0..TraitVector::NUM_DIMS {
-                    let r: f32 = rand::distr::Uniform::new(0.0_f32, 1.0)
-                        .unwrap()
-                        .sample(rng);
-                    if r < params.mutation_rate {
-                        let perturbation = mutation_dist.sample(rng);
-                        child_traits.set(dim, child_traits.get(dim) + perturbation);
-                    }
-                }
-            }
+            mutate_traits(&mut child_traits, params, rng);
 
             let offspring_id = next_agent_id;
             next_agent_id += 1;
 
             // Record reproduction flows in ledger.
-            // Each parent's investment is their outflow; positive investments
-            // transfer to offspring (with efficiency) and dissipation.
             if inv_a > 0.0 {
                 ledger.record(
                     EnergyEndpoint::Agent(agents[i].id),
@@ -718,6 +711,75 @@ pub fn resolve_interactions(
                 traits: child_traits,
                 contact_time: 0,
             });
+        } else if agents[i].traits.fecundity > 0.0 {
+            // --- Asexual reproduction ---
+            // No compatible mate found; reproduce alone if fecundity > 0
+            reproduced[i] = true;
+
+            let inv = agents[i].traits.reproductive_investment;
+            working_energies[i] -= inv;
+            reproduction_investments[i] = inv;
+
+            let total_offspring_energy = inv * params.reproduction_efficiency;
+            let repro_dissipation = inv * (1.0 - params.reproduction_efficiency);
+            dissipated_energy += repro_dissipation;
+
+            // Offspring count from Poisson(fecundity), minimum 1
+            let n_offspring = {
+                let poisson = Poisson::new(agents[i].traits.fecundity as f64).unwrap();
+                let count: f64 = poisson.sample(rng);
+                (count as usize).max(1)
+            };
+
+            // Energy split equally among offspring
+            let per_offspring_energy = total_offspring_energy / n_offspring as f32;
+
+            // Record reproduction flows in ledger
+            if inv > 0.0 {
+                ledger.record(
+                    EnergyEndpoint::Agent(agents[i].id),
+                    EnergyEndpoint::Dissipation,
+                    inv * (1.0 - params.reproduction_efficiency),
+                );
+            }
+
+            for _ in 0..n_offspring {
+                // Trait inheritance: copy parent (no crossover)
+                let mut child_traits = agents[i].traits;
+
+                // Mutation (each offspring mutated independently)
+                mutate_traits(&mut child_traits, params, rng);
+
+                let offspring_id = next_agent_id;
+                next_agent_id += 1;
+
+                if per_offspring_energy > 0.0 {
+                    ledger.record(
+                        EnergyEndpoint::Agent(agents[i].id),
+                        EnergyEndpoint::Agent(offspring_id),
+                        per_offspring_energy,
+                    );
+                }
+
+                events.push(event::Event {
+                    tick,
+                    seq: 0,
+                    kind: event::EventKind::Born,
+                    source: offspring_id,
+                    target: None,
+                    energy_delta: per_offspring_energy,
+                    position: Some(agents[i].position),
+                });
+
+                offspring.push(Agent {
+                    id: offspring_id,
+                    position: agents[i].position,
+                    energy: per_offspring_energy,
+                    nutrient: 0.0,
+                    traits: child_traits,
+                    contact_time: 0,
+                });
+            }
         }
     }
 
@@ -757,6 +819,7 @@ mod tests {
             mate_selectivity: 0.0,
             sensing_range: 0.0,
             reproductive_investment: 0.0,
+            fecundity: 0.0,
         }
     }
 
@@ -2111,6 +2174,224 @@ mod tests {
             (dissipated - 6.0).abs() < 1e-5,
             "reproduction dissipation: {}, expected 6.0",
             dissipated
+        );
+    }
+
+    #[test]
+    fn poisson_offspring_count_from_fecundity() {
+        // High fecundity should produce multiple offspring, each getting
+        // an equal share of the total reproductive energy
+        let parent_traits = TraitVector {
+            mobility: 1.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 20.0,
+            fecundity: 5.0, // expect ~5 offspring on average
+            ..zero_traits()
+        };
+        let agents = vec![Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            nutrient: 0.0,
+            traits: parent_traits,
+            contact_time: 0,
+        }];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        agent_grid.insert(0, agents[0].position);
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 10.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
+        };
+
+        // Run many trials to check average offspring count ~ fecundity
+        let mut total_offspring = 0u32;
+        let trials = 200;
+        for seed in 0..trials {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            let result = resolve_interactions(
+                &agents, &agent_grid, &carcass_grid, &[], &params,
+                &vec![0], &HashSet::new(), &HashMap::new(), 0,
+                &vec![100.0], &vec![0.0; 1], &mut rng, 100,
+                &mut EnergyLedger::new(),
+            );
+            let n = result.offspring.len();
+            total_offspring += n as u32;
+
+            // All offspring should share energy equally
+            if n > 0 {
+                let expected_per = 20.0 * 0.7 / n as f32;
+                for o in &result.offspring {
+                    assert!(
+                        (o.energy - expected_per).abs() < 1e-4,
+                        "offspring energy {}, expected {} (n={})",
+                        o.energy, expected_per, n
+                    );
+                }
+            }
+        }
+
+        let avg = total_offspring as f64 / trials as f64;
+        // Poisson(5.0) mean should be close to 5.0
+        assert!(
+            avg > 3.5 && avg < 6.5,
+            "average offspring count should be ~5.0, got {}",
+            avg
+        );
+    }
+
+    #[test]
+    fn asexual_offspring_inherits_parent_traits_without_crossover() {
+        // With mutation_rate=0, asexual offspring should have exact parent traits
+        let parent_traits = TraitVector {
+            photosynthetic_absorption: 0.3,
+            consumption_rate: 0.2,
+            scavenging_rate: 0.1,
+            nutrient_absorption: 0.05,
+            mobility: 0.15,
+            chemotaxis_sensitivity: 0.05,
+            mate_selectivity: 5.0,
+            sensing_range: 2.0,
+            reproductive_investment: 10.0,
+            fecundity: 0.01,
+        };
+        let agents = vec![Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            nutrient: 0.0,
+            traits: parent_traits,
+            contact_time: 0,
+        }];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        agent_grid.insert(0, agents[0].position);
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 10.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
+        };
+
+        let order = vec![0];
+        let pre_tick_energies = vec![50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_interactions(
+            &agents, &agent_grid, &carcass_grid, &[], &params, &order,
+            &HashSet::new(), &HashMap::new(), 0, &pre_tick_energies,
+            &vec![0.0; agents.len()], &mut rng, 100, &mut EnergyLedger::new(),
+        );
+
+        assert_eq!(result.offspring.len(), 1);
+        let child = &result.offspring[0];
+        // Every dimension should match parent exactly (no crossover, no mutation)
+        for dim in 0..TraitVector::NUM_DIMS {
+            assert!(
+                (child.traits.get(dim) - parent_traits.get(dim)).abs() < 1e-10,
+                "dim {} differs: child={}, parent={}",
+                dim, child.traits.get(dim), parent_traits.get(dim)
+            );
+        }
+    }
+
+    #[test]
+    fn lone_agent_reproduces_asexually_when_no_mate() {
+        // A single agent above energy threshold with no compatible mate
+        // should reproduce asexually: offspring inherits parent traits (no crossover)
+        let parent_traits = TraitVector {
+            mobility: 1.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            fecundity: 0.01,
+            ..zero_traits()
+        };
+        let agents = vec![Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            nutrient: 0.0,
+            traits: parent_traits,
+            contact_time: 0,
+        }];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        agent_grid.insert(0, agents[0].position);
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 10.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
+        };
+
+        let order = vec![0];
+        let pre_tick_energies = vec![50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &[],
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &vec![0.0; agents.len()],
+            &mut rng,
+            100,
+            &mut EnergyLedger::new(),
+        );
+
+        // Should produce offspring via asexual reproduction
+        assert_eq!(result.offspring.len(), 1, "lone agent should reproduce asexually");
+
+        // Parent invests reproductive_investment=10.0 alone
+        assert!(
+            (result.reproduction_investments[0] - 10.0).abs() < 1e-5,
+            "parent investment: {}",
+            result.reproduction_investments[0]
+        );
+
+        // Offspring energy = 10.0 * 0.7 = 7.0
+        assert!(
+            (result.offspring[0].energy - 7.0).abs() < 1e-5,
+            "offspring energy: {}",
+            result.offspring[0].energy
         );
     }
 }
