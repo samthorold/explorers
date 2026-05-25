@@ -1,9 +1,9 @@
-use std::fmt::Write as _;
 use std::fs;
 use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy::camera::ScalingMode;
+use bevy_egui::{EguiContexts, EguiPlugin};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe};
 
 #[derive(Resource)]
@@ -26,6 +26,18 @@ struct AgentMesh(Handle<Mesh>);
 
 #[derive(Resource)]
 struct CarcassMesh(Handle<Mesh>);
+
+#[derive(Resource, Default)]
+struct SelectedAgent(Option<u64>);
+
+#[derive(Resource)]
+struct DebugPanelOpen(bool);
+
+impl Default for DebugPanelOpen {
+    fn default() -> Self {
+        Self(true)
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -131,12 +143,15 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(EguiPlugin::default())
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(SimWorld(world))
         .insert_resource(TickCount(ticks))
-        .add_systems(Startup, (setup_camera, setup_meshes, setup_grid, setup_hud, configure_timestep))
+        .init_resource::<SelectedAgent>()
+        .init_resource::<DebugPanelOpen>()
+        .add_systems(Startup, (setup_camera, setup_meshes, setup_grid, configure_timestep))
         .add_systems(FixedUpdate, (step_simulation, reconcile_entities).chain())
-        .add_systems(Update, (tick_rate_control, update_hud))
+        .add_systems(Update, (tick_rate_control, click_to_inspect, debug_panel_ui).chain())
         .run();
 }
 
@@ -443,6 +458,113 @@ spatial_decay_rate: 0.5,
             other => panic!("expected orthographic projection, got {:?}", other),
         }
     }
+
+    #[test]
+    fn energy_budget_sums_correctly() {
+        let mut world = test_world(100.0);
+        // Add some agents with known energy
+        world.add_agent(explorers_sim::Agent {
+            id: 0, position: (0.0, 0.0), energy: 30.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 1.0, consumption_rate: 0.0,
+                scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
+            },
+            contact_time: 0,
+        });
+        world.add_agent(explorers_sim::Agent {
+            id: 0, position: (10.0, 10.0), energy: 20.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 1.0, consumption_rate: 0.0,
+                scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
+            },
+            contact_time: 0,
+        });
+        world.add_carcass(explorers_sim::Carcass {
+            id: 99, position: (5.0, 5.0), energy: 15.0,
+        });
+
+        let budget = compute_energy_budget(&world);
+        assert_eq!(budget.living_energy, 50.0);
+        assert_eq!(budget.carcass_energy, 15.0);
+        assert_eq!(budget.dissipated_energy, 0.0);
+    }
+
+    #[test]
+    fn energy_budget_handles_empty_world() {
+        let world = test_world(100.0);
+        let budget = compute_energy_budget(&world);
+        assert_eq!(budget.living_energy, 0.0);
+        assert_eq!(budget.carcass_energy, 0.0);
+        assert_eq!(budget.dissipated_energy, 0.0);
+    }
+
+    #[test]
+    fn find_nearest_agent_returns_closest() {
+        let agents = vec![
+            explorers_sim::Agent {
+                id: 1, position: (10.0, 10.0), energy: 50.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 1.0, consumption_rate: 0.0,
+                    scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
+                },
+                contact_time: 0,
+            },
+            explorers_sim::Agent {
+                id: 2, position: (20.0, 20.0), energy: 50.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 1.0, consumption_rate: 0.0,
+                    scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
+                },
+                contact_time: 0,
+            },
+        ];
+        let result = find_nearest_agent(&agents, (12.0, 12.0), 100.0);
+        assert_eq!(result, Some(1));
+    }
+
+    #[test]
+    fn find_nearest_agent_returns_none_when_empty() {
+        let agents: Vec<explorers_sim::Agent> = vec![];
+        let result = find_nearest_agent(&agents, (0.0, 0.0), 100.0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn find_nearest_agent_handles_toroidal_wrapping() {
+        let agents = vec![
+            explorers_sim::Agent {
+                id: 1, position: (5.0, 5.0), energy: 50.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 1.0, consumption_rate: 0.0,
+                    scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
+                },
+                contact_time: 0,
+            },
+            explorers_sim::Agent {
+                id: 2, position: (95.0, 95.0), energy: 50.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 1.0, consumption_rate: 0.0,
+                    scavenging_rate: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0,
+                },
+                contact_time: 0,
+            },
+        ];
+        // Click at (97,97) — toroidally closer to agent 2 at (95,95) = dist 2.83
+        // but also toroidally close to agent 1 at (5,5) via wrapping = dist ~11.3
+        let result = find_nearest_agent(&agents, (97.0, 97.0), 100.0);
+        assert_eq!(result, Some(2));
+
+        // Click at (99,99) — toroidally closer to agent 1 at (5,5) via wrapping = dist ~8.5
+        // than to agent 2 at (95,95) = dist ~5.7
+        let result2 = find_nearest_agent(&agents, (99.0, 99.0), 100.0);
+        assert_eq!(result2, Some(2));
+    }
 }
 
 fn setup_meshes(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
@@ -542,6 +664,37 @@ fn trophic_color(traits: &TraitVector, energy: f32) -> Color {
 
 const AGENT_RADIUS: f32 = 1.5;
 
+#[derive(Debug, PartialEq)]
+struct EnergyBudget {
+    living_energy: f32,
+    carcass_energy: f32,
+    dissipated_energy: f32,
+    // Nutrient fields — placeholders until nutrient system lands
+    nutrient_available: Option<f32>,
+    nutrient_living: Option<f32>,
+    nutrient_carcasses: Option<f32>,
+}
+
+fn compute_energy_budget(world: &explorers_sim::World) -> EnergyBudget {
+    let living_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+    let carcass_energy: f32 = world.carcasses().iter().map(|c| c.energy).sum();
+    EnergyBudget {
+        living_energy,
+        carcass_energy,
+        dissipated_energy: world.dissipated_energy(),
+        nutrient_available: None,
+        nutrient_living: None,
+        nutrient_carcasses: None,
+    }
+}
+
+fn find_nearest_agent(agents: &[explorers_sim::Agent], click_pos: (f32, f32), world_extent: f32) -> Option<u64> {
+    agents.iter()
+        .map(|a| (a.id, explorers_sim::toroidal_distance(click_pos, a.position, world_extent)))
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+        .map(|(id, _)| id)
+}
+
 fn dominant_role(traits: &TraitVector) -> &'static str {
     let p = traits.photosynthetic_absorption;
     let c = traits.consumption_rate;
@@ -621,65 +774,151 @@ fn setup_grid(
     }
 }
 
-fn setup_hud(mut commands: Commands) {
-    commands.spawn((
-        Text::new(""),
-        TextFont {
-            font_size: 16.0,
-            ..default()
-        },
-        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(10.0),
-            left: Val::Px(10.0),
-            ..default()
-        },
-        HudText,
-    ));
+fn click_to_inspect(
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    cameras: Query<(&Camera, &GlobalTransform)>,
+    sim: Res<SimWorld>,
+    mut selected: ResMut<SelectedAgent>,
+) {
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    let Ok(window) = windows.single() else { return };
+    let Some(cursor_pos) = window.cursor_position() else { return };
+    let Ok((camera, cam_transform)) = cameras.single() else { return };
+    let Ok(world_pos) = camera.viewport_to_world_2d(cam_transform, cursor_pos) else { return };
+
+    let click = (world_pos.x, world_pos.y);
+    let extent = sim.0.params().world_extent;
+    selected.0 = find_nearest_agent(sim.0.agents(), click, extent);
 }
 
-fn update_hud(
-    sim: Res<SimWorld>,
+fn debug_panel_ui(
+    mut contexts: EguiContexts,
+    mut sim: ResMut<SimWorld>,
     tick_count: Res<TickCount>,
     time: Res<Time<Fixed>>,
     virtual_time: Res<Time<Virtual>>,
-    mut query: Query<&mut Text, With<HudText>>,
+    selected: Res<SelectedAgent>,
+    mut panel_open: ResMut<DebugPanelOpen>,
 ) {
-    let agents = sim.0.agents();
-    let total = agents.len();
-    let mut producers = 0usize;
-    let mut consumers = 0usize;
-    let mut decomposers = 0usize;
-    for agent in agents {
-        match dominant_role(&agent.traits) {
-            "producers" => producers += 1,
-            "consumers" => consumers += 1,
-            _ => decomposers += 1,
-        }
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    // Toggle panel with F12
+    if ctx.input(|i| i.key_pressed(bevy_egui::egui::Key::F12)) {
+        panel_open.0 = !panel_open.0;
     }
 
-    let tps = 1.0 / time.timestep().as_secs_f64();
-    let paused = virtual_time.is_paused();
-
-    let avg_contact_time = if total > 0 {
-        agents.iter().map(|a| a.contact_time as f64).sum::<f64>() / total as f64
-    } else {
-        0.0
-    };
-    let max_contact_time = agents.iter().map(|a| a.contact_time).max().unwrap_or(0);
-
-    let mut hud = String::new();
-    let _ = write!(hud, "Tick {}", tick_count.0);
-    let _ = write!(hud, " | {total} agents ({producers} P / {consumers} C / {decomposers} D)");
-    let _ = write!(hud, " | contact time avg {avg_contact_time:.0} max {max_contact_time}");
-    let _ = write!(hud, " | {tps:.0} tps");
-    if paused {
-        let _ = write!(hud, " | PAUSED");
+    if !panel_open.0 {
+        return;
     }
 
-    for mut text in &mut query {
-        **text = hud.clone();
-    }
+    bevy_egui::egui::SidePanel::right("debug_panel")
+        .default_width(280.0)
+        .resizable(true)
+        .show(ctx, |ui| {
+            ui.heading("Debug Panel");
+            ui.separator();
+
+            // -- Status bar (preserves old HUD info) --
+            let agents = sim.0.agents();
+            let total = agents.len();
+            let mut producers = 0usize;
+            let mut consumers = 0usize;
+            let mut decomposers = 0usize;
+            for agent in agents {
+                match dominant_role(&agent.traits) {
+                    "producers" => producers += 1,
+                    "consumers" => consumers += 1,
+                    _ => decomposers += 1,
+                }
+            }
+            let tps = 1.0 / time.timestep().as_secs_f64();
+            let paused = virtual_time.is_paused();
+            let avg_contact_time = if total > 0 {
+                agents.iter().map(|a| a.contact_time as f64).sum::<f64>() / total as f64
+            } else {
+                0.0
+            };
+            let max_contact_time = agents.iter().map(|a| a.contact_time).max().unwrap_or(0);
+
+            ui.label(format!("Tick: {}", tick_count.0));
+            ui.label(format!("Agents: {} ({} P / {} C / {} D)", total, producers, consumers, decomposers));
+            ui.label(format!("Contact time: avg {:.0} / max {}", avg_contact_time, max_contact_time));
+            ui.label(format!("TPS: {:.0}{}", tps, if paused { " | PAUSED" } else { "" }));
+
+            ui.separator();
+
+            // -- Energy Budget --
+            bevy_egui::egui::CollapsingHeader::new("Energy Budget")
+                .default_open(true)
+                .show(ui, |ui| {
+                    let budget = compute_energy_budget(&sim.0);
+                    ui.label(format!("Living agents: {:.1}", budget.living_energy));
+                    ui.label(format!("Carcasses: {:.1}", budget.carcass_energy));
+                    ui.label(format!("Dissipated: {:.1}", budget.dissipated_energy));
+                    ui.label(format!("Total: {:.1}", budget.living_energy + budget.carcass_energy + budget.dissipated_energy));
+                    ui.separator();
+                    ui.label("Nutrients:");
+                    ui.label(format!("  Available pool: {}", budget.nutrient_available.map_or("N/A".to_string(), |v| format!("{:.1}", v))));
+                    ui.label(format!("  Living agents: {}", budget.nutrient_living.map_or("N/A".to_string(), |v| format!("{:.1}", v))));
+                    ui.label(format!("  Carcasses: {}", budget.nutrient_carcasses.map_or("N/A".to_string(), |v| format!("{:.1}", v))));
+                });
+
+            ui.separator();
+
+            // -- World Parameter Sliders --
+            bevy_egui::egui::CollapsingHeader::new("World Parameters")
+                .default_open(true)
+                .show(ui, |ui| {
+                    let params = sim.0.params_mut();
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.solar_flux_magnitude, 0.0..=10.0).text("Solar flux"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.base_metabolic_rate, 0.0..=2.0).text("Base metabolic rate"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.photo_maintenance_cost, 0.0..=0.5).text("Photo maintenance"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.consumption_maintenance_cost, 0.0..=0.5).text("Consumption maintenance"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.scavenging_maintenance_cost, 0.0..=0.5).text("Scavenging maintenance"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.mutation_rate, 0.0..=1.0).text("Mutation rate"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.mutation_magnitude, 0.0..=0.5).text("Mutation magnitude"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.contact_radius, 1.0..=50.0).text("Contact radius"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.light_competition_radius, 1.0..=100.0).text("Light competition radius"));
+                });
+
+            ui.separator();
+
+            // -- Click-to-inspect --
+            bevy_egui::egui::CollapsingHeader::new("Selected Agent")
+                .default_open(true)
+                .show(ui, |ui| {
+                    match selected.0 {
+                        None => {
+                            ui.label("Click an agent to inspect");
+                        }
+                        Some(agent_id) => {
+                            if let Some(agent) = sim.0.agents().iter().find(|a| a.id == agent_id) {
+                                ui.label(format!("ID: {}", agent.id));
+                                ui.label(format!("Position: ({:.1}, {:.1})", agent.position.0, agent.position.1));
+                                ui.label(format!("Energy: {:.1}", agent.energy));
+                                ui.label("Nutrient: N/A");
+                                ui.label(format!("Contact time: {}", agent.contact_time));
+                                ui.label(format!("Dominant role: {}", dominant_role(&agent.traits)));
+                                ui.separator();
+                                ui.label("Trait vector:");
+                                ui.label(format!("  photosynthetic_absorption: {:.3}", agent.traits.photosynthetic_absorption));
+                                ui.label(format!("  consumption_rate: {:.3}", agent.traits.consumption_rate));
+                                ui.label(format!("  scavenging_rate: {:.3}", agent.traits.scavenging_rate));
+                                ui.label(format!("  mobility: {:.3}", agent.traits.mobility));
+                                ui.label(format!("  chemotaxis_sensitivity: {:.3}", agent.traits.chemotaxis_sensitivity));
+                                ui.label(format!("  mate_selectivity: {:.3}", agent.traits.mate_selectivity));
+                                ui.label(format!("  sensing_range: {:.3}", agent.traits.sensing_range));
+                                ui.label(format!("  reproductive_investment: {:.3}", agent.traits.reproductive_investment));
+                            } else {
+                                ui.label(format!("Agent {} no longer alive", agent_id));
+                            }
+                        }
+                    }
+                });
+        });
 }
 

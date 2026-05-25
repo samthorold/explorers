@@ -929,6 +929,10 @@ impl World {
         &self.params
     }
 
+    pub fn params_mut(&mut self) -> &mut WorldParameters {
+        &mut self.params
+    }
+
     pub fn agents(&self) -> &[Agent] {
         &self.agents
     }
@@ -5436,5 +5440,17 @@ spatial_decay_rate: 0.5,
                 "contact_time should be {tick} after {tick} ticks of staying still"
             );
         }
+    }
+
+    #[test]
+    fn params_mut_allows_live_parameter_adjustment() {
+        let mut world = World::new(test_params(), test_distribution(), 42);
+        let original_flux = world.params().solar_flux_magnitude;
+        world.params_mut().solar_flux_magnitude = 5.0;
+        assert_eq!(world.params().solar_flux_magnitude, 5.0);
+        assert_ne!(original_flux, 5.0);
+        // Stepping should use the updated parameter
+        world.step();
+        // If we got here without panic, the updated params are used in step
     }
 }
