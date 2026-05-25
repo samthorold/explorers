@@ -613,13 +613,12 @@ impl World {
             std::collections::HashSet::new();
         let mut depleted_carcasses: std::collections::HashSet<usize> =
             std::collections::HashSet::new();
-        let mut reproduced = vec![false; n];
         let mut consumption_gains = vec![0.0_f32; n];
         let mut consumption_losses = vec![0.0_f32; n];
         let mut decomposition_gains = vec![0.0_f32; n];
         let mut solar_gains = vec![0.0_f32; n];
         let mut reproduction_investments = vec![0.0_f32; n];
-        let mut offspring: Vec<Agent> = Vec::new();
+        let offspring: Vec<Agent>;
 
         // --- Resolve consumption interactions via resolver ---
         let resolver_params = interaction_resolver::ResolverParams {
@@ -629,6 +628,9 @@ impl World {
             world_extent: extent,
             reproduction_energy_threshold: reproduction_threshold,
             solar_flux_magnitude: self.params.solar_flux_magnitude,
+            reproduction_efficiency,
+            mutation_rate,
+            mutation_magnitude,
         };
         let resolver_result = interaction_resolver::resolve_interactions(
             &self.agents,
@@ -642,6 +644,8 @@ impl World {
             self.tick,
             &pre_tick_energies,
             &light_shares,
+            &mut self.rng,
+            self.next_agent_id,
         );
 
         // Apply resolver mutations
@@ -707,131 +711,13 @@ impl World {
             }
         }
 
-        for &i in &order {
-            if dead_agents.contains(&i) || self.agents[i].energy <= 0.0 {
-                continue;
-            }
-
-            // --- Reproduction via broadcast-response ---
-            if !reproduced[i] && self.agents[i].energy > reproduction_threshold {
-                emit_broadcasts(
-                    &mut broadcasts,
-                    &event::EventKind::MatingReadiness,
-                    self.agents[i].position,
-                    &self.agents,
-                    &dead_agents,
-                    &self.nack_sets,
-                    extent,
-                );
-
-                // Build nearby agents for mate selection via receive()
-                let nearby_mates: Vec<NearbyAgent> = (0..n)
-                    .filter_map(|j| {
-                        if j == i || dead_agents.contains(&j) || reproduced[j]
-                            || self.agents[j].energy <= reproduction_threshold
-                        {
-                            return None;
-                        }
-                        let dist = toroidal_distance(
-                            self.agents[i].position, self.agents[j].position, extent,
-                        );
-                        Some(NearbyAgent {
-                            id: self.agents[j].id, distance: dist,
-                            energy: self.agents[j].energy, traits: self.agents[j].traits,
-                        })
-                    })
-                    .collect();
-                let data = ProjectionData {
-                    feeding_gradient: (0.0, 0.0), carcass_gradient: (0.0, 0.0),
-                    nearby_agents: nearby_mates, nearby_carcasses: vec![],
-                    contact_radius, reproduction_energy_threshold: reproduction_threshold,
-                };
-                let trigger = event::Event {
-                    tick: self.tick, seq: 0, kind: event::EventKind::MatingReadiness,
-                    source: self.agents[i].id, target: None, energy_delta: 0.0,
-                    position: Some(self.agents[i].position),
-                };
-                let response = self.agents[i].receive(&trigger, &data);
-                if let Some(mate_event) = response.events.first() {
-                    let mate_id = mate_event.target.unwrap();
-                    let j = (0..n).find(|&k| self.agents[k].id == mate_id).unwrap();
-                    reproduced[i] = true;
-                    reproduced[j] = true;
-                    self.emit(
-                        event::EventKind::MateSelected,
-                        self.agents[i].id,
-                        Some(self.agents[j].id),
-                        0.0,
-                        Some(self.agents[i].position),
-                    );
-
-                    let inv_a = self.agents[i].traits.reproductive_investment;
-                    let inv_b = self.agents[j].traits.reproductive_investment;
-                    self.agents[i].energy -= inv_a;
-                    self.agents[j].energy -= inv_b;
-                    reproduction_investments[i] = inv_a;
-                    reproduction_investments[j] = inv_b;
-
-                    let offspring_energy = (inv_a + inv_b) * reproduction_efficiency;
-                    self.dissipated_energy +=
-                        (inv_a + inv_b) * (1.0 - reproduction_efficiency);
-
-                    let mut child_traits = TraitVector {
-                        photosynthetic_absorption: 0.0,
-                        consumption_rate: 0.0,
-                        scavenging_rate: 0.0,
-                        mobility: 0.0,
-                        chemotaxis_sensitivity: 0.0,
-                        mate_selectivity: 0.0,
-                        sensing_range: 0.0,
-                        reproductive_investment: 0.0,
-                    };
-                    for dim in 0..8 {
-                        let from_a: bool = rand::distr::Uniform::new(0u32, 2)
-                            .unwrap()
-                            .sample(&mut self.rng)
-                            == 0;
-                        let val = if from_a {
-                            self.agents[i].traits.get(dim)
-                        } else {
-                            self.agents[j].traits.get(dim)
-                        };
-                        child_traits.set(dim, val);
-                    }
-
-                    if mutation_rate > 0.0 {
-                        let mutation_dist =
-                            Normal::new(0.0_f32, mutation_magnitude).unwrap();
-                        for dim in 0..8 {
-                            let r: f32 = rand::distr::Uniform::new(0.0_f32, 1.0)
-                                .unwrap()
-                                .sample(&mut self.rng);
-                            if r < mutation_rate {
-                                let perturbation = mutation_dist.sample(&mut self.rng);
-                                child_traits
-                                    .set(dim, child_traits.get(dim) + perturbation);
-                            }
-                        }
-                    }
-
-                    let offspring_id = self.next_agent_id;
-                    self.next_agent_id += 1;
-                    self.emit(
-                        event::EventKind::Born,
-                        offspring_id,
-                        None,
-                        offspring_energy,
-                        Some(self.agents[i].position),
-                    );
-                    offspring.push(Agent {
-                        id: offspring_id,
-                        position: self.agents[i].position,
-                        energy: offspring_energy,
-                        traits: child_traits,
-                    });
-                }
-            }
+        // Apply reproduction results from resolver
+        for i in 0..n {
+            self.agents[i].energy -= resolver_result.reproduction_investments[i];
+            reproduction_investments[i] = resolver_result.reproduction_investments[i];
         }
+        self.next_agent_id = resolver_result.next_agent_id;
+        offspring = resolver_result.offspring;
 
         // --- Deliver broadcasts and register NACKs ---
         // Build an index from agent id to index for broadcast delivery
