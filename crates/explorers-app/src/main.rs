@@ -147,7 +147,7 @@ fn main() {
         }))
         .add_plugins(EguiPlugin::default())
         .insert_resource(EguiGlobalSettings {
-            enable_absorb_bevy_input_system: true,
+            enable_absorb_bevy_input_system: false,
             ..default()
         })
         .insert_resource(ClearColor(Color::BLACK))
@@ -157,7 +157,12 @@ fn main() {
         .init_resource::<DebugPanelOpen>()
         .add_systems(Startup, (setup_camera, setup_meshes, setup_grid, configure_timestep))
         .add_systems(FixedUpdate, (step_simulation, reconcile_entities).chain())
-        .add_systems(Update, (tick_rate_control, debug_panel_ui, sync_camera_viewport, click_to_inspect).chain())
+        .add_systems(Update, (
+            tick_rate_control,
+            debug_panel_ui,
+            sync_camera_viewport,
+            click_to_inspect.run_if(not(bevy_egui::input::egui_wants_any_pointer_input)),
+        ).chain())
         .run();
 }
 
@@ -834,17 +839,9 @@ fn click_to_inspect(
     cameras: Query<(&Camera, &GlobalTransform)>,
     sim: Res<SimWorld>,
     mut selected: ResMut<SelectedAgent>,
-    mut egui_contexts: EguiContexts,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
         return;
-    }
-
-    // Don't select agents when clicking on the egui panel
-    if let Ok(ctx) = egui_contexts.ctx_mut() {
-        if ctx.is_pointer_over_area() {
-            return;
-        }
     }
 
     let Ok(window) = windows.single() else { return };
