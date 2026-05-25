@@ -18,9 +18,6 @@ struct AgentMarker(u64);
 #[derive(Component)]
 struct CarcassMarker(u64);
 
-#[derive(Component)]
-struct HudText;
-
 #[derive(Resource)]
 struct AgentMesh(Handle<Mesh>);
 
