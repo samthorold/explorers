@@ -60,6 +60,26 @@ fn mutate_traits(traits: &mut TraitVector, params: &ResolverParams, rng: &mut Ch
     }
 }
 
+fn dispersal_position(
+    parent_pos: (f32, f32),
+    contact_time: u64,
+    sensing_range: f32,
+    contact_radius: f32,
+    world_extent: f32,
+    rng: &mut ChaCha8Rng,
+) -> (f32, f32) {
+    let ct = contact_time as f32;
+    let k = 50.0_f32;
+    let radius = contact_radius + (sensing_range - contact_radius).max(0.0) * ct / (ct + k);
+    let dist = Normal::new(0.0_f32, radius.max(0.1)).unwrap();
+    let dx: f32 = dist.sample(rng);
+    let dy: f32 = dist.sample(rng);
+    let half = world_extent / 2.0;
+    let x = (parent_pos.0 + dx + half).rem_euclid(world_extent) - half;
+    let y = (parent_pos.1 + dy + half).rem_euclid(world_extent) - half;
+    (x, y)
+}
+
 /// Resolve trophic interactions (consumption and decomposition) and their
 /// consequence cascades.
 ///
@@ -703,9 +723,14 @@ pub fn resolve_interactions(
                 position: Some(agents[i].position),
             });
 
+            let child_pos = dispersal_position(
+                agents[i].position, agents[i].contact_time,
+                agents[i].traits.sensing_range, params.contact_radius,
+                params.world_extent, rng,
+            );
             offspring.push(Agent {
                 id: offspring_id,
-                position: agents[i].position,
+                position: child_pos,
                 energy: offspring_energy,
                 nutrient: 0.0,
                 traits: child_traits,
@@ -771,9 +796,14 @@ pub fn resolve_interactions(
                     position: Some(agents[i].position),
                 });
 
+                let child_pos = dispersal_position(
+                    agents[i].position, agents[i].contact_time,
+                    agents[i].traits.sensing_range, params.contact_radius,
+                    params.world_extent, rng,
+                );
                 offspring.push(Agent {
                     id: offspring_id,
-                    position: agents[i].position,
+                    position: child_pos,
                     energy: per_offspring_energy,
                     nutrient: 0.0,
                     traits: child_traits,
@@ -2392,6 +2422,90 @@ mod tests {
             (result.offspring[0].energy - 7.0).abs() < 1e-5,
             "offspring energy: {}",
             result.offspring[0].energy
+        );
+    }
+
+    #[test]
+    fn offspring_dispersed_from_parent_position() {
+        let parent_pos = (0.0, 0.0);
+        let agents = vec![Agent {
+            id: 0,
+            position: parent_pos,
+            energy: 50.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                sensing_range: 5.0,
+                reproductive_investment: 10.0,
+                fecundity: 0.01,
+                ..zero_traits()
+            },
+            contact_time: 100,
+        }];
+
+        let extent = 200.0;
+        let cell_size = 10.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        agent_grid.insert(0, agents[0].position);
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 3.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 10.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
+        };
+
+        let order = vec![0];
+        let pre_tick_energies = vec![50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_interactions(
+            &agents, &agent_grid, &carcass_grid, &[], &params, &order,
+            &HashSet::new(), &HashMap::new(), 0, &pre_tick_energies,
+            &vec![0.0; agents.len()], &mut rng, 100, &mut EnergyLedger::new(),
+        );
+
+        assert_eq!(result.offspring.len(), 1);
+        let child = &result.offspring[0];
+        assert!(
+            child.position != parent_pos,
+            "offspring should be dispersed from parent, but both at {:?}",
+            parent_pos
+        );
+    }
+
+    #[test]
+    fn dispersal_radius_scales_with_contact_time() {
+        // High contact time → dispersal radius approaches sensing_range
+        // Low contact time → dispersal radius near contact_radius
+        // Run many samples and check that mean distance differs
+        let n = 500;
+        let mut rng = ChaCha8Rng::seed_from_u64(99);
+
+        let mut low_ct_distances = Vec::new();
+        for _ in 0..n {
+            let pos = dispersal_position((0.0, 0.0), 1, 20.0, 3.0, 200.0, &mut rng);
+            low_ct_distances.push((pos.0 * pos.0 + pos.1 * pos.1).sqrt());
+        }
+
+        let mut high_ct_distances = Vec::new();
+        for _ in 0..n {
+            let pos = dispersal_position((0.0, 0.0), 1000, 20.0, 3.0, 200.0, &mut rng);
+            high_ct_distances.push((pos.0 * pos.0 + pos.1 * pos.1).sqrt());
+        }
+
+        let avg_low: f32 = low_ct_distances.iter().sum::<f32>() / n as f32;
+        let avg_high: f32 = high_ct_distances.iter().sum::<f32>() / n as f32;
+
+        assert!(
+            avg_high > avg_low * 2.0,
+            "high contact time should disperse much farther: avg_low={avg_low:.1}, avg_high={avg_high:.1}"
         );
     }
 }
