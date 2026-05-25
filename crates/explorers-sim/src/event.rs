@@ -34,6 +34,36 @@ pub struct Response {
     pub events: Vec<Event>,
 }
 
+pub struct EventQueue {
+    high: std::collections::VecDeque<Event>,
+    normal: std::collections::VecDeque<Event>,
+}
+
+impl EventQueue {
+    pub fn new() -> Self {
+        Self {
+            high: std::collections::VecDeque::new(),
+            normal: std::collections::VecDeque::new(),
+        }
+    }
+
+    pub fn push_high(&mut self, event: Event) {
+        self.high.push_back(event);
+    }
+
+    pub fn push_normal(&mut self, event: Event) {
+        self.normal.push_back(event);
+    }
+
+    pub fn pop(&mut self) -> Option<Event> {
+        self.high.pop_front().or_else(|| self.normal.pop_front())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.high.is_empty() && self.normal.is_empty()
+    }
+}
+
 pub struct EventLog {
     events: Vec<Event>,
 }
@@ -102,6 +132,42 @@ mod tests {
             energy_delta: 10.0,
             position: None,
         }
+    }
+
+    #[test]
+    fn queue_drains_high_priority_before_normal() {
+        let mut q = EventQueue::new();
+        let normal = make_event(0, 1, EventKind::Consumed);
+        let high = make_event(0, 2, EventKind::Died);
+        q.push_normal(normal.clone());
+        q.push_high(high.clone());
+        // High priority should come out first despite being pushed second
+        let first = q.pop().unwrap();
+        assert_eq!(first.kind, EventKind::Died);
+        let second = q.pop().unwrap();
+        assert_eq!(second.kind, EventKind::Consumed);
+        assert!(q.pop().is_none());
+    }
+
+    #[test]
+    fn queue_is_empty_after_draining_all_events() {
+        let mut q = EventQueue::new();
+        q.push_high(make_event(0, 1, EventKind::Died));
+        q.push_normal(make_event(0, 2, EventKind::Consumed));
+        q.pop();
+        q.pop();
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn queue_preserves_fifo_within_same_priority() {
+        let mut q = EventQueue::new();
+        q.push_high(make_event(0, 1, EventKind::Died));
+        q.push_high(make_event(0, 2, EventKind::CarcassCreated));
+        let first = q.pop().unwrap();
+        assert_eq!(first.seq, 1);
+        let second = q.pop().unwrap();
+        assert_eq!(second.seq, 2);
     }
 
     #[test]

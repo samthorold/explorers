@@ -596,7 +596,7 @@ impl World {
             agent_grid.insert(i as u64, agent.position);
         }
 
-        // --- DES: sequential agent processing with consequence cascading ---
+        // --- DES: sequential agent processing with priority event queue ---
         let contact_radius = self.params.contact_radius;
         let consumption_efficiency = self.params.consumption_efficiency;
         let decomposition_efficiency = self.params.decomposition_efficiency;
@@ -607,6 +607,7 @@ impl World {
         let n = agent_count;
 
         let mut broadcasts: Vec<Broadcast> = Vec::new();
+        let mut consequence_queue = event::EventQueue::new();
 
         let mut dead_agents: std::collections::HashSet<usize> =
             std::collections::HashSet::new();
@@ -685,52 +686,20 @@ impl World {
                         extent,
                     );
 
-                    // Cascade: target death → carcass creation
+                    // Queue consequence: target death → carcass creation
                     if self.agents[target].energy <= 0.0 {
                         let carcass_energy =
                             (pre_tick_energies[target] - consumption_losses[target])
                                 .max(0.0);
-                        self.emit(
-                            event::EventKind::Died,
-                            self.agents[target].id,
-                            None,
-                            0.0,
-                            Some(self.agents[target].position),
-                        );
-                        self.emit(
-                            event::EventKind::CarcassCreated,
-                            self.agents[target].id,
-                            None,
-                            carcass_energy,
-                            Some(self.agents[target].position),
-                        );
-                        let ci = self.carcasses.len();
-                        self.carcasses.push(Carcass {
-                            id: self.agents[target].id,
-                            position: self.agents[target].position,
-                            energy: carcass_energy,
+                        consequence_queue.push_high(event::Event {
+                            tick: self.tick,
+                            seq: 0, // seq assigned when emitting to log
+                            kind: event::EventKind::Died,
+                            source: self.agents[target].id,
+                            target: None,
+                            energy_delta: carcass_energy,
+                            position: Some(self.agents[target].position),
                         });
-                        carcass_grid.insert(ci as u64, self.agents[target].position);
-                        emit_broadcasts(
-                            &mut broadcasts,
-                            &event::EventKind::Died,
-                            self.agents[target].position,
-                            &self.agents,
-                            &dead_agents,
-                            &self.nack_sets,
-                            extent,
-                        );
-                        emit_broadcasts(
-                            &mut broadcasts,
-                            &event::EventKind::CarcassCreated,
-                            self.agents[target].position,
-                            &self.agents,
-                            &dead_agents,
-                            &self.nack_sets,
-                            extent,
-                        );
-                        dead_agents.insert(target);
-                        agent_grid.remove(target as u64);
                     }
                     acquired = true;
                 }
@@ -792,19 +761,102 @@ impl World {
                         extent,
                     );
 
-                    // Cascade: carcass depletion
+                    // Queue consequence: carcass depletion
                     if self.carcasses[ci].energy <= 0.0 {
+                        consequence_queue.push_high(event::Event {
+                            tick: self.tick,
+                            seq: 0,
+                            kind: event::EventKind::CarcassDepleted,
+                            source: self.carcasses[ci].id,
+                            target: None,
+                            energy_delta: 0.0,
+                            position: Some(self.carcasses[ci].position),
+                        });
+                    }
+                    acquired = true;
+                }
+            }
+
+            // --- Drain consequence queue before next agent decision ---
+            while let Some(consequence) = consequence_queue.pop() {
+                match consequence.kind {
+                    event::EventKind::Died => {
+                        let dead_id = consequence.source;
+                        let dead_pos = consequence.position.unwrap();
+                        let carcass_energy = consequence.energy_delta;
                         self.emit(
-                            event::EventKind::CarcassDepleted,
-                            self.carcasses[ci].id,
+                            event::EventKind::Died,
+                            dead_id,
                             None,
                             0.0,
-                            Some(self.carcasses[ci].position),
+                            Some(dead_pos),
                         );
+                        // Queue CarcassCreated as next consequence
+                        consequence_queue.push_high(event::Event {
+                            tick: self.tick,
+                            seq: 0,
+                            kind: event::EventKind::CarcassCreated,
+                            source: dead_id,
+                            target: None,
+                            energy_delta: carcass_energy,
+                            position: Some(dead_pos),
+                        });
+                        emit_broadcasts(
+                            &mut broadcasts,
+                            &event::EventKind::Died,
+                            dead_pos,
+                            &self.agents,
+                            &dead_agents,
+                            &self.nack_sets,
+                            extent,
+                        );
+                        let target_idx = (0..n).find(|&j| self.agents[j].id == dead_id).unwrap();
+                        dead_agents.insert(target_idx);
+                        agent_grid.remove(target_idx as u64);
+                    }
+                    event::EventKind::CarcassCreated => {
+                        let dead_id = consequence.source;
+                        let dead_pos = consequence.position.unwrap();
+                        let carcass_energy = consequence.energy_delta;
+                        self.emit(
+                            event::EventKind::CarcassCreated,
+                            dead_id,
+                            None,
+                            carcass_energy,
+                            Some(dead_pos),
+                        );
+                        let ci = self.carcasses.len();
+                        self.carcasses.push(Carcass {
+                            id: dead_id,
+                            position: dead_pos,
+                            energy: carcass_energy,
+                        });
+                        carcass_grid.insert(ci as u64, dead_pos);
+                        emit_broadcasts(
+                            &mut broadcasts,
+                            &event::EventKind::CarcassCreated,
+                            dead_pos,
+                            &self.agents,
+                            &dead_agents,
+                            &self.nack_sets,
+                            extent,
+                        );
+                    }
+                    event::EventKind::CarcassDepleted => {
+                        let carcass_id = consequence.source;
+                        let carcass_pos = consequence.position.unwrap();
+                        self.emit(
+                            event::EventKind::CarcassDepleted,
+                            carcass_id,
+                            None,
+                            0.0,
+                            Some(carcass_pos),
+                        );
+                        let ci = self.carcasses.iter().position(|c| c.id == carcass_id).unwrap();
                         depleted_carcasses.insert(ci);
                         carcass_grid.remove(ci as u64);
                     }
-                    acquired = true;
+                    _ => {}
                 }
             }
 
@@ -942,6 +994,9 @@ impl World {
                 }
             }
         }
+
+        // Assert: consequence queue is empty at end of tick
+        debug_assert!(consequence_queue.is_empty(), "consequence queue must be empty at end of tick");
 
         // --- Deliver broadcasts and register NACKs ---
         // Build an index from agent id to index for broadcast delivery
@@ -4993,6 +5048,89 @@ spatial_decay_rate: 0.5,
             assert_eq!(a.id, b.id, "agent IDs must match");
             assert_eq!(a.position, b.position, "positions must match");
             assert_eq!(a.energy, b.energy, "energies must match");
+        }
+    }
+
+    #[test]
+    fn consequence_events_resolve_before_next_agent_decision() {
+        // When consumption kills a target, the Died and CarcassCreated consequence
+        // events must resolve (via the priority queue) before any subsequent agent
+        // takes their turn. Verify by checking that the event log shows
+        // Consumed → Died → CarcassCreated in strict sequence order, with no
+        // interleaving agent decision events between them.
+        use crate::event::EventKind;
+        let mut world = World::new(event_test_params(), event_test_dist(), 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 20.0,
+                ..zero_traits()
+            },
+        });
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0),
+            energy: 5.0,
+            traits: zero_traits(),
+        });
+        world.step();
+        let log = world.event_log();
+        let events = log.by_tick_range(0, 1);
+        // Find the Consumed, Died, and CarcassCreated events
+        let consumed_seq = events.iter().find(|e| e.kind == EventKind::Consumed).unwrap().seq;
+        let died_seq = events.iter().find(|e| e.kind == EventKind::Died).unwrap().seq;
+        let carcass_seq = events.iter().find(|e| e.kind == EventKind::CarcassCreated).unwrap().seq;
+        // Consequence events must be contiguous: Died immediately after Consumed,
+        // CarcassCreated immediately after Died (no intervening events)
+        assert_eq!(died_seq, consumed_seq + 1,
+            "Died must immediately follow Consumed (no interleaving)");
+        assert_eq!(carcass_seq, died_seq + 1,
+            "CarcassCreated must immediately follow Died (no interleaving)");
+    }
+
+    #[test]
+    fn queue_empty_at_end_of_tick_after_cascading() {
+        // Run a scenario with cascading (consumption kills target) and verify
+        // that the simulation completes without panicking (the debug_assert
+        // inside step() checks the queue is empty).
+        let params = WorldParameters {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            base_metabolic_rate: 90.0,
+            ..event_test_params()
+        };
+        // Run across many seeds to exercise different cascading paths
+        for seed in 0..20u64 {
+            let mut world = World::new(params.clone(), event_test_dist(), seed);
+            world.add_agent(Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 200.0,
+                traits: TraitVector {
+                    consumption_rate: 15.0,
+                    ..zero_traits()
+                },
+            });
+            world.add_agent(Agent {
+                id: 0,
+                position: (1.0, 0.0),
+                energy: 100.0,
+                traits: zero_traits(),
+            });
+            world.add_agent(Agent {
+                id: 0,
+                position: (2.0, 0.0),
+                energy: 200.0,
+                traits: TraitVector {
+                    scavenging_rate: 10.0,
+                    ..zero_traits()
+                },
+            });
+            // Should not panic from debug_assert!(consequence_queue.is_empty())
+            world.step();
         }
     }
 }
