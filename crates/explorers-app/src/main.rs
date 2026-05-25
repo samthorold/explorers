@@ -869,6 +869,7 @@ fn debug_panel_ui(
 
             ui.label(format!("Tick: {}", tick_count.0));
             ui.label(format!("Agents: {} ({} P / {} C / {} D)", total, producers, consumers, decomposers));
+            ui.label(format!("Carcasses: {}", sim.0.carcasses().len()));
             ui.label(format!("Contact time: avg {:.0} / max {}", avg_contact_time, max_contact_time));
             ui.label(format!("TPS: {:.0}{}", tps, if paused { " | PAUSED" } else { "" }));
 
@@ -922,8 +923,12 @@ fn debug_panel_ui(
                             if let Some(agent) = sim.0.agents().iter().find(|a| a.id == agent_id) {
                                 ui.label(format!("ID: {}", agent.id));
                                 ui.label(format!("Position: ({:.1}, {:.1})", agent.position.0, agent.position.1));
-                                ui.label(format!("Energy: {:.1}", agent.energy));
+                                ui.label(format!("Energy: {:.1}  (death at 0)", agent.energy));
                                 ui.label(format!("Nutrient: {:.1}", agent.nutrient));
+                                let repro_threshold = sim.0.params().reproduction_energy_threshold;
+                                let demand = explorers_sim::stoichiometric_demand(&agent.traits);
+                                ui.label(format!("Repro: energy ≥ {:.0}, nutrient ≥ {:.1}",
+                                    repro_threshold, demand));
                                 ui.label(format!("Contact time: {}", agent.contact_time));
                                 ui.label(format!("Dominant role: {}", dominant_role(&agent.traits)));
                                 ui.separator();
@@ -937,6 +942,7 @@ fn debug_panel_ui(
                                 ui.label(format!("  mate_selectivity: {:.3}", agent.traits.mate_selectivity));
                                 ui.label(format!("  sensing_range: {:.3}", agent.traits.sensing_range));
                                 ui.label(format!("  reproductive_investment: {:.3}", agent.traits.reproductive_investment));
+                                ui.label(format!("  fecundity: {:.3}", agent.traits.fecundity));
                             } else {
                                 ui.label(format!("Agent {} no longer alive", agent_id));
                             }
