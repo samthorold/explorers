@@ -7,11 +7,11 @@ An ecology-driven game where a foreign entity navigates an alien world of interc
 ### Core
 
 **Agent**:
-The fundamental unit of the simulation. Everything in the world is an agent: organisms, carcasses, the player. There is no inert backdrop and no fixed types — an agent's role (producer, consumer, decomposer) is derived from its position in trait space. The derivation has mechanical consequences: trait values determine which capabilities an agent can exercise (e.g. photosynthesis is gated by low mobility), but the labels are always a reading of the trait vector, never an assigned type.
+The fundamental unit of the simulation. Everything in the world is an agent: organisms, carcasses, the player. There is no inert backdrop and no fixed types — an agent's role (producer, consumer, decomposer) is derived from its position in trait space. The derivation has mechanical consequences: trait values determine which capabilities an agent can exercise, but the labels are always a reading of the trait vector, never an assigned type. The trait budget constraint (L1, sum to 1.0) ensures that investing in one capability reduces others, driving role differentiation.
 _Avoid_: entity, creature, organism (when referring to the simulation abstraction)
 
 **Trait vector**:
-A multi-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Genesis-minimal dimensions (9): photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption, mobility, chemotaxis sensitivity, mate selectivity, sensing range, reproductive investment. Deferred dimensions: social weight (herding — emergent flavour, not structurally necessary for genesis criteria), chemical signature (player interaction and species recognition, not needed for genesis fitness).
+A multi-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Trait values sum to 1.0 (L1 budget constraint) — investing more in one capability necessarily reduces others. This shared budget is the primary mechanism that prevents generalist dominance and drives specialisation. Genesis-minimal dimensions (9): photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption, mobility, chemotaxis sensitivity, mate selectivity, sensing range, reproductive investment. Deferred dimensions: social weight (herding — emergent flavour, not structurally necessary for genesis criteria), chemical signature (player interaction and species recognition, not needed for genesis fitness).
 _Avoid_: stats, attributes, genome (genome implies a genotype/phenotype distinction that doesn't exist here)
 
 **Substrate**:
@@ -36,7 +36,7 @@ The discrete time step of the simulation. Each tick, all agents sense their neig
 ### Energy flow
 
 **Solar flux**:
-The sole external energy input to the world. Agents compete locally for flux — each producer shares available light with other producers within a **light competition radius**, weighted by photosynthetic absorption. An isolated producer receives full flux; a producer in a crowded area receives a fraction. Photosynthetic gain is attenuated by mobility via a steep sigmoid: near-sessile agents receive full gain, mobile agents receive negligible gain. The sigmoid constants are fixed laws of the world, not tunable parameters. This creates carrying capacity for producers and enforces the producer/consumer divide.
+The sole external energy input to the world. Agents compete locally for flux — each producer shares available light with other producers within a **light competition radius**, weighted by photosynthetic absorption. An isolated producer receives full flux; a producer in a crowded area receives a fraction. The producer/consumer divide is not enforced by a gate on photosynthesis — it emerges from two structural constraints: the trait budget (investing in photosynthetic absorption leaves less for mobility and consumption) and contact-time nutrient uptake (mobile agents cannot extract nutrients from the substrate, so photosynthesis without nutrient access is a dead end for reproduction).
 _Avoid_: sunlight, light level, radiation
 
 **Consumption**:
@@ -87,7 +87,7 @@ The sensing model. Agents detect others within their sensing range, but signal s
 ### Reproduction and evolution
 
 **Sexual reproduction**:
-Two agents whose trait vectors are within a compatibility distance produce an offspring via budding. Both parents survive. Each parent invests energy according to their own reproductive investment trait. Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Uniform crossover is deliberately chosen over arithmetic mean (Dieckmann & Doebeli 1999) because recombination works against speciation — clusters that persist despite recombination are ecologically reinforced, not just reproductively isolated. The effective reproduction radius depends on the mobility gate: sessile agents disperse spores over their **sensing range**, mobile agents require physical contact within **contact radius**, with continuous interpolation between. A pair can reproduce if their spatial distance is within the maximum of both agents' effective radii — spores travel one way.
+Two agents whose trait vectors are within a compatibility distance produce an offspring via budding. Both parents survive. Each parent invests energy according to their own reproductive investment trait. Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Uniform crossover is deliberately chosen over arithmetic mean (Dieckmann & Doebeli 1999) because recombination works against speciation — clusters that persist despite recombination are ecologically reinforced, not just reproductively isolated. The effective reproduction radius scales with **contact time**: agents with high contact time (long substrate residence) can disperse spores over their **sensing range**; agents with low contact time require physical contact within **contact radius**. Interpolation is continuous. A pair can reproduce if their spatial distance is within the maximum of both agents' effective radii — spores travel one way.
 _Avoid_: mating, breeding (too specific to animal analogues)
 
 **Mate selectivity**:
@@ -99,7 +99,7 @@ A trait dimension controlling how much energy a parent transfers to offspring at
 _Avoid_: brood size, litter size
 
 **Spore dispersal**:
-The reproduction mechanism for sessile agents. Instead of requiring physical contact, a sessile agent disperses reproductive material over its **sensing range**. The effective reproduction radius is interpolated by the mobility gate: sessile agents (gate ≈ 1) use sensing range, mobile agents (gate ≈ 0) use contact radius. This is a law of the world, not a tunable parameter — the same sigmoid that gates photosynthesis gates the reproduction mechanism.
+The reproduction mechanism for agents with high **contact time**. Instead of requiring physical contact, an agent that has maintained sustained substrate contact can disperse reproductive material over its **sensing range**. The effective reproduction radius scales continuously with contact time: high contact time uses sensing range, low contact time uses contact radius. This arises from the same world physics as nutrient uptake — sustained substrate contact is required to establish the structures (analogous to fruiting bodies or sporangia) through which propagules are dispersed.
 _Avoid_: pollination (implies a specific biological mechanism), asexual reproduction (spore dispersal is still sexual — both parents contribute traits)
 
 **Speciation**:
@@ -244,7 +244,7 @@ When an agent's energy reaches zero. The agent becomes a **carcass**.
 
 > **Dev:** An agent with high photosynthetic absorption and low mobility — is that a plant?
 >
-> **Domain:** It's a producer — its low mobility means it gets full photosynthetic gain from the sigmoid gate. We derive that label from its traits, not assign it. If it also has moderate scavenging rate, it's a producer that supplements with decomposition — something that doesn't map to any Earth category. It pays trait maintenance cost for the scavenging machinery whether or not carcasses are nearby.
+> **Domain:** It's a producer — its trait budget is concentrated in photosynthetic absorption and nutrient absorption, leaving little for mobility or consumption. We derive that label from its traits, not assign it. Because it stays put, it accumulates contact time and extracts nutrients efficiently from the substrate. If it also has moderate scavenging rate, it's a producer that supplements with decomposition — but the trait budget means that scavenging investment comes at the cost of its other capabilities.
 >
 > **Dev:** What happens when a herbivore eats a producer?
 >
