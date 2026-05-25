@@ -19,8 +19,16 @@ The physical medium of the world — what agents live on and in. Holds nutrients
 _Avoid_: terrain (too specific to one property), environment (too broad), map (implies player-facing representation)
 
 **Energy**:
-The universal currency of the simulation. Enters the world only through solar flux. Flows between agents through consumption, reproduction, and decomposition. Energy conversion is lossy at every trophic transfer — consumers capture only a fraction of the energy they drain (per Lindeman 1942's trophic efficiency principle). The remainder is dissipated. Metabolic cost also dissipates energy. The system is open: solar flux is the sole tap, metabolic dissipation and transfer loss are the drains. Carrying capacity and trophic pyramid structure emerge from this energy budget rather than being imposed.
+The universal currency of the simulation. Enters the world only through solar flux. Flows between agents through consumption, reproduction, and decomposition. Energy conversion is lossy at every trophic transfer — consumers capture only a fraction of the energy they drain (per Lindeman 1942's trophic efficiency principle). The remainder is dissipated. Metabolic cost also dissipates energy. The system is open: solar flux is the sole tap, metabolic dissipation and transfer loss are the drains. Carrying capacity and trophic pyramid structure emerge from this energy budget rather than being imposed. Energy exists in two forms within a living agent: **reserve** and **structure**.
 _Avoid_: health, mana, resources
+
+**Reserve**:
+An agent's metabolic fuel — the operating account through which all energy flows. Photosynthesis and decomposition income enter as reserve. Metabolic costs, growth, and reproduction are paid from reserve. Reserve fluctuates each tick as income and costs are applied. Death occurs when reserve reaches zero (starvation). Distinct from structure: reserve is the fuel gauge, not the body.
+_Avoid_: energy (when specifically meaning the metabolic balance), stamina
+
+**Structure**:
+An agent's embodied biomass energy — the physical body built up over its lifetime. Structure accumulates when an agent allocates reserve surplus to growth (a lossy conversion). Consumption by another agent drains the target's structure (eating the body). Death transfers structure to the carcass — this is what makes carcasses energy-rich and decomposers energetically viable. Death also occurs when structure drops below a complexity-dependent threshold: agents with trait budget spread across many dimensions (high complexity) are more fragile to structural damage than specialists concentrated in few traits. Grounded in DEB theory's (Kooijman 2010) distinction between reserve and structure.
+_Avoid_: biomass (too overloaded in ecology), body size, HP
 
 **Nutrient**:
 A cycling resource that agents require alongside energy. Unlike energy, nutrients are conserved — they cycle between pools rather than flowing from source to sink. The system tracks a single nutrient alongside energy. An agent's nutrient demand (how much nutrient it needs per unit energy) is derived from its trait vector — more capable agents need more nutrient. Nutrient limitation blocks reproduction but does not impair other functions.
@@ -40,15 +48,15 @@ The sole external energy input to the world. Agents compete locally for flux —
 _Avoid_: sunlight, light level, radiation
 
 **Consumption**:
-An agent draining energy and nutrient from a living agent over time through sustained contact. The consumer's consumption rate trait determines drain speed. The consumer retains only the nutrient it needs (per its stoichiometric demand) and excretes excess immediately to the available pool. The target survives unless its energy reaches zero — grazing is non-lethal by default.
+An agent draining structure and nutrient from a living agent over time through sustained contact — the consumer is eating the target's body. The consumer's consumption rate trait determines drain speed. The drained structure enters the consumer's reserve (with trophic transfer loss). The consumer retains only the nutrient it needs (per its stoichiometric demand) and excretes excess immediately to the available pool. The target survives unless its structure drops below its complexity-dependent death threshold or its reserve reaches zero — grazing is non-lethal by default.
 _Avoid_: eating, attacking, harvesting
 
 **Carcass**:
-A dead agent. Retains the dead agent's energy and nutrient, locked until a decomposer processes it. Emits a chemical signal detectable by agents with scavenging affinity. No passive decay — energy and nutrient stay locked indefinitely without decomposition.
+A dead agent. Retains the dead agent's structure (embodied biomass energy) and nutrient, locked until a decomposer processes it. Emits a chemical signal detectable by agents with scavenging affinity. No passive decay — structure and nutrient stay locked indefinitely without decomposition. A carcass's energy content reflects the agent's accumulated structure at death — old, well-fed agents leave energy-rich carcasses; heavily grazed or starved agents leave energy-poor ones.
 _Avoid_: corpse, remains, resource node
 
 **Decomposition**:
-An agent draining energy and nutrient from a **carcass**. Functionally identical to **consumption** but targets carcasses rather than living agents, governed by the scavenging rate trait. Nutrient that exceeds the decomposer's stoichiometric demand is excreted immediately to the available pool, closing the nutrient cycle.
+An agent draining structure and nutrient from a **carcass**. Functionally identical to **consumption** but targets carcasses rather than living agents, governed by the scavenging rate trait. The extracted structure enters the decomposer's reserve (with trophic transfer loss). Nutrient that exceeds the decomposer's stoichiometric demand is excreted immediately to the available pool, closing the nutrient cycle.
 _Avoid_: recycling, decay (decay implies passive process)
 
 **Nutrient uptake**:
@@ -238,7 +246,7 @@ The output artifact of world genesis. A combination of **world parameters**, an 
 _Avoid_: save file, world state, snapshot (a recipe is instructions for creating a world, not a captured moment of one)
 
 **Death**:
-When an agent's energy reaches zero. The agent becomes a **carcass**.
+When an agent's reserve reaches zero (starvation, predation) or its structure drops below its complexity-dependent threshold (structural damage from consumption). The agent becomes a **carcass**, retaining its remaining structure and nutrient.
 
 ## Example dialogue
 
@@ -248,11 +256,11 @@ When an agent's energy reaches zero. The agent becomes a **carcass**.
 >
 > **Dev:** What happens when a herbivore eats a producer?
 >
-> **Domain:** A consumer drains energy from it through consumption. The producer doesn't die unless its energy hits zero — it can recover if the consumer moves on. If it does die, it becomes a carcass, and its energy is locked until a decomposer finds it.
+> **Domain:** A consumer drains structure from it — eating the body. The drained structure enters the consumer's reserve with trophic loss. The producer doesn't die unless its structure drops below its death threshold or its reserve hits zero — it can recover if the consumer moves on, regrowing structure from reserve surplus. If it does die, its remaining structure and nutrient become a carcass, locked until a decomposer finds it.
 >
 > **Dev:** What if all the decomposers die out?
 >
-> **Domain:** Energy accumulates in carcasses with no way back into the flux. Producers starve for lack of recycled energy — wait, no. Producers get energy from solar flux directly. But the total energy in the living system shrinks as more gets locked in carcasses. Eventually populations decline because there's less free energy circulating. It's a slow death, not a sudden collapse.
+> **Domain:** Energy accumulates in carcass structure with no way back into the living system. Nutrient locks in carcasses too — and that's the real bottleneck. Producers get energy from solar flux directly, so energy input continues. But nutrient is conserved and cycling — every death locks nutrient in carcasses. Without decomposers to release it, the available pool depletes. Eventually producers can't reproduce even though they have plenty of energy. It's a slow death through nutrient starvation, not energy starvation.
 >
 > **Dev:** How do species form?
 >
