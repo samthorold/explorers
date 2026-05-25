@@ -1,9 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
+use rand::distr::Distribution;
+use rand_chacha::ChaCha8Rng;
+use rand_distr::Normal;
+
 use crate::event;
 use crate::spatial::SpatialGrid;
 use crate::{
-    Agent, Broadcast, Carcass, NearbyAgent, ProjectionData,
+    Agent, Broadcast, Carcass, NearbyAgent, ProjectionData, TraitVector,
     emit_broadcasts, toroidal_distance,
 };
 
@@ -15,9 +19,12 @@ pub struct ResolverParams {
     pub world_extent: f32,
     pub reproduction_energy_threshold: f32,
     pub solar_flux_magnitude: f32,
+    pub reproduction_efficiency: f32,
+    pub mutation_rate: f32,
+    pub mutation_magnitude: f32,
 }
 
-/// Accumulated mutations from resolving consumption interactions.
+/// Accumulated mutations from resolving all interactions.
 pub struct ResolverResult {
     pub events: Vec<event::Event>,
     pub broadcasts: Vec<Broadcast>,
@@ -30,6 +37,9 @@ pub struct ResolverResult {
     pub dissipated_energy: f32,
     pub solar_gains: Vec<f32>,
     pub total_solar_input: f32,
+    pub offspring: Vec<Agent>,
+    pub reproduction_investments: Vec<f32>,
+    pub next_agent_id: u64,
 }
 
 /// Resolve trophic interactions (consumption and decomposition) and their
@@ -50,6 +60,8 @@ pub fn resolve_interactions(
     tick: u64,
     pre_tick_energies: &[f32],
     light_shares: &[f32],
+    rng: &mut ChaCha8Rng,
+    next_agent_id: u64,
 ) -> ResolverResult {
     let n = agents.len();
     let mut working_energies: Vec<f32> = agents.iter().map(|a| a.energy).collect();
@@ -453,6 +465,158 @@ pub fn resolve_interactions(
         }
     }
 
+    // --- Reproduction ---
+    let mut reproduction_investments = vec![0.0_f32; n];
+    let mut reproduced = vec![false; n];
+    let mut offspring: Vec<Agent> = Vec::new();
+    let mut next_agent_id = next_agent_id;
+
+    for &i in order {
+        if dead_agents.contains(&i) || working_energies[i] <= 0.0 {
+            continue;
+        }
+        if reproduced[i] || working_energies[i] <= params.reproduction_energy_threshold {
+            continue;
+        }
+
+        emit_broadcasts(
+            &mut broadcasts,
+            &event::EventKind::MatingReadiness,
+            agents[i].position,
+            agents,
+            &dead_agents,
+            nack_sets,
+            params.world_extent,
+        );
+
+        // Build nearby agents for mate selection via receive()
+        let nearby_mates: Vec<NearbyAgent> = (0..n)
+            .filter_map(|j| {
+                if j == i || dead_agents.contains(&j) || reproduced[j]
+                    || working_energies[j] <= params.reproduction_energy_threshold
+                {
+                    return None;
+                }
+                let dist = toroidal_distance(
+                    agents[i].position, agents[j].position, params.world_extent,
+                );
+                Some(NearbyAgent {
+                    id: agents[j].id,
+                    distance: dist,
+                    energy: working_energies[j],
+                    traits: agents[j].traits,
+                })
+            })
+            .collect();
+
+        let data = ProjectionData {
+            feeding_gradient: (0.0, 0.0),
+            carcass_gradient: (0.0, 0.0),
+            nearby_agents: nearby_mates,
+            nearby_carcasses: vec![],
+            contact_radius: params.contact_radius,
+            reproduction_energy_threshold: params.reproduction_energy_threshold,
+        };
+        let trigger = event::Event {
+            tick,
+            seq: 0,
+            kind: event::EventKind::MatingReadiness,
+            source: agents[i].id,
+            target: None,
+            energy_delta: 0.0,
+            position: Some(agents[i].position),
+        };
+        let response = agents[i].receive(&trigger, &data);
+
+        if let Some(mate_event) = response.events.first() {
+            let mate_id = mate_event.target.unwrap();
+            let j = (0..n).find(|&k| agents[k].id == mate_id).unwrap();
+            reproduced[i] = true;
+            reproduced[j] = true;
+
+            events.push(event::Event {
+                tick,
+                seq: 0,
+                kind: event::EventKind::MateSelected,
+                source: agents[i].id,
+                target: Some(agents[j].id),
+                energy_delta: 0.0,
+                position: Some(agents[i].position),
+            });
+
+            let inv_a = agents[i].traits.reproductive_investment;
+            let inv_b = agents[j].traits.reproductive_investment;
+            working_energies[i] -= inv_a;
+            working_energies[j] -= inv_b;
+            reproduction_investments[i] = inv_a;
+            reproduction_investments[j] = inv_b;
+
+            let offspring_energy =
+                (inv_a + inv_b) * params.reproduction_efficiency;
+            dissipated_energy +=
+                (inv_a + inv_b) * (1.0 - params.reproduction_efficiency);
+
+            // Trait inheritance: uniform crossover
+            let mut child_traits = TraitVector {
+                photosynthetic_absorption: 0.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            };
+            for dim in 0..8 {
+                let from_a: bool = rand::distr::Uniform::new(0u32, 2)
+                    .unwrap()
+                    .sample(rng)
+                    == 0;
+                let val = if from_a {
+                    agents[i].traits.get(dim)
+                } else {
+                    agents[j].traits.get(dim)
+                };
+                child_traits.set(dim, val);
+            }
+
+            // Mutation
+            if params.mutation_rate > 0.0 {
+                let mutation_dist =
+                    Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
+                for dim in 0..8 {
+                    let r: f32 = rand::distr::Uniform::new(0.0_f32, 1.0)
+                        .unwrap()
+                        .sample(rng);
+                    if r < params.mutation_rate {
+                        let perturbation = mutation_dist.sample(rng);
+                        child_traits.set(dim, child_traits.get(dim) + perturbation);
+                    }
+                }
+            }
+
+            let offspring_id = next_agent_id;
+            next_agent_id += 1;
+
+            events.push(event::Event {
+                tick,
+                seq: 0,
+                kind: event::EventKind::Born,
+                source: offspring_id,
+                target: None,
+                energy_delta: offspring_energy,
+                position: Some(agents[i].position),
+            });
+
+            offspring.push(Agent {
+                id: offspring_id,
+                position: agents[i].position,
+                energy: offspring_energy,
+                traits: child_traits,
+            });
+        }
+    }
+
     ResolverResult {
         events,
         broadcasts,
@@ -465,6 +629,9 @@ pub fn resolve_interactions(
         dissipated_energy,
         solar_gains,
         total_solar_input,
+        offspring,
+        reproduction_investments,
+        next_agent_id,
     }
 }
 
@@ -472,6 +639,7 @@ pub fn resolve_interactions(
 mod tests {
     use super::*;
     use crate::TraitVector;
+    use rand::SeedableRng;
 
     fn zero_traits() -> TraitVector {
         TraitVector {
@@ -521,10 +689,14 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
         };
 
         let order = vec![0, 1];
         let pre_tick_energies = vec![50.0, 50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let result = resolve_interactions(
             &agents,
@@ -538,6 +710,8 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+            &mut rng,
+            100,
         );
 
         // drain = 2.0, gain = 2.0 * 0.5 = 1.0
@@ -607,10 +781,15 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 0.0,
+        reproduction_efficiency: 0.7,
+        mutation_rate: 0.0,
+        mutation_magnitude: 0.0,
         };
 
         let order = vec![0, 1];
-        let pre_tick_energies = vec![100.0, 5.0];
+        let pre_tick_energies = vec![100.0, 5.0];let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+
 
         let result = resolve_interactions(
             &agents,
@@ -624,6 +803,8 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+        &mut rng,
+        100,
         );
 
         // drain = 5.0 (capped at target energy), gain = 5.0 * 0.5 = 2.5
@@ -703,10 +884,15 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 0.0,
+        reproduction_efficiency: 0.7,
+        mutation_rate: 0.0,
+        mutation_magnitude: 0.0,
         };
 
         let order = vec![0];
-        let pre_tick_energies = vec![50.0];
+        let pre_tick_energies = vec![50.0];let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+
 
         let result = resolve_interactions(
             &agents,
@@ -720,6 +906,8 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+        &mut rng,
+        100,
         );
 
         // drain = 4.0 (scavenging_rate, capped at carcass energy 10.0)
@@ -781,10 +969,15 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 0.0,
+        reproduction_efficiency: 0.7,
+        mutation_rate: 0.0,
+        mutation_magnitude: 0.0,
         };
 
         let order = vec![0];
-        let pre_tick_energies = vec![50.0];
+        let pre_tick_energies = vec![50.0];let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+
 
         let result = resolve_interactions(
             &agents,
@@ -798,6 +991,8 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+        &mut rng,
+        100,
         );
 
         // drain = 10.0 (capped at carcass energy), gain = 10.0 * 0.8 = 8.0
@@ -875,11 +1070,16 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 10.0,
+        reproduction_efficiency: 0.7,
+        mutation_rate: 0.0,
+        mutation_magnitude: 0.0,
         };
 
         let order = vec![0, 1];
         let pre_tick_energies = vec![50.0, 50.0];
-        let light_shares = vec![0.8, 0.2];
+        let light_shares = vec![0.8, 0.2];let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+
 
         let result = resolve_interactions(
             &agents,
@@ -893,6 +1093,8 @@ mod tests {
             0,
             &pre_tick_energies,
             &light_shares,
+        &mut rng,
+        100,
         );
 
         // mobility_gate for mobility=0.0: 1/(1+exp(20*(0-0.3))) = 1/(1+exp(-6)) ≈ 0.9975
@@ -959,11 +1161,16 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 10.0,
+        reproduction_efficiency: 0.7,
+        mutation_rate: 0.0,
+        mutation_magnitude: 0.0,
         };
 
         let order = vec![0, 1];
         let pre_tick_energies = vec![50.0, 50.0];
-        let light_shares = vec![0.5, 0.5];
+        let light_shares = vec![0.5, 0.5];let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+
 
         let result = resolve_interactions(
             &agents,
@@ -977,6 +1184,8 @@ mod tests {
             0,
             &pre_tick_energies,
             &light_shares,
+        &mut rng,
+        100,
         );
 
         let gate_low = 1.0 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
@@ -1041,11 +1250,16 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 10.0,
+        reproduction_efficiency: 0.7,
+        mutation_rate: 0.0,
+        mutation_magnitude: 0.0,
         };
 
         let order = vec![0, 1];
         let pre_tick_energies = vec![50.0, 50.0];
-        let light_shares = vec![1.0, 1.0];
+        let light_shares = vec![1.0, 1.0];let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+
 
         let result = resolve_interactions(
             &agents,
@@ -1059,6 +1273,8 @@ mod tests {
             0,
             &pre_tick_energies,
             &light_shares,
+        &mut rng,
+        100,
         );
 
         // Agent 0 consumed, so should have zero solar gain
@@ -1108,11 +1324,16 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 10.0,
+        reproduction_efficiency: 0.7,
+        mutation_rate: 0.0,
+        mutation_magnitude: 0.0,
         };
 
         let order = vec![0];
         let pre_tick_energies = vec![50.0];
-        let light_shares = vec![1.0];
+        let light_shares = vec![1.0];let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+
 
         let result = resolve_interactions(
             &agents,
@@ -1126,6 +1347,8 @@ mod tests {
             0,
             &pre_tick_energies,
             &light_shares,
+        &mut rng,
+        100,
         );
 
         assert!(
@@ -1184,10 +1407,15 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 0.0,
+        reproduction_efficiency: 0.7,
+        mutation_rate: 0.0,
+        mutation_magnitude: 0.0,
         };
 
         let order = vec![0, 1];
-        let pre_tick_energies = vec![50.0, 50.0];
+        let pre_tick_energies = vec![50.0, 50.0];let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+
 
         let result = resolve_interactions(
             &agents,
@@ -1201,6 +1429,8 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+        &mut rng,
+        100,
         );
 
         // Agent 0 should have consumed (gain > 0)
@@ -1225,6 +1455,185 @@ mod tests {
         assert!(
             decomposed_by_0.is_empty(),
             "agent 0 must not emit Decomposed"
+        );
+    }
+
+    #[test]
+    fn reproduction_creates_offspring_with_correct_energy_and_investment() {
+        // Two compatible agents above threshold should reproduce:
+        // each invests their reproductive_investment, offspring gets
+        // (inv_a + inv_b) * reproduction_efficiency
+        let shared_traits = TraitVector {
+            mobility: 1.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        let agents = vec![
+            Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 50.0,
+                traits: shared_traits,
+            },
+            Agent {
+                id: 1,
+                position: (2.0, 0.0),
+                energy: 50.0,
+                traits: shared_traits,
+            },
+        ];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 10.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+        };
+
+        let order = vec![0, 1];
+        let pre_tick_energies = vec![50.0, 50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &[],
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &vec![0.0; agents.len()],
+            &mut rng,
+            100,
+        );
+
+        // One offspring should be created
+        assert_eq!(result.offspring.len(), 1, "should produce one offspring");
+
+        // Offspring energy = (10 + 10) * 0.7 = 14.0
+        let offspring = &result.offspring[0];
+        assert!(
+            (offspring.energy - 14.0).abs() < 1e-5,
+            "offspring energy: {}",
+            offspring.energy
+        );
+
+        // Parental investments tracked
+        assert!(
+            (result.reproduction_investments[0] - 10.0).abs() < 1e-5,
+            "parent A investment: {}",
+            result.reproduction_investments[0]
+        );
+        assert!(
+            (result.reproduction_investments[1] - 10.0).abs() < 1e-5,
+            "parent B investment: {}",
+            result.reproduction_investments[1]
+        );
+
+        // next_agent_id should be incremented
+        assert_eq!(result.next_agent_id, 101);
+    }
+
+    #[test]
+    fn reproduction_efficiency_dissipation_tracked() {
+        // With reproduction_efficiency = 0.6, parents investing 15 and 8,
+        // dissipated = (15 + 8) * (1 - 0.6) = 9.2
+        let agents = vec![
+            Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 50.0,
+                traits: TraitVector {
+                    mobility: 1.0,
+                    mate_selectivity: 10.0,
+                    reproductive_investment: 15.0,
+                    ..zero_traits()
+                },
+            },
+            Agent {
+                id: 1,
+                position: (2.0, 0.0),
+                energy: 50.0,
+                traits: TraitVector {
+                    mobility: 1.0,
+                    mate_selectivity: 10.0,
+                    reproductive_investment: 8.0,
+                    ..zero_traits()
+                },
+            },
+        ];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 10.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.6,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+        };
+
+        let order = vec![0, 1];
+        let pre_tick_energies = vec![50.0, 50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &[],
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &vec![0.0; agents.len()],
+            &mut rng,
+            100,
+        );
+
+        assert_eq!(result.offspring.len(), 1);
+
+        // Offspring energy = (15 + 8) * 0.6 = 13.8
+        assert!(
+            (result.offspring[0].energy - 13.8).abs() < 1e-5,
+            "offspring energy: {}",
+            result.offspring[0].energy
+        );
+
+        // Dissipated = (15 + 8) * 0.4 = 9.2
+        assert!(
+            (result.dissipated_energy - 9.2).abs() < 1e-5,
+            "dissipated: {}",
+            result.dissipated_energy
         );
     }
 }
