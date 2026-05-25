@@ -157,7 +157,6 @@ fn main() {
 
 fn setup_camera(mut commands: Commands, sim: Res<SimWorld>) {
     let extent = sim.0.params().world_extent;
-    let center = extent / 2.0;
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
@@ -167,7 +166,7 @@ fn setup_camera(mut commands: Commands, sim: Res<SimWorld>) {
             },
             ..OrthographicProjection::default_2d()
         }),
-        Transform::from_xyz(center, center, 0.0),
+        Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 }
 
@@ -434,8 +433,8 @@ mod tests {
             .single(app.world())
             .unwrap();
 
-        assert_eq!(transform.translation.x, 100.0);
-        assert_eq!(transform.translation.y, 100.0);
+        assert_eq!(transform.translation.x, 0.0);
+        assert_eq!(transform.translation.y, 0.0);
     }
 
     #[test]
@@ -780,17 +779,18 @@ fn setup_grid(
     let vertical_mesh = meshes.add(Rectangle::new(line_thickness, extent));
     let horizontal_mesh = meshes.add(Rectangle::new(extent, line_thickness));
 
+    let half = extent / 2.0;
     for i in 0..=divisions {
-        let pos = i as f32 * spacing;
+        let pos = -half + i as f32 * spacing;
         commands.spawn((
             Mesh2d(vertical_mesh.clone()),
             MeshMaterial2d(line_material.clone()),
-            Transform::from_xyz(pos, extent / 2.0, 0.0),
+            Transform::from_xyz(pos, 0.0, 0.0),
         ));
         commands.spawn((
             Mesh2d(horizontal_mesh.clone()),
             MeshMaterial2d(line_material.clone()),
-            Transform::from_xyz(extent / 2.0, pos, 0.0),
+            Transform::from_xyz(0.0, pos, 0.0),
         ));
     }
 }

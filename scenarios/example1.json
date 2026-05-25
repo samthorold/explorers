@@ -24,8 +24,8 @@
   "agents": [
     {
       "position": [
-        50.0,
-        50.0
+        0.0,
+        0.0
       ],
       "energy": 20.0,
       "traits": {
