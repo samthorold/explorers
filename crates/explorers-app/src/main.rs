@@ -36,7 +36,7 @@ fn main() {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--recipe" => {
+            "--recipe" | "--scenario" => {
                 i += 1;
                 recipe_path = Some(args[i].clone());
             }
@@ -49,6 +49,8 @@ fn main() {
                 eprintln!();
                 eprintln!("Options:");
                 eprintln!("  --recipe PATH        Load world recipe from JSON file");
+                eprintln!("  --scenario PATH      Load scenario from JSON file (same format as recipe,");
+                eprintln!("                       but may include explicit agents list)");
                 eprintln!("  --fast-forward N     Advance simulation N ticks before rendering");
                 eprintln!("  --help, -h           Show this help");
                 return;
@@ -89,10 +91,9 @@ fn main() {
                 photo_maintenance_cost: 0.01,
                 consumption_maintenance_cost: 0.01,
                 scavenging_maintenance_cost: 0.01,
-spatial_decay_rate: 0.5,
-
+                spatial_decay_rate: 0.5,
             },
-            initial_distribution: InitialDistribution {
+            initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
                     photosynthetic_absorption: 0.5,
                     consumption_rate: 0.3,
@@ -106,14 +107,15 @@ spatial_decay_rate: 0.5,
                 trait_covariance: 0.1,
                 initial_cluster_count: 1,
                 initial_energy_per_agent: 100.0,
-            },
+            }),
+            agents: None,
             max_ticks: 100,
         },
     };
 
     let ticks = if fast_forward > 0 { fast_forward } else { recipe.max_ticks };
     let seed: u64 = rand::random();
-    let mut world = World::new(recipe.parameters, recipe.initial_distribution, seed);
+    let mut world = World::from_recipe(&recipe, seed);
 
     eprintln!("Fast-forwarding {ticks} ticks...");
     for _ in 0..ticks {
