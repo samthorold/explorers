@@ -229,6 +229,154 @@ impl RunObserver {
     }
 }
 
+pub fn evaluate_from_log(
+    world: &explorers_sim::World,
+    config: &EvalConfig,
+    max_ticks: u64,
+) -> FitnessBreakdown {
+    let agents = world.agents();
+    let ticks_survived = world.tick();
+
+    let zero_breakdown = |failure: FailureMode| FitnessBreakdown {
+        fitness: 0.0,
+        failure: Some(failure),
+        oscillation_strength: 0.0,
+        clustering_strength: 0.0,
+        coexistence_duration: 0.0,
+        turnover_score: 0.0,
+        trophic_balance_score: 0.0,
+        ticks_survived,
+    };
+
+    if agents.is_empty() {
+        return zero_breakdown(FailureMode::Extinction);
+    }
+
+    if is_population_explosion(agents.len(), config.max_population) {
+        return zero_breakdown(FailureMode::PopulationExplosion);
+    }
+
+    let log = world.event_log();
+    let total_births = log.by_kind(&explorers_sim::event::EventKind::Born).len();
+    let total_deaths = log.by_kind(&explorers_sim::event::EventKind::Died).len();
+    let ts = turnover_score(total_births, total_deaths, max_ticks);
+
+    let trait_vectors: Vec<_> = agents.iter().map(|a| a.traits).collect();
+    let energies: Vec<_> = agents.iter().map(|a| a.energy).collect();
+
+    let cs = if trait_vectors.len() >= 4 {
+        clustering_strength(&trait_vectors)
+    } else {
+        0.0
+    };
+
+    let labels = dbscan(&trait_vectors, config.dbscan_eps, config.dbscan_min_points);
+    let tb = trophic_balance_score(&trait_vectors, &labels, &energies);
+
+    let grace_ticks = (max_ticks as f32 * config.grace_period_fraction) as u64;
+    if ticks_survived > grace_ticks {
+        let mut energy_per_tick: Vec<f32> = Vec::new();
+        for tick in 0..ticks_survived {
+            let tick_energy: f32 = log
+                .by_tick_range(tick, tick + 1)
+                .iter()
+                .filter(|e| {
+                    e.kind == explorers_sim::event::EventKind::Consumed
+                        || e.kind == explorers_sim::event::EventKind::Decomposed
+                })
+                .map(|e| e.energy_delta)
+                .sum();
+            energy_per_tick.push(tick_energy);
+        }
+        let post_grace: Vec<f32> = energy_per_tick
+            .into_iter()
+            .skip(grace_ticks as usize)
+            .collect();
+        if is_energy_flow_dead(&post_grace, config.energy_death_window) {
+            return zero_breakdown(FailureMode::EnergyDeath);
+        }
+    }
+
+    if ticks_survived > grace_ticks && trait_vectors.len() >= 20 {
+        if is_monoculture(&trait_vectors, config.clustering_threshold) {
+            return zero_breakdown(FailureMode::Monoculture);
+        }
+        if is_generalist_dominant(
+            &trait_vectors,
+            &labels,
+            &energies,
+            config.generalist_threshold,
+            config.generalist_dominance_fraction,
+        ) {
+            return zero_breakdown(FailureMode::GeneralistDominance);
+        }
+    }
+
+    let mut topo = explorers_sim::topology::TopologyProjection::new();
+    topo.update(log);
+    let mut lineage_map = topo.lineage_clusters();
+
+    let initial_pop = world.params().initial_population_size as u64;
+    let next_cluster = lineage_map.values().max().map_or(0, |&m| m + 1);
+    for id in 0..initial_pop {
+        lineage_map.entry(id).or_insert_with(|| {
+            let c = next_cluster + id as usize;
+            c
+        });
+    }
+
+    let mut active: std::collections::HashSet<u64> = (0..initial_pop).collect();
+
+    let mut cluster_counts_per_tick: Vec<usize> = Vec::new();
+    let mut cluster_pop_series: std::collections::HashMap<usize, Vec<usize>> =
+        std::collections::HashMap::new();
+
+    for tick in 0..ticks_survived {
+        for event in log.by_tick_range(tick, tick + 1) {
+            match event.kind {
+                explorers_sim::event::EventKind::Born => {
+                    active.insert(event.source);
+                }
+                explorers_sim::event::EventKind::Died => {
+                    active.remove(&event.source);
+                }
+                _ => {}
+            }
+        }
+
+        let mut pop_this_tick: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        for &agent_id in &active {
+            if let Some(&cluster) = lineage_map.get(&agent_id) {
+                *pop_this_tick.entry(cluster).or_default() += 1;
+            }
+        }
+
+        cluster_counts_per_tick.push(pop_this_tick.len());
+
+        for (&cluster, &count) in &pop_this_tick {
+            cluster_pop_series.entry(cluster).or_default().push(count);
+        }
+    }
+
+    let pop_vecs: Vec<Vec<usize>> = cluster_pop_series.into_values().collect();
+    let os = oscillation_strength(&pop_vecs);
+    let cd = coexistence_duration(&cluster_counts_per_tick);
+
+    let fitness = 0.2 * os + 0.2 * cs + 0.2 * cd + 0.2 * ts + 0.2 * tb;
+
+    FitnessBreakdown {
+        fitness,
+        failure: None,
+        oscillation_strength: os,
+        clustering_strength: cs,
+        coexistence_duration: cd,
+        turnover_score: ts,
+        trophic_balance_score: tb,
+        ticks_survived,
+    }
+}
+
 pub fn is_extinct(agent_count: usize) -> bool {
     agent_count == 0
 }
@@ -581,6 +729,14 @@ fn region_query(trait_vectors: &[explorers_sim::TraitVector], idx: usize, eps: f
     neighbors
 }
 
+pub fn is_energy_flow_dead(energy_flow_per_tick: &[f32], window: usize) -> bool {
+    if energy_flow_per_tick.len() < window {
+        return false;
+    }
+    let tail = &energy_flow_per_tick[energy_flow_per_tick.len() - window..];
+    tail.iter().all(|&e| e <= 0.0)
+}
+
 pub fn is_energy_death(energy_history: &[f32], window: usize) -> bool {
     if energy_history.len() < window {
         return false;
@@ -592,6 +748,262 @@ pub fn is_energy_death(energy_history: &[f32], window: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_world_params() -> explorers_sim::WorldParameters {
+        explorers_sim::WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.01,
+            sensing_cost_coefficient: 0.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            reproduction_efficiency: 0.9,
+            movement_cost_coefficient: 0.0,
+            reproduction_energy_threshold: 5.0,
+            mutation_rate: 0.1,
+            mutation_magnitude: 0.1,
+            contact_radius: 10.0,
+            world_extent: 20.0,
+            initial_population_size: 30,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
+            spatial_decay_rate: 0.5,
+        }
+    }
+
+    fn test_distribution() -> explorers_sim::InitialDistribution {
+        explorers_sim::InitialDistribution {
+            mean_traits: explorers_sim::TraitVector {
+                photosynthetic_absorption: 0.8,
+                consumption_rate: 0.3,
+                scavenging_rate: 0.1,
+                mobility: 0.3,
+                chemotaxis_sensitivity: 0.2,
+                mate_selectivity: 100.0,
+                sensing_range: 5.0,
+                reproductive_investment: 0.3,
+            },
+            trait_covariance: 0.5,
+            initial_cluster_count: 2,
+            initial_energy_per_agent: 50.0,
+        }
+    }
+
+    #[test]
+    fn evaluate_from_log_turnover_matches_event_counts() {
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 1.0,
+            ..EvalConfig::default()
+        };
+        let max_ticks = 50;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        for _ in 0..max_ticks {
+            world.step();
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+        let result = evaluate_from_log(&world, &config, max_ticks);
+        let born_count = world.event_log().by_kind(&explorers_sim::event::EventKind::Born).len();
+        let died_count = world.event_log().by_kind(&explorers_sim::event::EventKind::Died).len();
+        let expected_ts = turnover_score(born_count, died_count, max_ticks);
+        assert!(born_count > 0, "test setup should produce births");
+        assert!(expected_ts > 0.0, "test setup should produce non-zero turnover");
+        assert_eq!(result.turnover_score, expected_ts);
+    }
+
+    #[test]
+    fn energy_flow_dead_when_zero_for_window() {
+        let flow = vec![5.0, 3.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        assert!(is_energy_flow_dead(&flow, 5));
+    }
+
+    #[test]
+    fn energy_flow_not_dead_when_activity_in_window() {
+        let flow = vec![5.0, 3.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0];
+        assert!(!is_energy_flow_dead(&flow, 5));
+    }
+
+    #[test]
+    fn energy_flow_not_dead_when_shorter_than_window() {
+        let flow = vec![0.0, 0.0];
+        assert!(!is_energy_flow_dead(&flow, 5));
+    }
+
+    #[test]
+    fn evaluate_from_log_detects_monoculture() {
+        let params = explorers_sim::WorldParameters {
+            solar_flux_magnitude: 5.0,
+            base_metabolic_rate: 0.01,
+            reproduction_energy_threshold: 500.0,
+            contact_radius: 5.0,
+            world_extent: 20.0,
+            initial_population_size: 30,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_world_params()
+        };
+        let dist = explorers_sim::InitialDistribution {
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            ..test_distribution()
+        };
+        let config = EvalConfig {
+            grace_period_fraction: 0.0,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 10;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        for _ in 0..max_ticks {
+            world.step();
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+        if world.agents().len() < 20 {
+            return; // can't test monoculture with too few agents
+        }
+        let result = evaluate_from_log(&world, &config, max_ticks);
+        assert_eq!(result.failure, Some(FailureMode::Monoculture),
+            "identical traits from single cluster should be monoculture, \
+             clustering_strength={}", result.clustering_strength);
+        assert_eq!(result.fitness, 0.0);
+    }
+
+    #[test]
+    fn evaluate_from_log_detects_population_explosion() {
+        let params = explorers_sim::WorldParameters {
+            initial_population_size: 10001,
+            ..test_world_params()
+        };
+        let dist = test_distribution();
+        let config = EvalConfig::default();
+        let max_ticks: u64 = 1;
+        let world = explorers_sim::World::new(params, dist, 42);
+        let result = evaluate_from_log(&world, &config, max_ticks);
+        assert_eq!(result.failure, Some(FailureMode::PopulationExplosion));
+        assert_eq!(result.fitness, 0.0);
+    }
+
+    #[test]
+    fn evaluate_from_log_coexistence_and_oscillation_from_lineage_clusters() {
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 1.0,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 50;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        for _ in 0..max_ticks {
+            world.step();
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+        if world.agents().is_empty() {
+            return;
+        }
+        let result = evaluate_from_log(&world, &config, max_ticks);
+        // With 30 initial agents from 2 clusters, there should be some coexistence
+        // and the values should be computed (not left at 0.0 stub)
+        let fitness = 0.2 * result.oscillation_strength
+            + 0.2 * result.clustering_strength
+            + 0.2 * result.coexistence_duration
+            + 0.2 * result.turnover_score
+            + 0.2 * result.trophic_balance_score;
+        assert_eq!(result.fitness, fitness, "fitness should be weighted sum of components");
+        assert!(result.fitness > 0.0, "non-degenerate run should have positive fitness");
+    }
+
+    #[test]
+    fn evaluate_from_log_clustering_and_trophic_from_final_state() {
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 1.0,
+            ..EvalConfig::default()
+        };
+        let max_ticks = 50;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        for _ in 0..max_ticks {
+            world.step();
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+        if world.agents().is_empty() {
+            return; // can't test final-state metrics on extinct world
+        }
+        let result = evaluate_from_log(&world, &config, max_ticks);
+
+        let trait_vectors: Vec<_> = world.agents().iter().map(|a| a.traits).collect();
+        let energies: Vec<_> = world.agents().iter().map(|a| a.energy).collect();
+        let expected_cs = if trait_vectors.len() >= 4 {
+            clustering_strength(&trait_vectors)
+        } else {
+            0.0
+        };
+        let labels = dbscan(&trait_vectors, config.dbscan_eps, config.dbscan_min_points);
+        let expected_tb = trophic_balance_score(&trait_vectors, &labels, &energies);
+
+        assert_eq!(result.clustering_strength, expected_cs);
+        assert_eq!(result.trophic_balance_score, expected_tb);
+    }
+
+    #[test]
+    fn evaluate_from_log_returns_zero_fitness_on_extinction() {
+        let params = explorers_sim::WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 100.0,
+            sensing_cost_coefficient: 0.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            reproduction_efficiency: 0.7,
+            movement_cost_coefficient: 0.0,
+            reproduction_energy_threshold: 50.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            contact_radius: 5.0,
+            world_extent: 100.0,
+            initial_population_size: 1,
+            light_competition_radius: 1000.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
+            spatial_decay_rate: 0.5,
+        };
+        let dist = explorers_sim::InitialDistribution {
+            mean_traits: explorers_sim::TraitVector {
+                photosynthetic_absorption: 0.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let config = EvalConfig::default();
+        let max_ticks = 100;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        for _ in 0..10 {
+            world.step();
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+        let result = evaluate_from_log(&world, &config, max_ticks);
+        assert_eq!(result.fitness, 0.0);
+        assert_eq!(result.failure, Some(FailureMode::Extinction));
+    }
 
     #[test]
     fn extinct_when_no_agents() {
