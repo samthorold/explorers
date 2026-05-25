@@ -158,6 +158,8 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         consumption_maintenance_cost: v(15) as f32,
         scavenging_maintenance_cost: v(16) as f32,
         spatial_decay_rate: v(17) as f32,
+            nutrient_absorption_maintenance_cost: 0.0,
+            initial_nutrient_pool: 0.0,
     };
 
     let dist = InitialDistribution {
@@ -165,6 +167,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
             photosynthetic_absorption: v(18) as f32,
             consumption_rate: v(19) as f32,
             scavenging_rate: v(20) as f32,
+                nutrient_absorption: 0.0,
             mobility: v(21) as f32,
             chemotaxis_sensitivity: v(22) as f32,
             mate_selectivity: v(23) as f32,

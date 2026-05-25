@@ -23,6 +23,7 @@ pub struct ResolverParams {
     pub reproduction_efficiency: f32,
     pub mutation_rate: f32,
     pub mutation_magnitude: f32,
+    pub nutrient_gate_active: bool,
 }
 
 /// Accumulated mutations from resolving all interactions.
@@ -464,11 +465,16 @@ pub fn resolve_interactions(
                         position: Some(dead_pos),
                     });
 
+                    let dead_nutrient = (0..n)
+                        .find(|&j| agents[j].id == dead_id)
+                        .map(|j| agents[j].nutrient)
+                        .unwrap_or(0.0);
                     let ci = carcasses.len() + new_carcasses.len();
                     new_carcasses.push(Carcass {
                         id: dead_id,
                         position: dead_pos,
                         energy: carcass_energy,
+                        nutrient: dead_nutrient,
                     });
                     carcass_grid.insert(ci as u64, dead_pos);
 
@@ -529,6 +535,14 @@ pub fn resolve_interactions(
         if reproduced[i] || working_energies[i] <= params.reproduction_energy_threshold {
             continue;
         }
+        // Nutrient gate: agent cannot reproduce if nutrient below stoichiometric demand
+        // Only enforced when nutrient system is active (initial_nutrient_pool > 0)
+        if params.nutrient_gate_active {
+            let demand = crate::stoichiometric_demand(&agents[i].traits);
+            if agents[i].nutrient < demand {
+                continue;
+            }
+        }
 
         emit_broadcasts(
             &mut broadcasts,
@@ -547,6 +561,13 @@ pub fn resolve_interactions(
                     || working_energies[j] <= params.reproduction_energy_threshold
                 {
                     return None;
+                }
+                // Mate must also have sufficient nutrient
+                if params.nutrient_gate_active {
+                    let mate_demand = crate::stoichiometric_demand(&agents[j].traits);
+                    if agents[j].nutrient < mate_demand {
+                        return None;
+                    }
                 }
                 let dist = toroidal_distance(
                     agents[i].position, agents[j].position, params.world_extent,
@@ -613,13 +634,14 @@ pub fn resolve_interactions(
                 photosynthetic_absorption: 0.0,
                 consumption_rate: 0.0,
                 scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
                 sensing_range: 0.0,
                 reproductive_investment: 0.0,
             };
-            for dim in 0..8 {
+            for dim in 0..TraitVector::NUM_DIMS {
                 let from_a: bool = rand::distr::Uniform::new(0u32, 2)
                     .unwrap()
                     .sample(rng)
@@ -636,7 +658,7 @@ pub fn resolve_interactions(
             if params.mutation_rate > 0.0 {
                 let mutation_dist =
                     Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
-                for dim in 0..8 {
+                for dim in 0..TraitVector::NUM_DIMS {
                     let r: f32 = rand::distr::Uniform::new(0.0_f32, 1.0)
                         .unwrap()
                         .sample(rng);
@@ -692,6 +714,7 @@ pub fn resolve_interactions(
                 id: offspring_id,
                 position: agents[i].position,
                 energy: offspring_energy,
+                nutrient: 0.0,
                 traits: child_traits,
                 contact_time: 0,
             });
@@ -728,6 +751,7 @@ mod tests {
             photosynthetic_absorption: 0.0,
             consumption_rate: 0.0,
             scavenging_rate: 0.0,
+            nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
             mate_selectivity: 0.0,
@@ -743,6 +767,7 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 2.0,
                     ..zero_traits()
@@ -753,6 +778,7 @@ mod tests {
                 id: 1,
                 position: (3.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
 },
@@ -775,7 +801,7 @@ mod tests {
             solar_flux_magnitude: 0.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
-            mutation_magnitude: 0.0,
+            mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
@@ -838,6 +864,7 @@ mod tests {
                 id: 10,
                 position: (0.0, 0.0),
                 energy: 100.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 20.0,
                     ..zero_traits()
@@ -848,6 +875,7 @@ mod tests {
                 id: 11,
                 position: (1.0, 0.0),
                 energy: 5.0,
+                nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
 },
@@ -870,7 +898,7 @@ mod tests {
             solar_flux_magnitude: 0.0,
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
-        mutation_magnitude: 0.0,
+        mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
@@ -946,6 +974,7 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+                nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 4.0,
                 ..zero_traits()
@@ -962,6 +991,7 @@ mod tests {
             id: 99,
             position: (2.0, 0.0),
             energy: 10.0,
+            nutrient: 0.0,
         }];
         let mut carcass_grid = SpatialGrid::new(extent, cell_size);
         carcass_grid.insert(0, carcasses[0].position);
@@ -975,7 +1005,7 @@ mod tests {
             solar_flux_magnitude: 0.0,
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
-        mutation_magnitude: 0.0,
+        mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0];
@@ -1033,6 +1063,7 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+                nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 15.0,
                 ..zero_traits()
@@ -1049,6 +1080,7 @@ mod tests {
             id: 42,
             position: (1.0, 0.0),
             energy: 10.0,
+            nutrient: 0.0,
         }];
         let mut carcass_grid = SpatialGrid::new(extent, cell_size);
         carcass_grid.insert(0, carcasses[0].position);
@@ -1062,7 +1094,7 @@ mod tests {
             solar_flux_magnitude: 0.0,
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
-        mutation_magnitude: 0.0,
+        mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0];
@@ -1129,6 +1161,7 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0,
                     mobility: 0.0, // low mobility => gate ~1.0
@@ -1140,6 +1173,7 @@ mod tests {
                 id: 1,
                 position: (10.0, 10.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0,
                     mobility: 0.0,
@@ -1166,7 +1200,7 @@ mod tests {
             solar_flux_magnitude: 10.0,
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
-        mutation_magnitude: 0.0,
+        mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
@@ -1223,6 +1257,7 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0,
                     mobility: 0.0, // low mobility
@@ -1234,6 +1269,7 @@ mod tests {
                 id: 1,
                 position: (50.0, 50.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0,
                     mobility: 0.8, // high mobility
@@ -1260,7 +1296,7 @@ mod tests {
             solar_flux_magnitude: 10.0,
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
-        mutation_magnitude: 0.0,
+        mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
@@ -1318,6 +1354,7 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 2.0,
                     photosynthetic_absorption: 1.0,
@@ -1330,6 +1367,7 @@ mod tests {
                 id: 1,
                 position: (3.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
 },
@@ -1352,7 +1390,7 @@ mod tests {
             solar_flux_magnitude: 10.0,
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
-        mutation_magnitude: 0.0,
+        mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
@@ -1397,6 +1435,7 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+                nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 4.0,
                 photosynthetic_absorption: 1.0,
@@ -1415,6 +1454,7 @@ mod tests {
             id: 99,
             position: (2.0, 0.0),
             energy: 10.0,
+            nutrient: 0.0,
         }];
         let mut carcass_grid = SpatialGrid::new(extent, cell_size);
         carcass_grid.insert(0, carcasses[0].position);
@@ -1428,7 +1468,7 @@ mod tests {
             solar_flux_magnitude: 10.0,
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
-        mutation_magnitude: 0.0,
+        mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0];
@@ -1474,6 +1514,7 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 2.0,
                     scavenging_rate: 4.0,
@@ -1485,6 +1526,7 @@ mod tests {
                 id: 1,
                 position: (1.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
 },
@@ -1501,6 +1543,7 @@ mod tests {
             id: 99,
             position: (1.0, 0.0),
             energy: 10.0,
+            nutrient: 0.0,
         }];
         let mut carcass_grid = SpatialGrid::new(extent, cell_size);
         carcass_grid.insert(0, carcasses[0].position);
@@ -1514,7 +1557,7 @@ mod tests {
             solar_flux_magnitude: 0.0,
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
-        mutation_magnitude: 0.0,
+        mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
@@ -1580,6 +1623,7 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
 },
@@ -1587,6 +1631,7 @@ mod tests {
                 id: 1,
                 position: (2.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
 },
@@ -1609,7 +1654,7 @@ mod tests {
             solar_flux_magnitude: 0.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
-            mutation_magnitude: 0.0,
+            mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
@@ -1669,6 +1714,7 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     mobility: 1.0,
                     mate_selectivity: 10.0,
@@ -1681,6 +1727,7 @@ mod tests {
                 id: 1,
                 position: (2.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     mobility: 1.0,
                     mate_selectivity: 10.0,
@@ -1708,7 +1755,7 @@ mod tests {
             solar_flux_magnitude: 0.0,
             reproduction_efficiency: 0.6,
             mutation_rate: 0.0,
-            mutation_magnitude: 0.0,
+            mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
@@ -1756,6 +1803,7 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 2.0,
                     ..zero_traits()
@@ -1766,6 +1814,7 @@ mod tests {
                 id: 1,
                 position: (3.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
 },
@@ -1788,7 +1837,7 @@ mod tests {
             solar_flux_magnitude: 0.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
-            mutation_magnitude: 0.0,
+            mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
@@ -1841,6 +1890,7 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+                nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 4.0,
                 ..zero_traits()
@@ -1857,6 +1907,7 @@ mod tests {
             id: 99,
             position: (2.0, 0.0),
             energy: 10.0,
+            nutrient: 0.0,
         }];
         let mut carcass_grid = SpatialGrid::new(extent, cell_size);
         carcass_grid.insert(0, carcasses[0].position);
@@ -1870,7 +1921,7 @@ mod tests {
             solar_flux_magnitude: 0.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
-            mutation_magnitude: 0.0,
+            mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0];
@@ -1916,6 +1967,7 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+                nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0,
                 mobility: 0.0,
@@ -1939,7 +1991,7 @@ mod tests {
             solar_flux_magnitude: 10.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
-            mutation_magnitude: 0.0,
+            mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0];
@@ -1988,6 +2040,7 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
 },
@@ -1995,6 +2048,7 @@ mod tests {
                 id: 1,
                 position: (2.0, 0.0),
                 energy: 50.0,
+                nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
 },
@@ -2017,7 +2071,7 @@ mod tests {
             solar_flux_magnitude: 0.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
-            mutation_magnitude: 0.0,
+            mutation_magnitude: 0.0, nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];

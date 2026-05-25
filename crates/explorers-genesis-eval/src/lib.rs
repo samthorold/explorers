@@ -578,6 +578,8 @@ mod tests {
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
             spatial_decay_rate: 0.5,
+            nutrient_absorption_maintenance_cost: 0.0,
+            initial_nutrient_pool: 0.0,
         }
     }
 
@@ -587,6 +589,7 @@ mod tests {
                 photosynthetic_absorption: 0.8,
                 consumption_rate: 0.3,
                 scavenging_rate: 0.1,
+                nutrient_absorption: 0.0,
                 mobility: 0.3,
                 chemotaxis_sensitivity: 0.2,
                 mate_selectivity: 100.0,
@@ -784,12 +787,15 @@ mod tests {
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
             spatial_decay_rate: 0.5,
+            nutrient_absorption_maintenance_cost: 0.0,
+            initial_nutrient_pool: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.0,
                 consumption_rate: 0.0,
                 scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
@@ -840,6 +846,7 @@ mod tests {
             photosynthetic_absorption: vals[0],
             consumption_rate: vals[1],
             scavenging_rate: vals[2],
+                nutrient_absorption: 0.0,
             mobility: vals[3],
             chemotaxis_sensitivity: vals[4],
             mate_selectivity: vals[5],
