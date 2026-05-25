@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use bevy::prelude::*;
 use bevy::camera::{ScalingMode, Viewport};
-use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin};
+use bevy_egui::{EguiContexts, EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe};
 
 #[derive(Resource)]
@@ -157,10 +157,9 @@ fn main() {
         .init_resource::<DebugPanelOpen>()
         .add_systems(Startup, (setup_camera, setup_meshes, setup_grid, configure_timestep))
         .add_systems(FixedUpdate, (step_simulation, reconcile_entities).chain())
+        .add_systems(EguiPrimaryContextPass, debug_panel_ui)
         .add_systems(Update, (
             tick_rate_control,
-            debug_panel_ui,
-            sync_camera_viewport,
             click_to_inspect.run_if(not(bevy_egui::input::egui_wants_any_pointer_input)),
         ).chain())
         .run();
@@ -806,32 +805,6 @@ fn setup_grid(
     }
 }
 
-fn sync_camera_viewport(
-    windows: Query<&Window>,
-    mut cameras: Query<&mut Camera, With<Camera2d>>,
-    panel_open: Res<DebugPanelOpen>,
-) {
-    let Ok(window) = windows.single() else { return };
-    let Ok(mut camera) = cameras.single_mut() else { return };
-
-    let physical_width = window.physical_width();
-    let physical_height = window.physical_height();
-    let scale_factor = window.scale_factor();
-
-    if panel_open.0 {
-        let panel_physical = (DEBUG_PANEL_WIDTH * scale_factor) as u32;
-        let viewport_width = physical_width.saturating_sub(panel_physical);
-        if viewport_width > 0 {
-            camera.viewport = Some(Viewport {
-                physical_position: UVec2::ZERO,
-                physical_size: UVec2::new(viewport_width, physical_height),
-                ..default()
-            });
-        }
-    } else {
-        camera.viewport = None;
-    }
-}
 
 fn click_to_inspect(
     mouse: Res<ButtonInput<MouseButton>>,
@@ -863,6 +836,8 @@ fn debug_panel_ui(
     selected: Res<SelectedAgent>,
     mut panel_open: ResMut<DebugPanelOpen>,
     mut warmup_frames: Local<u32>,
+    mut cameras: Query<&mut Camera, With<Camera2d>>,
+    windows: Query<&Window>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
 
@@ -878,12 +853,15 @@ fn debug_panel_ui(
     }
 
     if !panel_open.0 {
+        if let Ok(mut camera) = cameras.single_mut() {
+            camera.viewport = None;
+        }
         return;
     }
 
-    bevy_egui::egui::SidePanel::right("debug_panel")
-        .exact_width(DEBUG_PANEL_WIDTH)
-        .resizable(false)
+    let panel_width = bevy_egui::egui::SidePanel::right("debug_panel")
+        .default_width(DEBUG_PANEL_WIDTH)
+        .resizable(true)
         .show(ctx, |ui| {
             ui.heading("Debug Panel");
             ui.separator();
@@ -992,6 +970,24 @@ fn debug_panel_ui(
                         }
                     }
                 });
-        });
+        })
+        .response
+        .rect
+        .width();
+
+    // Set camera viewport to exclude the panel area
+    if let Ok(mut camera) = cameras.single_mut() {
+        if let Ok(window) = windows.single() {
+            let right_px = (panel_width * window.scale_factor()) as u32;
+            let vp_width = window.physical_width().saturating_sub(right_px);
+            if vp_width > 0 {
+                camera.viewport = Some(Viewport {
+                    physical_position: UVec2::ZERO,
+                    physical_size: UVec2::new(vp_width, window.physical_height()),
+                    ..default()
+                });
+            }
+        }
+    }
 }
 
