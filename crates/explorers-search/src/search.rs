@@ -92,7 +92,8 @@ impl SearchResult {
         let (parameters, initial_distribution) = decode(&unit_values, ranges);
         WorldRecipe {
             parameters,
-            initial_distribution,
+            initial_distribution: Some(initial_distribution),
+            agents: None,
             max_ticks,
         }
     }

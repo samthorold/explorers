@@ -158,9 +158,42 @@ pub struct InitialDistribution {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentSpec {
+    #[serde(
+        deserialize_with = "deserialize_position",
+        serialize_with = "serialize_position"
+    )]
+    pub position: (f32, f32),
+    pub energy: f32,
+    pub traits: TraitVector,
+}
+
+fn deserialize_position<'de, D>(deserializer: D) -> Result<(f32, f32), D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let arr: [f32; 2] = Deserialize::deserialize(deserializer)?;
+    Ok((arr[0], arr[1]))
+}
+
+fn serialize_position<S>(pos: &(f32, f32), serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeSeq;
+    let mut seq = serializer.serialize_seq(Some(2))?;
+    seq.serialize_element(&pos.0)?;
+    seq.serialize_element(&pos.1)?;
+    seq.end()
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldRecipe {
     pub parameters: WorldParameters,
-    pub initial_distribution: InitialDistribution,
+    #[serde(default)]
+    pub initial_distribution: Option<InitialDistribution>,
+    #[serde(default)]
+    pub agents: Option<Vec<AgentSpec>>,
     pub max_ticks: u64,
 }
 
@@ -440,6 +473,52 @@ impl World {
             projection,
             tick_broadcasts: Vec::new(),
             nack_sets: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn from_recipe(recipe: &WorldRecipe, seed: u64) -> Self {
+        if let Some(ref agents) = recipe.agents {
+            let params = recipe.parameters.clone();
+            let extent = params.world_extent;
+            let rng = ChaCha8Rng::seed_from_u64(seed);
+            let pop_size = agents.len();
+            let projection = spatial_projection::SpatialProjection::new(
+                extent,
+                extent / 10.0,
+                params.spatial_decay_rate,
+            );
+            let sim_agents: Vec<Agent> = agents
+                .iter()
+                .enumerate()
+                .map(|(i, spec)| Agent {
+                    id: i as u64,
+                    position: spec.position,
+                    energy: spec.energy,
+                    traits: spec.traits,
+                })
+                .collect();
+            Self {
+                params,
+                agents: sim_agents,
+                carcasses: Vec::new(),
+                dissipated_energy: 0.0,
+                total_solar_input: 0.0,
+                seed,
+                rng,
+                tick: 0,
+                last_tick_births: 0,
+                last_tick_deaths: 0,
+                next_agent_id: pop_size as u64,
+                event_log: event::EventLog::new(),
+                next_seq: 0,
+                projection,
+                tick_broadcasts: Vec::new(),
+                nack_sets: std::collections::HashMap::new(),
+            }
+        } else if let Some(ref distribution) = recipe.initial_distribution {
+            Self::new(recipe.parameters.clone(), distribution.clone(), seed)
+        } else {
+            panic!("WorldRecipe must have either 'agents' or 'initial_distribution'");
         }
     }
 
@@ -2552,7 +2631,8 @@ spatial_decay_rate: 0.5,
     fn world_from_deserialized_recipe_matches_direct_construction() {
         let recipe = WorldRecipe {
             parameters: test_params(),
-            initial_distribution: test_distribution(),
+            initial_distribution: Some(test_distribution()),
+            agents: None,
             max_ticks: 100,
         };
         let json = serde_json::to_string(&recipe).unwrap();
@@ -2562,7 +2642,7 @@ spatial_decay_rate: 0.5,
         let world_direct = World::new(test_params(), test_distribution(), seed);
         let world_recipe = World::new(
             recovered.parameters,
-            recovered.initial_distribution,
+            recovered.initial_distribution.unwrap(),
             seed,
         );
 
@@ -2578,7 +2658,8 @@ spatial_decay_rate: 0.5,
     fn world_recipe_round_trips_through_json() {
         let recipe = WorldRecipe {
             parameters: test_params(),
-            initial_distribution: test_distribution(),
+            initial_distribution: Some(test_distribution()),
+            agents: None,
             max_ticks: 100,
         };
 
@@ -4863,6 +4944,200 @@ spatial_decay_rate: 0.5,
             });
             // Should not panic from debug_assert!(consequence_queue.is_empty())
             world.step();
+        }
+    }
+
+    #[test]
+    fn world_recipe_deserializes_with_agents_field() {
+        let json = r#"{
+            "parameters": {
+                "solar_flux_magnitude": 1.0,
+                "consumption_efficiency": 0.5,
+                "decomposition_efficiency": 0.5,
+                "reproduction_efficiency": 0.7,
+                "base_metabolic_rate": 0.1,
+                "movement_cost_coefficient": 0.05,
+                "sensing_cost_coefficient": 0.02,
+                "reproduction_energy_threshold": 50.0,
+                "mutation_rate": 0.1,
+                "mutation_magnitude": 0.05,
+                "contact_radius": 5.0,
+                "world_extent": 100.0,
+                "initial_population_size": 0,
+                "light_competition_radius": 20.0,
+                "photo_maintenance_cost": 0.01,
+                "consumption_maintenance_cost": 0.01,
+                "scavenging_maintenance_cost": 0.01,
+                "spatial_decay_rate": 0.5
+            },
+            "agents": [
+                {
+                    "position": [10.0, 20.0],
+                    "energy": 50.0,
+                    "traits": {
+                        "photosynthetic_absorption": 0.8,
+                        "consumption_rate": 0.0,
+                        "scavenging_rate": 0.0,
+                        "mobility": 0.0,
+                        "chemotaxis_sensitivity": 0.0,
+                        "mate_selectivity": 0.1,
+                        "sensing_range": 0.1,
+                        "reproductive_investment": 0.0
+                    }
+                },
+                {
+                    "position": [-5.0, 3.0],
+                    "energy": 75.0,
+                    "traits": {
+                        "photosynthetic_absorption": 0.0,
+                        "consumption_rate": 0.7,
+                        "scavenging_rate": 0.0,
+                        "mobility": 0.2,
+                        "chemotaxis_sensitivity": 0.1,
+                        "mate_selectivity": 0.0,
+                        "sensing_range": 0.0,
+                        "reproductive_investment": 0.0
+                    }
+                }
+            ],
+            "max_ticks": 100
+        }"#;
+        let recipe: WorldRecipe = serde_json::from_str(json).unwrap();
+        let agents = recipe.agents.expect("agents field should be present");
+        assert_eq!(agents.len(), 2);
+        assert_eq!(agents[0].position, (10.0, 20.0));
+        assert_eq!(agents[0].energy, 50.0);
+        assert_eq!(agents[0].traits.photosynthetic_absorption, 0.8);
+        assert_eq!(agents[1].position, (-5.0, 3.0));
+        assert_eq!(agents[1].energy, 75.0);
+        assert_eq!(agents[1].traits.consumption_rate, 0.7);
+        assert!(recipe.initial_distribution.is_none());
+    }
+
+    #[test]
+    fn world_from_recipe_with_agents_spawns_at_specified_positions() {
+        let recipe = WorldRecipe {
+            parameters: test_params(),
+            initial_distribution: None,
+            agents: Some(vec![
+                AgentSpec {
+                    position: (10.0, 20.0),
+                    energy: 50.0,
+                    traits: TraitVector {
+                        photosynthetic_absorption: 0.8,
+                        ..zero_traits()
+                    },
+                },
+                AgentSpec {
+                    position: (-5.0, 3.0),
+                    energy: 75.0,
+                    traits: TraitVector {
+                        consumption_rate: 0.7,
+                        mobility: 0.2,
+                        ..zero_traits()
+                    },
+                },
+            ]),
+            max_ticks: 100,
+        };
+        let world = World::from_recipe(&recipe, 42);
+        assert_eq!(world.agents().len(), 2);
+        assert_eq!(world.agents()[0].position, (10.0, 20.0));
+        assert_eq!(world.agents()[0].energy, 50.0);
+        assert_eq!(world.agents()[0].traits.photosynthetic_absorption, 0.8);
+        assert_eq!(world.agents()[1].position, (-5.0, 3.0));
+        assert_eq!(world.agents()[1].energy, 75.0);
+        assert_eq!(world.agents()[1].traits.consumption_rate, 0.7);
+    }
+
+    #[test]
+    fn existing_recipe_format_without_agents_deserializes() {
+        // Existing recipe.json format has initial_distribution but no agents
+        let json = r#"{
+            "parameters": {
+                "solar_flux_magnitude": 19.0,
+                "consumption_efficiency": 0.5,
+                "decomposition_efficiency": 0.5,
+                "reproduction_efficiency": 0.5,
+                "base_metabolic_rate": 0.255,
+                "movement_cost_coefficient": 0.05,
+                "sensing_cost_coefficient": 0.09,
+                "reproduction_energy_threshold": 27.5,
+                "mutation_rate": 0.255,
+                "mutation_magnitude": 0.255,
+                "contact_radius": 3.4,
+                "world_extent": 60.0,
+                "initial_population_size": 36,
+                "light_competition_radius": 5.9,
+                "photo_maintenance_cost": 0.05,
+                "consumption_maintenance_cost": 0.05,
+                "scavenging_maintenance_cost": 0.05,
+                "spatial_decay_rate": 0.5
+            },
+            "initial_distribution": {
+                "mean_traits": {
+                    "photosynthetic_absorption": 0.3,
+                    "consumption_rate": 0.5,
+                    "scavenging_rate": 0.2,
+                    "mobility": 0.3,
+                    "chemotaxis_sensitivity": 0.5,
+                    "mate_selectivity": 0.5,
+                    "sensing_range": 5.0,
+                    "reproductive_investment": 0.5
+                },
+                "trait_covariance": 0.14,
+                "initial_cluster_count": 2,
+                "initial_energy_per_agent": 25.5
+            },
+            "max_ticks": 500
+        }"#;
+        let recipe: WorldRecipe = serde_json::from_str(json).unwrap();
+        assert!(recipe.initial_distribution.is_some());
+        assert!(recipe.agents.is_none());
+        // Should create a world with initial_population_size agents
+        let world = World::from_recipe(&recipe, 42);
+        assert_eq!(world.agents().len(), 36);
+    }
+
+    #[test]
+    fn scenario_file_loads_and_spawns_agents() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let scenario_path = format!("{}/../../scenarios/test.json", manifest_dir);
+        let contents = std::fs::read_to_string(&scenario_path)
+            .unwrap_or_else(|e| panic!("Failed to read scenario file: {e}"));
+        let recipe: WorldRecipe = serde_json::from_str(&contents)
+            .unwrap_or_else(|e| panic!("Failed to parse scenario file: {e}"));
+
+        assert!(recipe.agents.is_some());
+        assert_eq!(recipe.agents.as_ref().unwrap().len(), 3);
+
+        let mut world = World::from_recipe(&recipe, 42);
+        assert_eq!(world.agents().len(), 3);
+        assert_eq!(world.agents()[0].position, (10.0, 10.0));
+        assert_eq!(world.agents()[1].position, (-20.0, 15.0));
+        assert_eq!(world.agents()[2].position, (0.0, -10.0));
+
+        // Confirm the world can step without panicking
+        for _ in 0..10 {
+            world.step();
+        }
+    }
+
+    #[test]
+    fn world_from_recipe_without_agents_uses_initial_distribution() {
+        let recipe = WorldRecipe {
+            parameters: test_params(),
+            initial_distribution: Some(test_distribution()),
+            agents: None,
+            max_ticks: 100,
+        };
+        let world_from_recipe = World::from_recipe(&recipe, 42);
+        let world_direct = World::new(test_params(), test_distribution(), 42);
+        assert_eq!(world_from_recipe.agents().len(), world_direct.agents().len());
+        for (a, b) in world_from_recipe.agents().iter().zip(world_direct.agents().iter()) {
+            assert_eq!(a.position, b.position);
+            assert_eq!(a.energy, b.energy);
+            assert_eq!(a.traits, b.traits);
         }
     }
 }
