@@ -35,9 +35,9 @@
         "nutrient_absorption": 0.25,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 0.05,
-        "sensing_range": 0.1,
-        "reproductive_investment": 0.15,
+        "mate_selectivity": 3.0,
+        "sensing_range": 5.0,
+        "reproductive_investment": 10.0,
         "fecundity": 0.1
       }
     },
@@ -54,9 +54,9 @@
         "nutrient_absorption": 0.25,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 0.05,
-        "sensing_range": 0.1,
-        "reproductive_investment": 0.15,
+        "mate_selectivity": 3.0,
+        "sensing_range": 5.0,
+        "reproductive_investment": 10.0,
         "fecundity": 0.1
       }
     },
@@ -73,9 +73,9 @@
         "nutrient_absorption": 0.25,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 0.05,
-        "sensing_range": 0.1,
-        "reproductive_investment": 0.15,
+        "mate_selectivity": 3.0,
+        "sensing_range": 5.0,
+        "reproductive_investment": 10.0,
         "fecundity": 0.1
       }
     }
