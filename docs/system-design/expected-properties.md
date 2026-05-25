@@ -96,15 +96,33 @@ Disturbance, succession, spatial refugia, patch dynamics — these are patterns 
 
 ## Initial conditions and world generation
 
-The expected properties above describe a world in motion — agents interacting under the world rules, producing dynamic ecology. But agents do not evolve into a void. They evolve into a **substrate**: a spatial distribution of nutrients, topography, and environmental heterogeneity that has been shaped by processes far longer than any agent-evolution timescale.
+The expected properties above describe a world in motion — agents interacting under the world rules, producing dynamic ecology. But agents do not evolve into a void. They evolve into a **substrate**: the physical medium of the world, with spatially heterogeneous nutrient distributions and terrain properties, shaped by processes far longer than any agent-evolution timescale.
 
-On Earth, the substrate is the product of 4.5 billion years of geology — tectonic uplift, erosion, atmospheric chemistry, hydrological cycles. The spatial distribution of phosphorus in rock, nitrogen in soils, water in river systems, and sunlight across latitudes is what creates the niche heterogeneity that supports diverse ecologies. Agents evolved into a world that was already richly structured.
+On Earth, the substrate is the product of 4.5 billion years of geology — tectonic uplift, erosion, atmospheric chemistry, hydrological cycles. The spatial distribution of nutrients in rock and soils, water in river systems, and sunlight across latitudes is what creates the niche heterogeneity that supports diverse ecologies. Agents evolved into a world that was already richly structured.
 
-The expected properties of a well-functioning world depend on the quality of its initial conditions. Certain substrate configurations make it very difficult — or impossible — for the expected ecological properties to emerge:
+### Two-phase world creation
 
-- **Homogeneous substrate.** If nutrients are uniformly distributed, there is no spatial reason for different strategies to succeed in different places. Coexistence and functional differentiation are harder to achieve because there is less context-dependent fitness variation.
-- **Extreme nutrient poverty.** If the substrate contains too little of a limiting nutrient, the energy throughput of the living system may be too low to sustain demographic turnover and population oscillations.
-- **Extreme nutrient abundance.** If all nutrients are superabundant everywhere, stoichiometric constraint ceases to differentiate strategies. The specialist-generalist trade-off weakens because there is no nutrient limitation to penalise inefficiency.
-- **Spatial monotony.** If the substrate has no variation in nutrient availability, topography, or accessibility, the spatial mosaic of successional stages and niche specialisation has no substrate-level driver.
+World creation is a two-phase process:
 
-The world rules describe the physics. The expected properties describe what a healthy ecology looks like. The initial conditions — how the substrate is generated — determine whether the physics has enough raw material for the ecology to emerge. How the substrate is generated (procedural algorithms, geological simulation, or hand design) is an implementation concern, but the properties it must have are a system design concern: **the substrate must provide spatially heterogeneous nutrient availability sufficient to create context-dependent fitness variation across the surface.**
+1. **Substrate generation.** The physical medium is procedurally generated — nutrient distributions (both available and unavailable pools), terrain properties, and spatial structure. This phase compresses geological history into an algorithm. The substrate is generated and validated independently of any agents.
+
+2. **Agent genesis.** Agents are seeded onto a validated substrate. World parameters and initial trait distributions are searched through ensemble runs (as described in the existing genesis process). A parameterisation is accepted only when most runs on the given substrate produce sensible worlds.
+
+Separating these phases allows independent validation: a substrate can be assessed for spatial heterogeneity and nutrient adequacy before agents are introduced. If genesis fails, the cause (bad substrate or bad agent parameters) can be diagnosed.
+
+### Substrate failure modes
+
+Certain substrate configurations make it very difficult — or impossible — for the expected ecological properties to emerge:
+
+- **Homogeneous substrate.** If nutrient is uniformly distributed, there is no spatial reason for different strategies to succeed in different places. Coexistence and functional differentiation are harder to achieve because there is less context-dependent fitness variation.
+- **Extreme nutrient poverty.** If the substrate contains too little nutrient, the living system cannot sustain demographic turnover and population oscillations — agents cannot reproduce due to nutrient limitation everywhere.
+- **Extreme nutrient abundance.** If nutrient is superabundant everywhere, stoichiometric constraint ceases to differentiate strategies. The specialist-generalist trade-off weakens because there is no nutrient limitation to penalise inefficiency.
+- **Spatial monotony.** If the substrate has no variation in nutrient availability or terrain properties, the spatial mosaic of successional stages and niche specialisation has no substrate-level driver.
+
+The world rules describe the physics. The expected properties describe what a healthy ecology looks like. The substrate determines whether the physics has enough raw material for the ecology to emerge. How the substrate is generated (procedural algorithms, geological simulation, or hand design) is an implementation concern, but the properties it must have are a system design concern: **the substrate must provide spatially heterogeneous nutrient availability sufficient to create context-dependent fitness variation across the surface.**
+
+### Open questions
+
+**Terrain properties.** The substrate has properties beyond nutrient content — candidates include elevation/topography, accessibility modifiers, light variation, and moisture. Which terrain properties matter and how they affect agent interactions is an open design question.
+
+**Specialization mechanism.** The contact-time mechanism for nutrient uptake creates one axis of producer/consumer specialization (sessile agents extract nutrients efficiently; mobile agents cannot). Whether this, combined with trait maintenance costs, is sufficient to prevent generalist dominance — or whether additional constraints are needed — is an open research question. The ecological ABM literature universally uses some form of constraint beyond linear per-trait costs (geometric budget constraints, superlinear maintenance costs, or hard gates) to ensure specialization.
