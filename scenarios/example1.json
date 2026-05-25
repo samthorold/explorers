@@ -23,7 +23,7 @@
   },
   "agents": [
     {
-      "position": [0.0, 0.0],
+      "position": [50.0, 50.0],
       "energy": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,

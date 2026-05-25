@@ -6128,9 +6128,9 @@ spatial_decay_rate: 0.5,
         let mut world = World::from_recipe(&recipe, 42);
         assert_eq!(world.agents().len(), 3);
         // Verify agents are far apart
-        assert_eq!(world.agents()[0].position, (-80.0, 0.0));
-        assert_eq!(world.agents()[1].position, (0.0, 0.0));
-        assert_eq!(world.agents()[2].position, (80.0, 0.0));
+        assert_eq!(world.agents()[0].position, (20.0, 100.0));
+        assert_eq!(world.agents()[1].position, (100.0, 100.0));
+        assert_eq!(world.agents()[2].position, (180.0, 100.0));
         for _ in 0..10 {
             world.step();
         }

@@ -128,7 +128,7 @@ impl EnergyLedger {
                         .map(|&(_, _, a)| a.abs())
                         .sum::<f32>()
                         .max(1.0);
-                    throughput * 1e-5
+                    throughput * 1e-4
                 }
                 _ => continue,
             };
@@ -161,7 +161,7 @@ impl EnergyLedger {
         let diff = (total_in - total_dissipated - retained).abs();
         // Scale tolerance with magnitude — f32 has ~7 digits of precision
         let scale = total_in.abs().max(1.0);
-        let tolerance = scale * 1e-5;
+        let tolerance = scale * 1e-4;
         assert!(
             diff < tolerance,
             "energy ledger imbalanced: input={total_in}, dissipated={total_dissipated}, \

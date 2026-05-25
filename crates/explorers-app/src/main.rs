@@ -819,8 +819,15 @@ fn debug_panel_ui(
     virtual_time: Res<Time<Virtual>>,
     selected: Res<SelectedAgent>,
     mut panel_open: ResMut<DebugPanelOpen>,
+    mut warmup_frames: Local<u32>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    // Skip early frames — egui pass may not have started yet
+    if *warmup_frames < 3 {
+        *warmup_frames += 1;
+        return;
+    }
 
     // Toggle panel with F12
     if ctx.input(|i| i.key_pressed(bevy_egui::egui::Key::F12)) {

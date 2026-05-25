@@ -23,7 +23,10 @@
   },
   "agents": [
     {
-      "position": [-80.0, 0.0],
+      "position": [
+        20.0,
+        100.0
+      ],
       "energy": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
@@ -33,13 +36,16 @@
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 0.05,
-        "sensing_range": 0.10,
+        "sensing_range": 0.1,
         "reproductive_investment": 0.15,
-        "fecundity": 0.10
+        "fecundity": 0.1
       }
     },
     {
-      "position": [0.0, 0.0],
+      "position": [
+        100.0,
+        100.0
+      ],
       "energy": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
@@ -49,13 +55,16 @@
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 0.05,
-        "sensing_range": 0.10,
+        "sensing_range": 0.1,
         "reproductive_investment": 0.15,
-        "fecundity": 0.10
+        "fecundity": 0.1
       }
     },
     {
-      "position": [80.0, 0.0],
+      "position": [
+        180.0,
+        100.0
+      ],
       "energy": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
@@ -65,9 +74,9 @@
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 0.05,
-        "sensing_range": 0.10,
+        "sensing_range": 0.1,
         "reproductive_investment": 0.15,
-        "fecundity": 0.10
+        "fecundity": 0.1
       }
     }
   ],
