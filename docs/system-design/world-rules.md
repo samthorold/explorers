@@ -12,12 +12,15 @@ The world has two currencies. Energy is the primary currency — it powers all p
 
 Energy flows through the system in one direction: from source to sink. It does not cycle.
 
+Within a living agent, energy exists in two forms: **reserve** (metabolic fuel — the operating account) and **structure** (embodied biomass — the physical body). Reserve fluctuates rapidly as income and costs are applied each tick. Structure accumulates slowly through growth and is depleted by consumption from other agents. The distinction follows Kooijman's (2010) Dynamic Energy Budget theory, where reserve and structure are separate state variables with different dynamics.
+
 | Stock | Type | Description |
 |---|---|---|
 | **Solar flux** | Source (inexhaustible) | Energy enters the system here. The flux is constant — the same amount of energy is available every tick. All temporal variation in the system is endogenous. |
-| **Living agents** | Internal | Energy held by living organisms. Every living agent carries an energy balance that increases through acquisition and decreases through costs. Living agents also accumulate somatic wear — see below. |
-| **Carcasses** | Internal | Energy held by dead organisms. When an agent dies, its remaining energy becomes a carcass at the same location on the surface. Carcasses hold energy indefinitely — there is no passive decay. |
-| **Heat** | Sink (inexhaustible) | Energy leaves the system here, permanently. Every lossy process — metabolism, trophic transfer, reproduction inefficiency — sends energy to this sink. It does not return. |
+| **Living agents (reserve)** | Internal | The metabolic fuel held by living organisms. Reserve increases through energy acquisition (photosynthesis, decomposition) and decreases through metabolic costs, growth, and reproduction. Reserve is the central clearing account — all energy income and expenditure flows through it. |
+| **Living agents (structure)** | Internal | The embodied biomass energy of living organisms. Structure accumulates when an agent allocates reserve surplus to growth (a lossy conversion). Structure is depleted when another agent consumes the body. Structure is not a searched world parameter or a heritable trait — it is a state variable that starts at zero for newborns and grows over the agent's lifetime. Living agents also accumulate somatic wear — see below. |
+| **Carcasses** | Internal | Energy held by dead organisms. When an agent dies, its structure (embodied biomass) and nutrient become a carcass at the same location on the surface. A carcass's energy content reflects the agent's accumulated structure at death. Carcasses hold energy indefinitely — there is no passive decay. |
+| **Heat** | Sink (inexhaustible) | Energy leaves the system here, permanently. Every lossy process — metabolism, trophic transfer, growth conversion, reproduction inefficiency — sends energy to this sink. It does not return. |
 
 ### Nutrient
 
@@ -44,13 +47,13 @@ Nutrients exist in four pools, analogous to the energy stocks:
 
 **Energy conservation.** At any point in time:
 
-> Total system energy = Σ(living agent energy) + Σ(carcass energy)
+> Total system energy = Σ(living agent reserve) + Σ(living agent structure) + Σ(carcass energy)
 
 The change in total system energy per tick equals:
 
 > ΔE = photosynthetic input − total dissipation to heat
 
-Energy is neither created nor destroyed within the system. Every flow is accounted for.
+Energy is neither created nor destroyed within the system. Every flow is accounted for. Reserve-to-structure conversion (growth) is internal to a living agent and does not change total system energy, but the conversion is lossy — the difference dissipates to heat.
 
 **Nutrient conservation.** For the nutrient:
 
@@ -84,19 +87,19 @@ Identity-determining thresholds use an agent's nominal (unworn) traits. An agent
 
 ## Flows
 
-Eight flows move energy and nutrient between stocks. Each flow is a rate — resources per tick — and each is subject to constraints described below. Energy and nutrient travel together through most flows (an agent that eats another agent acquires both energy and nutrient), but they have different fates: energy is progressively dissipated to heat, while nutrient cycles back through decomposition.
+Nine flows move energy and nutrient between stocks. Each flow is a rate — resources per tick — and each is subject to constraints described below. Energy and nutrient travel together through most flows (an agent that eats another agent acquires both energy and nutrient), but they have different fates: energy is progressively dissipated to heat, while nutrient cycles back through decomposition. Reserve is the central clearing account for energy: all income enters as reserve, all costs are paid from reserve, and surplus reserve can be converted to structure through growth.
 
 ### Input flows
 
-**1. Photosynthesis.** Solar → Living agent. The only way energy enters the living system. Producers absorb energy from the constant solar flux. This flow is attenuated by local competition (producers near other producers share the available flux). Any agent with photosynthetic absorption trait investment can photosynthesize — there is no gate. The producer/consumer divide emerges from two structural constraints: the trait budget (investing in photosynthetic absorption leaves less for mobility and consumption) and the nutrient bottleneck (photosynthesis produces energy but not nutrient; an agent that photosynthesizes must also acquire nutrient via uptake from the available pool, which requires sustained substrate contact). Photosynthesis moves energy only — nutrient must be acquired separately through nutrient uptake (flow 2).
+**1. Photosynthesis.** Solar → Living agent (reserve). The only way energy enters the living system. Producers absorb energy from the constant solar flux into their reserve. This flow is attenuated by local competition (producers near other producers share the available flux). Any agent with photosynthetic absorption trait investment can photosynthesize — there is no gate. The producer/consumer divide emerges from two structural constraints: the trait budget (investing in photosynthetic absorption leaves less for mobility and consumption) and the nutrient bottleneck (photosynthesis produces energy but not nutrient; an agent that photosynthesizes must also acquire nutrient via uptake from the available pool, which requires sustained substrate contact). Photosynthesis moves energy only — nutrient must be acquired separately through nutrient uptake (flow 2).
 
 **2. Nutrient uptake.** Available pool → Living agent. Agents extract nutrient from the available pool at their location. The uptake rate depends on two factors: the agent's nutrient absorption trait (a heritable, maintenance-costing capability) and the agent's contact time at its current location. An agent that has remained stationary for many ticks extracts nutrient more effectively than one that just arrived — sustained contact with the substrate is required to establish the interface structures (analogous to roots) through which nutrient is extracted. Moving resets contact time. Co-located agents share the available pool proportionally, weighted by their effective uptake rate. Nutrient uptake is the only way nutrient enters the living system.
 
 ### Flows between living agents
 
-**3. Consumption.** Living agent → Living agent. A consumer drains energy and nutrient from a living target through sustained physical contact. The transfer is lossy — only a fraction of the drained energy reaches the consumer; the remainder dissipates to heat (flow 8). Nutrient transfers alongside energy, but the consumer retains only what it needs according to its stoichiometric demand — excess nutrient is excreted immediately to the available pool at the consumption site, never incorporated. The limiting currency (energy or nutrient) constrains how much of the consumed material the consumer can actually use. Consumption is non-lethal by default; the target survives unless its energy reaches zero.
+**3. Consumption.** Living agent (structure) → Living agent (reserve). A consumer eats a living target's body through sustained physical contact, draining the target's structure. The drained structure enters the consumer's reserve, lossy — only a fraction reaches the consumer; the remainder dissipates to heat (flow 8). Nutrient transfers alongside structure, but the consumer retains only what it needs according to its stoichiometric demand — excess nutrient is excreted immediately to the available pool at the consumption site, never incorporated. The limiting currency (energy or nutrient) constrains how much of the consumed material the consumer can actually use. Consumption is non-lethal by default; the target survives unless its structure drops below its complexity-dependent death threshold or its reserve reaches zero.
 
-**4. Reproduction.** Living agent → Living agent. Parents invest energy and nutrient to create offspring. Reproduction requires sufficient nutrient — nutrient limitation blocks reproduction even when energy is abundant. The energy transfer is lossy — a fraction dissipates to heat (flow 8). Both parents survive. Reproduction has two modes, variable fecundity, and spatial dispersal of offspring.
+**4. Reproduction.** Living agent (reserve) → Living agent. Parents invest reserve and nutrient to create offspring. Reproduction requires sufficient nutrient — nutrient limitation blocks reproduction even when energy is abundant. The energy transfer is lossy — a fraction dissipates to heat (flow 8). Both parents survive. Reproduction has two modes, variable fecundity, and spatial dispersal of offspring.
 
 **Sexual reproduction** is the primary mode. Two compatible agents within reproductive range each invest energy. Offspring traits are derived from both parents through crossover (each trait dimension drawn randomly from one parent) with heritable mutation. Compatibility is determined by trait-space distance — agents with similar traits are more likely to mate. This makes reproductive isolation an emergent property of trait divergence.
 
@@ -112,44 +115,53 @@ For sexual reproduction, the effective fecundity is the average of the two paren
 
 ### Flows from living to dead
 
-**6. Death.** Living agent → Carcass. When a living agent's energy reaches zero, it becomes a carcass. All remaining energy and nutrient transfer to the carcass at the agent's location on the surface. The nutrient content of the carcass reflects the content of the agent that died.
+**6. Death.** Living agent → Carcass. When a living agent dies, its remaining structure and nutrient become a carcass at the same location on the surface. The carcass's energy content is the agent's structure at the moment of death. The nutrient content reflects the nutrient the agent had incorporated.
 
-Death has two proximate causes. **Extrinsic mortality** — predation drains energy below zero, or starvation when metabolic costs exceed energy income. **Intrinsic mortality** — somatic wear degrades functional traits until the agent can no longer acquire enough energy to cover its metabolic costs. In practice these compound: an aging agent with degraded photosynthetic capacity that was previously viable becomes energy-negative when a competitor shades it, or an aging consumer whose effective consumption rate has declined can no longer catch sufficient prey. Somatic wear makes death inevitable on a long enough timeline — even in the absence of predation or competition, an agent that invests less in somatic maintenance than the rate of wear accumulation will eventually degrade to the point of energy bankruptcy.
+Death has two triggers — either is sufficient:
+
+- **Reserve depletion.** Reserve reaches zero. The agent can no longer fund metabolism. This is starvation (metabolic costs exceed income) or the terminal consequence of predation draining a target that was already energy-marginal.
+- **Structural depletion.** Structure drops below a complexity-dependent threshold. The threshold scales with trait spread: an agent whose trait budget is concentrated in few dimensions (low complexity) tolerates greater structural damage — like a moss that functions the same at half its mass. An agent whose budget is spread across many dimensions (high complexity) is fragile — specialised organs and systems cannot sustain partial loss. The threshold is derived from the trait vector, not a separate parameter.
+
+Death also has two distal causes. **Extrinsic mortality** — consumption drains structure below the threshold, or competition/shading makes the agent energy-negative until reserve depletes. **Intrinsic mortality** — somatic wear degrades functional traits until the agent can no longer acquire enough energy to cover its metabolic costs, then reserve slowly depletes. In practice these compound: an aging agent with degraded photosynthetic capacity that was previously viable becomes energy-negative when a competitor shades it, or an aging consumer whose effective consumption rate has declined can no longer catch sufficient prey. Somatic wear makes death inevitable on a long enough timeline — even in the absence of predation or competition, an agent that invests less in somatic maintenance than the rate of wear accumulation will eventually degrade to the point of energy bankruptcy.
 
 ### Flows from dead to living
 
-**7. Decomposition.** Carcass → Living agent + Available pool. A decomposer drains energy and nutrient from a carcass through sustained physical contact. The energy transfer is lossy — only a fraction reaches the decomposer; the remainder dissipates to heat (flow 8). Nutrient that the decomposer cannot use (due to stoichiometric mismatch) is excreted immediately to the available pool, closing the nutrient cycle. The carcass is depleted as resources are extracted.
+**7. Decomposition.** Carcass (structure) → Living agent (reserve) + Available pool. A decomposer extracts energy and nutrient from a carcass's structure through sustained physical contact. The extracted structure enters the decomposer's reserve, lossy — only a fraction reaches the decomposer; the remainder dissipates to heat (flow 8). Nutrient that the decomposer cannot use (due to stoichiometric mismatch) is excreted immediately to the available pool, closing the nutrient cycle. The carcass is depleted as its structure is extracted.
 
 ### Dissipation
 
-**8. Trophic transfer loss.** Accompanies flows 3, 4, 5, and 7. At every energy transfer between agents, a fraction is lost to heat. This is not a separate event — it is the inefficiency inherent in every transfer. It is what makes trophic pyramids inevitable: each level of transfer dissipates energy, so less is available at each successive level. Nutrient is not lost to heat — it is either incorporated into the receiving agent or returned to the available pool.
+**8. Trophic transfer loss.** Accompanies flows 3, 4, 5, 7, and 10. At every energy conversion — between agents or between reserve and structure within an agent — a fraction is lost to heat. This is not a separate event — it is the inefficiency inherent in every conversion. It is what makes trophic pyramids inevitable: each level of transfer dissipates energy, so less is available at each successive level. The path from target structure → consumer reserve → consumer structure involves two lossy conversions, compounding the loss. Nutrient is not lost to heat — it is either incorporated into the receiving agent or returned to the available pool.
 
-**9. Metabolism.** Living agent → Heat. Every living agent pays a continuous energy cost simply to exist. This cost has three components:
+**9. Metabolism.** Living agent (reserve) → Heat. Every living agent pays a continuous energy cost from reserve simply to exist. This cost has three components:
 - A base rate — the minimum cost of being alive, independent of traits or activity.
 - Trait-dependent costs — each capability (photosynthesis, consumption, decomposition, nutrient absorption) costs energy to maintain whether or not it is currently in use. Sensing and movement also cost energy. These costs are the mechanism behind the specialist-generalist trade-off: an agent investing in multiple capabilities pays overhead for all of them.
 - Somatic maintenance — the energy cost of repairing accumulated wear. Higher investment in somatic maintenance slows aging but competes directly with the energy available for reproduction and growth. This is the mechanism behind the reproduce-vs-survive trade-off.
 
-Metabolism dissipates energy to heat. It does not release nutrient — nutrient leaves living agents only through death (flow 6). This makes decomposition structurally necessary for nutrient cycling.
+Metabolism dissipates reserve to heat. It does not release nutrient — nutrient leaves living agents only through death (flow 6). This makes decomposition structurally necessary for nutrient cycling.
+
+**10. Growth.** Living agent (reserve) → Living agent (structure). When an agent's reserve income exceeds its metabolic costs, it can allocate surplus reserve to structure — building its body. The conversion is lossy; a fraction dissipates to heat (flow 8). Growth is not a decision — it is an automatic consequence of being well-fed. Structure starts at zero for newborn agents and accumulates over the agent's lifetime. Growth rate depends on the available reserve surplus after metabolism, reproduction, and other costs are paid.
 
 ### Flow summary
 
-Energy flows one way: source → living system → heat. Nutrient cycles: available pool → living agents → carcasses → (via decomposition) → available pool. Nutrient leaves living agents only through death — metabolism releases energy to heat but not nutrient.
+Energy flows one way: source → living system → heat. All energy income enters as reserve. Reserve funds metabolism, growth, and reproduction. Growth converts reserve to structure (the body). Consumption and decomposition drain structure (from targets and carcasses respectively) into the consumer's reserve. Nutrient cycles: available pool → living agents → carcasses → (via decomposition) → available pool. Nutrient leaves living agents only through death — metabolism releases reserve to heat but not nutrient.
 
 ```
-Solar ──photosynthesis──▶ Living Agents ──death──▶ Carcasses
-  (source)                 ▲  │  ▲  ↕                │
-                           │  │  │  │                 │
-              nutrient     │  │  │  network           │
-              uptake       │  │  │  redistribution    │
-                ▲          │  │  │                    │
-                │   decomposition consumption    metabolism
-          Available pool   │  │  reproduction         │
-                ▲          │  ▼                       │
-                │       Carcasses              Heat (sink)
-                │                          ◀── trophic loss
-                └──── nutrient release
-                      (from decomposition,
-                       stoichiometric excretion)
+Solar ──photosynthesis──▶ Reserve ──growth──▶ Structure ──death──▶ Carcass
+  (source)                  │                    ▲                    │
+                        metabolism           consumed by         decomposition
+                        reproduction         another agent            │
+                            │                    │                    ▼
+                            ▼                    ▼              Consumer's
+                          Heat            Consumer's reserve     reserve
+                          Offspring        (with trophic loss)  (with trophic loss)
+                                                 │
+                                            ▲    │
+                  Available pool ◀───────── │ ───┘
+                       │              nutrient excretion
+                  nutrient uptake     (stoichiometric mismatch,
+                       │               decomposition)
+                       ▼
+                  Living agent (nutrient)
 ```
 
 ## Topologies
@@ -196,7 +208,7 @@ This distinction is a law of physics, not a strategy choice. No amount of trait 
 
 ## Cost structure (trade-offs)
 
-The cost structure is what prevents any agent from being good at everything. The primary mechanism is the **trait budget constraint**: trait values sum to 1.0 (L1 norm), so investing more in one capability necessarily reduces others. This shared budget, combined with energy maintenance costs and nutrient constraints, produces eight fundamental trade-offs:
+The cost structure is what prevents any agent from being good at everything. The primary mechanism is the **trait budget constraint**: trait values sum to 1.0 (L1 norm), so investing more in one capability necessarily reduces others. This shared budget, combined with energy maintenance costs, nutrient constraints, and structural fragility, produces nine fundamental trade-offs:
 
 **1. Acquire vs. maintain.** Every capability costs energy to maintain whether or not it is currently in use. More capability means more overhead. The trait budget ensures that total capability is finite, but maintenance costs determine the energy price of whatever allocation is chosen.
 
@@ -213,5 +225,7 @@ The cost structure is what prevents any agent from being good at everything. The
 **7. Stoichiometric constraint.** Agents need nutrient in amounts determined by their traits — more capable agents demand more nutrient per unit energy. Food sources have varying nutrient-to-energy ratios. An agent consuming nutrient-poor food must eat more to satisfy its nutrient demand, wasting excess energy as heat. An agent consuming nutrient-rich food retains what it needs and excretes the excess nutrient to the available pool. The limiting currency (energy or nutrient) constrains how much of the consumed material the consumer can actually use.
 
 **8. Sexual vs. asexual reproduction.** Sexual reproduction produces more diverse offspring (crossover recombines two parents' traits) but requires a compatible mate — a cost in mate-finding, energy, and the constraint that both parents must be present. Asexual reproduction requires no mate but produces less diverse offspring (parent traits plus mutation only). In dense populations with coevolutionary pressure (predator-prey arms races, competition), variation is valuable and sexual reproduction is favoured. In sparse populations or stable environments, the mate-finding cost outweighs the variation benefit and asexual reproduction is favoured. Which strategy a lineage relies on is emergent, not prescribed.
+
+**9. Complexity vs. structural resilience.** An agent's structural death threshold — the fraction of peak structure below which structural damage is fatal — scales with trait spread. An agent whose budget is concentrated in few traits (specialist) has a simple body plan that tolerates significant structural loss; a moss at half its mass is still a functioning moss. An agent whose budget is spread across many traits (generalist) has complex, interdependent systems that cannot sustain partial loss. This makes generalists more vulnerable to consumption — a predator needs to eat less of a complex agent to kill it. Combined with the specialist-generalist trade-off (#5), this means spreading the trait budget is penalised twice: higher metabolic overhead and greater structural fragility.
 
 These trade-offs are the differentiation engine. They do not prescribe what roles emerge — they create the selection pressure that makes role differentiation advantageous. The trait budget constraint guarantees this pressure is always present — it cannot be overcome by acquiring more energy.

@@ -60,7 +60,7 @@ Trait space collapses to a single cluster. The system has persistence but no div
 
 ### Energy death
 
-Free energy trends to zero. Energy accumulates in the carcass stock and is not returned to the living system. This occurs when decomposer strategies are not viable — either the cost of decomposition exceeds its energy return, or decomposer populations cannot sustain themselves. The living system starves while energy sits locked in dead matter.
+Free energy trends to zero. Energy accumulates in carcass structure and is not returned to the living system. This occurs when decomposer strategies are not viable — either the cost of decomposition exceeds its energy return, or decomposer populations cannot sustain themselves. Nutrient also locks in carcasses, compounding the decline: producers cannot reproduce without nutrient even when solar flux provides ample energy. The living system starves while energy and nutrient sit locked in dead matter.
 
 ### Population explosion
 
