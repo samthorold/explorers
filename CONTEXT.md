@@ -11,12 +11,24 @@ The fundamental unit of the simulation. Everything in the world is an agent: org
 _Avoid_: entity, creature, organism (when referring to the simulation abstraction)
 
 **Trait vector**:
-A multi-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Genesis-minimal dimensions (8): photosynthetic absorption, consumption rate, scavenging rate, mobility, chemotaxis sensitivity, mate selectivity, sensing range, reproductive investment. Deferred dimensions: social weight (herding — emergent flavour, not structurally necessary for genesis criteria), chemical signature (player interaction and species recognition, not needed for genesis fitness).
+A multi-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Genesis-minimal dimensions (9): photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption, mobility, chemotaxis sensitivity, mate selectivity, sensing range, reproductive investment. Deferred dimensions: social weight (herding — emergent flavour, not structurally necessary for genesis criteria), chemical signature (player interaction and species recognition, not needed for genesis fitness).
 _Avoid_: stats, attributes, genome (genome implies a genotype/phenotype distinction that doesn't exist here)
+
+**Substrate**:
+The physical medium of the world — what agents live on and in. Holds nutrients in spatially heterogeneous distributions. Has material properties beyond nutrient content (terrain characteristics that affect agent interactions — specific properties are an open design question). Generated procedurally before agents are seeded. In ecological literature, substrate consistently refers to the physical medium or material, not the nutrients themselves.
+_Avoid_: terrain (too specific to one property), environment (too broad), map (implies player-facing representation)
 
 **Energy**:
 The universal currency of the simulation. Enters the world only through solar flux. Flows between agents through consumption, reproduction, and decomposition. Energy conversion is lossy at every trophic transfer — consumers capture only a fraction of the energy they drain (per Lindeman 1942's trophic efficiency principle). The remainder is dissipated. Metabolic cost also dissipates energy. The system is open: solar flux is the sole tap, metabolic dissipation and transfer loss are the drains. Carrying capacity and trophic pyramid structure emerge from this energy budget rather than being imposed.
 _Avoid_: health, mana, resources
+
+**Nutrient**:
+A cycling resource that agents require alongside energy. Unlike energy, nutrients are conserved — they cycle between pools rather than flowing from source to sink. The system tracks a single nutrient alongside energy. An agent's nutrient demand (how much nutrient it needs per unit energy) is derived from its trait vector — more capable agents need more nutrient. Nutrient limitation blocks reproduction but does not impair other functions.
+_Avoid_: resource (too generic), mineral (too specific to one real-world nutrient)
+
+**Available pool**:
+The portion of nutrient at a location that is biologically accessible — extractable by agents through nutrient uptake. Distinguished from the unavailable pool (locked in rock or occluded forms, accessible only on geological timescales). The available pool at a location is finite and shared proportionally among co-located agents attempting uptake.
+_Avoid_: substrate (substrate is the physical medium, not the nutrient stock)
 
 **Tick**:
 The discrete time step of the simulation. Each tick, all agents sense their neighbourhood, select actions, and update state.
@@ -28,19 +40,31 @@ The sole external energy input to the world. Agents compete locally for flux —
 _Avoid_: sunlight, light level, radiation
 
 **Consumption**:
-An agent draining energy from a living agent over time through sustained contact. The consumer's consumption rate trait determines drain speed. The target survives unless its energy reaches zero — grazing is non-lethal by default.
+An agent draining energy and nutrient from a living agent over time through sustained contact. The consumer's consumption rate trait determines drain speed. The consumer retains only the nutrient it needs (per its stoichiometric demand) and excretes excess immediately to the available pool. The target survives unless its energy reaches zero — grazing is non-lethal by default.
 _Avoid_: eating, attacking, harvesting
 
 **Carcass**:
-A dead agent. Retains the dead agent's energy, locked until a decomposer processes it. Emits a chemical signal detectable by agents with scavenging affinity. No passive decay — energy stays locked indefinitely without decomposition.
+A dead agent. Retains the dead agent's energy and nutrient, locked until a decomposer processes it. Emits a chemical signal detectable by agents with scavenging affinity. No passive decay — energy and nutrient stay locked indefinitely without decomposition.
 _Avoid_: corpse, remains, resource node
 
 **Decomposition**:
-An agent draining energy from a **carcass**. Functionally identical to **consumption** but targets carcasses rather than living agents, governed by the scavenging rate trait.
+An agent draining energy and nutrient from a **carcass**. Functionally identical to **consumption** but targets carcasses rather than living agents, governed by the scavenging rate trait. Nutrient that exceeds the decomposer's stoichiometric demand is excreted immediately to the available pool, closing the nutrient cycle.
 _Avoid_: recycling, decay (decay implies passive process)
 
+**Nutrient uptake**:
+An agent extracting nutrient from the **available pool** at its location. The only way nutrient enters the living system. Rate depends on the agent's nutrient absorption trait and **contact time** — how long the agent has remained at its current location. Moving resets contact time. This creates a physical basis for the producer/consumer divide: sessile agents accumulate contact time and extract nutrients efficiently; mobile agents cannot.
+_Avoid_: feeding (feeding is consumption of other agents), mining (implies deliberate extraction from rock)
+
+**Contact time**:
+The number of consecutive ticks an agent has spent at its current location. Governs nutrient uptake effectiveness — longer contact time means more effective extraction from the available pool. Resets when the agent moves. This is a world physics principle: sustained contact with the substrate is required to establish the interface structures (analogous to roots) needed for nutrient extraction.
+_Avoid_: residence time (ecological term with different meaning — how long a nutrient stays in a pool)
+
+**Stoichiometric mismatch**:
+The difference between the nutrient ratio in an agent's food and the ratio the agent needs. When a consumer eats prey whose nutrient ratio doesn't match its demand, it retains only what it needs and excretes the excess nutrient immediately to the available pool. The limiting currency (energy or nutrient) constrains how much of the consumed material the consumer can actually use.
+_Avoid_: waste, inefficiency (mismatch is not inefficiency — it is a physical constraint)
+
 **Metabolic cost**:
-The energy an agent expends per **tick**. Comprises a base rate, plus costs for movement, sensing, and **trait maintenance** — each energy-acquisition trait (photosynthetic absorption, consumption rate, scavenging rate) costs energy to maintain whether used or not. Agents that carry traits they never exercise pay for the biological machinery, creating selection pressure toward specialisation. When agent size enters the model, metabolic cost should also scale with body mass (Kleiber's law).
+The energy an agent expends per **tick**. Comprises a base rate, plus costs for movement, sensing, and **trait maintenance** — each trait (photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption) costs energy to maintain whether used or not. Agents that carry traits they never exercise pay for the biological machinery, creating selection pressure toward specialisation. Metabolism costs energy only — nutrients are not released as metabolic waste. Nutrients leave living agents only through death.
 _Avoid_: upkeep, energy drain, maintenance
 
 ### Movement and sensing
