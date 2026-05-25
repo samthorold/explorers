@@ -133,6 +133,7 @@ mod tests {
                 mate_selectivity: 0.5,
                 sensing_range: 3.0,
                 reproductive_investment: 0.3,
+            fecundity: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
