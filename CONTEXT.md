@@ -60,7 +60,7 @@ An agent draining structure and nutrient from a **carcass**. Functionally identi
 _Avoid_: recycling, decay (decay implies passive process)
 
 **Nutrient uptake**:
-An agent extracting nutrient from the **available pool** at its location. The only way nutrient enters the living system. Rate depends on the agent's nutrient absorption trait and **contact time** — how long the agent has remained at its current location. Moving resets contact time. This creates a physical basis for the producer/consumer divide: sessile agents accumulate contact time and extract nutrients efficiently; mobile agents cannot.
+An agent extracting nutrient from the **available pool** at its location. The only way nutrient enters the living system. Rate follows Michaelis-Menten saturation: `nutrient_absorption × contact_time / (contact_time + k)`, where k is a half-saturation constant (50 ticks). Uptake increases with contact time but plateaus — diminishing returns on long residence. Moving resets contact time. This creates a physical basis for the producer/consumer divide: sessile agents accumulate contact time and extract nutrients efficiently; mobile agents cannot.
 _Avoid_: feeding (feeding is consumption of other agents), mining (implies deliberate extraction from rock)
 
 **Contact time**:
