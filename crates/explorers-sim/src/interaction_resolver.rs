@@ -14,6 +14,7 @@ pub struct ResolverParams {
     pub decomposition_efficiency: f32,
     pub world_extent: f32,
     pub reproduction_energy_threshold: f32,
+    pub solar_flux_magnitude: f32,
 }
 
 /// Accumulated mutations from resolving consumption interactions.
@@ -27,6 +28,8 @@ pub struct ResolverResult {
     pub new_carcasses: Vec<Carcass>,
     pub depleted_carcass_indices: HashSet<usize>,
     pub dissipated_energy: f32,
+    pub solar_gains: Vec<f32>,
+    pub total_solar_input: f32,
 }
 
 /// Resolve trophic interactions (consumption and decomposition) and their
@@ -46,6 +49,7 @@ pub fn resolve_interactions(
     nack_sets: &HashMap<u64, HashSet<event::EventKind>>,
     tick: u64,
     pre_tick_energies: &[f32],
+    light_shares: &[f32],
 ) -> ResolverResult {
     let n = agents.len();
     let mut working_energies: Vec<f32> = agents.iter().map(|a| a.energy).collect();
@@ -58,6 +62,8 @@ pub fn resolve_interactions(
     let mut new_carcasses: Vec<Carcass> = Vec::new();
     let mut depleted_carcass_indices: HashSet<usize> = HashSet::new();
     let mut dissipated_energy = 0.0_f32;
+    let mut solar_gains = vec![0.0_f32; n];
+    let mut total_solar_input = 0.0_f32;
 
     let mut consequence_queue = event::EventQueue::new();
 
@@ -323,6 +329,20 @@ pub fn resolve_interactions(
             }
         }
 
+        // Photosynthesise (fallback: only if agent didn't consume or decompose)
+        let acquired = consumption_gains[i] > 0.0 || decomposition_gains[i] > 0.0;
+        if !acquired {
+            let mobility_gate = 1.0
+                / (1.0 + (20.0_f32 * (agents[i].traits.mobility - 0.3)).exp());
+            let solar_gain = agents[i].traits.photosynthetic_absorption
+                * params.solar_flux_magnitude
+                * mobility_gate
+                * light_shares[i];
+            working_energies[i] += solar_gain;
+            solar_gains[i] = solar_gain;
+            total_solar_input += solar_gain;
+        }
+
         // Drain consequence queue
         while let Some(consequence) = consequence_queue.pop() {
             match consequence.kind {
@@ -443,6 +463,8 @@ pub fn resolve_interactions(
         new_carcasses,
         depleted_carcass_indices,
         dissipated_energy,
+        solar_gains,
+        total_solar_input,
     }
 }
 
@@ -498,6 +520,7 @@ mod tests {
             decomposition_efficiency: 0.5,
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 0.0,
         };
 
         let order = vec![0, 1];
@@ -514,6 +537,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
         );
 
         // drain = 2.0, gain = 2.0 * 0.5 = 1.0
@@ -582,6 +606,7 @@ mod tests {
             decomposition_efficiency: 0.5,
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 0.0,
         };
 
         let order = vec![0, 1];
@@ -598,6 +623,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
         );
 
         // drain = 5.0 (capped at target energy), gain = 5.0 * 0.5 = 2.5
@@ -676,6 +702,7 @@ mod tests {
             decomposition_efficiency: 0.8,
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 0.0,
         };
 
         let order = vec![0];
@@ -692,6 +719,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
         );
 
         // drain = 4.0 (scavenging_rate, capped at carcass energy 10.0)
@@ -752,6 +780,7 @@ mod tests {
             decomposition_efficiency: 0.8,
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 0.0,
         };
 
         let order = vec![0];
@@ -768,6 +797,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
         );
 
         // drain = 10.0 (capped at carcass energy), gain = 10.0 * 0.8 = 8.0
@@ -801,6 +831,311 @@ mod tests {
         assert!(
             decomposed_pos < depleted_pos,
             "Decomposed must precede CarcassDepleted"
+        );
+    }
+
+    #[test]
+    fn photosynthesis_applies_solar_gain_based_on_light_share() {
+        // Two agents with different light shares should receive proportional solar gain
+        let agents = vec![
+            Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 50.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 1.0,
+                    mobility: 0.0, // low mobility => gate ~1.0
+                    ..zero_traits()
+                },
+            },
+            Agent {
+                id: 1,
+                position: (10.0, 10.0),
+                energy: 50.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 1.0,
+                    mobility: 0.0,
+                    ..zero_traits()
+                },
+            },
+        ];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 10.0,
+        };
+
+        let order = vec![0, 1];
+        let pre_tick_energies = vec![50.0, 50.0];
+        let light_shares = vec![0.8, 0.2];
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &[],
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &light_shares,
+        );
+
+        // mobility_gate for mobility=0.0: 1/(1+exp(20*(0-0.3))) = 1/(1+exp(-6)) ≈ 0.9975
+        let gate = 1.0 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
+        let expected_0 = 1.0 * 10.0 * gate * 0.8;
+        let expected_1 = 1.0 * 10.0 * gate * 0.2;
+
+        assert!(
+            (result.solar_gains[0] - expected_0).abs() < 1e-4,
+            "agent 0 solar gain: got {}, expected {}",
+            result.solar_gains[0], expected_0
+        );
+        assert!(
+            (result.solar_gains[1] - expected_1).abs() < 1e-4,
+            "agent 1 solar gain: got {}, expected {}",
+            result.solar_gains[1], expected_1
+        );
+        assert!(
+            (result.total_solar_input - (expected_0 + expected_1)).abs() < 1e-4,
+            "total solar input: got {}, expected {}",
+            result.total_solar_input, expected_0 + expected_1
+        );
+    }
+
+    #[test]
+    fn mobility_gate_reduces_solar_gain_for_high_mobility() {
+        // High-mobility agent should receive much less solar gain than
+        // low-mobility agent, even with the same absorption and light share.
+        let agents = vec![
+            Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 50.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 1.0,
+                    mobility: 0.0, // low mobility
+                    ..zero_traits()
+                },
+            },
+            Agent {
+                id: 1,
+                position: (50.0, 50.0),
+                energy: 50.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 1.0,
+                    mobility: 0.8, // high mobility
+                    ..zero_traits()
+                },
+            },
+        ];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 10.0,
+        };
+
+        let order = vec![0, 1];
+        let pre_tick_energies = vec![50.0, 50.0];
+        let light_shares = vec![0.5, 0.5];
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &[],
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &light_shares,
+        );
+
+        let gate_low = 1.0 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
+        let gate_high = 1.0 / (1.0 + (20.0_f32 * (0.8 - 0.3)).exp());
+
+        let expected_low = 1.0 * 10.0 * gate_low * 0.5;
+        let expected_high = 1.0 * 10.0 * gate_high * 0.5;
+
+        assert!(
+            (result.solar_gains[0] - expected_low).abs() < 1e-4,
+            "low-mobility gain: got {}, expected {}",
+            result.solar_gains[0], expected_low
+        );
+        assert!(
+            (result.solar_gains[1] - expected_high).abs() < 1e-4,
+            "high-mobility gain: got {}, expected {}",
+            result.solar_gains[1], expected_high
+        );
+        // High-mobility agent should get significantly less
+        assert!(
+            result.solar_gains[1] < result.solar_gains[0] * 0.01,
+            "high-mobility agent should get <1% of low-mobility agent's gain: {} vs {}",
+            result.solar_gains[1], result.solar_gains[0]
+        );
+    }
+
+    #[test]
+    fn consumer_does_not_photosynthesize() {
+        // An agent that successfully consumed should not also get solar gain
+        let agents = vec![
+            Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 50.0,
+                traits: TraitVector {
+                    consumption_rate: 2.0,
+                    photosynthetic_absorption: 1.0,
+                    mobility: 0.0,
+                    ..zero_traits()
+                },
+            },
+            Agent {
+                id: 1,
+                position: (3.0, 0.0),
+                energy: 50.0,
+                traits: zero_traits(),
+            },
+        ];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 10.0,
+        };
+
+        let order = vec![0, 1];
+        let pre_tick_energies = vec![50.0, 50.0];
+        let light_shares = vec![1.0, 1.0];
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &[],
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &light_shares,
+        );
+
+        // Agent 0 consumed, so should have zero solar gain
+        assert!(
+            result.consumption_gains[0] > 0.0,
+            "agent 0 should have consumed"
+        );
+        assert!(
+            result.solar_gains[0] == 0.0,
+            "consumer should not photosynthesize, got: {}",
+            result.solar_gains[0]
+        );
+    }
+
+    #[test]
+    fn decomposer_does_not_photosynthesize() {
+        // An agent that successfully decomposed should not also get solar gain
+        let agents = vec![Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                scavenging_rate: 4.0,
+                photosynthetic_absorption: 1.0,
+                mobility: 0.0,
+                ..zero_traits()
+            },
+        }];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        agent_grid.insert(0, agents[0].position);
+
+        let carcasses = vec![Carcass {
+            id: 99,
+            position: (2.0, 0.0),
+            energy: 10.0,
+        }];
+        let mut carcass_grid = SpatialGrid::new(extent, cell_size);
+        carcass_grid.insert(0, carcasses[0].position);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.8,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 10.0,
+        };
+
+        let order = vec![0];
+        let pre_tick_energies = vec![50.0];
+        let light_shares = vec![1.0];
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &carcasses,
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &light_shares,
+        );
+
+        assert!(
+            result.decomposition_gains[0] > 0.0,
+            "agent 0 should have decomposed"
+        );
+        assert!(
+            result.solar_gains[0] == 0.0,
+            "decomposer should not photosynthesize, got: {}",
+            result.solar_gains[0]
         );
     }
 
@@ -848,6 +1183,7 @@ mod tests {
             decomposition_efficiency: 0.8,
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 0.0,
         };
 
         let order = vec![0, 1];
@@ -864,6 +1200,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
         );
 
         // Agent 0 should have consumed (gain > 0)

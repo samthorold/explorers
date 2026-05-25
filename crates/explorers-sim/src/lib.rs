@@ -628,6 +628,7 @@ impl World {
             decomposition_efficiency,
             world_extent: extent,
             reproduction_energy_threshold: reproduction_threshold,
+            solar_flux_magnitude: self.params.solar_flux_magnitude,
         };
         let resolver_result = interaction_resolver::resolve_interactions(
             &self.agents,
@@ -640,6 +641,7 @@ impl World {
             &self.nack_sets,
             self.tick,
             &pre_tick_energies,
+            &light_shares,
         );
 
         // Apply resolver mutations
@@ -647,11 +649,14 @@ impl World {
             self.agents[i].energy += resolver_result.consumption_gains[i];
             self.agents[i].energy -= resolver_result.consumption_losses[i];
             self.agents[i].energy += resolver_result.decomposition_gains[i];
+            self.agents[i].energy += resolver_result.solar_gains[i];
             consumption_gains[i] = resolver_result.consumption_gains[i];
             consumption_losses[i] = resolver_result.consumption_losses[i];
             decomposition_gains[i] = resolver_result.decomposition_gains[i];
+            solar_gains[i] = resolver_result.solar_gains[i];
         }
         self.dissipated_energy += resolver_result.dissipated_energy;
+        self.total_solar_input += resolver_result.total_solar_input;
         dead_agents = resolver_result.dead_agents;
 
         // Emit resolver events into the event log
@@ -705,25 +710,6 @@ impl World {
         for &i in &order {
             if dead_agents.contains(&i) || self.agents[i].energy <= 0.0 {
                 continue;
-            }
-
-            // --- Energy acquisition (mutually exclusive) ---
-            // Resolver already handled consumption and decomposition
-            let acquired =
-                consumption_gains[i] > 0.0 || decomposition_gains[i] > 0.0;
-
-            // Photosynthesise (fallback)
-            if !acquired {
-                let mobility_gate = 1.0
-                    / (1.0
-                        + (20.0_f32 * (self.agents[i].traits.mobility - 0.3)).exp());
-                let solar_gain = self.agents[i].traits.photosynthetic_absorption
-                    * self.params.solar_flux_magnitude
-                    * mobility_gate
-                    * light_shares[i];
-                self.agents[i].energy += solar_gain;
-                self.total_solar_input += solar_gain;
-                solar_gains[i] = solar_gain;
             }
 
             // --- Reproduction via broadcast-response ---
