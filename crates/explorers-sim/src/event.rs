@@ -8,6 +8,7 @@ pub enum EventKind {
     CarcassCreated,
     CarcassDepleted,
     MatingReadiness,
+    Moved,
 }
 
 #[derive(Clone, Debug, PartialEq)]

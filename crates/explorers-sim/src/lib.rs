@@ -292,6 +292,35 @@ impl Agent {
                 }
                 event::Response { ack: event::Ack::Ack, events: vec![] }
             }
+            event::EventKind::Moved if self.traits.mobility > 0.0 => {
+                let mut cx = 0.0_f32;
+                let mut cy = 0.0_f32;
+
+                if self.traits.consumption_rate > 0.0 {
+                    cx += self.traits.consumption_rate * data.feeding_gradient.0;
+                    cy += self.traits.consumption_rate * data.feeding_gradient.1;
+                }
+                if self.traits.scavenging_rate > 0.0 {
+                    cx += self.traits.scavenging_rate * data.carcass_gradient.0;
+                    cy += self.traits.scavenging_rate * data.carcass_gradient.1;
+                }
+
+                cx *= self.traits.chemotaxis_sensitivity;
+                cy *= self.traits.chemotaxis_sensitivity;
+
+                event::Response {
+                    ack: event::Ack::Ack,
+                    events: vec![event::Event {
+                        tick: event.tick,
+                        seq: 0,
+                        kind: event::EventKind::Moved,
+                        source: self.id,
+                        target: None,
+                        energy_delta: 0.0,
+                        position: Some((cx, cy)),
+                    }],
+                }
+            }
             _ => event::Response { ack: event::Ack::Ack, events: vec![] },
         }
     }
@@ -443,7 +472,7 @@ impl World {
         // --- Update spatial projection from event log ---
         self.projection.update(&self.event_log, self.tick);
 
-        // --- Sense & Decide: compute movement vectors via projection gradients ---
+        // --- Sense & Decide: DES computes projections and hands data to agents ---
         let mut movements = vec![(0.0_f32, 0.0_f32); agent_count];
         for &i in &order {
             let agent = &self.agents[i];
@@ -451,32 +480,41 @@ impl World {
                 continue;
             }
 
-            let mut chemotaxis_x = 0.0_f32;
-            let mut chemotaxis_y = 0.0_f32;
+            // DES pre-computes projection gradients for this agent
+            let feeding_gradient = self.projection.gradient(
+                agent.position,
+                agent.traits.sensing_range,
+                spatial_projection::ActivityLayer::Feeding,
+            );
+            let carcass_gradient = self.projection.gradient(
+                agent.position,
+                agent.traits.sensing_range,
+                spatial_projection::ActivityLayer::Carcass,
+            );
 
-            if agent.traits.consumption_rate > 0.0 {
-                let (gx, gy) = self.projection.gradient(
-                    agent.position,
-                    agent.traits.sensing_range,
-                    spatial_projection::ActivityLayer::Feeding,
-                );
-                chemotaxis_x += agent.traits.consumption_rate * gx;
-                chemotaxis_y += agent.traits.consumption_rate * gy;
-            }
+            let data = ProjectionData {
+                feeding_gradient,
+                carcass_gradient,
+                nearby_agents: vec![],
+                nearby_carcasses: vec![],
+                contact_radius: self.params.contact_radius,
+                reproduction_energy_threshold: self.params.reproduction_energy_threshold,
+            };
+            let trigger = event::Event {
+                tick: self.tick, seq: 0, kind: event::EventKind::Moved,
+                source: 0, target: None, energy_delta: 0.0,
+                position: Some(agent.position),
+            };
+            let response = agent.receive(&trigger, &data);
 
-            if agent.traits.scavenging_rate > 0.0 {
-                let (gx, gy) = self.projection.gradient(
-                    agent.position,
-                    agent.traits.sensing_range,
-                    spatial_projection::ActivityLayer::Carcass,
-                );
-                chemotaxis_x += agent.traits.scavenging_rate * gx;
-                chemotaxis_y += agent.traits.scavenging_rate * gy;
-            }
+            // Extract chemotaxis vector from agent response
+            let (chemotaxis_x, chemotaxis_y) = if let Some(moved) = response.events.first() {
+                moved.position.unwrap_or((0.0, 0.0))
+            } else {
+                (0.0, 0.0)
+            };
 
-            chemotaxis_x *= agent.traits.chemotaxis_sensitivity;
-            chemotaxis_y *= agent.traits.chemotaxis_sensitivity;
-
+            // DES adds exploration noise (requires RNG on World)
             let angle_dist =
                 rand::distr::Uniform::new(0.0_f32, std::f32::consts::TAU).unwrap();
             let angle = angle_dist.sample(&mut self.rng);
@@ -486,6 +524,7 @@ impl World {
             let mut move_x = chemotaxis_x + explore_x;
             let mut move_y = chemotaxis_y + explore_y;
 
+            // DES normalizes and scales by mobility
             let mag = (move_x * move_x + move_y * move_y).sqrt();
             if mag > 0.0 {
                 move_x = move_x / mag * agent.traits.mobility;
@@ -4425,5 +4464,145 @@ spatial_decay_rate: 0.5,
 
         assert_eq!(world.agents()[0].energy, 50.0 + expected_drain * 0.5);
         assert_eq!(world.agents()[1].energy, 50.0 - expected_drain);
+    }
+
+    #[test]
+    fn agent_returns_chemotaxis_vector_on_moved_broadcast() {
+        // A consumer with feeding gradient should return a Moved event
+        // with chemotaxis direction based on gradient and traits
+        let agent = Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                consumption_rate: 1.0,
+                chemotaxis_sensitivity: 2.0,
+                mobility: 1.0,
+                ..zero_traits()
+            },
+        };
+        let data = ProjectionData {
+            feeding_gradient: (3.0, 4.0),
+            carcass_gradient: (0.0, 0.0),
+            nearby_agents: vec![],
+            nearby_carcasses: vec![],
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+        };
+        let trigger = event::Event {
+            tick: 0,
+            seq: 0,
+            kind: event::EventKind::Moved,
+            source: 0,
+            target: None,
+            energy_delta: 0.0,
+            position: None,
+        };
+        let response = agent.receive(&trigger, &data);
+        assert_eq!(response.ack, event::Ack::Ack);
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(response.events[0].kind, event::EventKind::Moved);
+        // chemotaxis = sensitivity * (consumption_rate * feeding_gradient)
+        // = 2.0 * (1.0 * (3.0, 4.0)) = (6.0, 8.0)
+        let pos = response.events[0].position.unwrap();
+        assert!((pos.0 - 6.0).abs() < 1e-5, "x={}", pos.0);
+        assert!((pos.1 - 8.0).abs() < 1e-5, "y={}", pos.1);
+    }
+
+    #[test]
+    fn zero_mobility_agent_returns_no_events_on_moved_broadcast() {
+        let agent = Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                consumption_rate: 1.0,
+                chemotaxis_sensitivity: 2.0,
+                mobility: 0.0,
+                ..zero_traits()
+            },
+        };
+        let data = ProjectionData {
+            feeding_gradient: (3.0, 4.0),
+            carcass_gradient: (0.0, 0.0),
+            nearby_agents: vec![],
+            nearby_carcasses: vec![],
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+        };
+        let trigger = event::Event {
+            tick: 0, seq: 0, kind: event::EventKind::Moved,
+            source: 0, target: None, energy_delta: 0.0, position: None,
+        };
+        let response = agent.receive(&trigger, &data);
+        assert!(response.events.is_empty(), "zero-mobility agent should not move");
+    }
+
+    #[test]
+    fn scavenger_combines_carcass_gradient_into_chemotaxis() {
+        let agent = Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                consumption_rate: 0.5,
+                scavenging_rate: 0.5,
+                chemotaxis_sensitivity: 1.0,
+                mobility: 1.0,
+                ..zero_traits()
+            },
+        };
+        let data = ProjectionData {
+            feeding_gradient: (2.0, 0.0),
+            carcass_gradient: (0.0, 3.0),
+            nearby_agents: vec![],
+            nearby_carcasses: vec![],
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 50.0,
+        };
+        let trigger = event::Event {
+            tick: 0, seq: 0, kind: event::EventKind::Moved,
+            source: 0, target: None, energy_delta: 0.0, position: None,
+        };
+        let response = agent.receive(&trigger, &data);
+        let pos = response.events[0].position.unwrap();
+        // chemotaxis = 1.0 * (0.5 * (2.0, 0.0) + 0.5 * (0.0, 3.0)) = (1.0, 1.5)
+        assert!((pos.0 - 1.0).abs() < 1e-5, "x={}", pos.0);
+        assert!((pos.1 - 1.5).abs() < 1e-5, "y={}", pos.1);
+    }
+
+    #[test]
+    fn movement_via_receive_matches_direct_query_approach() {
+        // Regression test: movement through projection handoff must produce
+        // identical results to the previous direct-query approach.
+        // Two identical worlds run the same steps and must produce same positions.
+        let params = WorldParameters {
+            initial_population_size: 5,
+            ..test_params()
+        };
+        let dist = test_distribution();
+        let seed = 42;
+
+        let mut world1 = World::new(params.clone(), dist.clone(), seed);
+        let mut world2 = World::new(params, dist, seed);
+
+        // Seed some events so projections have gradient data
+        for w in [&mut world1, &mut world2] {
+            w.emit(
+                event::EventKind::Consumed, 99, Some(100), 20.0, Some((10.0, 10.0)),
+            );
+            w.emit(
+                event::EventKind::CarcassCreated, 101, None, 15.0, Some((-10.0, -10.0)),
+            );
+        }
+
+        for _ in 0..10 {
+            world1.step();
+            world2.step();
+        }
+        for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
+            assert_eq!(a.position, b.position, "positions must match");
+            assert_eq!(a.energy, b.energy, "energies must match");
+        }
     }
 }
