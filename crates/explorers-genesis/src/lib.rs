@@ -31,24 +31,27 @@ pub fn run_single(
 ) -> RunResult {
     let mut world =
         explorers_sim::World::new(params.clone(), distribution.clone(), seed);
-    let mut observer =
-        explorers_genesis_eval::RunObserver::new(run_config.eval_config.clone(), run_config.max_ticks);
 
-    let mut tick = 0;
-    for t in 0..run_config.max_ticks {
+    for _ in 0..run_config.max_ticks {
         world.step();
-        observer.observe(&world);
-        tick = t + 1;
-        if observer.failed().is_some() {
+        if world.agents().is_empty() {
+            break;
+        }
+        if world.agents().len() > run_config.eval_config.max_population {
             break;
         }
     }
 
-    let breakdown = observer.evaluate();
+    let breakdown = explorers_genesis_eval::evaluate_from_log(
+        &world,
+        &run_config.eval_config,
+        run_config.max_ticks,
+    );
+    let termination_tick = world.tick();
     RunResult {
         fitness: breakdown.fitness,
         failure: breakdown.failure.clone(),
-        termination_tick: tick,
+        termination_tick,
         breakdown,
     }
 }
@@ -154,8 +157,9 @@ spatial_decay_rate: 0.5,
     fn different_seeds_produce_different_runs() {
         let params = WorldParameters {
             initial_population_size: 30,
-            contact_radius: 5.0,
+            contact_radius: 10.0,
             reproduction_energy_threshold: 10.0,
+            world_extent: 20.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -165,13 +169,23 @@ spatial_decay_rate: 0.5,
         };
         let config = RunConfig {
             max_ticks: 200,
-            eval_config: EvalConfig::default(),
+            eval_config: EvalConfig {
+                grace_period_fraction: 1.0,
+                ..EvalConfig::default()
+            },
         };
         let result_a = run_single(&params, &dist, &config, 42);
         let result_b = run_single(&params, &dist, &config, 999);
+        let a = &result_a.breakdown;
+        let b = &result_b.breakdown;
         assert!(
             result_a.termination_tick != result_b.termination_tick
-                || result_a.fitness != result_b.fitness,
+                || result_a.fitness != result_b.fitness
+                || a.oscillation_strength != b.oscillation_strength
+                || a.clustering_strength != b.clustering_strength
+                || a.coexistence_duration != b.coexistence_duration
+                || a.turnover_score != b.turnover_score
+                || a.trophic_balance_score != b.trophic_balance_score,
             "different seeds should produce different trajectories \
              (a: tick={} fit={}, b: tick={} fit={})",
             result_a.termination_tick, result_a.fitness,

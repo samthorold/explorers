@@ -146,6 +146,66 @@ impl TopologyProjection {
         self.lineage.get(&agent_id).copied()
     }
 
+    pub fn lineage_clusters(&self) -> HashMap<u64, usize> {
+        let mut parent: HashMap<u64, u64> = HashMap::new();
+        let all_agents: HashSet<u64> = self
+            .birth_tick
+            .keys()
+            .chain(self.death_tick.keys())
+            .copied()
+            .collect();
+        for &a in &all_agents {
+            parent.insert(a, a);
+        }
+
+        fn find(parent: &mut HashMap<u64, u64>, x: u64) -> u64 {
+            let mut root = x;
+            while parent[&root] != root {
+                root = parent[&root];
+            }
+            let mut curr = x;
+            while curr != root {
+                let next = parent[&curr];
+                parent.insert(curr, root);
+                curr = next;
+            }
+            root
+        }
+
+        for (&child, &(p1, p2)) in &self.lineage {
+            if parent.contains_key(&child) {
+                if parent.contains_key(&p1) {
+                    let rc = find(&mut parent, child);
+                    let rp = find(&mut parent, p1);
+                    if rc != rp {
+                        parent.insert(rc, rp);
+                    }
+                }
+                if parent.contains_key(&p2) {
+                    let rc = find(&mut parent, child);
+                    let rp = find(&mut parent, p2);
+                    if rc != rp {
+                        parent.insert(rc, rp);
+                    }
+                }
+            }
+        }
+
+        let mut cluster_id_map: HashMap<u64, usize> = HashMap::new();
+        let mut next_id = 0;
+        let mut result = HashMap::new();
+        for &a in &all_agents {
+            let root = find(&mut parent, a);
+            let id = *cluster_id_map.entry(root).or_insert_with(|| {
+                let id = next_id;
+                next_id += 1;
+                id
+            });
+            result.insert(a, id);
+        }
+        result
+    }
+
     pub fn energy_flow_between(&self, from: TrophicRole, to: TrophicRole) -> f32 {
         let roles = self.trophic_roles();
         self.edges
@@ -391,6 +451,30 @@ mod tests {
             proj.energy_flow_between(TrophicRole::Producer, TrophicRole::Consumer),
             0.0
         );
+    }
+
+    #[test]
+    fn lineage_clusters_groups_descendants_with_ancestors() {
+        let log = make_log(vec![
+            // Two initial agents (roots) born independently
+            Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 1, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0, position: None },
+            // Agent 1 and 2 mate → child 3
+            Event { tick: 2, seq: 2, kind: EventKind::MateSelected, source: 1, target: Some(2), energy_delta: 0.0, position: None },
+            Event { tick: 2, seq: 3, kind: EventKind::Born, source: 3, target: None, energy_delta: 8.0, position: None },
+            // Agent 4 born independently (separate lineage)
+            Event { tick: 3, seq: 4, kind: EventKind::Born, source: 4, target: None, energy_delta: 10.0, position: None },
+        ]);
+
+        let mut proj = TopologyProjection::new();
+        proj.update(&log);
+
+        let clusters = proj.lineage_clusters();
+        // Agents 1, 2, 3 should be in the same cluster (connected via child 3)
+        assert_eq!(clusters[&1], clusters[&2]);
+        assert_eq!(clusters[&1], clusters[&3]);
+        // Agent 4 should be in a different cluster
+        assert_ne!(clusters[&1], clusters[&4]);
     }
 
     #[test]
