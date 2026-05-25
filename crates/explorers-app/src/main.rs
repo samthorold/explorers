@@ -801,9 +801,17 @@ fn click_to_inspect(
     cameras: Query<(&Camera, &GlobalTransform)>,
     sim: Res<SimWorld>,
     mut selected: ResMut<SelectedAgent>,
+    mut egui_contexts: EguiContexts,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
         return;
+    }
+
+    // Don't select agents when clicking on the egui panel
+    if let Ok(ctx) = egui_contexts.ctx_mut() {
+        if ctx.is_pointer_over_area() {
+            return;
+        }
     }
 
     let Ok(window) = windows.single() else { return };
