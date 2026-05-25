@@ -36,11 +36,17 @@ fn emit_broadcasts(
     position: (f32, f32),
     agents: &[Agent],
     dead_agents: &std::collections::HashSet<usize>,
+    nack_sets: &std::collections::HashMap<u64, std::collections::HashSet<event::EventKind>>,
     extent: f32,
 ) {
     for (i, agent) in agents.iter().enumerate() {
         if dead_agents.contains(&i) {
             continue;
+        }
+        if let Some(nacked) = nack_sets.get(&agent.id) {
+            if nacked.contains(kind) {
+                continue;
+            }
         }
         let sensing_range = agent.traits.sensing_range;
         if sensing_range <= 0.0 {
@@ -321,7 +327,7 @@ impl Agent {
                     }],
                 }
             }
-            _ => event::Response { ack: event::Ack::Ack, events: vec![] },
+            _ => event::Response { ack: event::Ack::Nack, events: vec![] },
         }
     }
 }
@@ -342,6 +348,7 @@ pub struct World {
     next_seq: u64,
     projection: spatial_projection::SpatialProjection,
     tick_broadcasts: Vec<Broadcast>,
+    nack_sets: std::collections::HashMap<u64, std::collections::HashSet<event::EventKind>>,
 }
 
 impl World {
@@ -429,6 +436,7 @@ impl World {
             next_seq: 0,
             projection,
             tick_broadcasts: Vec::new(),
+            nack_sets: std::collections::HashMap::new(),
         }
     }
 
@@ -673,6 +681,7 @@ impl World {
                         self.agents[i].position,
                         &self.agents,
                         &dead_agents,
+                        &self.nack_sets,
                         extent,
                     );
 
@@ -708,6 +717,7 @@ impl World {
                             self.agents[target].position,
                             &self.agents,
                             &dead_agents,
+                            &self.nack_sets,
                             extent,
                         );
                         emit_broadcasts(
@@ -716,6 +726,7 @@ impl World {
                             self.agents[target].position,
                             &self.agents,
                             &dead_agents,
+                            &self.nack_sets,
                             extent,
                         );
                         dead_agents.insert(target);
@@ -777,6 +788,7 @@ impl World {
                         self.agents[i].position,
                         &self.agents,
                         &dead_agents,
+                        &self.nack_sets,
                         extent,
                     );
 
@@ -818,6 +830,7 @@ impl World {
                     self.agents[i].position,
                     &self.agents,
                     &dead_agents,
+                    &self.nack_sets,
                     extent,
                 );
 
@@ -930,6 +943,42 @@ impl World {
             }
         }
 
+        // --- Deliver broadcasts and register NACKs ---
+        // Build an index from agent id to index for broadcast delivery
+        let agent_id_to_idx: std::collections::HashMap<u64, usize> = self.agents.iter()
+            .enumerate()
+            .map(|(i, a)| (a.id, i))
+            .collect();
+        for broadcast in &broadcasts {
+            if dead_agents.contains(agent_id_to_idx.get(&broadcast.receiver_id).unwrap_or(&usize::MAX)) {
+                continue;
+            }
+            if let Some(&idx) = agent_id_to_idx.get(&broadcast.receiver_id) {
+                let agent = &self.agents[idx];
+                let data = ProjectionData {
+                    feeding_gradient: (0.0, 0.0),
+                    carcass_gradient: (0.0, 0.0),
+                    nearby_agents: vec![],
+                    nearby_carcasses: vec![],
+                    contact_radius,
+                    reproduction_energy_threshold: reproduction_threshold,
+                };
+                let trigger = event::Event {
+                    tick: self.tick, seq: 0, kind: broadcast.kind.clone(),
+                    source: 0, target: None, energy_delta: 0.0,
+                    position: Some(broadcast.source_position),
+                };
+                let response = agent.receive(&trigger, &data);
+                if response.ack == event::Ack::Nack {
+                    self.nack_sets
+                        .entry(agent.id)
+                        .or_insert_with(std::collections::HashSet::new)
+                        .insert(broadcast.kind.clone());
+                }
+                // NACK response events are ignored — only ACK'd events would be queued
+            }
+        }
+
         // --- End-of-tick death check and energy accounting ---
         let mut next_agents: Vec<Agent> = Vec::with_capacity(n);
         let mut next_carcasses: Vec<Carcass> = self
@@ -987,6 +1036,11 @@ impl World {
         self.last_tick_births = offspring.len();
         self.last_tick_deaths = dead_agents.len() + (n - dead_agents.len() - next_agents.len());
         next_agents.extend(offspring);
+
+        // Clean up NACK state for dead agents
+        let live_ids: std::collections::HashSet<u64> = next_agents.iter().map(|a| a.id).collect();
+        self.nack_sets.retain(|id, _| live_ids.contains(id));
+
         self.agents = next_agents;
         self.carcasses = next_carcasses;
         self.tick_broadcasts = broadcasts;
@@ -1031,6 +1085,12 @@ impl World {
 
     pub fn tick_broadcasts(&self) -> &[Broadcast] {
         &self.tick_broadcasts
+    }
+
+    pub fn has_nacked(&self, agent_id: u64, kind: &event::EventKind) -> bool {
+        self.nack_sets
+            .get(&agent_id)
+            .map_or(false, |set| set.contains(kind))
     }
 
     fn emit(&mut self, kind: event::EventKind, source: u64, target: Option<u64>, energy_delta: f32, position: Option<(f32, f32)>) {
@@ -4229,7 +4289,7 @@ spatial_decay_rate: 0.5,
     }
 
     #[test]
-    fn receive_agent_without_consumption_acks_with_no_events() {
+    fn receive_agent_without_consumption_nacks_with_no_events() {
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
@@ -4252,7 +4312,7 @@ spatial_decay_rate: 0.5,
             reproduction_energy_threshold: 50.0,
         };
         let response = agent.receive(&trigger, &data);
-        assert_eq!(response.ack, event::Ack::Ack);
+        assert_eq!(response.ack, event::Ack::Nack);
         assert!(response.events.is_empty());
     }
 
@@ -4376,7 +4436,7 @@ spatial_decay_rate: 0.5,
     }
 
     #[test]
-    fn receive_irrelevant_event_acks_with_no_events() {
+    fn receive_irrelevant_event_nacks_with_no_events() {
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
@@ -4405,7 +4465,7 @@ spatial_decay_rate: 0.5,
             reproduction_energy_threshold: 50.0,
         };
         let response = agent.receive(&trigger, &data);
-        assert_eq!(response.ack, event::Ack::Ack);
+        assert_eq!(response.ack, event::Ack::Nack);
         assert!(response.events.is_empty());
     }
 
@@ -4601,6 +4661,336 @@ spatial_decay_rate: 0.5,
             world2.step();
         }
         for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
+            assert_eq!(a.position, b.position, "positions must match");
+            assert_eq!(a.energy, b.energy, "energies must match");
+        }
+    }
+
+    #[test]
+    fn agent_that_nacked_consumed_does_not_receive_consumed_broadcasts() {
+        // A non-consumer NACKs Consumed on tick 1.
+        // On tick 2, a Consumed event occurs nearby — the NACKing agent
+        // should NOT appear in tick_broadcasts for Consumed.
+        let extent = 100.0;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+
+        // Consumer at (0,0) — will trigger Consumed broadcasts
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 2.0,
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+        // Prey at (2,0) — within contact radius
+        world.add_agent(Agent {
+            id: 0,
+            position: (2.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+        // Non-consumer observer at (4,0) — within sensing range, will NACK Consumed
+        world.add_agent(Agent {
+            id: 0,
+            position: (4.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+
+        // Tick 1: consumption happens, observer receives Consumed broadcast and NACKs it
+        world.step();
+        let observer_id = world.agents()[2].id;
+
+        // Tick 2: another consumption — observer should NOT receive Consumed broadcast
+        world.step();
+        let consumed_broadcasts_to_observer = world.tick_broadcasts().iter()
+            .filter(|b| b.kind == event::EventKind::Consumed && b.receiver_id == observer_id)
+            .count();
+        assert_eq!(
+            consumed_broadcasts_to_observer, 0,
+            "observer that NACKed Consumed should not receive Consumed broadcasts"
+        );
+    }
+
+    #[test]
+    fn agent_that_nacked_consumed_still_receives_other_event_types() {
+        // A non-consumer NACKs Consumed but should still receive Died/CarcassCreated broadcasts.
+        let extent = 100.0;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+
+        // Consumer at (0,0) — will kill the prey
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 200.0, // high enough to kill in one tick
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+        // Prey at (2,0) — within contact radius, low energy to ensure death
+        world.add_agent(Agent {
+            id: 0,
+            position: (2.0, 0.0),
+            energy: 10.0,
+            traits: TraitVector {
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+        // Observer at (4,0) — non-consumer, will NACK Consumed but should receive Died
+        world.add_agent(Agent {
+            id: 0,
+            position: (4.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+
+        // Tick 1: consumption kills prey, observer NACKs Consumed but receives Died
+        world.step();
+        let observer_id = world.agents().last().unwrap().id;
+        let died_broadcasts_to_observer = world.tick_broadcasts().iter()
+            .filter(|b| b.kind == event::EventKind::Died && b.receiver_id == observer_id)
+            .count();
+        assert!(
+            died_broadcasts_to_observer > 0,
+            "observer should still receive Died broadcasts despite NACKing Consumed"
+        );
+    }
+
+    #[test]
+    fn offspring_of_nacking_agent_starts_fully_subscribed() {
+        // Parent NACKs Consumed. Offspring should still receive Consumed broadcasts.
+        let extent = 100.0;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            reproduction_efficiency: 0.9,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+
+        // Two non-consumer parents that will reproduce — they will NACK Consumed
+        let parent_traits = TraitVector {
+            photosynthetic_absorption: 0.0,
+            consumption_rate: 0.0,
+            scavenging_rate: 0.0,
+            mobility: 0.0,
+            chemotaxis_sensitivity: 0.0,
+            mate_selectivity: 10.0, // wide compatibility
+            sensing_range: 20.0,
+            reproductive_investment: 5.0,
+        };
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: parent_traits,
+        });
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0),
+            energy: 100.0,
+            traits: parent_traits,
+        });
+
+        // Consumer nearby to trigger Consumed broadcasts
+        world.add_agent(Agent {
+            id: 0,
+            position: (3.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                consumption_rate: 2.0,
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+        // Prey for the consumer
+        world.add_agent(Agent {
+            id: 0,
+            position: (4.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+
+        // Tick 1: parents reproduce (creating offspring), parents NACK Consumed
+        world.step();
+        let pre_offspring_count = world.agents().len();
+        assert!(
+            pre_offspring_count > 4,
+            "expected offspring to be born, got {} agents",
+            pre_offspring_count
+        );
+
+        // Find the offspring — it has the highest id
+        let offspring_id = world.agents().iter().map(|a| a.id).max().unwrap();
+        // Verify offspring has no NACK set
+        assert!(
+            !world.has_nacked(offspring_id, &event::EventKind::Consumed),
+            "offspring should start with empty NACK set — no inheritance from parent"
+        );
+    }
+
+    #[test]
+    fn dead_agent_nack_state_is_cleaned_up() {
+        // An agent NACKs an event type, then dies. Its NACK state should be removed.
+        let extent = 100.0;
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 50.0, // high enough to kill quickly
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            world_extent: extent,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+
+        // Consumer triggers Consumed broadcasts
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 1000.0, // enough to survive
+            traits: TraitVector {
+                consumption_rate: 2.0,
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+        // Prey
+        world.add_agent(Agent {
+            id: 0,
+            position: (2.0, 0.0),
+            energy: 1000.0,
+            traits: TraitVector {
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+        // Non-consumer observer — will NACK Consumed, then die from metabolic cost
+        world.add_agent(Agent {
+            id: 0,
+            position: (4.0, 0.0),
+            energy: 60.0, // dies after ~1 tick at 50.0 metabolic rate
+            traits: TraitVector {
+                sensing_range: 20.0,
+                ..zero_traits()
+            },
+        });
+
+        // Record observer id before step
+        let observer_id = world.agents()[2].id;
+
+        // Tick 1: observer NACKs Consumed
+        world.step();
+        // Observer should have NACKed Consumed
+        assert!(
+            world.has_nacked(observer_id, &event::EventKind::Consumed),
+            "observer should have NACKed Consumed after tick 1"
+        );
+
+        // Tick 2: observer dies from metabolic cost
+        world.step();
+        // NACK state should be cleaned up
+        assert!(
+            !world.has_nacked(observer_id, &event::EventKind::Consumed),
+            "dead agent NACK state should be cleaned up"
+        );
+    }
+
+    #[test]
+    fn nack_filtering_is_deterministic_across_identical_runs() {
+        // Two worlds with identical seeds produce identical results with NACK filtering.
+        let params = WorldParameters {
+            initial_population_size: 10,
+            ..test_params()
+        };
+        let dist = test_distribution();
+        let seed = 77;
+
+        let mut world1 = World::new(params.clone(), dist.clone(), seed);
+        let mut world2 = World::new(params, dist, seed);
+
+        for _ in 0..20 {
+            world1.step();
+            world2.step();
+        }
+
+        assert_eq!(world1.agents().len(), world2.agents().len());
+        for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
+            assert_eq!(a.id, b.id, "agent IDs must match");
             assert_eq!(a.position, b.position, "positions must match");
             assert_eq!(a.energy, b.energy, "energies must match");
         }
