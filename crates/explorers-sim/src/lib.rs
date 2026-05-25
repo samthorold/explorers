@@ -1,5 +1,6 @@
 pub mod energy_ledger;
 pub mod event;
+pub mod interaction_resolver;
 pub mod spatial;
 pub mod spatial_projection;
 pub mod topology;
@@ -31,7 +32,7 @@ fn toroidal_displacement(from: (f32, f32), to: (f32, f32), extent: f32) -> (f32,
     (dx, dy)
 }
 
-fn emit_broadcasts(
+pub fn emit_broadcasts(
     broadcasts: &mut Vec<Broadcast>,
     kind: &event::EventKind,
     position: (f32, f32),
@@ -599,7 +600,6 @@ impl World {
 
         // --- DES: sequential agent processing with priority event queue ---
         let contact_radius = self.params.contact_radius;
-        let consumption_efficiency = self.params.consumption_efficiency;
         let decomposition_efficiency = self.params.decomposition_efficiency;
         let reproduction_threshold = self.params.reproduction_energy_threshold;
         let reproduction_efficiency = self.params.reproduction_efficiency;
@@ -622,89 +622,72 @@ impl World {
         let mut reproduction_investments = vec![0.0_f32; n];
         let mut offspring: Vec<Agent> = Vec::new();
 
+        // --- Resolve consumption interactions via resolver ---
+        let consumption_params = interaction_resolver::ConsumptionParams {
+            contact_radius,
+            consumption_efficiency: self.params.consumption_efficiency,
+            world_extent: extent,
+            reproduction_energy_threshold: reproduction_threshold,
+        };
+        let resolver_result = interaction_resolver::resolve_consumption(
+            &self.agents,
+            &agent_grid,
+            &carcass_grid,
+            &self.carcasses,
+            &consumption_params,
+            &order,
+            &dead_agents,
+            &self.nack_sets,
+            self.tick,
+            &pre_tick_energies,
+        );
+
+        // Apply resolver mutations
+        for i in 0..n {
+            self.agents[i].energy += resolver_result.consumption_gains[i];
+            self.agents[i].energy -= resolver_result.consumption_losses[i];
+            consumption_gains[i] = resolver_result.consumption_gains[i];
+            consumption_losses[i] = resolver_result.consumption_losses[i];
+        }
+        self.dissipated_energy += resolver_result.dissipated_energy;
+        dead_agents = resolver_result.dead_agents;
+
+        // Emit resolver events into the event log
+        for ev in &resolver_result.events {
+            self.emit(
+                ev.kind.clone(),
+                ev.source,
+                ev.target,
+                ev.energy_delta,
+                ev.position,
+            );
+        }
+        broadcasts.extend(resolver_result.broadcasts);
+
+        // Apply new carcasses from consumption cascade
+        for carcass in resolver_result.new_carcasses {
+            let ci = self.carcasses.len();
+            carcass_grid.insert(ci as u64, carcass.position);
+            self.carcasses.push(carcass);
+        }
+
+        // Remove dead agents from the agent grid
+        for &idx in &dead_agents {
+            agent_grid.remove(idx as u64);
+        }
+
+        // Track which agents consumed (for mutually exclusive energy acquisition)
+        let consumed_agents: std::collections::HashSet<usize> = (0..n)
+            .filter(|&i| consumption_gains[i] > 0.0)
+            .collect();
+
         for &i in &order {
             if dead_agents.contains(&i) || self.agents[i].energy <= 0.0 {
                 continue;
             }
 
             // --- Energy acquisition (mutually exclusive) ---
-            let mut acquired = false;
-
-            // Try consumption via broadcast-response
-            if !acquired && self.agents[i].traits.consumption_rate > 0.0 {
-                let neighbors =
-                    agent_grid.query_radius(self.agents[i].position, contact_radius);
-                let nearby_agents: Vec<NearbyAgent> = neighbors.iter()
-                    .filter_map(|&j_id| {
-                        let j = j_id as usize;
-                        if j == i || dead_agents.contains(&j) || self.agents[j].energy <= 0.0 {
-                            return None;
-                        }
-                        let dist = toroidal_distance(
-                            self.agents[i].position, self.agents[j].position, extent,
-                        );
-                        Some(NearbyAgent {
-                            id: self.agents[j].id, distance: dist,
-                            energy: self.agents[j].energy, traits: self.agents[j].traits,
-                        })
-                    })
-                    .collect();
-                let data = ProjectionData {
-                    feeding_gradient: (0.0, 0.0), carcass_gradient: (0.0, 0.0),
-                    nearby_agents, nearby_carcasses: vec![],
-                    contact_radius, reproduction_energy_threshold: reproduction_threshold,
-                };
-                let trigger = event::Event {
-                    tick: self.tick, seq: 0, kind: event::EventKind::Consumed,
-                    source: 0, target: None, energy_delta: 0.0,
-                    position: Some(self.agents[i].position),
-                };
-                let response = self.agents[i].receive(&trigger, &data);
-                if let Some(consumed) = response.events.first() {
-                    let target_id = consumed.target.unwrap();
-                    let target = (0..n).find(|&j| self.agents[j].id == target_id).unwrap();
-                    let drain = consumed.energy_delta;
-                    let gain = drain * consumption_efficiency;
-                    self.agents[i].energy += gain;
-                    self.agents[target].energy -= drain;
-                    consumption_gains[i] += gain;
-                    consumption_losses[target] += drain;
-                    self.dissipated_energy += drain * (1.0 - consumption_efficiency);
-                    self.emit(
-                        event::EventKind::Consumed,
-                        self.agents[i].id,
-                        Some(self.agents[target].id),
-                        drain,
-                        Some(self.agents[i].position),
-                    );
-                    emit_broadcasts(
-                        &mut broadcasts,
-                        &event::EventKind::Consumed,
-                        self.agents[i].position,
-                        &self.agents,
-                        &dead_agents,
-                        &self.nack_sets,
-                        extent,
-                    );
-
-                    // Queue consequence: target death → carcass creation
-                    if self.agents[target].energy <= 0.0 {
-                        let carcass_energy =
-                            (pre_tick_energies[target] - consumption_losses[target])
-                                .max(0.0);
-                        consequence_queue.push_high(event::Event {
-                            tick: self.tick,
-                            seq: 0, // seq assigned when emitting to log
-                            kind: event::EventKind::Died,
-                            source: self.agents[target].id,
-                            target: None,
-                            energy_delta: carcass_energy,
-                            position: Some(self.agents[target].position),
-                        });
-                    }
-                    acquired = true;
-                }
-            }
+            let mut acquired = consumed_agents.contains(&i);
 
             // Try decomposition via broadcast-response
             if !acquired && self.agents[i].traits.scavenging_rate > 0.0 {
@@ -778,71 +761,9 @@ impl World {
                 }
             }
 
-            // --- Drain consequence queue before next agent decision ---
+            // --- Drain consequence queue (decomposition cascades only) ---
             while let Some(consequence) = consequence_queue.pop() {
                 match consequence.kind {
-                    event::EventKind::Died => {
-                        let dead_id = consequence.source;
-                        let dead_pos = consequence.position.unwrap();
-                        let carcass_energy = consequence.energy_delta;
-                        self.emit(
-                            event::EventKind::Died,
-                            dead_id,
-                            None,
-                            0.0,
-                            Some(dead_pos),
-                        );
-                        // Queue CarcassCreated as next consequence
-                        consequence_queue.push_high(event::Event {
-                            tick: self.tick,
-                            seq: 0,
-                            kind: event::EventKind::CarcassCreated,
-                            source: dead_id,
-                            target: None,
-                            energy_delta: carcass_energy,
-                            position: Some(dead_pos),
-                        });
-                        emit_broadcasts(
-                            &mut broadcasts,
-                            &event::EventKind::Died,
-                            dead_pos,
-                            &self.agents,
-                            &dead_agents,
-                            &self.nack_sets,
-                            extent,
-                        );
-                        let target_idx = (0..n).find(|&j| self.agents[j].id == dead_id).unwrap();
-                        dead_agents.insert(target_idx);
-                        agent_grid.remove(target_idx as u64);
-                    }
-                    event::EventKind::CarcassCreated => {
-                        let dead_id = consequence.source;
-                        let dead_pos = consequence.position.unwrap();
-                        let carcass_energy = consequence.energy_delta;
-                        self.emit(
-                            event::EventKind::CarcassCreated,
-                            dead_id,
-                            None,
-                            carcass_energy,
-                            Some(dead_pos),
-                        );
-                        let ci = self.carcasses.len();
-                        self.carcasses.push(Carcass {
-                            id: dead_id,
-                            position: dead_pos,
-                            energy: carcass_energy,
-                        });
-                        carcass_grid.insert(ci as u64, dead_pos);
-                        emit_broadcasts(
-                            &mut broadcasts,
-                            &event::EventKind::CarcassCreated,
-                            dead_pos,
-                            &self.agents,
-                            &dead_agents,
-                            &self.nack_sets,
-                            extent,
-                        );
-                    }
                     event::EventKind::CarcassDepleted => {
                         let carcass_id = consequence.source;
                         let carcass_pos = consequence.position.unwrap();

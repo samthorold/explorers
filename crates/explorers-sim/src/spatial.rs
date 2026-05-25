@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::toroidal_distance;
 
+#[derive(Clone)]
 pub struct SpatialGrid {
     world_extent: f32,
     cell_size: f32,
