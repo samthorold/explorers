@@ -7,10 +7,11 @@ use crate::{
     emit_broadcasts, toroidal_distance,
 };
 
-/// Subset of WorldParameters needed for consumption resolution.
-pub struct ConsumptionParams {
+/// Subset of WorldParameters needed for interaction resolution.
+pub struct ResolverParams {
     pub contact_radius: f32,
     pub consumption_efficiency: f32,
+    pub decomposition_efficiency: f32,
     pub world_extent: f32,
     pub reproduction_energy_threshold: f32,
 }
@@ -22,22 +23,24 @@ pub struct ResolverResult {
     pub consumption_gains: Vec<f32>,
     pub consumption_losses: Vec<f32>,
     pub dead_agents: HashSet<usize>,
+    pub decomposition_gains: Vec<f32>,
     pub new_carcasses: Vec<Carcass>,
     pub depleted_carcass_indices: HashSet<usize>,
     pub dissipated_energy: f32,
 }
 
-/// Resolve consumption interactions and their consequence cascades.
+/// Resolve trophic interactions (consumption and decomposition) and their
+/// consequence cascades.
 ///
 /// Takes an immutable snapshot of agent state and returns mutations for
 /// `step()` to apply. The resolver maintains working copies of energies
 /// to correctly handle sequential interactions within a single tick.
-pub fn resolve_consumption(
+pub fn resolve_interactions(
     agents: &[Agent],
     agent_grid: &SpatialGrid,
     carcass_grid: &SpatialGrid,
     carcasses: &[Carcass],
-    params: &ConsumptionParams,
+    params: &ResolverParams,
     order: &[usize],
     dead_agents_before: &HashSet<usize>,
     nack_sets: &HashMap<u64, HashSet<event::EventKind>>,
@@ -48,6 +51,7 @@ pub fn resolve_consumption(
     let mut working_energies: Vec<f32> = agents.iter().map(|a| a.energy).collect();
     let mut consumption_gains = vec![0.0_f32; n];
     let mut consumption_losses = vec![0.0_f32; n];
+    let mut decomposition_gains = vec![0.0_f32; n];
     let mut events = Vec::new();
     let mut broadcasts = Vec::new();
     let mut dead_agents: HashSet<usize> = dead_agents_before.clone();
@@ -61,6 +65,10 @@ pub fn resolve_consumption(
     let mut agent_grid = agent_grid.clone();
     // Mutable copy of carcass_grid for new carcass insertions
     let mut carcass_grid = carcass_grid.clone();
+
+    // Working copies of carcass energies for decomposition tracking
+    let mut working_carcass_energies: Vec<f32> =
+        carcasses.iter().map(|c| c.energy).collect();
 
     for &i in order {
         if dead_agents.contains(&i) || working_energies[i] <= 0.0 {
@@ -162,6 +170,159 @@ pub fn resolve_consumption(
             }
         }
 
+        // Try decomposition (mutually exclusive with consumption)
+        if consumption_gains[i] == 0.0 && agents[i].traits.scavenging_rate > 0.0 {
+            let nearby_carcass_ids =
+                carcass_grid.query_radius(agents[i].position, params.contact_radius);
+            let nearby_carcasses: Vec<crate::NearbyCarcass> = nearby_carcass_ids
+                .iter()
+                .filter_map(|&ci_id| {
+                    let ci = ci_id as usize;
+                    // Get energy from working copy; handle both original and new carcasses
+                    let energy = if ci < working_carcass_energies.len() {
+                        working_carcass_energies[ci]
+                    } else {
+                        let new_idx = ci - carcasses.len();
+                        if new_idx < new_carcasses.len() {
+                            new_carcasses[new_idx].energy
+                        } else {
+                            return None;
+                        }
+                    };
+                    if energy <= 0.0 {
+                        return None;
+                    }
+                    let carcass_pos = if ci < carcasses.len() {
+                        carcasses[ci].position
+                    } else {
+                        new_carcasses[ci - carcasses.len()].position
+                    };
+                    let carcass_id = if ci < carcasses.len() {
+                        carcasses[ci].id
+                    } else {
+                        new_carcasses[ci - carcasses.len()].id
+                    };
+                    let dist = toroidal_distance(
+                        agents[i].position,
+                        carcass_pos,
+                        params.world_extent,
+                    );
+                    Some(crate::NearbyCarcass {
+                        id: carcass_id,
+                        distance: dist,
+                        energy,
+                    })
+                })
+                .collect();
+
+            let data = ProjectionData {
+                feeding_gradient: (0.0, 0.0),
+                carcass_gradient: (0.0, 0.0),
+                nearby_agents: vec![],
+                nearby_carcasses,
+                contact_radius: params.contact_radius,
+                reproduction_energy_threshold: params.reproduction_energy_threshold,
+            };
+            let trigger = event::Event {
+                tick,
+                seq: 0,
+                kind: event::EventKind::CarcassCreated,
+                source: 0,
+                target: None,
+                energy_delta: 0.0,
+                position: Some(agents[i].position),
+            };
+            let response = agents[i].receive(&trigger, &data);
+            if let Some(decomposed) = response.events.first() {
+                let carcass_id = decomposed.target.unwrap();
+                let drain = decomposed.energy_delta;
+                let gain = drain * params.decomposition_efficiency;
+
+                // Find carcass index and update working energy
+                if let Some(ci) = carcasses.iter().position(|c| c.id == carcass_id) {
+                    working_carcass_energies[ci] -= drain;
+                    working_energies[i] += gain;
+                    decomposition_gains[i] = gain;
+                    dissipated_energy += drain * (1.0 - params.decomposition_efficiency);
+
+                    events.push(event::Event {
+                        tick,
+                        seq: 0,
+                        kind: event::EventKind::Decomposed,
+                        source: agents[i].id,
+                        target: Some(carcass_id),
+                        energy_delta: drain,
+                        position: Some(agents[i].position),
+                    });
+
+                    emit_broadcasts(
+                        &mut broadcasts,
+                        &event::EventKind::Decomposed,
+                        agents[i].position,
+                        agents,
+                        &dead_agents,
+                        nack_sets,
+                        params.world_extent,
+                    );
+
+                    // Queue consequence: carcass depletion
+                    if working_carcass_energies[ci] <= 0.0 {
+                        consequence_queue.push_high(event::Event {
+                            tick,
+                            seq: 0,
+                            kind: event::EventKind::CarcassDepleted,
+                            source: carcass_id,
+                            target: None,
+                            energy_delta: 0.0,
+                            position: Some(carcasses[ci].position),
+                        });
+                    }
+                } else if let Some(ni) =
+                    new_carcasses.iter().position(|c| c.id == carcass_id)
+                {
+                    new_carcasses[ni].energy -= drain;
+                    working_energies[i] += gain;
+                    decomposition_gains[i] = gain;
+                    dissipated_energy += drain * (1.0 - params.decomposition_efficiency);
+
+                    events.push(event::Event {
+                        tick,
+                        seq: 0,
+                        kind: event::EventKind::Decomposed,
+                        source: agents[i].id,
+                        target: Some(carcass_id),
+                        energy_delta: drain,
+                        position: Some(new_carcasses[ni].position),
+                    });
+
+                    emit_broadcasts(
+                        &mut broadcasts,
+                        &event::EventKind::Decomposed,
+                        agents[i].position,
+                        agents,
+                        &dead_agents,
+                        nack_sets,
+                        params.world_extent,
+                    );
+
+                    // Queue consequence: carcass depletion for new carcass
+                    if new_carcasses[ni].energy <= 0.0 {
+                        // For new carcasses, CarcassDepleted needs special handling
+                        // since they're not in the original carcasses slice
+                        consequence_queue.push_high(event::Event {
+                            tick,
+                            seq: 0,
+                            kind: event::EventKind::CarcassDepleted,
+                            source: carcass_id,
+                            target: None,
+                            energy_delta: 0.0,
+                            position: Some(new_carcasses[ni].position),
+                        });
+                    }
+                }
+            }
+        }
+
         // Drain consequence queue
         while let Some(consequence) = consequence_queue.pop() {
             match consequence.kind {
@@ -252,12 +413,20 @@ pub fn resolve_consumption(
                         position: Some(carcass_pos),
                     });
 
-                    let ci = carcasses
-                        .iter()
-                        .position(|c| c.id == carcass_id)
-                        .unwrap();
-                    depleted_carcass_indices.insert(ci);
-                    carcass_grid.remove(ci as u64);
+                    if let Some(ci) =
+                        carcasses.iter().position(|c| c.id == carcass_id)
+                    {
+                        depleted_carcass_indices.insert(ci);
+                        carcass_grid.remove(ci as u64);
+                    } else {
+                        // New carcass created this tick
+                        let ni = new_carcasses
+                            .iter()
+                            .position(|c| c.id == carcass_id)
+                            .unwrap();
+                        let grid_idx = carcasses.len() + ni;
+                        carcass_grid.remove(grid_idx as u64);
+                    }
                 }
                 _ => {}
             }
@@ -269,6 +438,7 @@ pub fn resolve_consumption(
         broadcasts,
         consumption_gains,
         consumption_losses,
+        decomposition_gains,
         dead_agents,
         new_carcasses,
         depleted_carcass_indices,
@@ -322,9 +492,10 @@ mod tests {
         }
         let carcass_grid = SpatialGrid::new(extent, cell_size);
 
-        let params = ConsumptionParams {
+        let params = ResolverParams {
             contact_radius: 5.0,
             consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
         };
@@ -332,7 +503,7 @@ mod tests {
         let order = vec![0, 1];
         let pre_tick_energies = vec![50.0, 50.0];
 
-        let result = resolve_consumption(
+        let result = resolve_interactions(
             &agents,
             &agent_grid,
             &carcass_grid,
@@ -405,9 +576,10 @@ mod tests {
         }
         let carcass_grid = SpatialGrid::new(extent, cell_size);
 
-        let params = ConsumptionParams {
+        let params = ResolverParams {
             contact_radius: 5.0,
             consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
         };
@@ -415,7 +587,7 @@ mod tests {
         let order = vec![0, 1];
         let pre_tick_energies = vec![100.0, 5.0];
 
-        let result = resolve_consumption(
+        let result = resolve_interactions(
             &agents,
             &agent_grid,
             &carcass_grid,
@@ -470,5 +642,252 @@ mod tests {
             .unwrap();
         assert!(consumed_pos < died_pos, "Consumed must precede Died");
         assert!(died_pos < carcass_pos, "Died must precede CarcassCreated");
+    }
+
+    #[test]
+    fn decomposition_drains_carcass_energy() {
+        // A scavenger near a carcass should decompose it
+        let agents = vec![Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                scavenging_rate: 4.0,
+                ..zero_traits()
+            },
+        }];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        agent_grid.insert(0, agents[0].position);
+
+        let carcasses = vec![Carcass {
+            id: 99,
+            position: (2.0, 0.0),
+            energy: 10.0,
+        }];
+        let mut carcass_grid = SpatialGrid::new(extent, cell_size);
+        carcass_grid.insert(0, carcasses[0].position);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.8,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+        };
+
+        let order = vec![0];
+        let pre_tick_energies = vec![50.0];
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &carcasses,
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+        );
+
+        // drain = 4.0 (scavenging_rate, capped at carcass energy 10.0)
+        // gain = 4.0 * 0.8 = 3.2
+        assert!(
+            (result.decomposition_gains[0] - 3.2).abs() < 1e-5,
+            "decomposition gain: {}",
+            result.decomposition_gains[0]
+        );
+        // dissipated = 4.0 * (1 - 0.8) = 0.8
+        assert!(
+            (result.dissipated_energy - 0.8).abs() < 1e-5,
+            "dissipated: {}",
+            result.dissipated_energy
+        );
+
+        // Should have a Decomposed event
+        let decomposed: Vec<_> = result
+            .events
+            .iter()
+            .filter(|e| e.kind == event::EventKind::Decomposed)
+            .collect();
+        assert_eq!(decomposed.len(), 1);
+        assert_eq!(decomposed[0].source, 0);
+        assert_eq!(decomposed[0].target, Some(99));
+        assert!((decomposed[0].energy_delta - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn decomposition_depletes_carcass_via_cascade() {
+        // A scavenger with rate >= carcass energy fully depletes the carcass
+        let agents = vec![Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: TraitVector {
+                scavenging_rate: 15.0,
+                ..zero_traits()
+            },
+        }];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        agent_grid.insert(0, agents[0].position);
+
+        let carcasses = vec![Carcass {
+            id: 42,
+            position: (1.0, 0.0),
+            energy: 10.0,
+        }];
+        let mut carcass_grid = SpatialGrid::new(extent, cell_size);
+        carcass_grid.insert(0, carcasses[0].position);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.8,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+        };
+
+        let order = vec![0];
+        let pre_tick_energies = vec![50.0];
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &carcasses,
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+        );
+
+        // drain = 10.0 (capped at carcass energy), gain = 10.0 * 0.8 = 8.0
+        assert!(
+            (result.decomposition_gains[0] - 8.0).abs() < 1e-5,
+            "decomposition gain: {}",
+            result.decomposition_gains[0]
+        );
+
+        // Carcass should be depleted
+        assert!(
+            result.depleted_carcass_indices.contains(&0),
+            "carcass index 0 should be depleted"
+        );
+
+        // Event sequence should include Decomposed and CarcassDepleted
+        let kinds: Vec<&event::EventKind> =
+            result.events.iter().map(|e| &e.kind).collect();
+        assert!(kinds.contains(&&event::EventKind::Decomposed));
+        assert!(kinds.contains(&&event::EventKind::CarcassDepleted));
+
+        // CarcassDepleted must come after Decomposed
+        let decomposed_pos = kinds
+            .iter()
+            .position(|k| **k == event::EventKind::Decomposed)
+            .unwrap();
+        let depleted_pos = kinds
+            .iter()
+            .position(|k| **k == event::EventKind::CarcassDepleted)
+            .unwrap();
+        assert!(
+            decomposed_pos < depleted_pos,
+            "Decomposed must precede CarcassDepleted"
+        );
+    }
+
+    #[test]
+    fn consumer_does_not_decompose_in_same_tick() {
+        // An agent with both consumption_rate and scavenging_rate that
+        // successfully consumes should NOT also decompose.
+        let agents = vec![
+            Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                energy: 50.0,
+                traits: TraitVector {
+                    consumption_rate: 2.0,
+                    scavenging_rate: 4.0,
+                    ..zero_traits()
+                },
+            },
+            Agent {
+                id: 1,
+                position: (1.0, 0.0),
+                energy: 50.0,
+                traits: zero_traits(),
+            },
+        ];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+
+        let carcasses = vec![Carcass {
+            id: 99,
+            position: (1.0, 0.0),
+            energy: 10.0,
+        }];
+        let mut carcass_grid = SpatialGrid::new(extent, cell_size);
+        carcass_grid.insert(0, carcasses[0].position);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.8,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+        };
+
+        let order = vec![0, 1];
+        let pre_tick_energies = vec![50.0, 50.0];
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &carcasses,
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+        );
+
+        // Agent 0 should have consumed (gain > 0)
+        assert!(
+            result.consumption_gains[0] > 0.0,
+            "agent 0 should have consumed"
+        );
+        // Agent 0 should NOT have decomposed
+        assert!(
+            result.decomposition_gains[0] == 0.0,
+            "agent 0 should not decompose after consuming, got: {}",
+            result.decomposition_gains[0]
+        );
+        // No Decomposed events should exist for agent 0
+        let decomposed_by_0: Vec<_> = result
+            .events
+            .iter()
+            .filter(|e| {
+                e.kind == event::EventKind::Decomposed && e.source == 0
+            })
+            .collect();
+        assert!(
+            decomposed_by_0.is_empty(),
+            "agent 0 must not emit Decomposed"
+        );
     }
 }
