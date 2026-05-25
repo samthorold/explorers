@@ -202,6 +202,7 @@ pub struct Agent {
     pub position: (f32, f32),
     pub energy: f32,
     pub traits: TraitVector,
+    pub contact_time: u64,
 }
 
 pub struct Carcass {
@@ -446,6 +447,7 @@ impl World {
                         reproductive_investment: centroid.reproductive_investment
                             + trait_dist.sample(&mut rng),
                     },
+                    contact_time: 0,
                 }
             })
             .collect();
@@ -495,6 +497,7 @@ impl World {
                     position: spec.position,
                     energy: spec.energy,
                     traits: spec.traits,
+                    contact_time: 0,
                 })
                 .collect();
             Self {
@@ -693,6 +696,14 @@ impl World {
                 (agent.position.0 + mx, agent.position.1 + my), extent,
             );
             let distance = (mx * mx + my * my).sqrt();
+
+            // Update contact time: increment when stationary, reset when moved
+            if distance < 1e-6 {
+                agent.contact_time += 1;
+            } else {
+                agent.contact_time = 0;
+            }
+
             let movement_cost = distance * self.params.movement_cost_coefficient;
             let metabolic_cost = self.params.base_metabolic_rate
                 + agent.traits.sensing_range * self.params.sensing_cost_coefficient
@@ -898,6 +909,7 @@ impl World {
         for o in &result.offspring {
             next_agents.push(Agent {
                 id: o.id, position: o.position, energy: o.energy, traits: o.traits,
+                contact_time: 0,
             });
         }
 
@@ -1354,7 +1366,8 @@ spatial_decay_rate: 0.5,
                     sensing_range: 30.0,
                     ..zero_traits()
                 },
-            });
+                            contact_time: 0,
+});
             let initial_x = world.agents()[0].position.0;
             world.step();
             if world.agents()[0].position.0 > initial_x {
@@ -1411,7 +1424,8 @@ spatial_decay_rate: 0.5,
                     sensing_range: 30.0,
                     ..zero_traits()
                 },
-            });
+                            contact_time: 0,
+});
             let initial_x = world.agents()[0].position.0;
             world.step();
             if world.agents()[0].position.0 > initial_x {
@@ -1470,7 +1484,8 @@ spatial_decay_rate: 0.5,
                     sensing_range: 10.0,
                     ..zero_traits()
                 },
-            });
+                            contact_time: 0,
+});
 
             let initial_pos = world.agents()[0].position;
             world.step();
@@ -1541,13 +1556,15 @@ spatial_decay_rate: 0.5,
                 sensing_range: 50.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (-48.0, 0.0),
             energy: 100.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.step();
         let pos = world.agents()[0].position;
         let half = extent / 2.0;
@@ -1588,7 +1605,8 @@ spatial_decay_rate: 0.5,
                 mobility,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.step();
         let pos = world.agents()[0].position;
         let distance_moved = (pos.0 * pos.0 + pos.1 * pos.1).sqrt();
@@ -1663,13 +1681,15 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 2.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (3.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.step();
         // Consumer should have gained energy, target should have lost energy
         let consumer = &world.agents()[0];
@@ -1706,13 +1726,15 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 3.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.step();
         // Drain = 3.0, gained = 3.0 * 0.7 = 2.1, dissipated = 3.0 * 0.3 = 0.9
         assert!((world.agents()[0].energy - 52.1).abs() < 1e-5);
@@ -1747,13 +1769,15 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 10.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
             energy: 5.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.step();
         // Drain capped at target's energy = 5.0
         // Consumer gains 5.0 * 0.5 = 2.5
@@ -1791,7 +1815,8 @@ spatial_decay_rate: 0.5,
                 scavenging_rate: 4.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_carcass(Carcass {
             id: 0,
             position: (3.0, 0.0),
@@ -1831,7 +1856,8 @@ spatial_decay_rate: 0.5,
                 scavenging_rate: 10.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_carcass(Carcass {
             id: 0,
             position: (2.0, 0.0),
@@ -1868,13 +1894,15 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.add_carcass(Carcass {
             id: 0,
             position: (0.0, 1.0),
@@ -1915,13 +1943,15 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 2.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (48.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.step();
         // Should drain across boundary
         assert!((world.agents()[0].energy - 51.0).abs() < 1e-5);
@@ -2000,13 +2030,15 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 2.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (10.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.step();
         assert_eq!(world.agents()[0].energy, 50.0);
         assert_eq!(world.agents()[1].energy, 50.0);
@@ -2045,13 +2077,15 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.step();
         assert_eq!(
             world.agents().len(),
@@ -2092,7 +2126,8 @@ spatial_decay_rate: 0.5,
                 reproductive_investment: 15.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
@@ -2103,7 +2138,8 @@ spatial_decay_rate: 0.5,
                 reproductive_investment: 8.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.step();
         assert_eq!(world.agents().len(), 3);
         assert!((world.agents()[0].energy - 35.0).abs() < 1e-5, "parent A: {}", world.agents()[0].energy);
@@ -2142,7 +2178,8 @@ spatial_decay_rate: 0.5,
                 reproductive_investment: 15.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
@@ -2153,7 +2190,8 @@ spatial_decay_rate: 0.5,
                 reproductive_investment: 8.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.step();
         // Offspring energy = (15 + 8) * 0.7 = 16.1
         let offspring = &world.agents()[2];
@@ -2195,13 +2233,15 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 40.0, // below threshold of 50
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.step();
         assert_eq!(world.agents().len(), 2, "no reproduction when one parent below threshold");
     }
@@ -2237,13 +2277,15 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (20.0, 0.0), // far outside contact_radius of 5
             energy: 50.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.step();
         assert_eq!(world.agents().len(), 2, "no reproduction when outside contact radius");
     }
@@ -2280,7 +2322,8 @@ spatial_decay_rate: 0.5,
                 reproductive_investment: 10.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
@@ -2290,7 +2333,8 @@ spatial_decay_rate: 0.5,
                 reproductive_investment: 10.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.step();
         assert_eq!(world.agents().len(), 2, "asymmetric selectivity should prevent reproduction");
     }
@@ -2329,19 +2373,22 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.step();
         // One pair reproduces, one agent left out → 3 + 1 = 4
         assert_eq!(world.agents().len(), 4, "three agents should produce exactly one offspring");
@@ -2388,7 +2435,8 @@ spatial_decay_rate: 0.5,
                     sensing_range: 1.0,
                     reproductive_investment: 10.0,
                 },
-            });
+                            contact_time: 0,
+});
             world.add_agent(Agent {
                 id: 0,
                 position: (1.0, 0.0),
@@ -2403,7 +2451,8 @@ spatial_decay_rate: 0.5,
                     sensing_range: 2.0,
                     reproductive_investment: 20.0,
                 },
-            });
+                            contact_time: 0,
+});
             world.step();
             assert_eq!(world.agents().len(), 3);
             let child = &world.agents()[2];
@@ -2460,13 +2509,15 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 100.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.step();
         assert_eq!(world.agents().len(), 3);
         let child = &world.agents()[2];
@@ -2516,13 +2567,15 @@ spatial_decay_rate: 0.5,
                 position: (0.0, 0.0),
                 energy: 100.0,
                 traits: shared_traits,
-            });
+                            contact_time: 0,
+});
             world.add_agent(Agent {
                 id: 0,
                 position: (1.0, 0.0),
                 energy: 100.0,
                 traits: shared_traits,
-            });
+                            contact_time: 0,
+});
             world.step();
             world
         };
@@ -2692,8 +2745,8 @@ spatial_decay_rate: 0.5,
             photosynthetic_absorption: 1.0,
             ..zero_traits()
         };
-        world.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 100.0, traits: reproducer_traits });
-        world.add_agent(Agent { id: 0, position: (0.1, 0.0), energy: 100.0, traits: reproducer_traits });
+        world.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 100.0, traits: reproducer_traits, contact_time: 0, });
+        world.add_agent(Agent { id: 0, position: (0.1, 0.0), energy: 100.0, traits: reproducer_traits, contact_time: 0, });
 
         let initial_max_id = world.agents().iter().map(|a| a.id).max().unwrap();
 
@@ -2725,7 +2778,8 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 0.01,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         let agent_id = world.agents()[0].id;
 
         world.step();
@@ -2791,7 +2845,8 @@ spatial_decay_rate: 0.5,
         let mut world_lone = World::new(params.clone(), dist.clone(), 42);
         world_lone.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
-        });
+                    contact_time: 0,
+});
         world_lone.step();
         let lone_energy = world_lone.agents()[0].energy;
         let gate = 1.0_f32 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
@@ -2805,10 +2860,12 @@ spatial_decay_rate: 0.5,
         let mut world_two = World::new(params.clone(), dist.clone(), 42);
         world_two.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
-        });
+                    contact_time: 0,
+});
         world_two.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
-        });
+                    contact_time: 0,
+});
         world_two.step();
         let energy_a = world_two.agents()[0].energy;
         let energy_b = world_two.agents()[1].energy;
@@ -2856,10 +2913,12 @@ spatial_decay_rate: 0.5,
         let mut world = World::new(params.clone(), dist.clone(), 42);
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 100.0, traits: producer,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0, position: (40.0, 40.0), energy: 100.0, traits: producer,
-        });
+                    contact_time: 0,
+});
         world.step();
         let gate = 1.0_f32 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
         let expected_full = 100.0 + 1.0 * 10.0 * gate;
@@ -2911,7 +2970,8 @@ spatial_decay_rate: 0.5,
         let mut world_sessile = World::new(params.clone(), dist.clone(), 42);
         world_sessile.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 100.0, traits: sessile_traits,
-        });
+                    contact_time: 0,
+});
         world_sessile.step();
         let sessile_energy = world_sessile.agents()[0].energy;
         // Sessile agent: gate ≈ 1.0, solar gain ≈ 1.0 * 10.0 = 10.0
@@ -2923,7 +2983,8 @@ spatial_decay_rate: 0.5,
         let mut world_mobile = World::new(params.clone(), dist.clone(), 42);
         world_mobile.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 100.0, traits: mobile_traits,
-        });
+                    contact_time: 0,
+});
         world_mobile.step();
         let mobile_energy = world_mobile.agents()[0].energy;
         // Mobile agent: gate ≈ 0.0, solar gain ≈ 0.0
@@ -2968,13 +3029,15 @@ spatial_decay_rate: 0.5,
         let mut world_high = World::new(params.clone(), dist.clone(), 42);
         world_high.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 100.0, traits: high_consumption,
-        });
+                    contact_time: 0,
+});
         world_high.step();
 
         let mut world_low = World::new(params.clone(), dist.clone(), 42);
         world_low.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 100.0, traits: low_consumption,
-        });
+                    contact_time: 0,
+});
         world_low.step();
 
         let high_energy = world_high.agents()[0].energy;
@@ -3036,10 +3099,12 @@ spatial_decay_rate: 0.5,
         let mut world_gen = World::new(params.clone(), dist.clone(), 42);
         world_gen.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 100.0, traits: generalist,
-        });
+                    contact_time: 0,
+});
         world_gen.add_agent(Agent {
             id: 0, position: (1.0, 0.0), energy: 100.0, traits: generalist,
-        });
+                    contact_time: 0,
+});
         world_gen.step();
         let gen_energy = world_gen.agents()[0].energy;
 
@@ -3047,7 +3112,8 @@ spatial_decay_rate: 0.5,
         let mut world_spec = World::new(params.clone(), dist.clone(), 42);
         world_spec.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 100.0, traits: specialist,
-        });
+                    contact_time: 0,
+});
         world_spec.step();
         let spec_energy = world_spec.agents()[0].energy;
 
@@ -3092,10 +3158,12 @@ spatial_decay_rate: 0.5,
         let mut world_near = World::new(params.clone(), dist.clone(), 42);
         world_near.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 50.0, traits: midpoint_traits,
-        });
+                    contact_time: 0,
+});
         world_near.add_agent(Agent {
             id: 0, position: (9.0, 0.0), energy: 50.0, traits: midpoint_traits,
-        });
+                    contact_time: 0,
+});
         world_near.step();
         assert_eq!(
             world_near.agents().len(), 3,
@@ -3106,10 +3174,12 @@ spatial_decay_rate: 0.5,
         let mut world_far = World::new(params.clone(), dist.clone(), 42);
         world_far.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 50.0, traits: midpoint_traits,
-        });
+                    contact_time: 0,
+});
         world_far.add_agent(Agent {
             id: 0, position: (11.0, 0.0), energy: 50.0, traits: midpoint_traits,
-        });
+                    contact_time: 0,
+});
         world_far.step();
         assert_eq!(
             world_far.agents().len(), 2,
@@ -3154,10 +3224,12 @@ spatial_decay_rate: 0.5,
         };
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 50.0, traits: sessile_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0, position: (10.0, 0.0), energy: 50.0, traits: mobile_traits,
-        });
+                    contact_time: 0,
+});
         world.step();
         assert_eq!(
             world.agents().len(), 3,
@@ -3195,10 +3267,12 @@ spatial_decay_rate: 0.5,
         };
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 50.0, traits: mobile_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0, position: (10.0, 0.0), energy: 50.0, traits: mobile_traits,
-        });
+                    contact_time: 0,
+});
         world.step();
         assert_eq!(
             world.agents().len(), 2,
@@ -3236,10 +3310,12 @@ spatial_decay_rate: 0.5,
         };
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 50.0, traits: sessile_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0, position: (10.0, 0.0), energy: 50.0, traits: sessile_traits,
-        });
+                    contact_time: 0,
+});
         world.step();
         assert_eq!(
             world.agents().len(), 3,
@@ -3468,13 +3544,15 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 2.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.step();
         let consumed = world.event_log().by_kind(&EventKind::Consumed);
         assert_eq!(consumed.len(), 1);
@@ -3495,7 +3573,8 @@ spatial_decay_rate: 0.5,
                 scavenging_rate: 10.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_carcass(Carcass {
             id: 99,
             position: (1.0, 0.0),
@@ -3525,7 +3604,8 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         let agent_id = world.agents()[0].id;
         world.step();
         let died = world.event_log().by_kind(&EventKind::Died);
@@ -3554,13 +3634,15 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: repro_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 100.0,
             traits: repro_traits,
-        });
+                    contact_time: 0,
+});
         world.step();
         let mates = world.event_log().by_kind(&EventKind::MateSelected);
         assert_eq!(mates.len(), 1);
@@ -3584,7 +3666,8 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         for _ in 0..15 {
             world.step();
         }
@@ -3615,13 +3698,15 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 5.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.step();
         let log = world.event_log();
         let events = log.by_tick_range(0, 1);
@@ -3674,7 +3759,8 @@ spatial_decay_rate: 0.5,
                     consumption_rate: 15.0,
                     ..zero_traits()
                 },
-            });
+                            contact_time: 0,
+});
             // Target: energy=100, after metabolic(90) → 10, drained 10 → dead
             // Carcass energy = max(0, 100 - 10) = 90 (biomass minus consumed)
             world.add_agent(Agent {
@@ -3682,7 +3768,8 @@ spatial_decay_rate: 0.5,
                 position: (1.0, 0.0),
                 energy: 100.0,
                 traits: zero_traits(),
-            });
+                            contact_time: 0,
+});
             // Scavenger: decomposes the newly-created carcass
             world.add_agent(Agent {
                 id: 0,
@@ -3692,7 +3779,8 @@ spatial_decay_rate: 0.5,
                     scavenging_rate: 10.0,
                     ..zero_traits()
                 },
-            });
+                            contact_time: 0,
+});
             world.step();
             let log = world.event_log();
             let consumed = log.by_kind(&EventKind::Consumed);
@@ -3731,13 +3819,15 @@ spatial_decay_rate: 0.5,
                 scavenging_rate: 3.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 50.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.add_carcass(Carcass {
             id: 99,
             position: (0.0, 1.0),
@@ -3818,7 +3908,8 @@ spatial_decay_rate: 0.5,
                     sensing_range: 30.0,
                     ..zero_traits()
                 },
-            });
+                            contact_time: 0,
+});
 
             world.step();
 
@@ -3881,7 +3972,8 @@ spatial_decay_rate: 0.5,
                     sensing_range: 30.0,
                     ..zero_traits()
                 },
-            });
+                            contact_time: 0,
+});
 
             world.step();
 
@@ -3930,13 +4022,15 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 100.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 1.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         // Observer A: close to the death (dist ~2 from death at (1,0))
         world.add_agent(Agent {
             id: 0,
@@ -3946,7 +4040,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         // Observer B: farther from the death (dist ~9 from death at (1,0))
         world.add_agent(Agent {
             id: 0,
@@ -3956,7 +4051,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
 
         world.step();
 
@@ -4021,13 +4117,15 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 50.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
             energy: 50.0,
             traits: shared_traits,
-        });
+                    contact_time: 0,
+});
 
         world.step();
 
@@ -4090,13 +4188,15 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 100.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 1.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         // Observer with zero sensing range — right next to the action
         world.add_agent(Agent {
             id: 0,
@@ -4106,7 +4206,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 0.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
 
         world.step();
 
@@ -4130,7 +4231,8 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 2.0,
                 ..zero_traits()
             },
-        };
+                    contact_time: 0,
+};
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::Consumed,
             source: 99, target: Some(100), energy_delta: 5.0,
@@ -4163,7 +4265,8 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: zero_traits(),
-        };
+                    contact_time: 0,
+};
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::Consumed,
             source: 99, target: Some(100), energy_delta: 5.0,
@@ -4194,7 +4297,8 @@ spatial_decay_rate: 0.5,
                 scavenging_rate: 4.0,
                 ..zero_traits()
             },
-        };
+                    contact_time: 0,
+};
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::CarcassCreated,
             source: 99, target: None, energy_delta: 20.0,
@@ -4232,7 +4336,8 @@ spatial_decay_rate: 0.5,
                 reproductive_investment: 10.0,
                 ..zero_traits()
             },
-        };
+                    contact_time: 0,
+};
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::MatingReadiness,
             source: 2, target: None, energy_delta: 0.0,
@@ -4275,7 +4380,8 @@ spatial_decay_rate: 0.5,
                 reproductive_investment: 10.0,
                 ..zero_traits()
             },
-        };
+                    contact_time: 0,
+};
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::MatingReadiness,
             source: 2, target: None, energy_delta: 0.0,
@@ -4314,7 +4420,8 @@ spatial_decay_rate: 0.5,
                 scavenging_rate: 3.0,
                 ..zero_traits()
             },
-        };
+                    contact_time: 0,
+};
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::Born,
             source: 99, target: None, energy_delta: 50.0,
@@ -4359,11 +4466,13 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), energy: 50.0,
             traits: TraitVector { consumption_rate: 2.0, ..zero_traits() },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0, position: (3.0, 0.0), energy: 50.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
 
         // Before step: construct what receive() would return
         let consumer = &world.agents()[0];
@@ -4408,7 +4517,8 @@ spatial_decay_rate: 0.5,
                 mobility: 1.0,
                 ..zero_traits()
             },
-        };
+                    contact_time: 0,
+};
         let data = ProjectionData {
             feeding_gradient: (3.0, 4.0),
             carcass_gradient: (0.0, 0.0),
@@ -4449,7 +4559,8 @@ spatial_decay_rate: 0.5,
                 mobility: 0.0,
                 ..zero_traits()
             },
-        };
+                    contact_time: 0,
+};
         let data = ProjectionData {
             feeding_gradient: (3.0, 4.0),
             carcass_gradient: (0.0, 0.0),
@@ -4479,7 +4590,8 @@ spatial_decay_rate: 0.5,
                 mobility: 1.0,
                 ..zero_traits()
             },
-        };
+                    contact_time: 0,
+};
         let data = ProjectionData {
             feeding_gradient: (2.0, 0.0),
             carcass_gradient: (0.0, 3.0),
@@ -4569,7 +4681,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         // Prey at (2,0) — within contact radius
         world.add_agent(Agent {
             id: 0,
@@ -4579,7 +4692,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         // Non-consumer observer at (4,0) — within sensing range, will NACK Consumed
         world.add_agent(Agent {
             id: 0,
@@ -4589,7 +4703,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
 
         // Tick 1: consumption happens, observer receives Consumed broadcast and NACKs it
         world.step();
@@ -4639,7 +4754,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         // Prey at (2,0) — within contact radius, low energy to ensure death
         world.add_agent(Agent {
             id: 0,
@@ -4649,7 +4765,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         // Observer at (4,0) — non-consumer, will NACK Consumed but should receive Died
         world.add_agent(Agent {
             id: 0,
@@ -4659,7 +4776,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
 
         // Tick 1: consumption kills prey, observer NACKs Consumed but receives Died
         world.step();
@@ -4715,13 +4833,15 @@ spatial_decay_rate: 0.5,
             position: (0.0, 0.0),
             energy: 100.0,
             traits: parent_traits,
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 100.0,
             traits: parent_traits,
-        });
+                    contact_time: 0,
+});
 
         // Consumer nearby to trigger Consumed broadcasts
         world.add_agent(Agent {
@@ -4733,7 +4853,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         // Prey for the consumer
         world.add_agent(Agent {
             id: 0,
@@ -4743,7 +4864,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
 
         // Tick 1: parents reproduce (creating offspring), parents NACK Consumed
         world.step();
@@ -4796,7 +4918,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         // Prey
         world.add_agent(Agent {
             id: 0,
@@ -4806,7 +4929,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         // Non-consumer observer — will NACK Consumed, then die from metabolic cost
         world.add_agent(Agent {
             id: 0,
@@ -4816,7 +4940,8 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
 
         // Record observer id before step
         let observer_id = world.agents()[2].id;
@@ -4881,13 +5006,15 @@ spatial_decay_rate: 0.5,
                 consumption_rate: 20.0,
                 ..zero_traits()
             },
-        });
+                    contact_time: 0,
+});
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             energy: 5.0,
             traits: zero_traits(),
-        });
+                    contact_time: 0,
+});
         world.step();
         let log = world.event_log();
         let events = log.by_tick_range(0, 1);
@@ -4926,13 +5053,15 @@ spatial_decay_rate: 0.5,
                     consumption_rate: 15.0,
                     ..zero_traits()
                 },
-            });
+                            contact_time: 0,
+});
             world.add_agent(Agent {
                 id: 0,
                 position: (1.0, 0.0),
                 energy: 100.0,
                 traits: zero_traits(),
-            });
+                            contact_time: 0,
+});
             world.add_agent(Agent {
                 id: 0,
                 position: (2.0, 0.0),
@@ -4941,7 +5070,8 @@ spatial_decay_rate: 0.5,
                     scavenging_rate: 10.0,
                     ..zero_traits()
                 },
-            });
+                            contact_time: 0,
+});
             // Should not panic from debug_assert!(consequence_queue.is_empty())
             world.step();
         }
@@ -5138,6 +5268,173 @@ spatial_decay_rate: 0.5,
             assert_eq!(a.position, b.position);
             assert_eq!(a.energy, b.energy);
             assert_eq!(a.traits, b.traits);
+        }
+    }
+
+    #[test]
+    fn new_agent_has_zero_contact_time() {
+        let world = World::new(test_params(), test_distribution(), 42);
+        for agent in world.agents() {
+            assert_eq!(agent.contact_time, 0);
+        }
+    }
+
+    #[test]
+    fn offspring_starts_with_zero_contact_time() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let shared_traits = TraitVector {
+            mobility: 1.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            traits: shared_traits,
+            contact_time: 0,
+        });
+        world.add_agent(Agent {
+            id: 0,
+            position: (2.0, 0.0),
+            energy: 50.0,
+            traits: shared_traits,
+            contact_time: 0,
+        });
+        let initial_count = world.agents().len();
+        world.step();
+        if world.agents().len() > initial_count {
+            // Find offspring (highest id)
+            let max_id = world.agents().iter().map(|a| a.id).max().unwrap();
+            let offspring = world.agents().iter().find(|a| a.id == max_id).unwrap();
+            assert_eq!(offspring.contact_time, 0, "offspring should start with contact_time 0");
+        }
+    }
+
+    #[test]
+    fn producer_with_zero_mobility_accumulates_contact_time_indefinitely() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 1.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 1.0,
+                mobility: 0.0,
+                ..zero_traits()
+            },
+            contact_time: 0,
+        });
+        let ticks = 100;
+        for _ in 0..ticks {
+            world.step();
+        }
+        assert_eq!(
+            world.agents()[0].contact_time, ticks,
+            "sessile producer should accumulate contact_time every tick"
+        );
+    }
+
+    #[test]
+    fn moving_agent_resets_contact_time() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Start with accumulated contact_time
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: TraitVector {
+                mobility: 5.0,
+                ..zero_traits()
+            },
+            contact_time: 10,
+        });
+        world.step();
+        // Agent has mobility > 0, so it moves and contact_time resets to 0
+        assert_eq!(
+            world.agents()[0].contact_time, 0,
+            "contact_time should reset to 0 when agent moves"
+        );
+    }
+
+    #[test]
+    fn stationary_agent_increments_contact_time_each_tick() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 100.0,
+            traits: zero_traits(), // zero mobility = stationary
+            contact_time: 0,
+        });
+        for tick in 1..=5 {
+            world.step();
+            assert_eq!(
+                world.agents()[0].contact_time, tick,
+                "contact_time should be {tick} after {tick} ticks of staying still"
+            );
         }
     }
 }
