@@ -584,6 +584,7 @@ mod tests {
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.0,
         }
     }
 
@@ -799,6 +800,7 @@ mod tests {
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {

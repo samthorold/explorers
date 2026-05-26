@@ -183,6 +183,11 @@ pub struct WorldParameters {
     /// Energy cost per unit somatic_maintenance trait per tick (reserve → heat).
     #[serde(default)]
     pub somatic_maintenance_cost_coefficient: f32,
+    /// Per-tick use-dependent wear rate. Each functional trait accumulates
+    /// `use_wear_rate * throughput` additional wear per tick, where throughput
+    /// is the actual energy/distance/count processed through that trait.
+    #[serde(default)]
+    pub use_wear_rate: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -730,20 +735,15 @@ impl World {
         self.projection.update(&self.event_log, self.tick);
 
         // (5) Compute movement vectors and apply metabolic costs
-        let movements = self.compute_movements(&order, n);
+        let (movements, chemotaxis_magnitudes) = self.compute_movements(&order, n);
         let light_shares = self.compute_light_shares(n, &agent_grid);
         let pre_tick_energies: Vec<f32> = self.agents.iter().map(|a| a.reserve).collect();
         let pre_tick_structures: Vec<f32> = self.agents.iter().map(|a| a.structure).collect();
+        let pre_positions: Vec<(f32, f32)> = self.agents.iter().map(|a| a.position).collect();
         self.apply_movement_and_metabolism(&movements);
 
-        // (5b) Nutrient uptake from available pool
-        self.apply_nutrient_uptake();
-
-        // (5c) Somatic wear accumulation
-        self.apply_wear_accumulation();
-
-        // (5d) Somatic repair — reduces wear proportional to somatic_maintenance trait
-        self.apply_somatic_repair();
+        // (5b) Nutrient uptake from available pool — returns per-agent uptake amounts
+        let nutrient_uptakes = self.apply_nutrient_uptake();
 
         // (6) Rebuild grids with post-move positions
         agent_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
@@ -788,7 +788,18 @@ impl World {
         self.apply_growth(&dead_agents, n, &mut ledger);
 
         // (10) Deliver broadcasts and register NACKs
-        self.deliver_broadcasts(&resolver_result.broadcasts, &dead_agents);
+        let broadcast_counts = self.deliver_broadcasts_counted(&resolver_result.broadcasts, &dead_agents);
+
+        // (10b) Build per-agent throughput and apply somatic wear
+        let throughput = Self::compute_throughput(
+            n, &movements, &nutrient_uptakes, &resolver_result,
+            &broadcast_counts, &pre_positions, &chemotaxis_magnitudes,
+            self.params.world_extent,
+        );
+        self.apply_wear_accumulation(&throughput);
+
+        // (10c) Somatic repair — reduces wear proportional to somatic_maintenance trait
+        self.apply_somatic_repair();
 
         // (11) End-of-tick bookkeeping: death check, energy accounting, ledger balance
         self.end_of_tick(
@@ -799,9 +810,11 @@ impl World {
         self.tick += 1;
     }
 
-    fn compute_movements(&mut self, order: &[usize], n: usize) -> Vec<(f32, f32)> {
+    /// Compute movement vectors and per-agent chemotaxis gradient magnitudes.
+    fn compute_movements(&mut self, order: &[usize], n: usize) -> (Vec<(f32, f32)>, Vec<f32>) {
         let k = self.params.wear_degradation_steepness;
         let mut movements = vec![(0.0_f32, 0.0_f32); n];
+        let mut chemotaxis_magnitudes = vec![0.0_f32; n];
         for &i in order {
             let agent = &self.agents[i];
             let eff_mobility = agent.effective_trait_with_steepness(4, k);
@@ -817,6 +830,11 @@ impl World {
                 agent.position, eff_sensing,
                 spatial_projection::ActivityLayer::Carcass,
             );
+            // Track chemotaxis gradient magnitude used this tick
+            let grad_mag = (feeding_gradient.0.powi(2) + feeding_gradient.1.powi(2)
+                + carcass_gradient.0.powi(2) + carcass_gradient.1.powi(2)).sqrt();
+            chemotaxis_magnitudes[i] = grad_mag;
+
             let data = ProjectionData {
                 feeding_gradient, carcass_gradient,
                 nearby_agents: vec![], nearby_carcasses: vec![],
@@ -845,7 +863,7 @@ impl World {
             }
             movements[i] = (mx, my);
         }
-        movements
+        (movements, chemotaxis_magnitudes)
     }
 
     fn compute_light_shares(&self, n: usize, agent_grid: &crate::spatial::SpatialGrid) -> Vec<f32> {
@@ -901,9 +919,12 @@ impl World {
         }
     }
 
-    fn apply_nutrient_uptake(&mut self) {
+    /// Apply nutrient uptake and return per-agent uptake amounts for throughput tracking.
+    fn apply_nutrient_uptake(&mut self) -> Vec<f32> {
+        let n = self.agents.len();
+        let mut uptakes = vec![0.0_f32; n];
         if self.nutrient_pool <= 0.0 {
-            return;
+            return uptakes;
         }
         // Compute total demand from all agents
         // Uptake saturates with contact time: absorption * ct / (ct + k)
@@ -917,7 +938,7 @@ impl World {
         }).collect();
         let total_demand: f32 = demands.iter().sum();
         if total_demand <= 0.0 {
-            return;
+            return uptakes;
         }
         // Agents share proportionally if demand exceeds supply
         let available = self.nutrient_pool;
@@ -932,20 +953,67 @@ impl World {
             };
             agent.nutrient += uptake;
             self.nutrient_pool -= uptake;
+            uptakes[i] = uptake;
         }
+        uptakes
     }
 
-    /// Accumulate somatic wear on each functional trait proportional to its
-    /// nominal magnitude: `wear[i] += wear_rate * nominal_trait_value`.
-    fn apply_wear_accumulation(&mut self) {
-        let rate = self.params.wear_rate;
-        if rate <= 0.0 {
+    /// Build per-agent throughput for use-dependent wear.
+    /// Throughput indices match FUNCTIONAL_TRAIT_INDICES:
+    ///   0=photosynthetic_absorption: solar energy captured
+    ///   1=consumption_rate: structure drained from targets
+    ///   2=scavenging_rate: energy extracted from carcasses
+    ///   3=nutrient_absorption: nutrient taken up
+    ///   4=mobility: distance moved
+    ///   5=chemotaxis_sensitivity: gradient magnitude used
+    ///   6=sensing_range: broadcasts received
+    fn compute_throughput(
+        n: usize,
+        movements: &[(f32, f32)],
+        nutrient_uptakes: &[f32],
+        resolver: &interaction_resolver::ResolverResult,
+        broadcast_counts: &[u32],
+        _pre_positions: &[(f32, f32)],
+        chemotaxis_magnitudes: &[f32],
+        _world_extent: f32,
+    ) -> Vec<[f32; FUNCTIONAL_TRAIT_COUNT]> {
+        let mut throughput = vec![[0.0_f32; FUNCTIONAL_TRAIT_COUNT]; n];
+        for i in 0..n {
+            // ft 0: photosynthetic absorption — solar energy captured
+            throughput[i][0] = resolver.solar_gains[i];
+            // ft 1: consumption rate — energy gained from consumption
+            throughput[i][1] = resolver.consumption_gains[i];
+            // ft 2: scavenging rate — energy gained from decomposition
+            throughput[i][2] = resolver.decomposition_gains[i];
+            // ft 3: nutrient absorption — nutrient taken up
+            throughput[i][3] = nutrient_uptakes[i];
+            // ft 4: mobility — distance actually moved
+            let (mx, my) = movements[i];
+            throughput[i][4] = (mx * mx + my * my).sqrt();
+            // ft 5: chemotaxis sensitivity — gradient magnitude used
+            throughput[i][5] = chemotaxis_magnitudes[i];
+            // ft 6: sensing range — broadcasts received
+            throughput[i][6] = broadcast_counts[i] as f32;
+        }
+        throughput
+    }
+
+    /// Accumulate somatic wear on each functional trait. Two components:
+    /// 1. Baseline: `wear_rate * nominal_trait_value` (complex machinery degrades even when idle)
+    /// 2. Use-dependent: `use_wear_rate * throughput` (active use produces damaging byproducts)
+    fn apply_wear_accumulation(&mut self, throughput: &[[f32; FUNCTIONAL_TRAIT_COUNT]]) {
+        let baseline_rate = self.params.wear_rate;
+        let use_rate = self.params.use_wear_rate;
+        if baseline_rate <= 0.0 && use_rate <= 0.0 {
             return;
         }
-        for agent in self.agents.iter_mut() {
+        for (i, agent) in self.agents.iter_mut().enumerate() {
             for ft in 0..FUNCTIONAL_TRAIT_COUNT {
                 let nominal = agent.traits.get(FUNCTIONAL_TRAIT_INDICES[ft]);
-                agent.wear[ft] += rate * nominal.max(0.0);
+                agent.wear[ft] += baseline_rate * nominal.max(0.0);
+                if use_rate > 0.0 {
+                    agent.wear[ft] += use_rate * throughput[i][ft];
+                }
             }
         }
     }
@@ -1131,11 +1199,14 @@ impl World {
         }
     }
 
-    fn deliver_broadcasts(
+    /// Deliver broadcasts and return per-agent count of broadcasts received (for sensing throughput).
+    fn deliver_broadcasts_counted(
         &mut self,
         broadcasts: &[Broadcast],
         dead_agents: &std::collections::HashSet<usize>,
-    ) {
+    ) -> Vec<u32> {
+        let n = self.agents.len();
+        let mut counts = vec![0_u32; n];
         let agent_id_to_idx: std::collections::HashMap<u64, usize> = self.agents.iter()
             .enumerate().map(|(i, a)| (a.id, i)).collect();
         for broadcast in broadcasts {
@@ -1143,6 +1214,7 @@ impl World {
                 Some(&i) if !dead_agents.contains(&i) => i,
                 _ => continue,
             };
+            counts[idx] += 1;
             let data = ProjectionData {
                 feeding_gradient: (0.0, 0.0), carcass_gradient: (0.0, 0.0),
                 nearby_agents: vec![], nearby_carcasses: vec![],
@@ -1163,6 +1235,7 @@ impl World {
                     .insert(broadcast.kind.clone());
             }
         }
+        counts
     }
 
     fn end_of_tick(
@@ -1465,6 +1538,7 @@ mod tests {
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.0,
         }
     }
 
@@ -4914,6 +4988,7 @@ spatial_decay_rate: 0.5,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.0,
         }
     }
 
@@ -8491,6 +8566,305 @@ spatial_decay_rate: 0.5,
                 "wear for functional trait {} should not be negative: {}",
                 ft, agent.wear[ft]);
         }
+    }
+
+    // ── Use-dependent wear tests ─────────────────────────────────────
+
+    #[test]
+    fn active_photosynthesizer_wears_faster_than_idle() {
+        // An agent that actually photosynthesizes should accumulate more
+        // photosynthesis wear than one that doesn't (e.g. because it has
+        // zero solar flux).
+        let base_params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.01,
+            wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.05,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 1000.0,
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+
+        // Active: solar flux = 10.0, agent photosynthesizes
+        let mut world_active = World::new(base_params.clone(), dist.clone(), 42);
+        world_active.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+            nutrient: 0.0, traits, contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_active.step();
+        let active_wear = world_active.agents()[0].wear[0];
+
+        // Idle: solar flux = 0.0, agent cannot photosynthesize
+        let mut idle_params = base_params.clone();
+        idle_params.solar_flux_magnitude = 0.0;
+        let mut world_idle = World::new(idle_params, dist.clone(), 42);
+        world_idle.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+            nutrient: 0.0, traits, contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_idle.step();
+        let idle_wear = world_idle.agents()[0].wear[0];
+
+        // Both should have baseline wear (same nominal trait)
+        assert!(idle_wear > 0.0, "idle agent should still have baseline wear");
+        // Active should have MORE wear due to use-dependent component
+        assert!(
+            active_wear > idle_wear,
+            "active photosynthesizer should wear faster: active={active_wear}, idle={idle_wear}"
+        );
+    }
+
+    #[test]
+    fn active_consumer_wears_faster_than_idle() {
+        // A consumer that actually consumes should accumulate more
+        // consumption_rate wear than one that has no targets.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.01,
+            wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.05,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 1000.0,
+        };
+
+        // Active consumer: has a target nearby to consume
+        let mut world_active = World::new(params.clone(), dist.clone(), 42);
+        world_active.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 10.0,
+            nutrient: 0.0,
+            traits: TraitVector { consumption_rate: 2.0, ..zero_traits() },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_active.add_agent(Agent {
+            id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 50.0,
+            nutrient: 0.0, traits: zero_traits(),
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_active.step();
+        let consumer = world_active.agents().iter()
+            .find(|a| a.traits.consumption_rate > 1.0)
+            .expect("consumer should survive");
+        let active_wear = consumer.wear[1];
+
+        // Idle consumer: no target to consume
+        let mut world_idle = World::new(params.clone(), dist.clone(), 42);
+        world_idle.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 10.0,
+            nutrient: 0.0,
+            traits: TraitVector { consumption_rate: 2.0, ..zero_traits() },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_idle.step();
+        let idle_consumer = &world_idle.agents()[0];
+        let idle_wear = idle_consumer.wear[1];
+
+        assert!(idle_wear > 0.0, "idle consumer should have baseline wear");
+        assert!(
+            active_wear > idle_wear,
+            "active consumer should wear faster: active={active_wear}, idle={idle_wear}"
+        );
+    }
+
+    #[test]
+    fn active_decomposer_wears_faster_than_idle() {
+        // A decomposer that decomposes a carcass should accumulate more
+        // scavenging_rate wear than one with no carcasses nearby.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.01,
+            wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.05,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 1000.0,
+        };
+
+        // Active decomposer: has a carcass nearby
+        let mut world_active = World::new(params.clone(), dist.clone(), 42);
+        world_active.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector { scavenging_rate: 2.0, ..zero_traits() },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_active.add_carcass(Carcass {
+            id: 999, position: (1.0, 0.0), energy: 50.0, nutrient: 0.0,
+        });
+        world_active.step();
+        let active_wear = world_active.agents()[0].wear[2];
+
+        // Idle decomposer: no carcass
+        let mut world_idle = World::new(params.clone(), dist.clone(), 42);
+        world_idle.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector { scavenging_rate: 2.0, ..zero_traits() },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_idle.step();
+        let idle_wear = world_idle.agents()[0].wear[2];
+
+        assert!(idle_wear > 0.0, "idle decomposer should have baseline wear");
+        assert!(
+            active_wear > idle_wear,
+            "active decomposer should wear faster: active={active_wear}, idle={idle_wear}"
+        );
+    }
+
+    #[test]
+    fn mobile_agent_wears_faster_than_stationary() {
+        // An agent that moves should accumulate more mobility wear than
+        // baseline alone predicts, due to use-dependent wear from distance moved.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.01,
+            wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.1,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 1000.0,
+        };
+
+        // Average over multiple seeds to smooth out random movement direction
+        let mut total_mobile_wear = 0.0_f32;
+        let trials = 10;
+        for seed in 0..trials {
+            let mut world = World::new(params.clone(), dist.clone(), seed);
+            world.add_agent(Agent {
+                id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+                nutrient: 0.0,
+                traits: TraitVector { mobility: 5.0, ..zero_traits() },
+                contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            });
+            world.step();
+            total_mobile_wear += world.agents()[0].wear[4];
+        }
+        let avg_mobile = total_mobile_wear / trials as f32;
+        // baseline wear = wear_rate * nominal = 0.01 * 5.0 = 0.05
+        // use-dependent = use_wear_rate * distance_moved ≈ 0.1 * 5.0 = 0.5
+        // total should significantly exceed baseline alone
+        let baseline_only = 0.01 * 5.0;
+        assert!(
+            avg_mobile > baseline_only * 1.5,
+            "mobile agent should have use-dependent wear beyond baseline: avg={avg_mobile}, baseline_only={baseline_only}"
+        );
+    }
+
+    #[test]
+    fn baseline_and_use_wear_compound() {
+        // With both wear_rate and use_wear_rate > 0, total wear should
+        // exceed either component alone.
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.01,
+            wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.05,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 1000.0,
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+
+        // Both components active
+        let mut world_both = World::new(params.clone(), dist.clone(), 42);
+        world_both.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+            nutrient: 0.0, traits, contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_both.step();
+        let both_wear = world_both.agents()[0].wear[0];
+
+        // Baseline only (use_wear_rate = 0)
+        let mut baseline_params = params.clone();
+        baseline_params.use_wear_rate = 0.0;
+        let mut world_baseline = World::new(baseline_params, dist.clone(), 42);
+        world_baseline.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+            nutrient: 0.0, traits, contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_baseline.step();
+        let baseline_wear = world_baseline.agents()[0].wear[0];
+
+        // Use-dependent only (wear_rate = 0)
+        let mut use_params = params.clone();
+        use_params.wear_rate = 0.0;
+        let mut world_use = World::new(use_params, dist.clone(), 42);
+        world_use.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+            nutrient: 0.0, traits, contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_use.step();
+        let use_wear = world_use.agents()[0].wear[0];
+
+        assert!(baseline_wear > 0.0, "baseline wear should be positive");
+        assert!(use_wear > 0.0, "use wear should be positive");
+        // Both together should approximately equal the sum
+        let sum = baseline_wear + use_wear;
+        assert!(
+            (both_wear - sum).abs() < 1e-6,
+            "combined wear should equal baseline + use: both={both_wear}, sum={sum}"
+        );
+        // And combined should exceed either alone
+        assert!(both_wear > baseline_wear, "combined should exceed baseline alone");
+        assert!(both_wear > use_wear, "combined should exceed use-dependent alone");
     }
 
     #[test]

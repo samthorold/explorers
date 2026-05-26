@@ -109,6 +109,7 @@ fn main() {
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.0,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -453,6 +454,7 @@ mod tests {
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
+            use_wear_rate: 0.0,
             },
             InitialDistribution {
                 mean_traits: TraitVector {
