@@ -71,6 +71,18 @@ _Avoid_: residence time (ecological term with different meaning — how long a n
 The difference between the nutrient ratio in an agent's food and the ratio the agent needs. When a consumer eats prey whose nutrient ratio doesn't match its demand, it retains only what it needs and excretes the excess nutrient immediately to the available pool. The limiting currency (energy or nutrient) constrains how much of the consumed material the consumer can actually use.
 _Avoid_: waste, inefficiency (mismatch is not inefficiency — it is a physical constraint)
 
+**Gross primary production**:
+The total photosynthetic income across all producers per tick — the sum of all photosynthesis (flow 1) in the system. The raw energy tap before producers pay their own costs. Sets the ceiling on how much energy the rest of the ecosystem can access.
+_Avoid_: GPP (abbreviation obscures meaning in a glossary)
+
+**Autotrophic respiration**:
+The total metabolic cost of all producers per tick. Producers pay to exist — base metabolism, trait maintenance, somatic maintenance, sensing — before any energy is available to consumers or decomposers. A producer population that barely covers its own costs leaves nothing for the rest of the food web regardless of how much solar flux enters the system.
+_Avoid_: producer overhead, self-consumption
+
+**Net primary production**:
+Gross primary production minus autotrophic respiration. The energy actually available to consumers, decomposers, and the detrital pool — the portion of photosynthetic income that producers do not spend on themselves. This is the quantity that constrains whether consumer strategies are viable: if net primary production is low relative to consumer metabolic costs, no amount of consumption efficiency or predation skill makes consumers energy-positive. The trophic pyramid sits on this base.
+_Avoid_: NPP (abbreviation), surplus (implies waste — NPP is the functional output of the producer base)
+
 **Metabolic cost**:
 The energy an agent expends per **tick**. Comprises a base rate, plus costs for movement, sensing, trait maintenance, and **somatic maintenance**. Each energy-acquisition trait (photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption) costs energy to maintain whether used or not. Agents that carry traits they never exercise pay for the biological machinery, creating selection pressure toward specialisation. Somatic maintenance — repairing accumulated **wear** — is an additional cost that competes directly with reproduction. Metabolism costs energy only — nutrients are not released as metabolic waste. Nutrients leave living agents only through death.
 _Avoid_: upkeep, energy drain, maintenance
@@ -103,7 +115,7 @@ The sensing model. Agents detect others within their sensing range, but signal s
 ### Reproduction and evolution
 
 **Sexual reproduction**:
-Two agents whose trait vectors are within a compatibility distance produce an offspring via budding. Both parents survive. Each parent invests energy according to their own reproductive investment trait. Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Uniform crossover is deliberately chosen over arithmetic mean (Dieckmann & Doebeli 1999) because recombination works against speciation — clusters that persist despite recombination are ecologically reinforced, not just reproductively isolated. The effective reproduction radius scales with **contact time**: agents with high contact time (long substrate residence) can disperse spores over their **sensing range**; agents with low contact time require physical contact within **contact radius**. Interpolation is continuous. A pair can reproduce if their spatial distance is within the maximum of both agents' effective radii — spores travel one way.
+Two agents whose trait vectors are within a compatibility distance produce an offspring via budding. Both parents survive. Each parent invests energy according to their own reproductive investment trait. Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Uniform crossover is deliberately chosen over arithmetic mean (Dieckmann & Doebeli 1999) because recombination works against speciation — clusters that persist despite recombination are ecologically reinforced, not just reproductively isolated. Sexual reproduction requires physical contact on the surface — both agents must be within physical interaction range as determined by their traits.
 _Avoid_: mating, breeding (too specific to animal analogues)
 
 **Mate selectivity**:
@@ -123,7 +135,7 @@ A universal fallback when an agent has sufficient energy to reproduce but no com
 _Avoid_: cloning (implies exact replication — mutation still applies)
 
 **Spore dispersal**:
-The reproduction mechanism for agents with high **contact time**. Instead of requiring physical contact, an agent that has maintained sustained substrate contact can disperse reproductive material over its **sensing range**. The effective reproduction radius scales continuously with contact time: high contact time uses sensing range, low contact time uses contact radius. This arises from the same world physics as nutrient uptake — sustained substrate contact is required to establish the structures (analogous to fruiting bodies or sporangia) through which propagules are dispersed. Spore dispersal applies to both sexual and asexual reproduction.
+A reproduction mechanism that bypasses the requirement for physical contact — the specific topology and mechanics are TBD.
 _Avoid_: pollination (implies a specific biological mechanism)
 
 **Speciation**:
@@ -140,12 +152,6 @@ Total energy available per tick within a **light competition radius**. Divided a
 
 **Light competition radius**:
 The radius within which producers compete for solar flux. Producers outside this radius do not affect each other's energy intake. A world parameter searched by genesis. Interacts with world extent and population density to determine how crowded the light environment is.
-
-**Consumption efficiency**:
-Energy transferred per tick per unit consumption rate on sustained contact with a living agent.
-
-**Decomposition efficiency**:
-Energy transferred per tick per unit scavenging rate on contact with a carcass.
 
 **Base metabolic rate**:
 Fixed energy cost per tick, independent of traits or activity. The floor of metabolic cost — trait maintenance, movement, and sensing costs are added on top.
@@ -170,9 +176,6 @@ Probability of each trait dimension mutating per reproduction event.
 
 **Mutation magnitude**:
 Standard deviation of the Gaussian perturbation applied to a mutated trait dimension.
-
-**Contact radius**:
-Distance threshold below which two agents are considered in contact. Governs consumption, decomposition, and reproduction. A world parameter, uniform for all agents.
 
 **World extent**:
 Spatial dimensions of the world. Interacts with population size to determine density. Toroidal topology during genesis (no edges, no boundary effects). Play-time topology — where the player can move beyond the genesis world — is a separate design problem (see future ADR).

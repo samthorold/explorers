@@ -93,11 +93,17 @@ Nine flows move energy and nutrient between stocks. Each flow is a rate — reso
 
 **1. Photosynthesis.** Solar → Living agent (reserve). The only way energy enters the living system. Producers absorb energy from the constant solar flux into their reserve. This flow is attenuated by local competition (producers near other producers share the available flux). Any agent with photosynthetic absorption trait investment can photosynthesize — there is no gate. The producer/consumer divide emerges from two structural constraints: the trait budget (investing in photosynthetic absorption leaves less for mobility and consumption) and the nutrient bottleneck (photosynthesis produces energy but not nutrient; an agent that photosynthesizes must also acquire nutrient via uptake from the available pool, which requires sustained substrate contact). Photosynthesis moves energy only — nutrient must be acquired separately through nutrient uptake (flow 2).
 
+Grounded in terrestrial plant photosynthesis. Real producers capture a small fraction of incident solar radiation (1–2% of PAR; Monteith 1972, Zhu et al. 2010), and roughly half of gross primary production is consumed by the producer's own respiration (Gifford 2003). The remainder — net primary production — is the energy base for the rest of the ecosystem. In the world physics, solar flux is the external energy source and light share models spatial competition: an isolated producer receives full flux, a crowded producer receives a fraction. Photosynthesis produces energy but not nutrient — the producer must acquire nutrient separately through substrate uptake, which requires sustained contact. This couples energy capture to physical stillness: a mobile agent can photosynthesize but cannot access the nutrient needed to reproduce, making mobile photosynthesis a demographic dead end.
+
 **2. Nutrient uptake.** Available pool → Living agent. Agents extract nutrient from the available pool at their location. The uptake rate depends on two factors: the agent's nutrient absorption trait (a heritable, maintenance-costing capability) and the agent's contact time at its current location. An agent that has remained stationary for many ticks extracts nutrient more effectively than one that just arrived — sustained contact with the substrate is required to establish the interface structures (analogous to roots) through which nutrient is extracted. Uptake follows Michaelis-Menten saturation: `rate = nutrient_absorption × contact_time / (contact_time + k)`, where k is a half-saturation constant (currently 50 ticks). This means uptake increases with contact time but plateaus — an agent that has been stationary for 500 ticks extracts only marginally more than one stationary for 100 ticks. Moving resets contact time. Co-located agents share the available pool proportionally, weighted by their effective uptake rate. Nutrient uptake is the only way nutrient enters the living system.
+
+Grounded in root-mediated nutrient uptake. Real producers extract mineral nutrients from soil solution through root surfaces — a process that requires physical infrastructure (roots, root hairs, mycorrhizal associations) built and maintained over time (Lambers, Chapin & Pons 2008). Uptake is not instantaneous; it depends on the extent of the interface an organism has established with its substrate. In the world physics, contact time models this infrastructure investment: an agent that has remained stationary builds up its interface with the substrate, increasing uptake effectiveness. Moving destroys the interface and resets the process. Uptake saturates — diminishing returns on long residence reflect the depletion of the local available pool around the uptake interface. The available pool is spatially heterogeneous and shared among co-located agents, creating local competition for nutrient independent of competition for light.
 
 ### Flows between living agents
 
-**3. Consumption.** Living agent (structure) → Living agent (reserve). A consumer eats a living target's body through sustained physical contact, draining the target's structure. The drained structure enters the consumer's reserve, lossy — only a fraction reaches the consumer; the remainder dissipates to heat (flow 8). Nutrient transfers alongside structure, but the consumer retains only what it needs according to its stoichiometric demand — excess nutrient is excreted immediately to the available pool at the consumption site, never incorporated. The limiting currency (energy or nutrient) constrains how much of the consumed material the consumer can actually use. Consumption is non-lethal by default; the target survives unless its structure drops below its complexity-dependent death threshold or its reserve reaches zero.
+**3. Consumption.** Living agent (structure) → Living agent (reserve). A consumer eats a living target's body through sustained physical contact, draining the target's structure. The drained structure enters the consumer's reserve, lossy — the fraction retained depends on the trait-space distance between consumer and target (flow 8); the remainder dissipates to heat. Nutrient transfers alongside structure, but the consumer retains only what it needs according to its stoichiometric demand — excess nutrient is excreted immediately to the available pool at the consumption site, never incorporated. The limiting currency (energy or nutrient) constrains how much of the consumed material the consumer can actually use. Consumption is non-lethal by default; the target survives unless its structure drops below its complexity-dependent death threshold or its reserve reaches zero.
+
+Grounded in animal consumption of living tissue. Real consumers face two distinct modes: partial consumption (grazing, browsing) removes tissue but leaves the target alive and capable of regrowth, while lethal consumption removes the target from the living system entirely, creating a carcass (McNaughton 1979; Begon et al. 2006). Both modes operate through the same physical act — the consumer eats the target's body — but the ecological consequences diverge based on how much structure is removed relative to what the target can survive. In the world physics, this distinction emerges rather than being prescribed: consumption drains target structure, and the target's complexity-dependent death threshold determines whether the interaction is survivable. Trophic transfer efficiency is governed by trait-space distance between consumer and target — consuming a biochemically similar agent yields more usable energy and nutrient than consuming a dissimilar one. In terrestrial ecosystems, direct consumption of living tissue accounts for only 5–15% of net primary production (Cyr & Pace 1993); the majority of energy reaches consumers through the detrital pathway (flow 7). The world physics should not assume consumption is the primary energy pathway for all consumer strategies.
 
 **4. Reproduction.** Living agent (reserve) → Living agent. Parents invest reserve and nutrient to create offspring. Reproduction requires sufficient nutrient — nutrient limitation blocks reproduction even when energy is abundant. The energy transfer is lossy — a fraction dissipates to heat (flow 8). Both parents survive. Reproduction has two modes, variable fecundity, and spatial dispersal of offspring.
 
@@ -111,7 +117,11 @@ For sexual reproduction, the effective fecundity is the average of the two paren
 
 **Offspring dispersal** follows a Gaussian kernel centred on the parent's position. Most offspring land nearby; a tail of long-distance dispersers enables colonisation of distant habitat. The dispersal radius is scaled by the parent's reproductive range — wide for sessile agents (spore/seed dispersal) and narrow for mobile agents (who can disperse under their own locomotion after birth). Each offspring in a clutch is placed independently, so siblings from the same event scatter across the dispersal range.
 
+Grounded in life history allocation theory. Real organisms face a fundamental budget problem: energy and nutrient invested in offspring is unavailable for self-maintenance, growth, or future reproduction (Williams 1966). The core axes of variation are offspring number vs. quality (Smith & Fretwell 1974), current vs. future reproduction, and the mode of reproduction itself — sexual (recombination generates variation, but requires mate-finding) vs. asexual (no mate cost, but offspring are less variable). Sessile organisms must disperse gametes or propagules through the environment; mobile organisms can seek mates directly but pay locomotion and predation-risk costs to do so. In the world physics, reproduction is an energy and nutrient transfer from parent to offspring, lossy like all transfers. Fecundity determines how a fixed investment is divided among offspring — many fragile or few robust. Sexual reproduction requires trait-space proximity (compatibility) and physical proximity (contact or spore dispersal scaled by contact time), coupling reproductive success to both ecological similarity and spatial context. Nutrient limitation blocks reproduction even when energy is abundant, reflecting the stoichiometric constraint that real organisms face: building offspring requires specific material ratios, not just calories.
+
 **5. Network redistribution.** Living agent ↔ Living agent. Energy and nutrient move between living agents through network connections (see Topologies below). This flow is cooperative, not adversarial — it is distinct from consumption. It is bidirectional: resources can flow in either direction through a connection, governed by the states of the connected agents. This is the mechanism by which mutualistic relationships become possible. Like all transfers, the energy component is lossy (flow 8).
+
+Grounded in mycorrhizal network exchange. Real ecosystems contain transport infrastructure built by organisms — primarily fungal hyphae and root systems — that move resources between producers (Simard 2018). This is not passive diffusion; it is a market-like exchange governed by local supply-demand ratios (Kiers et al. 2011). Plants allocate more carbon to fungal partners that deliver more nutrient, and fungi allocate more nutrient to plant partners that deliver more carbon. The network transforms point-to-point competition for local resources into a connected system where resources flow along supply-demand gradients. Hub nodes (large, well-established agents) disproportionately influence system-wide distribution. In the world physics, network redistribution is bidirectional and cooperative — distinct from consumption, which is adversarial. The network is built and maintained by agents that invest in it, at an energy cost. Resources flow through network connections independent of surface distance, enabling redistribution between agents that are spatially separated. The network acts as a buffer against local resource shocks, damping oscillations by redistributing from surplus to deficit.
 
 ### Flows from living to dead
 
@@ -124,13 +134,21 @@ Death has two triggers — either is sufficient:
 
 Death also has two distal causes. **Extrinsic mortality** — consumption drains structure below the threshold, or competition/shading makes the agent energy-negative until reserve depletes. **Intrinsic mortality** — somatic wear degrades functional traits until the agent can no longer acquire enough energy to cover its metabolic costs, then reserve slowly depletes. In practice these compound: an aging agent with degraded photosynthetic capacity that was previously viable becomes energy-negative when a competitor shades it, or an aging consumer whose effective consumption rate has declined can no longer catch sufficient prey. Somatic wear makes death inevitable on a long enough timeline — even in the absence of predation or competition, an agent that invests less in somatic maintenance than the rate of wear accumulation will eventually degrade to the point of energy bankruptcy.
 
+Grounded in mortality ecology across all kingdoms. Real organisms die from two broad causes: extrinsic mortality (predation, disease, physical disturbance) and intrinsic mortality (senescence — the progressive failure of somatic maintenance; Kirkwood 1977). These causes compound: an aging organism with degraded function that was previously viable becomes fatally vulnerable when conditions shift (Ricklefs 2008). Death transfers embodied energy and nutrient from the living stock to the dead stock — creating the carcass pool that funds decomposition. What the organism accumulated over its lifetime determines the value of the carcass: a long-lived, well-fed agent leaves an energy-rich carcass; a starved juvenile leaves an energy-poor one. In the world physics, death has two triggers — reserve depletion (starvation) and structural depletion below a complexity-dependent threshold — reflecting the distinction between metabolic failure and structural collapse. Both routes produce a carcass that retains the dead agent's structure, nutrient, and trait vector.
+
 ### Flows from dead to living
 
-**7. Decomposition.** Carcass (structure) → Living agent (reserve) + Available pool. A decomposer extracts energy and nutrient from a carcass's structure through sustained physical contact. The extracted structure enters the decomposer's reserve, lossy — only a fraction reaches the decomposer; the remainder dissipates to heat (flow 8). Nutrient that the decomposer cannot use (due to stoichiometric mismatch) is excreted immediately to the available pool, closing the nutrient cycle. The carcass is depleted as its structure is extracted.
+**7. Decomposition.** Carcass (structure) → Living agent (reserve) + Available pool. A decomposer extracts energy and nutrient from a carcass's structure through sustained physical contact. The extracted structure enters the decomposer's reserve, lossy — the fraction retained depends on the trait-space distance between the decomposer and the carcass's original trait vector (flow 8); the remainder dissipates to heat. Nutrient that the decomposer cannot use (due to stoichiometric mismatch) is excreted immediately to the available pool, closing the nutrient cycle. The carcass is depleted as its structure is extracted.
+
+Grounded in saprotrophic decomposition. Real decomposition is dominated by fungi and bacteria, not by animals — though animal scavengers compete for the same carrion stock (Wilson & Wolkovich 2011). Substrate quality is the primary control on decomposition rate: the lignin-to-nitrogen ratio of dead material determines how quickly decomposers can process it (Melillo, Aber & Muratore 1982). Chemically simple material (leaf litter, animal tissue) decomposes fast; chemically complex material (wood, lignin-rich tissue) decomposes slowly. Decomposers that are biochemically equipped for a particular substrate process it more efficiently — fungi monopolise lignin breakdown because they produce the required extracellular enzymes (Floudas et al. 2012). In the world physics, decomposition targets carcasses rather than living agents, governed by the scavenging rate trait. Trophic transfer efficiency is governed by trait-space distance between decomposer and carcass — a decomposer biochemically similar to its target extracts more usable energy and nutrient. Nutrient exceeding the decomposer's stoichiometric demand is excreted to the available pool, closing the nutrient cycle.
 
 ### Dissipation
 
 **8. Trophic transfer loss.** Accompanies flows 3, 4, 5, 7, and 10. At every energy conversion — between agents or between reserve and structure within an agent — a fraction is lost to heat. This is not a separate event — it is the inefficiency inherent in every conversion. It is what makes trophic pyramids inevitable: each level of transfer dissipates energy, so less is available at each successive level. The path from target structure → consumer reserve → consumer structure involves two lossy conversions, compounding the loss. Nutrient is not lost to heat — it is either incorporated into the receiving agent or returned to the available pool.
+
+The fraction lost varies with the relationship between consumer and target. Agents that occupy similar positions in trait space are biochemically similar — their structure is built from compatible machinery. Consuming a biochemically similar target is inherently more efficient: less energy is wasted breaking down unfamiliar structures, more of the target's embodied energy and nutrient is usable. Consuming a biochemically dissimilar target is less efficient: more energy is lost in conversion. Trait-space distance between consumer and target determines trophic transfer efficiency. This produces the ecological pattern without a special rule: consumers eating other consumers (small trait distance) capture a high fraction of energy and nutrient per unit consumed, while consumers eating producers (large trait distance) capture a low fraction. The trophic chain's increasing per-interaction efficiency at higher levels — and the corresponding decrease in available biomass — emerges from trait-space geometry.
+
+Grounded in Lindeman's (1942) trophic-dynamic concept. Real trophic transfer efficiency ranges from 5–20% between trophic levels (Welch 1968), decomposed into assimilation efficiency (fraction of consumed energy absorbed) and net production efficiency (fraction of assimilated energy converted to biomass). Assimilation efficiency varies systematically with diet similarity: carnivores assimilate 60–90% of ingested energy because animal tissue is chemically similar to consumer tissue, while herbivores assimilate 15–80% depending on food type (Begon et al. 2006). Net production efficiency varies with thermal strategy: ectotherms convert 25–75% of assimilated energy to biomass, while endotherms rarely exceed 5% due to thermoregulatory costs. In the world physics, trophic transfer efficiency is derived from trait-space distance between consumer and target, producing the ecological pattern without a special rule: consumers eating biochemically similar agents retain a higher fraction than consumers eating dissimilar agents.
 
 **9. Metabolism.** Living agent (reserve) → Heat. Every living agent pays a continuous energy cost from reserve simply to exist. This cost has three components:
 - A base rate — the minimum cost of being alive, independent of traits or activity.
@@ -139,7 +157,11 @@ Death also has two distal causes. **Extrinsic mortality** — consumption drains
 
 Metabolism dissipates reserve to heat. It does not release nutrient — nutrient leaves living agents only through death (flow 6). This makes decomposition structurally necessary for nutrient cycling.
 
+Grounded in metabolic theory and DEB theory. Real organisms pay a continuous energy cost to exist — basal metabolic rate scales with body mass as M^(3/4) (Kleiber 1932; West, Brown & Enquist 1997). Metabolic cost has multiple components: basal maintenance, activity costs (locomotion at 10–15× basal rate during active movement; Schmidt-Nielsen 1972), and the cost of maintaining functional machinery whether or not it is in use. DEB theory (Kooijman 2010) formalises maintenance priority: when reserves are insufficient, maintenance takes precedence over growth and reproduction — the organism cannibalises its own capacity to stay alive. In the world physics, metabolism is the sum of base rate, trait-dependent maintenance costs, movement costs, sensing costs, and somatic maintenance. Each capability costs energy to maintain regardless of use, creating the specialist-generalist trade-off: agents carrying unused traits pay for machinery they never exercise.
+
 **10. Growth.** Living agent (reserve) → Living agent (structure). When an agent's reserve income exceeds its metabolic costs, it can allocate surplus reserve to structure — building its body. The conversion is lossy; a fraction dissipates to heat (flow 8). Growth is not a decision — it is an automatic consequence of being well-fed. Structure starts at zero for newborn agents and accumulates over the agent's lifetime. Growth rate depends on the available reserve surplus after metabolism, reproduction, and other costs are paid.
+
+Grounded in DEB theory's reserve-to-structure conversion. Real organisms grow by converting metabolic surplus into embodied biomass — a lossy process constrained by the balance between assimilation and maintenance. DEB theory predicts that growth rate decelerates as body size increases, because maintenance costs scale with existing structure while assimilation scales with surface area — producing the von Bertalanffy growth curve as an emergent property (Kooijman 2010). Growth is not a decision but an automatic consequence of surplus: a well-fed organism grows, a starving organism does not. Structure once built is durable but not free — it must be maintained, creating a feedback where larger agents have higher maintenance costs and need more income to sustain themselves. In the world physics, growth converts reserve surplus to structure after metabolism and reproduction costs are paid. The conversion is lossy, with a fraction dissipated to heat. Structure starts at zero for newborns and accumulates over the agent's lifetime.
 
 ### Flow summary
 
@@ -164,15 +186,43 @@ Solar ──photosynthesis──▶ Reserve ──growth──▶ Structure ─�
                   Living agent (nutrient)
 ```
 
+## Viability constraints
+
+The flows above describe what can happen. Viability constraints describe what the flows must be capable of producing for the ecology to function. These are not parameter values — they are design requirements on the physics. If any constraint cannot be satisfied by some agent configuration under the trait budget, that trophic role is structurally impossible and the ecology is broken.
+
+### Individual balance
+
+Every agent has two currencies — energy and nutrient — each with its own income and cost structure per tick.
+
+**Energy income** enters reserve through acquisition flows: photosynthesis (flow 1), consumption (flow 3), or decomposition (flow 7). Each flow's yield depends on the agent's trait investment, the availability of the resource it targets, and an amplifying factor external to the trait budget.
+
+**Energy cost** leaves reserve through metabolism (flow 9): base rate, trait maintenance, movement, sensing, and somatic maintenance. Cost is determined by the agent's trait vector and activity.
+
+**Nutrient income** enters the agent through uptake from the available pool (flow 2) or alongside energy during consumption (flow 3) and decomposition (flow 7). Uptake requires sustained substrate contact. Consumption and decomposition transfer nutrient directly from the target, bypassing the contact-time requirement.
+
+**Nutrient cost** is driven by reproduction. Nutrient limitation blocks reproduction but does not impair other functions. An agent that is nutrient-negative cannot replace itself even if it is energy-positive.
+
+An agent is **viable** when it can achieve positive balance in both currencies over the timescale needed to grow, reproduce, and replace itself. Energy viability without nutrient viability produces agents that survive but cannot reproduce — a demographic dead end. Nutrient viability without energy viability is impossible, since the agent starves before it can reproduce.
+
+### Trophic viability
+
+Each trophic role imposes specific viability requirements across both currencies.
+
+**Producers.** Photosynthetic income must exceed producer metabolic cost. The difference — net primary production — is the energy available to the rest of the ecosystem. If producers barely break even, nothing else can live. Producers acquire nutrient through uptake from the available pool, gated by contact time. A sessile producer-specialist accumulates contact time naturally. The physics must allow such an agent to generate substantial energy surplus while acquiring enough nutrient to reproduce.
+
+**Consumers.** Consumer energy income — whether from grazing living agents or from predation followed by scavenging — must exceed consumer metabolic cost. Consumer income is downstream of net primary production: consumers can only extract what producers make available as structure. Consumers acquire nutrient alongside energy through consumption, bypassing the contact-time gate. But the nutrient content of prey depends on the prey's own nutrient accumulation — consumers inherit whatever nutrient-to-energy ratio their targets carry. A consumer whose stoichiometric demand exceeds what prey provides is nutrient-limited despite successful feeding.
+
+**Decomposers.** Decomposer energy income from processing carcasses must exceed decomposer metabolic cost. Decomposer income is downstream of mortality: decomposers can only extract what death makes available. Decomposers also acquire nutrient from carcasses, and excrete excess to the available pool — closing the nutrient cycle. A world without viable decomposers locks nutrient in carcasses indefinitely, eventually starving producers of nutrient even while solar flux continues to provide energy.
+
 ## Topologies
 
-The world has two topologies. Different flows operate on different topologies.
+The world has two topologies. Each topology is a geometry on which agents interact. Different flows operate on different topologies.
 
 ### Physical surface
 
 A two-dimensional continuous surface. Movement happens here. Every agent and every carcass has a position on this surface.
 
-The surface is the topology for all spatially-local interactions. Agents can only physically contact other agents that are nearby on the surface. Photosynthesis, consumption, decomposition, death, and reproduction all require surface proximity.
+The surface is the topology for all spatially-local interactions. Photosynthesis, consumption, decomposition, nutrient uptake, death, and reproduction all require surface proximity. Sensing, chemotaxis, and light competition also operate on the surface.
 
 ### Emergent network
 
@@ -184,27 +234,37 @@ The network enables flows and perception that bypass surface locality. Its topol
 
 ## Channels
 
-Each topology carries two kinds of channel, distinguished by whether they can carry energy.
+A channel defines what can flow between agents — information, energy, or both — and on which topology. An agent's trait vector determines the range at which it can interact on each channel. Two agents are in **contact** on a channel when they are within the range that their traits allow on that channel's topology.
 
-### Perception channels (information only)
+### Channel types
 
-Perception channels carry information about the state of other agents and carcasses. They do not move energy. Looking at food does not feed you; detecting a chemical signal does not transfer resources. Perception enables decision-making — it tells an agent what is nearby and in what direction — but it has no direct effect on stocks.
+Channels are distinguished by whether they can carry energy.
 
-Both topologies carry perception channels:
-- **Surface perception** — detecting agents and carcasses within a range on the surface (vision, chemotaxis, vibration).
-- **Network perception** — detecting signals propagated through network connections (chemical alerts, resource-state information).
+**Perception channels** carry information only. They tell an agent what is nearby and in what direction, enabling decision-making, but they do not move energy or nutrient. Looking at food does not feed you; detecting a chemical signal does not transfer resources.
 
-### Physical channels (information + energy)
+**Physical channels** carry energy and nutrient between agents. They are the pathways through which trophic flows operate. Consumption, decomposition, reproduction, nutrient uptake, and network redistribution all require a physical channel.
 
-Physical channels can carry energy between agents. They are the pathways through which flows 2, 3, 4, and 6 operate.
+This distinction is a law of physics, not a strategy choice. No amount of trait investment can make a perception channel carry energy. Energy transfer always requires a physical channel — either physical contact on the surface or a connection on the network.
 
-Both topologies carry physical channels:
-- **Surface contact** — direct physical proximity on the surface. Required for consumption, decomposition, and reproduction.
-- **Network transfer** — resource movement through network connections. Required for network redistribution (flow 4). This is what makes the network more than a signaling system — it is infrastructure that moves energy.
+### Channels on the surface
 
-### The perception-physical distinction as a world rule
+The surface carries both perception and physical channels. Each operates at a range determined by the interacting agents' traits.
 
-This distinction is a law of physics, not a strategy choice. No amount of trait investment can make a perception channel carry energy. An agent cannot feed through vision or acquire resources through chemotaxis alone. Energy transfer always requires a physical channel — either surface contact or a network connection.
+- **Surface perception** — detecting agents and carcasses on the surface. Chemotaxis, visual detection, vibration. The range at which an agent perceives its surroundings is determined by its trait investment in sensing. Signals are distance-weighted: closer agents produce stronger signals.
+- **Surface contact** — physical interaction on the surface. Required for consumption, decomposition, reproduction, and nutrient uptake. The range at which an agent can physically interact is determined by its trait vector — not a uniform world parameter. An agent's physical reach is a property of the agent, not the world.
+
+### Channels on the network
+
+The network carries both perception and physical channels.
+
+- **Network perception** — signals propagated through network connections. Chemical alerts, resource-state information. An agent connected to the network can perceive the states of connected agents regardless of surface distance.
+- **Network transfer** — resource movement through network connections. Required for network redistribution (flow 5). This is what makes the network more than a signalling system — it is infrastructure that moves energy and nutrient.
+
+### Sustained contact
+
+Many physical interactions are not instantaneous — they require sustained contact over multiple ticks. Nutrient uptake depends on how long an agent has maintained contact with the substrate. Consumption drains structure over time through continued physical contact. The effectiveness of sustained-contact interactions increases with duration, reflecting the time needed to establish the physical interface through which resources transfer. Moving breaks sustained contact and resets the process.
+
+Sustained contact creates a fundamental trade-off on the surface: mobile agents can reach more targets but cannot maintain contact long enough for slow, high-yield interactions. Sessile agents sacrifice reach but gain the deep contact needed for nutrient uptake and sustained feeding.
 
 ## Cost structure (trade-offs)
 
