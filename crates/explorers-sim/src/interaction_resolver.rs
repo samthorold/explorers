@@ -702,6 +702,7 @@ pub fn resolve_interactions(
 
             // Mutation
             mutate_traits(&mut child_traits, params, rng);
+            child_traits.normalize_budget();
 
             let offspring_id = next_agent_id;
             next_agent_id += 1;
