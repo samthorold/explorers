@@ -19,7 +19,8 @@
     "scavenging_maintenance_cost": 0.01,
     "spatial_decay_rate": 0.5,
     "nutrient_absorption_maintenance_cost": 0.01,
-    "initial_nutrient_pool": 5000.0
+    "initial_nutrient_pool": 5000.0,
+    "somatic_maintenance_cost_coefficient": 0.1
   },
   "agents": [
     {
@@ -38,7 +39,8 @@
         "mate_selectivity": 3.0,
         "sensing_range": 5.0,
         "reproductive_investment": 10.0,
-        "fecundity": 0.1
+        "fecundity": 0.1,
+        "somatic_maintenance": 0.05
       }
     }
   ],

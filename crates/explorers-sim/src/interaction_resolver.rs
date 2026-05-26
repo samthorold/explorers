@@ -873,6 +873,7 @@ mod tests {
             sensing_range: 0.0,
             reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
         }
     }
 
@@ -2335,6 +2336,7 @@ mod tests {
             mate_selectivity: 5.0,
             reproductive_investment: 20.0,
             fecundity: 5.0, // expect ~5 offspring on average
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         let agents = vec![Agent {
@@ -2419,6 +2421,7 @@ mod tests {
             sensing_range: 2.0,
             reproductive_investment: 10.0,
             fecundity: 0.01,
+            somatic_maintenance: 0.0,
         };
         let agents = vec![Agent {
             id: 0,
@@ -2483,6 +2486,7 @@ mod tests {
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.01,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         let agents = vec![Agent {
@@ -2571,6 +2575,7 @@ mod tests {
                 sensing_range: 5.0,
                 reproductive_investment: 10.0,
                 fecundity: 0.01,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             },
             contact_time: 100,

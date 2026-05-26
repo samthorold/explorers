@@ -163,6 +163,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
             growth_efficiency: 0.0,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
     };
 
     let dist = InitialDistribution {
@@ -177,6 +178,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
             sensing_range: v(24) as f32,
             reproductive_investment: v(25) as f32,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
         },
         trait_covariance: v(26) as f32,
         initial_cluster_count: v(27).round() as u32,

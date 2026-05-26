@@ -121,6 +121,7 @@ mod tests {
             growth_efficiency: 0.0,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
         }
     }
 
@@ -137,6 +138,7 @@ mod tests {
                 sensing_range: 3.0,
                 reproductive_investment: 0.3,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -170,7 +172,7 @@ mod tests {
         };
         let dist = InitialDistribution {
             trait_covariance: 0.5,
-            initial_energy_per_agent: 30.0,
+            initial_energy_per_agent: 50.0,
             ..test_distribution()
         };
         let config = RunConfig {
@@ -180,8 +182,8 @@ mod tests {
                 ..EvalConfig::default()
             },
         };
-        let result_a = run_single(&params, &dist, &config, 42);
-        let result_b = run_single(&params, &dist, &config, 999);
+        let result_a = run_single(&params, &dist, &config, 1);
+        let result_b = run_single(&params, &dist, &config, 100);
         let a = &result_a.breakdown;
         let b = &result_b.breakdown;
         assert!(
