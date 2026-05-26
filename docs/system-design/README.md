@@ -9,6 +9,7 @@ The ADRs describe how the system design gets implemented in code. They are close
 ## Documents
 
 - [World Rules](world-rules.md) — the immutable physics of the simulation: stocks (energy and nutrients), flows, topologies, channels, conservation laws, and the cost structure that creates trade-offs
+- [Execution Model](execution-model.md) — how the world rules are realised through time: discrete event simulation with event sourcing, the DES loop, event ordering, causal chains
 - [Expected Properties](expected-properties.md) — the emergent properties we expect from those rules, the failure modes that indicate miscalibration, and the initial conditions that enable or prevent healthy ecology
 
 ## How the ecology layer maps here
