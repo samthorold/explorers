@@ -96,14 +96,15 @@ pub fn resolve_interactions(
     dead_agents_before: &HashSet<usize>,
     nack_sets: &HashMap<u64, HashSet<event::EventKind>>,
     tick: u64,
-    pre_tick_energies: &[f32],
+    _pre_tick_energies: &[f32],
+    agent_structures: &[f32],
     light_shares: &[f32],
     rng: &mut ChaCha8Rng,
     next_agent_id: u64,
     ledger: &mut EnergyLedger,
 ) -> ResolverResult {
     let n = agents.len();
-    let mut working_energies: Vec<f32> = agents.iter().map(|a| a.energy).collect();
+    let mut working_energies: Vec<f32> = agents.iter().map(|a| a.reserve).collect();
     let mut consumption_gains = vec![0.0_f32; n];
     let mut consumption_losses = vec![0.0_f32; n];
     let mut decomposition_gains = vec![0.0_f32; n];
@@ -154,7 +155,7 @@ pub fn resolve_interactions(
                     Some(NearbyAgent {
                         id: agents[j].id,
                         distance: dist,
-                        energy: working_energies[j],
+                        reserve: working_energies[j],
                         traits: agents[j].traits,
                     })
                 })
@@ -222,9 +223,8 @@ pub fn resolve_interactions(
 
                 // Queue consequence: target death
                 if working_energies[target] <= 0.0 {
-                    let carcass_energy =
-                        (pre_tick_energies[target] - consumption_losses[target])
-                            .max(0.0);
+                    // Carcass retains the dead agent's structure
+                    let carcass_energy = agent_structures[target];
                     consequence_queue.push_high(event::Event {
                         tick,
                         seq: 0,
@@ -611,7 +611,7 @@ pub fn resolve_interactions(
                 Some(NearbyAgent {
                     id: agents[j].id,
                     distance: dist,
-                    energy: working_energies[j],
+                    reserve: working_energies[j],
                     traits: agents[j].traits,
                 })
             })
@@ -731,7 +731,8 @@ pub fn resolve_interactions(
             offspring.push(Agent {
                 id: offspring_id,
                 position: child_pos,
-                energy: offspring_energy,
+                reserve: offspring_energy,
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: child_traits,
                 contact_time: 0,
@@ -804,7 +805,8 @@ pub fn resolve_interactions(
                 offspring.push(Agent {
                     id: offspring_id,
                     position: child_pos,
-                    energy: per_offspring_energy,
+                    reserve: per_offspring_energy,
+                    structure: 0.0,
                     nutrient: 0.0,
                     traits: child_traits,
                     contact_time: 0,
@@ -859,7 +861,9 @@ mod tests {
             Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 2.0,
@@ -870,7 +874,9 @@ mod tests {
             Agent {
                 id: 1,
                 position: (3.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
@@ -912,6 +918,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
             &vec![0.0; agents.len()],
             &mut rng,
             100,
@@ -956,7 +963,9 @@ mod tests {
             Agent {
                 id: 10,
                 position: (0.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 20.0,
@@ -967,7 +976,9 @@ mod tests {
             Agent {
                 id: 11,
                 position: (1.0, 0.0),
-                energy: 5.0,
+                reserve: 5.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
@@ -1010,6 +1021,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
             &vec![0.0; agents.len()],
         &mut rng,
         100,
@@ -1066,7 +1078,9 @@ mod tests {
         let agents = vec![Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
                 nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 4.0,
@@ -1118,6 +1132,7 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+            &vec![0.0; agents.len()],
         &mut rng,
         100,
             &mut EnergyLedger::new(),
@@ -1155,7 +1170,9 @@ mod tests {
         let agents = vec![Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
                 nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 15.0,
@@ -1207,6 +1224,7 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+            &vec![0.0; agents.len()],
         &mut rng,
         100,
             &mut EnergyLedger::new(),
@@ -1253,7 +1271,9 @@ mod tests {
             Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0,
@@ -1265,7 +1285,9 @@ mod tests {
             Agent {
                 id: 1,
                 position: (10.0, 10.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0,
@@ -1313,6 +1335,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
             &light_shares,
         &mut rng,
         100,
@@ -1349,7 +1372,9 @@ mod tests {
             Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0,
@@ -1361,7 +1386,9 @@ mod tests {
             Agent {
                 id: 1,
                 position: (50.0, 50.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0,
@@ -1409,6 +1436,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
             &light_shares,
         &mut rng,
         100,
@@ -1446,7 +1474,9 @@ mod tests {
             Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 2.0,
@@ -1459,7 +1489,9 @@ mod tests {
             Agent {
                 id: 1,
                 position: (3.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
@@ -1503,6 +1535,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
             &light_shares,
         &mut rng,
         100,
@@ -1527,7 +1560,9 @@ mod tests {
         let agents = vec![Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
                 nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 4.0,
@@ -1581,6 +1616,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
             &light_shares,
         &mut rng,
         100,
@@ -1606,7 +1642,9 @@ mod tests {
             Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 2.0,
@@ -1618,7 +1656,9 @@ mod tests {
             Agent {
                 id: 1,
                 position: (1.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
@@ -1670,6 +1710,7 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+            &vec![0.0; agents.len()],
         &mut rng,
         100,
             &mut EnergyLedger::new(),
@@ -1715,7 +1756,9 @@ mod tests {
             Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
@@ -1723,7 +1766,9 @@ mod tests {
             Agent {
                 id: 1,
                 position: (2.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
@@ -1766,6 +1811,7 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+            &vec![0.0; agents.len()],
             &mut rng,
             100,
             &mut EnergyLedger::new(),
@@ -1777,9 +1823,9 @@ mod tests {
         // Offspring energy = (10 + 10) * 0.7 = 14.0
         let offspring = &result.offspring[0];
         assert!(
-            (offspring.energy - 14.0).abs() < 1e-5,
+            (offspring.reserve - 14.0).abs() < 1e-5,
             "offspring energy: {}",
-            offspring.energy
+            offspring.reserve
         );
 
         // Parental investments tracked
@@ -1806,7 +1852,9 @@ mod tests {
             Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     mobility: 1.0,
@@ -1819,7 +1867,9 @@ mod tests {
             Agent {
                 id: 1,
                 position: (2.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     mobility: 1.0,
@@ -1867,6 +1917,7 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+            &vec![0.0; agents.len()],
             &mut rng,
             100,
             &mut EnergyLedger::new(),
@@ -1876,9 +1927,9 @@ mod tests {
 
         // Offspring energy = (15 + 8) * 0.6 = 13.8
         assert!(
-            (result.offspring[0].energy - 13.8).abs() < 1e-5,
+            (result.offspring[0].reserve - 13.8).abs() < 1e-5,
             "offspring energy: {}",
-            result.offspring[0].energy
+            result.offspring[0].reserve
         );
 
         // Dissipated = (15 + 8) * 0.4 = 9.2
@@ -1895,7 +1946,9 @@ mod tests {
             Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 2.0,
@@ -1906,7 +1959,9 @@ mod tests {
             Agent {
                 id: 1,
                 position: (3.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
@@ -1950,6 +2005,7 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+            &vec![0.0; agents.len()],
             &mut rng,
             100,
             &mut ledger,
@@ -1982,7 +2038,9 @@ mod tests {
         let agents = vec![Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
                 nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 4.0,
@@ -2034,6 +2092,7 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+            &vec![0.0; agents.len()],
             &mut rng,
             100,
             &mut ledger,
@@ -2059,7 +2118,9 @@ mod tests {
         let agents = vec![Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
                 nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0,
@@ -2104,6 +2165,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0; agents.len()],
             &light_shares,
             &mut rng,
             100,
@@ -2132,7 +2194,9 @@ mod tests {
             Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
@@ -2140,7 +2204,9 @@ mod tests {
             Agent {
                 id: 1,
                 position: (2.0, 0.0),
-                energy: 50.0,
+                reserve: 50.0,
+
+                structure: 0.0,
                 nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
@@ -2184,6 +2250,7 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+            &vec![0.0; agents.len()],
             &mut rng,
             100,
             &mut ledger,
@@ -2221,7 +2288,9 @@ mod tests {
         let agents = vec![Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: parent_traits,
             contact_time: 0,
@@ -2254,7 +2323,7 @@ mod tests {
             let result = resolve_interactions(
                 &agents, &agent_grid, &carcass_grid, &[], &params,
                 &vec![0], &HashSet::new(), &HashMap::new(), 0,
-                &vec![100.0], &vec![0.0; 1], &mut rng, 100,
+                &vec![100.0], &vec![0.0; 1], &vec![0.0; 1], &mut rng, 100,
                 &mut EnergyLedger::new(),
             );
             let n = result.offspring.len();
@@ -2265,9 +2334,9 @@ mod tests {
                 let expected_per = 20.0 * 0.7 / n as f32;
                 for o in &result.offspring {
                     assert!(
-                        (o.energy - expected_per).abs() < 1e-4,
+                        (o.reserve - expected_per).abs() < 1e-4,
                         "offspring energy {}, expected {} (n={})",
-                        o.energy, expected_per, n
+                        o.reserve, expected_per, n
                     );
                 }
             }
@@ -2300,7 +2369,9 @@ mod tests {
         let agents = vec![Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: parent_traits,
             contact_time: 0,
@@ -2332,7 +2403,7 @@ mod tests {
         let result = resolve_interactions(
             &agents, &agent_grid, &carcass_grid, &[], &params, &order,
             &HashSet::new(), &HashMap::new(), 0, &pre_tick_energies,
-            &vec![0.0; agents.len()], &mut rng, 100, &mut EnergyLedger::new(),
+            &vec![0.0; agents.len()], &vec![0.0; agents.len()], &mut rng, 100, &mut EnergyLedger::new(),
         );
 
         assert_eq!(result.offspring.len(), 1);
@@ -2361,7 +2432,9 @@ mod tests {
         let agents = vec![Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: parent_traits,
             contact_time: 0,
@@ -2402,6 +2475,7 @@ mod tests {
             0,
             &pre_tick_energies,
             &vec![0.0; agents.len()],
+            &vec![0.0; agents.len()],
             &mut rng,
             100,
             &mut EnergyLedger::new(),
@@ -2419,9 +2493,9 @@ mod tests {
 
         // Offspring energy = 10.0 * 0.7 = 7.0
         assert!(
-            (result.offspring[0].energy - 7.0).abs() < 1e-5,
+            (result.offspring[0].reserve - 7.0).abs() < 1e-5,
             "offspring energy: {}",
-            result.offspring[0].energy
+            result.offspring[0].reserve
         );
     }
 
@@ -2431,7 +2505,9 @@ mod tests {
         let agents = vec![Agent {
             id: 0,
             position: parent_pos,
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 5.0,
@@ -2468,7 +2544,7 @@ mod tests {
         let result = resolve_interactions(
             &agents, &agent_grid, &carcass_grid, &[], &params, &order,
             &HashSet::new(), &HashMap::new(), 0, &pre_tick_energies,
-            &vec![0.0; agents.len()], &mut rng, 100, &mut EnergyLedger::new(),
+            &vec![0.0; agents.len()], &vec![0.0; agents.len()], &mut rng, 100, &mut EnergyLedger::new(),
         );
 
         assert_eq!(result.offspring.len(), 1);

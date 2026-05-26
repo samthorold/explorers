@@ -27,7 +27,7 @@
         0.0,
         0.0
       ],
-      "energy": 20.0,
+      "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
         "consumption_rate": 0.0,

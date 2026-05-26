@@ -79,7 +79,7 @@ pub fn evaluate_from_log(
     let ts = turnover_score(total_births, total_deaths, max_ticks);
 
     let trait_vectors: Vec<_> = agents.iter().map(|a| a.traits).collect();
-    let energies: Vec<_> = agents.iter().map(|a| a.energy).collect();
+    let energies: Vec<_> = agents.iter().map(|a| a.energy()).collect();
 
     let cs = if trait_vectors.len() >= 4 {
         clustering_strength(&trait_vectors)
@@ -754,7 +754,7 @@ mod tests {
         let result = evaluate_from_log(&world, &config, max_ticks);
 
         let trait_vectors: Vec<_> = world.agents().iter().map(|a| a.traits).collect();
-        let energies: Vec<_> = world.agents().iter().map(|a| a.energy).collect();
+        let energies: Vec<_> = world.agents().iter().map(|a| a.energy()).collect();
         let expected_cs = if trait_vectors.len() >= 4 {
             clustering_strength(&trait_vectors)
         } else {
