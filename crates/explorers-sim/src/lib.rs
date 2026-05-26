@@ -7532,7 +7532,7 @@ spatial_decay_rate: 0.5,
         }
 
         // At least some consumers should survive
-        let final_consumers = *consumer_counts.last().unwrap();
+        let _final_consumers = *consumer_counts.last().unwrap();
         assert!(
             max_consumers >= 2,
             "consumers should persist: max consumer count was {max_consumers}"
