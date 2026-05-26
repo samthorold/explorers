@@ -7,11 +7,11 @@ An ecology-driven game where a foreign entity navigates an alien world of interc
 ### Core
 
 **Agent**:
-The fundamental unit of the simulation. Everything in the world is an agent: organisms, carcasses, the player. There is no inert backdrop and no fixed types — an agent's role (producer, consumer, decomposer) is derived from its position in trait space. The derivation has mechanical consequences: trait values determine which capabilities an agent can exercise, but the labels are always a reading of the trait vector, never an assigned type. The trait budget constraint (L1, sum to 1.0) ensures that investing in one capability reduces others, driving role differentiation.
+The fundamental unit of the simulation. Everything in the world is an agent: organisms, carcasses. There is no inert backdrop and no fixed types — an agent's role (producer, consumer, decomposer) is derived from its position in trait space. The derivation has mechanical consequences: trait values determine which capabilities an agent can exercise, but the labels are always a reading of the trait vector, never an assigned type. The trait budget constraint (L1, sum to 1.0 across budget traits) ensures that investing in one capability reduces others, driving role differentiation.
 _Avoid_: entity, creature, organism (when referring to the simulation abstraction)
 
 **Trait vector**:
-A multi-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Trait values sum to 1.0 (L1 budget constraint) — investing more in one capability necessarily reduces others. This shared budget is the primary mechanism that prevents generalist dominance and drives specialisation. Genesis-minimal dimensions (9): photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption, mobility, chemotaxis sensitivity, mate selectivity, sensing range, reproductive investment. Deferred dimensions: social weight (herding — emergent flavour, not structurally necessary for genesis criteria), chemical signature (player interaction and species recognition, not needed for genesis fitness).
+A multi-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. The vector has two tiers. **Budget traits** (7 dimensions) sum to 1.0 (L1 budget constraint) — investing more in one capability necessarily reduces others. This shared budget is the primary mechanism that prevents generalist dominance and drives specialisation. Budget traits: photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption, mobility, chemotaxis sensitivity, somatic maintenance. **Unconstrained traits** (4 dimensions) govern reproduction strategy and perception, not resource acquisition: mate selectivity, sensing range, reproductive investment, fecundity. These are not under the L1 budget — reproduction strategy is a separate axis from feeding strategy. Deferred dimensions: social weight (herding — emergent flavour, not structurally necessary for genesis criteria), chemical signature (species recognition, not needed for genesis fitness).
 _Avoid_: stats, attributes, genome (genome implies a genotype/phenotype distinction that doesn't exist here)
 
 **Substrate**:
@@ -72,8 +72,16 @@ The difference between the nutrient ratio in an agent's food and the ratio the a
 _Avoid_: waste, inefficiency (mismatch is not inefficiency — it is a physical constraint)
 
 **Metabolic cost**:
-The energy an agent expends per **tick**. Comprises a base rate, plus costs for movement, sensing, and **trait maintenance** — each trait (photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption) costs energy to maintain whether used or not. Agents that carry traits they never exercise pay for the biological machinery, creating selection pressure toward specialisation. Metabolism costs energy only — nutrients are not released as metabolic waste. Nutrients leave living agents only through death.
+The energy an agent expends per **tick**. Comprises a base rate, plus costs for movement, sensing, trait maintenance, and **somatic maintenance**. Each energy-acquisition trait (photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption) costs energy to maintain whether used or not. Agents that carry traits they never exercise pay for the biological machinery, creating selection pressure toward specialisation. Somatic maintenance — repairing accumulated **wear** — is an additional cost that competes directly with reproduction. Metabolism costs energy only — nutrients are not released as metabolic waste. Nutrients leave living agents only through death.
 _Avoid_: upkeep, energy drain, maintenance
+
+**Somatic wear**:
+The cumulative degradation of an agent's functional traits over its lifetime. Each functional trait (the seven budget traits excluding somatic maintenance) accumulates wear independently through two mechanisms: baseline degradation proportional to the trait's magnitude (complex machinery degrades even when idle) and use-dependent degradation proportional to the trait's metabolic throughput that tick (active use produces damaging byproducts). Wear reduces a trait's effective output via exponential decay — small wear barely affects performance, but wear compounds and later increments are increasingly catastrophic. An aging producer captures less light. An aging consumer catches prey less efficiently. Behavioural traits (mate selectivity, reproductive investment, fecundity) do not wear — they are allocation parameters, not physical machinery. Offspring are born with zero wear. Grounded in the disposable soma theory (Kirkwood 1977).
+_Avoid_: aging (too vague — wear is per-trait, not a single scalar), damage (implies a discrete event, not continuous accumulation)
+
+**Somatic maintenance**:
+A budget trait controlling how much energy an agent invests in repairing accumulated **wear**. Higher investment slows degradation across all functional traits — somatic maintenance is a whole-organism investment, not selective repair. Repair effectiveness decays exponentially with current wear — heavily degraded traits are harder to repair than lightly worn ones. The energy cost of somatic maintenance competes directly with reproduction — this is the core survive-vs-reproduce trade-off. High somatic maintenance produces long-lived agents that reproduce infrequently. Low somatic maintenance produces short-lived agents that reproduce early and often.
+_Avoid_: healing, regeneration (these imply discrete repair events, not continuous investment)
 
 ### Movement and sensing
 
@@ -106,9 +114,17 @@ _Avoid_: choosiness, pickiness
 A trait dimension controlling how much energy a parent transfers to offspring at birth. High investment = fewer, fitter offspring (K-strategy). Low investment = many, fragile offspring (r-strategy).
 _Avoid_: brood size, litter size
 
+**Fecundity**:
+An unconstrained trait controlling the number of offspring per reproductive event. A fixed total energy budget is invested per event; fecundity determines how many offspring share that budget. High fecundity produces many poorly-provisioned offspring (r-strategy). Low fecundity (or zero) produces few well-provisioned offspring (K-strategy). The actual offspring count is stochastic — drawn from a Poisson distribution with mean equal to the fecundity trait. For sexual reproduction, the effective fecundity is the average of both parents'. Because fecundity is part of the trait vector, it contributes to trait-space distance and therefore to mate compatibility — agents with very different reproductive strategies are less likely to mate.
+_Avoid_: clutch size, litter size (too specific to animal analogues)
+
+**Asexual reproduction**:
+A universal fallback when an agent has sufficient energy to reproduce but no compatible mate is available. Offspring traits are the parent's traits plus mutation — no crossover, because there is no second parent. The costs are inherent: lower offspring variation (no recombination) and a single parent's energy contribution. In dense populations where mates are available, sexual reproduction is advantageous because it generates more combinatorial diversity. In sparse populations or for isolated colonizers, asexual reproduction is the only option. Whether a lineage relies primarily on sexual or asexual reproduction is emergent, not prescribed.
+_Avoid_: cloning (implies exact replication — mutation still applies)
+
 **Spore dispersal**:
-The reproduction mechanism for agents with high **contact time**. Instead of requiring physical contact, an agent that has maintained sustained substrate contact can disperse reproductive material over its **sensing range**. The effective reproduction radius scales continuously with contact time: high contact time uses sensing range, low contact time uses contact radius. This arises from the same world physics as nutrient uptake — sustained substrate contact is required to establish the structures (analogous to fruiting bodies or sporangia) through which propagules are dispersed.
-_Avoid_: pollination (implies a specific biological mechanism), asexual reproduction (spore dispersal is still sexual — both parents contribute traits)
+The reproduction mechanism for agents with high **contact time**. Instead of requiring physical contact, an agent that has maintained sustained substrate contact can disperse reproductive material over its **sensing range**. The effective reproduction radius scales continuously with contact time: high contact time uses sensing range, low contact time uses contact radius. This arises from the same world physics as nutrient uptake — sustained substrate contact is required to establish the structures (analogous to fruiting bodies or sporangia) through which propagules are dispersed. Spore dispersal applies to both sexual and asexual reproduction.
+_Avoid_: pollination (implies a specific biological mechanism)
 
 **Speciation**:
 The divergence of agent populations into distinct clusters in trait space that no longer interbreed due to trait distance exceeding mate selectivity thresholds. Not designed — emerges from selection and reproductive dynamics.
@@ -207,27 +223,6 @@ _Avoid_: using "broadcast" to describe ecological phenomena like spore dispersal
 A left fold over the event log that produces derived data for a specific consumer. Multiple projections can exist for different purposes (agent perception, genesis evaluation, replay tooling). Spatial projections decay over time and provide agents with navigational context. The DES computes projections and hands the data to agents alongside broadcasts — agents do not query projections themselves.
 _Avoid_: view, cache (a projection is a derived model, not a performance optimisation)
 
-### Player
-
-**Player**:
-A foreign entity dropped into the world. Has a mutable trait vector that shifts through interactions. Starts as an outsider; the world reacts to them based on trait compatibility.
-_Avoid_: character, avatar
-
-**Touch**:
-Direct physical contact between the player and another agent. The strongest form of interaction. Modifies both parties' traits.
-
-**Presence**:
-The passive effect of the player being near agents. A weaker form of interaction. Strength depends on the agent's chemotaxis sensitivity and the player's chemical signature.
-
-**Field of view**:
-The player perceives only their local surroundings. Once they move on, they lose sight of that area, but the simulation continues there. No persistent map.
-
-**Symbiosis**:
-Interactions where trait compatibility produces mutual benefit. The ecology responds to a symbiotic player by offering more interactions, approaching rather than fleeing, stabilising locally.
-
-**Exploitation**:
-One-sided interactions that benefit the player at an agent's expense. The ecology responds defensively: organisms withdraw symbiotic responses, activate defensive behaviours, and the player becomes increasingly isolated.
-
 ### Simulation
 
 **World genesis**:
@@ -238,7 +233,7 @@ A simulation outcome that fails to produce a functioning ecology. Six canonical 
 _Avoid_: bad run, failed world (too vague)
 
 **Sensible world**:
-A world that exhibits the positive patterns expected of a functioning ecology. Five criteria evaluated via geometric mean: endogenous population oscillations between trophic levels (Lotka & Volterra; verified in ABMs by DeAngelis & Grimm 2014), trait-space clustering with gaps (emergent speciation), coexistence duration (multiple clusters persisting simultaneously over extended periods, per Chesson 2000's coexistence theory), demographic turnover (non-trivial birth and death rates), and trophic balance (energy decreasing at higher trophic levels, Lindeman 1942). All criteria must contribute — the geometric mean penalises zeros heavily but preserves gradient signal for the optimiser. Evaluation follows the pattern-oriented modelling approach (Grimm et al. 2005): a parameterisation is accepted only when multiple independent patterns are reproduced simultaneously across an ensemble of runs.
+A world that exhibits the positive patterns expected of a functioning ecology. Five criteria evaluated via arithmetic mean: endogenous population oscillations between trophic levels (Lotka & Volterra; verified in ABMs by DeAngelis & Grimm 2014), trait-space clustering with gaps (emergent speciation), coexistence duration (multiple clusters persisting simultaneously over extended periods, per Chesson 2000's coexistence theory), demographic turnover (non-trivial birth and death rates), and trophic balance (energy decreasing at higher trophic levels, Lindeman 1942). Arithmetic mean is used rather than geometric mean because the genesis optimiser requires gradient signal even when some criteria score zero — geometric mean produces zero gradient in all directions when any single criterion is zero, creating a flat fitness landscape that the optimiser cannot descend. Evaluation follows the pattern-oriented modelling approach (Grimm et al. 2005): a parameterisation is accepted only when multiple independent patterns are reproduced simultaneously across an ensemble of runs.
 _Avoid_: balanced world, stable world (stability is not the goal — dynamic persistence is)
 
 **World recipe**:
@@ -275,26 +270,6 @@ The world is an agent-based model in the tradition of computational ecology (Gri
 ### Earth-analogous ecology
 
 The simulation follows real ecological principles: energy conservation, trophic levels (Lindeman 1942), nutrient cycling, carrying capacity. The forms may be alien but the dynamics are grounded. This allows us to draw on established ABM literature and ecological models (the ODD protocol, Grimm et al. 2006, 2010, provides the standard description format; pattern-oriented modelling, Grimm et al. 2005, provides the validation approach). Alien mechanics can be layered on once the base ecology produces coherent dynamics.
-
-### No explicit rules for the player
-
-The player receives no tutorial, no HUD, no rule explanations. The world communicates through visible agent behaviour — movement patterns, colour, shape, pulsation, spatial relationships. The player learns by observing and interacting.
-
-### No goal, no win state
-
-The game is open-ended. There is no objective, quest, or ending. The experience is being in this world — watching its dynamics, participating in its ecology, deepening understanding. Engagement comes from the world being intrinsically interesting, not from extrinsic rewards.
-
-### Observation is participation
-
-The player can never passively observe. Their presence affects nearby agents based on trait-dependent sensitivity. Even standing still is an interaction. The player is always a disturbance — the question is whether they become a welcome one.
-
-### The ecology is robust, the player is fragile
-
-Exploitation does not collapse the ecosystem. The world was functioning before the player arrived and will continue after they die. Exploitative play causes the local ecology to withdraw — defensive responses activate, symbiotic offers cease, and the player is left isolated with no way to sustain themselves. The punishment for exploitation is exclusion, not apocalypse.
-
-### Player verbs: move and touch (v1)
-
-The initial verb set is minimal: move through the world and make physical contact with agents. Richer verbs (carry, transform) may emerge through symbiotic relationships in future iterations — the world grants capability as the player integrates.
 
 ### No environmental cycles (v1)
 

@@ -1,16 +1,16 @@
-# Geometric-mean fitness function for world genesis evaluation
+# Arithmetic-mean fitness function for world genesis evaluation
 
-World genesis evaluates parameterisations by running an ensemble of replicate simulations (same world parameters, different random seeds) and computing a single scalar fitness. A parameterisation is accepted when its median fitness across the ensemble exceeds a threshold. The fitness function is a geometric mean of five normalised criteria, preceded by early-termination failure checks with a uniform grace period — following the pattern-oriented modelling approach (Grimm et al. 2005) where multiple independent patterns must be reproduced simultaneously.
+World genesis evaluates parameterisations by running an ensemble of replicate simulations (same world parameters, different random seeds) and computing a single scalar fitness. A parameterisation is accepted when its median fitness across the ensemble exceeds a threshold. The fitness function is an arithmetic mean of five normalised criteria (equal weights), preceded by early-termination failure checks with a uniform grace period — following the pattern-oriented modelling approach (Grimm et al. 2005) where multiple independent patterns must be reproduced simultaneously.
 
 ## Revision history
 
-Revised from gated product of three criteria to geometric mean of five criteria. The original product with hard-zero gates produced a flat fitness landscape — every parameterisation scored exactly 0 because (a) failure detectors fired prematurely on initial conditions before evolution could act, and (b) the product of any zero is zero, giving the optimiser no gradient signal. See "Why this changed" below.
+Revised twice. First from gated product of three criteria to geometric mean of five criteria. Then from geometric mean to arithmetic mean — the geometric mean still produced zero-gradient regions whenever any criterion scored zero, preventing the optimiser from navigating from partial worlds toward complete ones. The arithmetic mean preserves gradient signal at the cost of allowing some compensation between criteria. See "Why this changed" below for the original revision; the geometric→arithmetic change is documented in the considered options.
 
 ## Considered options
 
-- **Weighted sum of criteria.** Assign weights to oscillation, clustering, and coexistence, normalise, and sum. Simple but weights are arbitrary and allow compensation — strong clustering can mask absent oscillations. A sensible world requires all properties, not a high total.
 - **Gated product of three criteria (original, superseded).** Failure modes and sanity checks gate to zero. Primary criteria multiplied. Any criterion at zero collapses the entire score. In practice this created a feasibility cliff — the optimiser saw a flat zero landscape with no gradient to follow.
-- **Geometric mean of five criteria (chosen).** Failure modes still terminate runs early but failed runs score a small nonzero value proportional to survival duration. Former sanity checks (turnover, trophic balance) become two additional criteria in the geometric mean alongside the original three (oscillation, clustering, coexistence). Zeros are heavily penalised but a single weak criterion doesn't obliterate all signal from the others.
+- **Geometric mean of five criteria (superseded).** Failure modes still terminate runs early. Former sanity checks (turnover, trophic balance) become two additional criteria alongside the original three (oscillation, clustering, coexistence). Zeros are heavily penalised — but this is the problem: geometric mean produces zero gradient in all directions when any single criterion is zero, so the optimiser cannot descend from partial worlds toward complete ones. Slightly better than the gated product but still creates flat regions.
+- **Arithmetic mean of five criteria with equal weights (chosen).** Failure modes still terminate runs early. Same five criteria as the geometric mean variant. Allows compensation — strong clustering can partially mask weak oscillations — but critically preserves gradient signal even when some criteria score zero. A world with (oscillation=0, clustering=0.8) scores 0.16 rather than 0, giving the optimiser a direction to move. The compensation cost is acceptable because the failure detectors (monoculture, generalist dominance, energy death) catch the worst cases before the fitness function is evaluated.
 - **Lexicographic ordering.** Rank parameterisations by clustering first, break ties by coexistence, then oscillation. Gives a total ordering but not a scalar, making it incompatible with Bayesian optimisation.
 
 ## Why this changed
@@ -40,11 +40,11 @@ A uniform grace period of 20% of max_ticks applies to all non-catastrophic detec
 
 Frozen dynamics (zero births and deaths) was originally a hard failure mode but is now handled entirely by the demographic turnover criterion in the geometric mean. A frozen population gets turnover_score=0, which zeros the geometric mean — no hard termination needed. Removing the hard gate avoids the perverse incentive where the survival floor rewarded frozen populations (long survival, no activity) over populations with active reproduction that exploded (short survival, high activity).
 
-Failed runs score 0. The geometric mean of the five criteria provides the gradient signal for the search — runs that develop ecological structure score higher than those that don't. The survival-fraction floor was removed because it created a perverse incentive: failed runs (with nonzero floor) outscored successful-but-ecologically-dead runs (geometric mean = 0 due to no turnover).
+Failed runs score 0. The arithmetic mean of the five criteria provides the gradient signal for the search — runs that develop ecological structure score higher than those that don't. The survival-fraction floor was removed because it created a perverse incentive: failed runs (with nonzero floor) outscored successful-but-ecologically-dead runs.
 
 All checks are external observers — the simulation has no knowledge of genesis.
 
-### 2. Criteria (normalised to [0,1], combined via geometric mean)
+### 2. Criteria (normalised to [0,1], combined via arithmetic mean)
 
 Five criteria, all normalised to [0,1]:
 
@@ -59,9 +59,9 @@ Five criteria, all normalised to [0,1]:
 ```
 fitness(run) =
   0                                           if any failure mode detected
-  geometric_mean(oscillation, clustering,
-                 coexistence, turnover,
-                 trophic_balance)             otherwise
+  arithmetic_mean(oscillation, clustering,
+                  coexistence, turnover,
+                  trophic_balance)            otherwise
 
 fitness(parameterisation) = median(fitness across ensemble runs)
 ```
@@ -80,8 +80,8 @@ Latin hypercube sampling (Thiele et al. 2014) maps the landscape first — ident
 ## Consequences
 
 - Genesis tooling lives outside the simulation crate (consistent with ADR-0001). The simulation exposes state; genesis observes and evaluates.
-- The geometric mean means a parameterisation cannot score well by excelling at one criterion — all must contribute. But unlike the product, a single weak (but nonzero) criterion doesn't obliterate the signal from strong criteria.
+- The arithmetic mean allows some compensation between criteria, but failure detectors catch the worst cases (monoculture, generalist dominance, energy death) before the fitness function is evaluated. The trade-off is accepted because gradient signal is more valuable than zero-intolerance during parameter search.
 - Grace periods mean the search can explore parameterisations that start uniform but evolve diversity — consistent with genesis testing whether differentiation emerges spontaneously.
 - Cluster labelling (DBSCAN) is required for oscillation and coexistence measurement. The dip test gates whether labelling is attempted.
 - The median across ensemble runs means outlier runs (one lucky or unlucky seed) don't dominate. A parameterisation must reliably produce sensible worlds.
-- The fitness function will need recalibration as new criteria are added (e.g., spatial patterns, environmental cycles). Adding a new factor to the geometric mean is straightforward.
+- The fitness function will need recalibration as new criteria are added (e.g., spatial patterns, environmental cycles). Adding a new term to the arithmetic mean is straightforward — the weight becomes 1/N for N criteria.
