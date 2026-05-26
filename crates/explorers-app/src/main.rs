@@ -248,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn low_energy_dims_color() {
+    fn low_reserve_dims_color() {
         let traits = TraitVector {
             photosynthetic_absorption: 1.0,
             consumption_rate: 0.0,
@@ -264,6 +264,31 @@ mod tests {
         let dim = trophic_color(&traits, 10.0).to_srgba();
         assert!(dim.green < bright.green, "low energy should dim: {:.2} vs {:.2}", dim.green, bright.green);
         assert!(dim.green > 0.0, "should still be visible at low energy");
+    }
+
+    #[test]
+    fn brightness_maps_to_reserve_not_total_energy() {
+        let traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            consumption_rate: 0.0,
+            scavenging_rate: 0.0,
+            nutrient_absorption: 0.0,
+            mobility: 0.0,
+            chemotaxis_sensitivity: 0.0,
+            mate_selectivity: 0.0,
+            sensing_range: 0.0,
+            reproductive_investment: 0.0,
+            fecundity: 0.0,
+        };
+        // Same total energy (100), but different reserve values
+        let high_reserve = trophic_color(&traits, 80.0).to_srgba(); // reserve=80
+        let low_reserve = trophic_color(&traits, 20.0).to_srgba();  // reserve=20
+        assert!(
+            high_reserve.green > low_reserve.green,
+            "higher reserve should be brighter: {:.3} vs {:.3}",
+            high_reserve.green,
+            low_reserve.green
+        );
     }
 
     #[test]
@@ -628,7 +653,7 @@ fn reconcile_entities(
 
     for agent in sim.0.agents() {
         if !existing_agents.contains(&agent.id) {
-            let color = trophic_color(&agent.traits, agent.energy());
+            let color = trophic_color(&agent.traits, agent.reserve);
             commands.spawn((
                 Mesh2d(agent_mesh.0.clone()),
                 MeshMaterial2d(materials.add(ColorMaterial::from_color(color))),
@@ -644,7 +669,7 @@ fn reconcile_entities(
             transform.translation.x = agent.position.0;
             transform.translation.y = agent.position.1;
             if let Some(mat) = materials.get_mut(&material_handle.0) {
-                mat.color = trophic_color(&agent.traits, agent.energy());
+                mat.color = trophic_color(&agent.traits, agent.reserve);
             }
         }
     }
@@ -686,8 +711,8 @@ fn reconcile_entities(
     }
 }
 
-fn trophic_color(traits: &TraitVector, energy: f32) -> Color {
-    let brightness = (energy.max(0.0) / 100.0).clamp(0.5, 1.0);
+fn trophic_color(traits: &TraitVector, reserve: f32) -> Color {
+    let brightness = (reserve.max(0.0) / 100.0).clamp(0.5, 1.0);
     let total = traits.photosynthetic_absorption + traits.consumption_rate + traits.scavenging_rate;
     if total <= 0.0 {
         return Color::srgb(0.8 * brightness, 0.8 * brightness, 0.8 * brightness);
@@ -917,7 +942,7 @@ fn debug_panel_ui(
                     ui.label(format!("Living reserve: {:.1}", budget.living_reserve));
                     ui.label(format!("Living structure: {:.1}", budget.living_structure));
                     ui.label(format!("Living total: {:.1}", budget.living_energy));
-                    ui.label(format!("Carcasses: {:.1}", budget.carcass_energy));
+                    ui.label(format!("Carcass structure: {:.1}", budget.carcass_energy));
                     ui.label(format!("Dissipated: {:.1}", budget.dissipated_energy));
                     ui.label(format!("Total: {:.1}", budget.living_energy + budget.carcass_energy + budget.dissipated_energy));
                     ui.separator();
