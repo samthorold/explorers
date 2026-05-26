@@ -42,6 +42,7 @@ pub struct ResolverResult {
     pub total_solar_input: f32,
     pub offspring: Vec<Agent>,
     pub reproduction_investments: Vec<f32>,
+    pub nutrient_donations: Vec<f32>,
     pub next_agent_id: u64,
 }
 
@@ -107,6 +108,7 @@ pub fn resolve_interactions(
     let n = agents.len();
     let mut working_energies: Vec<f32> = agents.iter().map(|a| a.reserve).collect();
     let mut working_structures: Vec<f32> = agent_structures.to_vec();
+    let mut working_nutrients: Vec<f32> = agents.iter().map(|a| a.nutrient).collect();
     let mut consumption_gains = vec![0.0_f32; n];
     let mut consumption_losses = vec![0.0_f32; n];
     let mut decomposition_gains = vec![0.0_f32; n];
@@ -576,6 +578,7 @@ pub fn resolve_interactions(
 
     // --- Reproduction ---
     let mut reproduction_investments = vec![0.0_f32; n];
+    let mut nutrient_donations = vec![0.0_f32; n];
     let mut reproduced = vec![false; n];
     let mut offspring: Vec<Agent> = Vec::new();
     let mut next_agent_id = next_agent_id;
@@ -587,11 +590,9 @@ pub fn resolve_interactions(
         if reproduced[i] || working_energies[i] <= params.reproduction_energy_threshold {
             continue;
         }
-        // Nutrient gate: agent cannot reproduce if nutrient below stoichiometric demand
-        // Only enforced when nutrient system is active (initial_nutrient_pool > 0)
         if params.nutrient_gate_active {
             let demand = crate::stoichiometric_demand(&agents[i].traits);
-            if agents[i].nutrient < demand {
+            if working_nutrients[i] < demand {
                 continue;
             }
         }
@@ -615,10 +616,9 @@ pub fn resolve_interactions(
                 {
                     return None;
                 }
-                // Mate must also have sufficient nutrient
                 if params.nutrient_gate_active {
                     let mate_demand = crate::stoichiometric_demand(&agents[j].traits);
-                    if agents[j].nutrient < mate_demand {
+                    if working_nutrients[j] < mate_demand {
                         return None;
                     }
                 }
@@ -684,6 +684,14 @@ pub fn resolve_interactions(
             let repro_dissipation =
                 (inv_a + inv_b) * (1.0 - params.reproduction_efficiency);
             dissipated_energy += repro_dissipation;
+
+            let nutrient_a = working_nutrients[i] * 0.5;
+            let nutrient_b = working_nutrients[j] * 0.5;
+            working_nutrients[i] -= nutrient_a;
+            working_nutrients[j] -= nutrient_b;
+            nutrient_donations[i] += nutrient_a;
+            nutrient_donations[j] += nutrient_b;
+            let offspring_nutrient = nutrient_a + nutrient_b;
 
             // Trait inheritance: uniform crossover
             let mut child_traits = agents[i].traits;
@@ -753,7 +761,7 @@ pub fn resolve_interactions(
                 position: child_pos,
                 reserve: offspring_energy,
                 structure: 0.0,
-                nutrient: 0.0,
+                nutrient: offspring_nutrient,
                 traits: child_traits,
                 contact_time: 0,
                 wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
@@ -771,6 +779,10 @@ pub fn resolve_interactions(
             let repro_dissipation = inv * (1.0 - params.reproduction_efficiency);
             dissipated_energy += repro_dissipation;
 
+            let parent_nutrient_donation = working_nutrients[i] * 0.5;
+            working_nutrients[i] -= parent_nutrient_donation;
+            nutrient_donations[i] += parent_nutrient_donation;
+
             // Offspring count from Poisson(fecundity), minimum 1
             let n_offspring = {
                 let poisson = Poisson::new(agents[i].traits.fecundity as f64).unwrap();
@@ -780,6 +792,7 @@ pub fn resolve_interactions(
 
             // Energy split equally among offspring
             let per_offspring_energy = total_offspring_energy / n_offspring as f32;
+            let per_offspring_nutrient = parent_nutrient_donation / n_offspring as f32;
 
             // Record reproduction flows in ledger
             if inv > 0.0 {
@@ -828,7 +841,7 @@ pub fn resolve_interactions(
                     position: child_pos,
                     reserve: per_offspring_energy,
                     structure: 0.0,
-                    nutrient: 0.0,
+                    nutrient: per_offspring_nutrient,
                     traits: child_traits,
                     contact_time: 0,
                     wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
@@ -851,6 +864,7 @@ pub fn resolve_interactions(
         total_solar_input,
         offspring,
         reproduction_investments,
+        nutrient_donations,
         next_agent_id,
     }
 }
