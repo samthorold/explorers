@@ -128,15 +128,16 @@ fn main() {
         },
     };
 
-    let ticks = if fast_forward > 0 { fast_forward } else { recipe.max_ticks };
     let seed: u64 = rand::random();
     let mut world = World::from_recipe(&recipe, seed);
 
-    eprintln!("Fast-forwarding {ticks} ticks...");
-    for _ in 0..ticks {
-        world.step();
+    if fast_forward > 0 {
+        eprintln!("Fast-forwarding {fast_forward} ticks...");
+        for _ in 0..fast_forward {
+            world.step();
+        }
+        eprintln!("Fast-forward complete. {} agents alive.", world.agents().len());
     }
-    eprintln!("Fast-forward complete. {} agents alive.", world.agents().len());
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -153,7 +154,7 @@ fn main() {
         })
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(SimWorld(world))
-        .insert_resource(TickCount(ticks))
+        .insert_resource(TickCount(fast_forward))
         .init_resource::<SelectedAgent>()
         .init_resource::<DebugPanelOpen>()
         .add_systems(Startup, (setup_camera, setup_meshes, setup_grid, configure_timestep))
