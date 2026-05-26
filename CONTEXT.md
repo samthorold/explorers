@@ -19,11 +19,11 @@ The physical medium of the world — what agents live on and in. Holds nutrients
 _Avoid_: terrain (too specific to one property), environment (too broad), map (implies player-facing representation)
 
 **Energy**:
-The universal currency of the simulation. Enters the world only through solar flux. Flows between agents through consumption, reproduction, and decomposition. Energy conversion is lossy at every trophic transfer — consumers capture only a fraction of the energy they drain (per Lindeman 1942's trophic efficiency principle). The remainder is dissipated. Metabolic cost also dissipates energy. The system is open: solar flux is the sole tap, metabolic dissipation and transfer loss are the drains. Carrying capacity and trophic pyramid structure emerge from this energy budget rather than being imposed. Energy exists in two forms within a living agent: **reserve** and **structure**.
+The universal currency of the simulation. Enters the world only through solar flux. Flows between agents through consumption and reproduction. Energy conversion is lossy at every trophic transfer — consumers capture only a fraction of the energy they drain (per Lindeman 1942's trophic efficiency principle). The remainder is dissipated. Metabolic cost also dissipates energy. The system is open: solar flux is the sole tap, metabolic dissipation and transfer loss are the drains. Carrying capacity and trophic pyramid structure emerge from this energy budget rather than being imposed. Energy exists in two forms within a living agent: **reserve** and **structure**.
 _Avoid_: health, mana, resources
 
 **Reserve**:
-An agent's metabolic fuel — the operating account through which all energy flows. Photosynthesis and decomposition income enter as reserve. Metabolic costs, growth, and reproduction are paid from reserve. Reserve fluctuates each tick as income and costs are applied. Death occurs when reserve reaches zero (starvation). Distinct from structure: reserve is the fuel gauge, not the body.
+An agent's metabolic fuel — the operating account through which all energy flows. Photosynthesis and consumption income enter as reserve. Metabolic costs, growth, and reproduction are paid from reserve. Reserve fluctuates each tick as income and costs are applied. Death occurs when reserve reaches zero (starvation). Distinct from structure: reserve is the fuel gauge, not the body.
 _Avoid_: energy (when specifically meaning the metabolic balance), stamina
 
 **Structure**:
@@ -52,11 +52,11 @@ An agent draining structure and nutrient from a living agent over time through s
 _Avoid_: eating, attacking, harvesting
 
 **Carcass**:
-A dead agent. Retains the dead agent's structure (embodied biomass energy) and nutrient, locked until a decomposer processes it. Emits a chemical signal detectable by agents with scavenging affinity. No passive decay — structure and nutrient stay locked indefinitely without decomposition. A carcass's energy content reflects the agent's accumulated structure at death — old, well-fed agents leave energy-rich carcasses; heavily grazed or starved agents leave energy-poor ones.
+An inert agent. A living agent becomes a carcass on death — it retains its structure (embodied biomass energy), nutrient, position, and trait vector, but no longer acts. Structure and nutrient stay locked until another agent consumes the carcass. No passive decay. A carcass's energy content reflects the agent's accumulated structure at death — old, well-fed agents leave energy-rich carcasses; heavily grazed or starved agents leave energy-poor ones.
 _Avoid_: corpse, remains, resource node
 
 **Decomposition**:
-An agent draining structure and nutrient from a **carcass**. Functionally identical to **consumption** but targets carcasses rather than living agents, governed by the scavenging rate trait. The extracted structure enters the decomposer's reserve (with trophic transfer loss). Nutrient that exceeds the decomposer's stoichiometric demand is excreted immediately to the available pool, closing the nutrient cycle.
+**Consumption** where the target is a **carcass**. Not a separate mechanism — the same physics apply (trait-space distance governs trophic transfer efficiency, stoichiometric mismatch causes nutrient excretion). The term is useful because it names the ecological role: decomposers are agents whose trait-space position makes them efficient consumers of carcasses. Decomposition closes the nutrient cycle by returning carcass nutrient to the available pool.
 _Avoid_: recycling, decay (decay implies passive process)
 
 **Nutrient uptake**:

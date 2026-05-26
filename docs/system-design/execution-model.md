@@ -69,9 +69,40 @@ An event may trigger responses that trigger further responses. A clock event at 
 
 A causal chain settles when no agent produces further responses. The queue drains of events at the current timestamp, and the next clock event advances time.
 
+## Event categories
+
+Events divide into two categories based on how many agents' states change.
+
+### Autonomous events
+
+An autonomous event changes only one agent's state. The agent emits the event in response to a clock tick, unilaterally — no coordination required. The agent evaluates its own traits, local conditions, and private state, then emits a fact about what happened.
+
+Autonomous events, in processing order within a single tick:
+
+1. **Photosynthesized** — agent absorbed energy from local solar flux into reserve.
+2. **NutrientAbsorbed** — agent absorbed nutrient from local available pool.
+3. **Metabolized** — agent paid energy costs (base + trait maintenance + somatic maintenance) from reserve to heat.
+4. **Grew** — agent converted reserve surplus to structure (lossy).
+5. **Wore** — agent's functional traits degraded from use and baseline accumulation.
+6. **Died** — agent's reserve or structure crossed a death threshold.
+
+The ordering follows energy flow direction: acquire before spend, spend before convert, convert before degrade, degrade before check. An agent gets a chance to use incoming energy before paying costs. Death is always the last word in a tick.
+
+### Coordinated events
+
+A coordinated event changes multiple agents' states. Because agents do not share state, a coordinator agent (analogous to the clock agent — a distinguished agent with a special projection) resolves the interaction and emits a fact that the involved agents then independently react to, each updating only their own private state.
+
+Three interactions require coordination:
+
+1. **Consumption** (including decomposition — a carcass is an inert agent). A consumer drains a target's structure into its own reserve, lossy.
+2. **Network redistribution.** Energy and nutrient move between agents through network connections.
+3. **Sexual reproduction.** Two parents invest reserve and nutrient to create offspring.
+
+The coordinator, event vocabulary, and resolution logic for coordinated events are not yet defined.
+
 ## What this document does not define
 
-- **Which event types exist.** The vocabulary of events (birth, death, consumption, metabolism, etc.) is defined by the world rules. The execution model processes them uniformly.
+- **Functional forms.** How much energy a given trait investment produces, what the metabolic base rate is, what the growth conversion efficiency is — these are calibration, not execution model.
 - **What "relevant" means.** How the DES determines which agents receive a broadcast — spatial filtering, subscription, network topology — is a design question to be resolved separately.
 - **Agent decision logic.** How an agent decides what events to emit in response to a broadcast is agent behaviour, not execution model.
 - **Specific priority levels.** Which events are higher priority than others is a calibration concern. The execution model provides the ordering mechanism.
