@@ -49,8 +49,8 @@ The simulation advances through a single, uniform loop:
 1. **Pop** the next event from the queue (earliest timestamp, highest priority).
 2. **Append** the event to the log.
 3. **Broadcast** the event to all relevant agents.
-4. Each agent may update its private state and **respond** with zero or more new events.
-5. **Enqueue** all response events.
+4. Each agent may update its private state and **respond** with zero or more new events, plus optionally a new agent to register.
+5. **Enqueue** all response events. **Register** any new agents.
 6. Repeat from 1.
 
 When the queue is empty, the simulation has settled. The clock agent's next scheduled event will eventually arrive to advance time.
@@ -90,19 +90,23 @@ The ordering follows energy flow direction: acquire before spend, spend before c
 
 ### Coordinated events
 
-A coordinated event changes multiple agents' states. Because agents do not share state, a coordinator agent (analogous to the clock agent — a distinguished agent with a special projection) resolves the interaction and emits a fact that the involved agents then independently react to, each updating only their own private state.
+A coordinated event changes multiple agents' states. Because agents do not share state, a single **interaction coordinator** — a distinguished agent analogous to the clock agent — resolves multi-agent interactions. The coordinator maintains both spatial and network projections and emits facts that involved agents independently react to, each updating only their own private state.
 
-Three interactions require coordination:
+The coordinator responds to the clock tick after all autonomous events at that timestamp have settled. Priority ordering within a timestamp ensures autonomous events process before coordinated events.
 
-1. **Consumption** (including decomposition — a carcass is an inert agent). A consumer drains a target's structure into its own reserve, lossy.
-2. **Network redistribution.** Energy and nutrient move between agents through network connections.
-3. **Sexual reproduction.** Two parents invest reserve and nutrient to create offspring.
+Three coordinated events:
 
-The coordinator, event vocabulary, and resolution logic for coordinated events are not yet defined.
+1. **Consumed(consumer, target, energy_amount, nutrient_amount, t)** — the coordinator resolves a consumption interaction between two agents (living or carcass — a carcass is an inert agent). The consumer credits its own reserve, the target debits its own structure. The target may emit `Died` in response if a threshold is crossed.
+2. **Redistributed(sender, receiver, energy_amount, nutrient_amount, t)** — the coordinator resolves a resource transfer through a network connection. Both agents update their own state.
+3. **Reproduced(parent_a, parent_b, offspring_traits, position, t)** — the coordinator resolves a sexual reproduction event. Both parents debit their own reserve and nutrient. The coordinator includes the new offspring agent in its response — the DES registers the new agent.
+
+### Agent responses
+
+An agent's response to a broadcast is zero or more new events, plus optionally a new agent for the DES to register. Events are enqueued normally. Agent creation is handled by the DES loop — only the DES owns the agent list. This mechanism is how the interaction coordinator creates offspring during reproduction.
 
 ## What this document does not define
 
 - **Functional forms.** How much energy a given trait investment produces, what the metabolic base rate is, what the growth conversion efficiency is — these are calibration, not execution model.
-- **What "relevant" means.** How the DES determines which agents receive a broadcast — spatial filtering, subscription, network topology — is a design question to be resolved separately.
+- **Broadcast filtering.** How the DES determines which agents receive a given event broadcast — the interaction coordinator maintains spatial and network projections, but the filtering rules are not yet defined.
 - **Agent decision logic.** How an agent decides what events to emit in response to a broadcast is agent behaviour, not execution model.
 - **Specific priority levels.** Which events are higher priority than others is a calibration concern. The execution model provides the ordering mechanism.
