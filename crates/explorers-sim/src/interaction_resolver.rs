@@ -24,6 +24,7 @@ pub struct ResolverParams {
     pub mutation_rate: f32,
     pub mutation_magnitude: f32,
     pub nutrient_gate_active: bool,
+    pub wear_degradation_steepness: f32,
 }
 
 /// Accumulated mutations from resolving all interactions.
@@ -135,7 +136,8 @@ pub fn resolve_interactions(
         }
 
         // Try consumption
-        if agents[i].traits.consumption_rate > 0.0 {
+        let k = params.wear_degradation_steepness;
+        if agents[i].effective_trait_with_steepness(1, k) > 0.0 {
             let neighbors =
                 agent_grid.query_radius(agents[i].position, params.contact_radius);
             let nearby_agents: Vec<NearbyAgent> = neighbors
@@ -170,6 +172,7 @@ pub fn resolve_interactions(
                 nearby_carcasses: vec![],
                 contact_radius: params.contact_radius,
                 reproduction_energy_threshold: params.reproduction_energy_threshold,
+                wear_degradation_steepness: params.wear_degradation_steepness,
             };
             let trigger = event::Event {
                 tick,
@@ -221,6 +224,7 @@ pub fn resolve_interactions(
                     &dead_agents,
                     nack_sets,
                     params.world_extent,
+                    params.wear_degradation_steepness,
                 );
 
                 // Queue consequence: target death when structure drops below
@@ -243,7 +247,7 @@ pub fn resolve_interactions(
         }
 
         // Try decomposition (mutually exclusive with consumption)
-        if consumption_gains[i] == 0.0 && agents[i].traits.scavenging_rate > 0.0 {
+        if consumption_gains[i] == 0.0 && agents[i].effective_trait_with_steepness(2, k) > 0.0 {
             let nearby_carcass_ids =
                 carcass_grid.query_radius(agents[i].position, params.contact_radius);
             let nearby_carcasses: Vec<crate::NearbyCarcass> = nearby_carcass_ids
@@ -294,6 +298,7 @@ pub fn resolve_interactions(
                 nearby_carcasses,
                 contact_radius: params.contact_radius,
                 reproduction_energy_threshold: params.reproduction_energy_threshold,
+                wear_degradation_steepness: params.wear_degradation_steepness,
             };
             let trigger = event::Event {
                 tick,
@@ -346,6 +351,7 @@ pub fn resolve_interactions(
                         &dead_agents,
                         nack_sets,
                         params.world_extent,
+                        params.wear_degradation_steepness,
                     );
 
                     // Queue consequence: carcass depletion
@@ -397,6 +403,7 @@ pub fn resolve_interactions(
                         &dead_agents,
                         nack_sets,
                         params.world_extent,
+                        params.wear_degradation_steepness,
                     );
 
                     // Queue consequence: carcass depletion for new carcass
@@ -420,9 +427,12 @@ pub fn resolve_interactions(
         // Photosynthesise (fallback: only if agent didn't consume or decompose)
         let acquired = consumption_gains[i] > 0.0 || decomposition_gains[i] > 0.0;
         if !acquired {
+            let k = params.wear_degradation_steepness;
+            let eff_mobility = agents[i].effective_trait_with_steepness(4, k);
+            let eff_photo = agents[i].effective_trait_with_steepness(0, k);
             let mobility_gate = 1.0
-                / (1.0 + (20.0_f32 * (agents[i].traits.mobility - 0.3)).exp());
-            let solar_gain = agents[i].traits.photosynthetic_absorption
+                / (1.0 + (20.0_f32 * (eff_mobility - 0.3)).exp());
+            let solar_gain = eff_photo
                 * params.solar_flux_magnitude
                 * mobility_gate
                 * light_shares[i];
@@ -474,6 +484,7 @@ pub fn resolve_interactions(
                         &dead_agents,
                         nack_sets,
                         params.world_extent,
+                        params.wear_degradation_steepness,
                     );
 
                     let target_idx =
@@ -526,6 +537,7 @@ pub fn resolve_interactions(
                         &dead_agents,
                         nack_sets,
                         params.world_extent,
+                        params.wear_degradation_steepness,
                     );
                 }
                 event::EventKind::CarcassDepleted => {
@@ -592,6 +604,7 @@ pub fn resolve_interactions(
             &dead_agents,
             nack_sets,
             params.world_extent,
+            params.wear_degradation_steepness,
         );
 
         // Build nearby agents for mate selection via receive()
@@ -629,6 +642,7 @@ pub fn resolve_interactions(
             nearby_carcasses: vec![],
             contact_radius: params.contact_radius,
             reproduction_energy_threshold: params.reproduction_energy_threshold,
+            wear_degradation_steepness: params.wear_degradation_steepness,
         };
         let trigger = event::Event {
             tick,
@@ -741,6 +755,7 @@ pub fn resolve_interactions(
                 nutrient: 0.0,
                 traits: child_traits,
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             });
         } else if agents[i].traits.fecundity > 0.0 {
             // --- Asexual reproduction ---
@@ -815,6 +830,7 @@ pub fn resolve_interactions(
                     nutrient: 0.0,
                     traits: child_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
                 });
             }
         }
@@ -874,6 +890,7 @@ mod tests {
                     ..zero_traits()
                 },
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
             Agent {
                 id: 1,
@@ -883,6 +900,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: zero_traits(),
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
         ];
 
@@ -904,6 +922,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0, nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -974,6 +993,7 @@ mod tests {
                     ..zero_traits()
                 },
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
             Agent {
                 id: 11,
@@ -983,6 +1003,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: zero_traits(),
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
         ];
 
@@ -1005,6 +1026,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -1088,6 +1110,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 }];
 
         let extent = 100.0;
@@ -1114,6 +1137,7 @@ mod tests {
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
         mutation_magnitude: 0.0, nutrient_gate_active: false,
+        wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0];
@@ -1180,6 +1204,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 }];
 
         let extent = 100.0;
@@ -1206,6 +1231,7 @@ mod tests {
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
         mutation_magnitude: 0.0, nutrient_gate_active: false,
+        wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0];
@@ -1282,6 +1308,7 @@ mod tests {
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 },
             Agent {
                 id: 1,
@@ -1296,6 +1323,7 @@ mod tests {
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 },
         ];
 
@@ -1317,6 +1345,7 @@ mod tests {
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
         mutation_magnitude: 0.0, nutrient_gate_active: false,
+        wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -1383,6 +1412,7 @@ mod tests {
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 },
             Agent {
                 id: 1,
@@ -1397,6 +1427,7 @@ mod tests {
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 },
         ];
 
@@ -1418,6 +1449,7 @@ mod tests {
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
         mutation_magnitude: 0.0, nutrient_gate_active: false,
+        wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -1485,6 +1517,7 @@ mod tests {
                     ..zero_traits()
                 },
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
             Agent {
                 id: 1,
@@ -1494,6 +1527,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: zero_traits(),
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
         ];
 
@@ -1516,6 +1550,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -1570,6 +1605,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 }];
 
         let extent = 100.0;
@@ -1596,6 +1632,7 @@ mod tests {
         reproduction_efficiency: 0.7,
         mutation_rate: 0.0,
         mutation_magnitude: 0.0, nutrient_gate_active: false,
+        wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0];
@@ -1650,6 +1687,7 @@ mod tests {
                     ..zero_traits()
                 },
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
             Agent {
                 id: 1,
@@ -1659,6 +1697,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: zero_traits(),
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
         ];
 
@@ -1689,6 +1728,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -1759,6 +1799,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 },
             Agent {
                 id: 1,
@@ -1769,6 +1810,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 },
         ];
 
@@ -1790,6 +1832,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0, nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -1860,6 +1903,7 @@ mod tests {
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 },
             Agent {
                 id: 1,
@@ -1875,6 +1919,7 @@ mod tests {
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 },
         ];
 
@@ -1896,6 +1941,7 @@ mod tests {
             reproduction_efficiency: 0.6,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0, nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -1951,6 +1997,7 @@ mod tests {
                     ..zero_traits()
                 },
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
             Agent {
                 id: 1,
@@ -1960,6 +2007,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: zero_traits(),
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
         ];
 
@@ -1982,6 +2030,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -2043,6 +2092,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 }];
 
         let extent = 100.0;
@@ -2069,6 +2119,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0, nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0];
@@ -2124,6 +2175,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 }];
 
         let extent = 100.0;
@@ -2142,6 +2194,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0, nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0];
@@ -2196,6 +2249,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 },
             Agent {
                 id: 1,
@@ -2206,6 +2260,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 },
         ];
 
@@ -2227,6 +2282,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0, nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -2290,6 +2346,7 @@ mod tests {
             nutrient: 0.0,
             traits: parent_traits,
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         }];
 
         let extent = 100.0;
@@ -2309,6 +2366,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         // Run many trials to check average offspring count ~ fecundity
@@ -2371,6 +2429,7 @@ mod tests {
             nutrient: 0.0,
             traits: parent_traits,
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         }];
 
         let extent = 100.0;
@@ -2390,6 +2449,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0];
@@ -2434,6 +2494,7 @@ mod tests {
             nutrient: 0.0,
             traits: parent_traits,
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         }];
 
         let extent = 100.0;
@@ -2453,6 +2514,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0];
@@ -2512,6 +2574,7 @@ mod tests {
                 ..zero_traits()
             },
             contact_time: 100,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         }];
 
         let extent = 200.0;
@@ -2531,6 +2594,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0];
@@ -2598,6 +2662,7 @@ mod tests {
                     ..zero_traits()
                 },
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
             Agent {
                 id: 1,
@@ -2607,6 +2672,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: zero_traits(),
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
         ];
 
@@ -2629,6 +2695,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let order = vec![0, 1];
@@ -2692,6 +2759,7 @@ mod tests {
                         ..zero_traits()
                     },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
                 },
                 Agent {
                     id: 1,
@@ -2701,6 +2769,7 @@ mod tests {
                     nutrient: 0.0,
                     traits: zero_traits(),
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
                 },
             ]
         };
@@ -2718,6 +2787,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         // Case 1: structure=20, drain=15. Target survives.
@@ -2776,6 +2846,7 @@ mod tests {
                     ..zero_traits()
                 },
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
             Agent {
                 id: 1,
@@ -2785,6 +2856,7 @@ mod tests {
                 nutrient: 0.0,
                 traits: zero_traits(),
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             },
         ];
 
@@ -2807,6 +2879,7 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             nutrient_gate_active: false,
+            wear_degradation_steepness: 0.0,
         };
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);

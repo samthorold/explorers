@@ -581,6 +581,8 @@ mod tests {
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
+            wear_rate: 0.0,
+            wear_degradation_steepness: 0.0,
         }
     }
 
@@ -792,6 +794,8 @@ mod tests {
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
+            wear_rate: 0.0,
+            wear_degradation_steepness: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
