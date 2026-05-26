@@ -164,6 +164,10 @@ pub struct WorldParameters {
     pub nutrient_absorption_maintenance_cost: f32,
     #[serde(default)]
     pub initial_nutrient_pool: f32,
+    /// Fraction of surplus reserve converted to structure each tick (0.0–1.0).
+    /// The remainder (1 - growth_efficiency) is dissipated as heat.
+    #[serde(default)]
+    pub growth_efficiency: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -669,13 +673,16 @@ impl World {
             &resolver_result, &mut carcass_grid, n,
         );
 
+        // (9b) Growth: convert surplus reserve to structure
+        self.apply_growth(&dead_agents, n, &mut ledger);
+
         // (10) Deliver broadcasts and register NACKs
         self.deliver_broadcasts(&resolver_result.broadcasts, &dead_agents);
 
         // (11) End-of-tick bookkeeping: death check, energy accounting, ledger balance
         self.end_of_tick(
-            &resolver_result, &pre_tick_energies, &dead_agents,
-            &mut ledger, n,
+            &resolver_result, &pre_tick_energies, &pre_tick_structures,
+            &dead_agents, &mut ledger, n,
         );
 
         self.tick += 1;
@@ -900,6 +907,57 @@ impl World {
         result.dead_agents.clone()
     }
 
+    /// Convert surplus reserve (above metabolic cost) to structure.
+    ///
+    /// Each tick, after metabolic costs and all income, surplus reserve
+    /// converts to structure at the `growth_efficiency` rate. The remainder
+    /// (1 - growth_efficiency) is dissipated. The agent retains enough
+    /// reserve for the next tick's metabolism.
+    ///
+    /// Growth dissipation is accounted for by end_of_tick's cost calculation
+    /// (which computes total energy lost as pre_total + input - final_total - repro).
+    fn apply_growth(
+        &mut self,
+        dead_agents: &std::collections::HashSet<usize>,
+        n: usize,
+        _ledger: &mut energy_ledger::EnergyLedger,
+    ) {
+        let efficiency = self.params.growth_efficiency;
+        if efficiency <= 0.0 {
+            return;
+        }
+        for i in 0..n {
+            if dead_agents.contains(&i) {
+                continue;
+            }
+            let agent = &self.agents[i];
+            // Compute metabolic cost and retain enough reserve for the next
+            // tick's metabolism so that the agent stays alive and can receive income.
+            let metabolic_cost = self.params.base_metabolic_rate
+                + agent.traits.sensing_range * self.params.sensing_cost_coefficient
+                + agent.traits.photosynthetic_absorption * self.params.photo_maintenance_cost
+                + agent.traits.consumption_rate * self.params.consumption_maintenance_cost
+                + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost
+                + agent.traits.nutrient_absorption * self.params.nutrient_absorption_maintenance_cost;
+            // Movement cost for next tick is unknown, so retain extra margin.
+            // Using 2x metabolic cost ensures reserve > 0 after next metabolism.
+            let retention = metabolic_cost * 2.0;
+            let surplus = (agent.reserve - retention).max(0.0);
+            if surplus <= 0.0 {
+                continue;
+            }
+            let to_structure = surplus * efficiency;
+            let dissipated = surplus - to_structure;
+            self.agents[i].reserve -= surplus;
+            self.agents[i].structure += to_structure;
+            // Note: dissipated_energy is NOT incremented here because
+            // end_of_tick's cost calculation already captures it:
+            // costs = pre_tick_total + input - final_total - repro
+            // This difference naturally includes growth dissipation.
+            let _ = dissipated;
+        }
+    }
+
     fn deliver_broadcasts(
         &mut self,
         broadcasts: &[Broadcast],
@@ -937,6 +995,7 @@ impl World {
         &mut self,
         result: &interaction_resolver::ResolverResult,
         pre_tick_energies: &[f32],
+        pre_tick_structures: &[f32],
         dead_agents: &std::collections::HashSet<usize>,
         ledger: &mut energy_ledger::EnergyLedger,
         n: usize,
@@ -993,10 +1052,10 @@ impl World {
                 });
 
                 // Dissipate: everything the agent had except what goes to carcass.
-                // Agent's total energy this tick = pre_tick_reserve + structure
+                // Agent's total energy this tick = pre_tick_reserve + pre_tick_structure
                 //   + gains - consumption_losses - reproduction_investments
-                // Carcass gets structure; the rest is dissipated.
-                let agent_total = pre_tick_energies[i] + agent.structure
+                // Carcass gets current structure; the rest is dissipated.
+                let agent_total = pre_tick_energies[i] + pre_tick_structures[i]
                     + result.solar_gains[i]
                     + result.consumption_gains[i]
                     + result.decomposition_gains[i]
@@ -1022,7 +1081,7 @@ impl World {
                 }
             } else {
                 // Surviving agent: metabolic costs = pre_tick_total + input - final_total - repro
-                let pre_tick_total = pre_tick_energies[i] + agent.structure;
+                let pre_tick_total = pre_tick_energies[i] + pre_tick_structures[i];
                 let total_input = result.solar_gains[i]
                     + result.consumption_gains[i]
                     + result.decomposition_gains[i]
@@ -1206,6 +1265,7 @@ mod tests {
             spatial_decay_rate: 0.5,
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
+            growth_efficiency: 0.0,
         }
     }
 
@@ -4334,6 +4394,7 @@ spatial_decay_rate: 0.5,
             spatial_decay_rate: 0.5,
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
+            growth_efficiency: 0.0,
         }
     }
 
@@ -6509,5 +6570,249 @@ spatial_decay_rate: 0.5,
         // Stepping should use the updated parameter
         world.step();
         // If we got here without panic, the updated params are used in step
+    }
+
+    #[test]
+    fn growth_efficiency_defaults_to_zero() {
+        let params = test_params();
+        assert_eq!(params.growth_efficiency, 0.0);
+    }
+
+    #[test]
+    fn surplus_reserve_converts_to_structure_at_growth_efficiency() {
+        // A producer with solar income and growth_efficiency > 0 should
+        // accumulate structure from surplus reserve after metabolic costs.
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 1.0,
+            growth_efficiency: 0.5,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0, traits: TraitVector {
+                photosynthetic_absorption: 1.0,
+                ..zero_traits()
+            }, contact_time: 0,
+        });
+        world.step();
+        // After tick: reserve starts 100, minus metabolic cost 1.0 = 99.0,
+        // plus solar gain (~10 * 1.0 * gate * 1.0).
+        // Surplus = reserve_after_metabolism_and_income - 0 (structure starts at 0).
+        // The surplus is: pre_metabolism_reserve - metabolic_cost + solar_gain.
+        // But growth is only applied to *surplus* (reserve > metabolic cost threshold).
+        // With growth_efficiency = 0.5, surplus converts: 50% to structure, 50% dissipated.
+        let agent = &world.agents()[0];
+        assert!(
+            agent.structure > 0.0,
+            "agent should have grown structure, got {}",
+            agent.structure
+        );
+    }
+
+    #[test]
+    fn growth_dissipates_correct_fraction() {
+        // With metabolic cost of 1.0 and reserve 102.0:
+        // After metabolism: reserve = 101.0. Retention = 2*1.0 = 2.0.
+        // Surplus = 101.0 - 2.0 = 99.0.
+        // growth_efficiency = 0.6: 59.4 to structure, 39.6 dissipated.
+        // Reserve after growth = 2.0.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 1.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            growth_efficiency: 0.6,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 102.0, structure: 0.0,
+            nutrient: 0.0, traits: zero_traits(), contact_time: 0,
+        });
+        world.step();
+        let agent = &world.agents()[0];
+        // After metabolism: reserve = 102 - 1 = 101.
+        // Retention = 2 * 1.0 = 2.0. Surplus = 101 - 2 = 99.
+        // to_structure = 99 * 0.6 = 59.4
+        // dissipated = 99 * 0.4 = 39.6
+        // reserve after growth = 2.0
+        assert!(
+            (agent.structure - 59.4).abs() < 1e-2,
+            "structure should be ~59.4, got {}", agent.structure
+        );
+        assert!(
+            (agent.reserve - 2.0).abs() < 1e-2,
+            "reserve should be ~2.0, got {}", agent.reserve
+        );
+        // Total dissipated = metabolic (1.0) + growth (39.6) = 40.6
+        assert!(
+            (world.dissipated_energy() - 40.6).abs() < 1e-2,
+            "dissipated should be ~40.6, got {}", world.dissipated_energy()
+        );
+    }
+
+    #[test]
+    fn energy_conservation_with_growth_over_many_ticks() {
+        // With growth enabled, energy accounting should still balance:
+        // initial + solar = living + carcass + dissipated
+        let params = WorldParameters {
+            solar_flux_magnitude: 5.0,
+            base_metabolic_rate: 0.3,
+            sensing_cost_coefficient: 0.02,
+            movement_cost_coefficient: 0.05,
+            growth_efficiency: 0.5,
+            initial_population_size: 5,
+            contact_radius: 5.0,
+            reproduction_energy_threshold: 15.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.3,
+                mobility: 0.0,
+                sensing_range: 0.5,
+                ..zero_traits()
+            },
+            trait_covariance: 0.1,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 20.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let initial_energy: f32 = world.agents().iter().map(|a| a.energy()).sum();
+        for _ in 0..50 {
+            world.step();
+        }
+        let living_energy: f32 = world.agents().iter().map(|a| a.energy()).sum();
+        let carcass_energy: f32 = world.carcasses().iter().map(|c| c.energy).sum();
+        let total = living_energy + carcass_energy + world.dissipated_energy();
+        let expected = initial_energy + world.total_solar_input();
+        let diff = (total - expected).abs();
+        assert!(
+            diff < 1e-1,
+            "energy conservation violated with growth: total={total}, expected={expected}, diff={diff}"
+        );
+    }
+
+    #[test]
+    fn producers_accumulate_structure_over_time() {
+        // A producer with solar income should accumulate increasing structure
+        // over many ticks when growth_efficiency > 0.
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.5,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            growth_efficiency: 0.7,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0,
+            nutrient: 0.0, traits: TraitVector {
+                photosynthetic_absorption: 1.0,
+                ..zero_traits()
+            }, contact_time: 0,
+        });
+        let mut prev_structure = 0.0_f32;
+        for tick in 1..=10 {
+            world.step();
+            assert!(!world.agents().is_empty(), "agent died at tick {tick}");
+            let agent = &world.agents()[0];
+            assert!(
+                agent.structure > prev_structure,
+                "structure should increase each tick: tick {tick}, prev={prev_structure}, now={}",
+                agent.structure
+            );
+            prev_structure = agent.structure;
+        }
+        assert!(
+            prev_structure > 10.0,
+            "after 10 ticks of solar income, structure should be substantial: {prev_structure}"
+        );
+    }
+
+    #[test]
+    fn scenario1_viable_with_growth_enabled() {
+        // Example 1 should still work with growth enabled — a single producer
+        // with solar income should accumulate structure over time.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{}/../../scenarios/example1.json", manifest_dir);
+        let contents = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read scenario file: {e}"));
+        let mut recipe: WorldRecipe = serde_json::from_str(&contents)
+            .unwrap_or_else(|e| panic!("Failed to parse scenario file: {e}"));
+        recipe.parameters.growth_efficiency = 0.5;
+        let mut world = World::from_recipe(&recipe, 42);
+        for _ in 0..50 {
+            world.step();
+        }
+        // Agent should still be alive
+        assert!(!world.agents().is_empty(), "producer should survive with growth");
+        // Agent should have accumulated structure
+        let total_structure: f32 = world.agents().iter().map(|a| a.structure).sum();
+        assert!(
+            total_structure > 0.0,
+            "producers should accumulate structure over time, got {total_structure}"
+        );
+    }
+
+    #[test]
+    fn no_growth_when_no_surplus() {
+        // An agent whose reserve equals metabolic cost has no surplus.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 50.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            growth_efficiency: 0.8,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0,
+            nutrient: 0.0, traits: zero_traits(), contact_time: 0,
+        });
+        world.step();
+        // After metabolism: reserve = 50 - 50 = 0 → no surplus → no growth
+        // Agent should be dead (reserve <= 0)
+        assert_eq!(world.agents().len(), 0, "agent with no surplus should die");
+        // Carcass should have 0 structure
+        assert_eq!(world.carcasses().len(), 1);
+        assert!(
+            world.carcasses()[0].energy.abs() < 1e-3,
+            "carcass should have 0 structure energy"
+        );
     }
 }

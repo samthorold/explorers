@@ -105,6 +105,7 @@ fn main() {
                 spatial_decay_rate: 0.5,
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
+            growth_efficiency: 0.0,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -410,6 +411,7 @@ mod tests {
                 spatial_decay_rate: 0.5,
                 nutrient_absorption_maintenance_cost: 0.0,
                 initial_nutrient_pool: 0.0,
+            growth_efficiency: 0.0,
             },
             InitialDistribution {
                 mean_traits: TraitVector {
@@ -702,19 +704,24 @@ const AGENT_RADIUS: f32 = 3.0;
 
 #[derive(Debug, PartialEq)]
 struct EnergyBudget {
+    living_reserve: f32,
+    living_structure: f32,
     living_energy: f32,
     carcass_energy: f32,
     dissipated_energy: f32,
-    // Nutrient fields — placeholders until nutrient system lands
     nutrient_available: Option<f32>,
     nutrient_living: Option<f32>,
     nutrient_carcasses: Option<f32>,
 }
 
 fn compute_energy_budget(world: &explorers_sim::World) -> EnergyBudget {
+    let living_reserve: f32 = world.agents().iter().map(|a| a.reserve).sum();
+    let living_structure: f32 = world.agents().iter().map(|a| a.structure).sum();
     let living_energy: f32 = world.agents().iter().map(|a| a.energy()).sum();
     let carcass_energy: f32 = world.carcasses().iter().map(|c| c.energy).sum();
     EnergyBudget {
+        living_reserve,
+        living_structure,
         living_energy,
         carcass_energy,
         dissipated_energy: world.dissipated_energy(),
@@ -907,7 +914,9 @@ fn debug_panel_ui(
                 .default_open(true)
                 .show(ui, |ui| {
                     let budget = compute_energy_budget(&sim.0);
-                    ui.label(format!("Living agents: {:.1}", budget.living_energy));
+                    ui.label(format!("Living reserve: {:.1}", budget.living_reserve));
+                    ui.label(format!("Living structure: {:.1}", budget.living_structure));
+                    ui.label(format!("Living total: {:.1}", budget.living_energy));
                     ui.label(format!("Carcasses: {:.1}", budget.carcass_energy));
                     ui.label(format!("Dissipated: {:.1}", budget.dissipated_energy));
                     ui.label(format!("Total: {:.1}", budget.living_energy + budget.carcass_energy + budget.dissipated_energy));
@@ -934,6 +943,7 @@ fn debug_panel_ui(
                     ui.add(bevy_egui::egui::Slider::new(&mut params.mutation_magnitude, 0.0..=0.5).text("Mutation magnitude"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.contact_radius, 1.0..=50.0).text("Contact radius"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.light_competition_radius, 1.0..=100.0).text("Light competition radius"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.growth_efficiency, 0.0..=1.0).text("Growth efficiency"));
                 });
 
             ui.separator();
@@ -951,6 +961,7 @@ fn debug_panel_ui(
                                 ui.label(format!("ID: {}", agent.id));
                                 ui.label(format!("Position: ({:.1}, {:.1})", agent.position.0, agent.position.1));
                                 ui.label(format!("Reserve: {:.1}  (death at 0)", agent.reserve));
+                                ui.label(format!("Structure: {:.1}", agent.structure));
                                 ui.label(format!("Nutrient: {:.1}", agent.nutrient));
                                 let repro_threshold = sim.0.params().reproduction_energy_threshold;
                                 let demand = explorers_sim::stoichiometric_demand(&agent.traits);

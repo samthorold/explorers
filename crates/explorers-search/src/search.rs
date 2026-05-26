@@ -160,6 +160,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         spatial_decay_rate: v(17) as f32,
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
+            growth_efficiency: 0.0,
     };
 
     let dist = InitialDistribution {
