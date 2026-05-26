@@ -105,6 +105,7 @@ pub fn resolve_interactions(
 ) -> ResolverResult {
     let n = agents.len();
     let mut working_energies: Vec<f32> = agents.iter().map(|a| a.reserve).collect();
+    let mut working_structures: Vec<f32> = agent_structures.to_vec();
     let mut consumption_gains = vec![0.0_f32; n];
     let mut consumption_losses = vec![0.0_f32; n];
     let mut decomposition_gains = vec![0.0_f32; n];
@@ -156,6 +157,7 @@ pub fn resolve_interactions(
                         id: agents[j].id,
                         distance: dist,
                         reserve: working_energies[j],
+                        structure: working_structures[j],
                         traits: agents[j].traits,
                     })
                 })
@@ -185,7 +187,7 @@ pub fn resolve_interactions(
                 let drain = consumed.energy_delta;
                 let gain = drain * params.consumption_efficiency;
                 working_energies[i] += gain;
-                working_energies[target] -= drain;
+                working_structures[target] -= drain;
                 consumption_gains[i] += gain;
                 consumption_losses[target] += drain;
                 dissipated_energy += drain * (1.0 - params.consumption_efficiency);
@@ -221,10 +223,10 @@ pub fn resolve_interactions(
                     params.world_extent,
                 );
 
-                // Queue consequence: target death
-                if working_energies[target] <= 0.0 {
-                    // Carcass retains the dead agent's structure
-                    let carcass_energy = agent_structures[target];
+                // Queue consequence: target death when structure depleted
+                if working_structures[target] <= 0.0 {
+                    // Carcass retains zero structure (fully consumed)
+                    let carcass_energy = 0.0_f32;
                     consequence_queue.push_high(event::Event {
                         tick,
                         seq: 0,
@@ -612,6 +614,7 @@ pub fn resolve_interactions(
                     id: agents[j].id,
                     distance: dist,
                     reserve: working_energies[j],
+                    structure: working_structures[j],
                     traits: agents[j].traits,
                 })
             })
@@ -862,25 +865,23 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 reserve: 50.0,
-
                 structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 2.0,
                     ..zero_traits()
                 },
-                            contact_time: 0,
-},
+                contact_time: 0,
+            },
             Agent {
                 id: 1,
                 position: (3.0, 0.0),
                 reserve: 50.0,
-
-                structure: 0.0,
+                structure: 50.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
-                            contact_time: 0,
-},
+                contact_time: 0,
+            },
         ];
 
         let extent = 100.0;
@@ -918,7 +919,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
-            &vec![0.0; agents.len()],
+            &vec![0.0, 50.0],
             &vec![0.0; agents.len()],
             &mut rng,
             100,
@@ -958,31 +959,29 @@ mod tests {
 
     #[test]
     fn consumption_cascade_drain_to_death_to_carcass() {
-        // Consumer with rate 20 kills a target with only 5 energy
+        // Consumer with rate 20 kills a target with only 5 structure
         let agents = vec![
             Agent {
                 id: 10,
                 position: (0.0, 0.0),
                 reserve: 100.0,
-
                 structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 20.0,
                     ..zero_traits()
                 },
-                            contact_time: 0,
-},
+                contact_time: 0,
+            },
             Agent {
                 id: 11,
                 position: (1.0, 0.0),
-                reserve: 5.0,
-
-                structure: 0.0,
+                reserve: 50.0,
+                structure: 5.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
-                            contact_time: 0,
-},
+                contact_time: 0,
+            },
         ];
 
         let extent = 100.0;
@@ -1000,15 +999,15 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 0.0,
-        reproduction_efficiency: 0.7,
-        mutation_rate: 0.0,
-        mutation_magnitude: 0.0, nutrient_gate_active: false,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
-        let pre_tick_energies = vec![100.0, 5.0];let mut rng = ChaCha8Rng::seed_from_u64(42);
-
-
+        let pre_tick_energies = vec![100.0, 50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let result = resolve_interactions(
             &agents,
@@ -1021,14 +1020,14 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0, 5.0],
             &vec![0.0; agents.len()],
-            &vec![0.0; agents.len()],
-        &mut rng,
-        100,
+            &mut rng,
+            100,
             &mut EnergyLedger::new(),
         );
 
-        // drain = 5.0 (capped at target energy), gain = 5.0 * 0.5 = 2.5
+        // drain = 5.0 (capped at target structure), gain = 5.0 * 0.5 = 2.5
         assert!(
             (result.consumption_gains[0] - 2.5).abs() < 1e-5,
             "consumer gain: {}",
@@ -1040,10 +1039,10 @@ mod tests {
             result.consumption_losses[1]
         );
 
-        // Target should be dead
+        // Target should be dead (structure depleted)
         assert!(result.dead_agents.contains(&1), "target index 1 should be dead");
 
-        // Carcass should be created with pre_tick - consumption_losses = 5.0 - 5.0 = 0.0
+        // Carcass created with zero structure (fully consumed)
         assert_eq!(result.new_carcasses.len(), 1);
         assert_eq!(result.new_carcasses[0].id, 11);
         assert!((result.new_carcasses[0].energy - 0.0).abs() < 1e-5);
@@ -1475,7 +1474,6 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 reserve: 50.0,
-
                 structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
@@ -1484,18 +1482,17 @@ mod tests {
                     mobility: 0.0,
                     ..zero_traits()
                 },
-                            contact_time: 0,
-},
+                contact_time: 0,
+            },
             Agent {
                 id: 1,
                 position: (3.0, 0.0),
                 reserve: 50.0,
-
-                structure: 0.0,
+                structure: 50.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
-                            contact_time: 0,
-},
+                contact_time: 0,
+            },
         ];
 
         let extent = 100.0;
@@ -1513,16 +1510,16 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 10.0,
-        reproduction_efficiency: 0.7,
-        mutation_rate: 0.0,
-        mutation_magnitude: 0.0, nutrient_gate_active: false,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
         let pre_tick_energies = vec![50.0, 50.0];
-        let light_shares = vec![1.0, 1.0];let mut rng = ChaCha8Rng::seed_from_u64(42);
-
-
+        let light_shares = vec![1.0, 1.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let result = resolve_interactions(
             &agents,
@@ -1535,10 +1532,10 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
-            &vec![0.0; agents.len()],
+            &vec![0.0, 50.0],
             &light_shares,
-        &mut rng,
-        100,
+            &mut rng,
+            100,
             &mut EnergyLedger::new(),
         );
 
@@ -1643,7 +1640,6 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 reserve: 50.0,
-
                 structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
@@ -1651,18 +1647,17 @@ mod tests {
                     scavenging_rate: 4.0,
                     ..zero_traits()
                 },
-                            contact_time: 0,
-},
+                contact_time: 0,
+            },
             Agent {
                 id: 1,
                 position: (1.0, 0.0),
                 reserve: 50.0,
-
-                structure: 0.0,
+                structure: 50.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
-                            contact_time: 0,
-},
+                contact_time: 0,
+            },
         ];
 
         let extent = 100.0;
@@ -1688,15 +1683,15 @@ mod tests {
             world_extent: extent,
             reproduction_energy_threshold: 50.0,
             solar_flux_magnitude: 0.0,
-        reproduction_efficiency: 0.7,
-        mutation_rate: 0.0,
-        mutation_magnitude: 0.0, nutrient_gate_active: false,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
-        let pre_tick_energies = vec![50.0, 50.0];let mut rng = ChaCha8Rng::seed_from_u64(42);
-
-
+        let pre_tick_energies = vec![50.0, 50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let result = resolve_interactions(
             &agents,
@@ -1709,10 +1704,10 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
+            &vec![0.0, 50.0],
             &vec![0.0; agents.len()],
-            &vec![0.0; agents.len()],
-        &mut rng,
-        100,
+            &mut rng,
+            100,
             &mut EnergyLedger::new(),
         );
 
@@ -1947,25 +1942,23 @@ mod tests {
                 id: 0,
                 position: (0.0, 0.0),
                 reserve: 50.0,
-
                 structure: 0.0,
                 nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 2.0,
                     ..zero_traits()
                 },
-                            contact_time: 0,
-},
+                contact_time: 0,
+            },
             Agent {
                 id: 1,
                 position: (3.0, 0.0),
                 reserve: 50.0,
-
-                structure: 0.0,
+                structure: 50.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
-                            contact_time: 0,
-},
+                contact_time: 0,
+            },
         ];
 
         let extent = 100.0;
@@ -1985,7 +1978,8 @@ mod tests {
             solar_flux_magnitude: 0.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
-            mutation_magnitude: 0.0, nutrient_gate_active: false,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
         };
 
         let order = vec![0, 1];
@@ -2004,7 +1998,7 @@ mod tests {
             &HashMap::new(),
             0,
             &pre_tick_energies,
-            &vec![0.0; agents.len()],
+            &vec![0.0, 50.0],
             &vec![0.0; agents.len()],
             &mut rng,
             100,
@@ -2582,6 +2576,265 @@ mod tests {
         assert!(
             avg_high > avg_low * 2.0,
             "high contact time should disperse much farther: avg_low={avg_low:.1}, avg_high={avg_high:.1}"
+        );
+    }
+
+    #[test]
+    fn consumption_drains_structure_not_reserve() {
+        // Consumer with rate 5.0 drains target's structure (only 2.0).
+        // Drain is capped at structure, NOT reserve (which is 50.0).
+        // This distinguishes structure-targeting from reserve-targeting.
+        let agents = vec![
+            Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 0.0,
+                nutrient: 0.0,
+                traits: TraitVector {
+                    consumption_rate: 5.0,
+                    ..zero_traits()
+                },
+                contact_time: 0,
+            },
+            Agent {
+                id: 1,
+                position: (3.0, 0.0),
+                reserve: 50.0,
+                structure: 2.0,
+                nutrient: 0.0,
+                traits: zero_traits(),
+                contact_time: 0,
+            },
+        ];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
+        };
+
+        let order = vec![0, 1];
+        let pre_tick_energies = vec![50.0, 50.0];
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_interactions(
+            &agents,
+            &agent_grid,
+            &carcass_grid,
+            &[],
+            &params,
+            &order,
+            &HashSet::new(),
+            &HashMap::new(),
+            0,
+            &pre_tick_energies,
+            &vec![0.0, 2.0],
+            &vec![0.0; agents.len()],
+            &mut rng,
+            100,
+            &mut EnergyLedger::new(),
+        );
+
+        // drain = 2.0 (capped at target structure, NOT reserve)
+        // gain = 2.0 * 0.5 = 1.0 (enters consumer's reserve)
+        assert!(
+            (result.consumption_gains[0] - 1.0).abs() < 1e-5,
+            "consumer gain should be 1.0 (drain capped at structure 2.0), got {}",
+            result.consumption_gains[0]
+        );
+        // consumption_losses = 2.0 (drained from target's structure)
+        assert!(
+            (result.consumption_losses[1] - 2.0).abs() < 1e-5,
+            "target structure loss should be 2.0, got {}",
+            result.consumption_losses[1]
+        );
+        // Trophic loss dissipated = 2.0 * 0.5 = 1.0
+        assert!(
+            (result.dissipated_energy - 1.0).abs() < 1e-5,
+            "dissipated should be 1.0, got {}",
+            result.dissipated_energy
+        );
+    }
+
+    #[test]
+    fn consumption_death_triggers_only_when_structure_reaches_zero() {
+        // Target with structure=10, consumer with rate=5.
+        // Drain=5 from structure (10→5). Target survives.
+        // Second scenario: consumer with rate=15, drain=10 (capped). Structure→0. Dies.
+        let make_agents = |target_structure: f32| {
+            vec![
+                Agent {
+                    id: 0,
+                    position: (0.0, 0.0),
+                    reserve: 50.0,
+                    structure: 0.0,
+                    nutrient: 0.0,
+                    traits: TraitVector {
+                        consumption_rate: 15.0,
+                        ..zero_traits()
+                    },
+                    contact_time: 0,
+                },
+                Agent {
+                    id: 1,
+                    position: (1.0, 0.0),
+                    reserve: 50.0,
+                    structure: target_structure,
+                    nutrient: 0.0,
+                    traits: zero_traits(),
+                    contact_time: 0,
+                },
+            ]
+        };
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
+        };
+
+        // Case 1: structure=20, drain=15. Target survives.
+        {
+            let agents = make_agents(20.0);
+            let mut agent_grid = SpatialGrid::new(extent, cell_size);
+            for (i, a) in agents.iter().enumerate() {
+                agent_grid.insert(i as u64, a.position);
+            }
+            let carcass_grid = SpatialGrid::new(extent, cell_size);
+            let mut rng = ChaCha8Rng::seed_from_u64(42);
+            let result = resolve_interactions(
+                &agents, &agent_grid, &carcass_grid, &[], &params,
+                &vec![0, 1], &HashSet::new(), &HashMap::new(), 0,
+                &vec![50.0, 50.0], &vec![0.0, 20.0], &vec![0.0; 2],
+                &mut rng, 100, &mut EnergyLedger::new(),
+            );
+            assert!(!result.dead_agents.contains(&1), "target should survive with structure remaining");
+            assert!(result.new_carcasses.is_empty());
+        }
+
+        // Case 2: structure=10, drain=10 (capped). Target dies.
+        {
+            let agents = make_agents(10.0);
+            let mut agent_grid = SpatialGrid::new(extent, cell_size);
+            for (i, a) in agents.iter().enumerate() {
+                agent_grid.insert(i as u64, a.position);
+            }
+            let carcass_grid = SpatialGrid::new(extent, cell_size);
+            let mut rng = ChaCha8Rng::seed_from_u64(42);
+            let result = resolve_interactions(
+                &agents, &agent_grid, &carcass_grid, &[], &params,
+                &vec![0, 1], &HashSet::new(), &HashMap::new(), 0,
+                &vec![50.0, 50.0], &vec![0.0, 10.0], &vec![0.0; 2],
+                &mut rng, 100, &mut EnergyLedger::new(),
+            );
+            assert!(result.dead_agents.contains(&1), "target should die when structure reaches zero");
+            assert_eq!(result.new_carcasses.len(), 1);
+        }
+    }
+
+    #[test]
+    fn ledger_records_structure_to_reserve_cross_agent_transfer() {
+        // Consumption is a cross-agent transfer: target's structure → consumer's reserve.
+        // Ledger should record the flow from target agent to consumer agent (gain)
+        // and from target agent to dissipation (trophic loss).
+        let agents = vec![
+            Agent {
+                id: 0,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 0.0,
+                nutrient: 0.0,
+                traits: TraitVector {
+                    consumption_rate: 4.0,
+                    ..zero_traits()
+                },
+                contact_time: 0,
+            },
+            Agent {
+                id: 1,
+                position: (1.0, 0.0),
+                reserve: 50.0,
+                structure: 20.0,
+                nutrient: 0.0,
+                traits: zero_traits(),
+                contact_time: 0,
+            },
+        ];
+
+        let extent = 100.0;
+        let cell_size = 5.0;
+        let mut agent_grid = SpatialGrid::new(extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            agent_grid.insert(i as u64, a.position);
+        }
+        let carcass_grid = SpatialGrid::new(extent, cell_size);
+
+        let params = ResolverParams {
+            contact_radius: 5.0,
+            consumption_efficiency: 0.6,
+            decomposition_efficiency: 0.5,
+            world_extent: extent,
+            reproduction_energy_threshold: 50.0,
+            solar_flux_magnitude: 0.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            nutrient_gate_active: false,
+        };
+
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let mut ledger = EnergyLedger::new();
+
+        let _result = resolve_interactions(
+            &agents, &agent_grid, &carcass_grid, &[], &params,
+            &vec![0, 1], &HashSet::new(), &HashMap::new(), 0,
+            &vec![50.0, 50.0], &vec![0.0, 20.0], &vec![0.0; 2],
+            &mut rng, 100, &mut ledger,
+        );
+
+        // drain = 4.0, gain = 4.0 * 0.6 = 2.4, dissipated = 4.0 * 0.4 = 1.6
+        let consumer_received = ledger.net_received(&EnergyEndpoint::Agent(0));
+        assert!(
+            (consumer_received - 2.4).abs() < 1e-5,
+            "consumer should receive 2.4, got {}",
+            consumer_received
+        );
+        let target_sent = ledger.net_sent(&EnergyEndpoint::Agent(1));
+        assert!(
+            (target_sent - 4.0).abs() < 1e-5,
+            "target should send 4.0 (structure drained), got {}",
+            target_sent
+        );
+        let dissipated = ledger.total_dissipated();
+        assert!(
+            (dissipated - 1.6).abs() < 1e-5,
+            "trophic loss should be 1.6, got {}",
+            dissipated
         );
     }
 }

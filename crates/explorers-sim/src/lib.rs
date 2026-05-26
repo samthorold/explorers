@@ -248,6 +248,7 @@ pub struct NearbyAgent {
     pub id: u64,
     pub distance: f32,
     pub reserve: f32,
+    pub structure: f32,
     pub traits: TraitVector,
 }
 
@@ -280,11 +281,11 @@ impl Agent {
         match &event.kind {
             event::EventKind::Consumed if self.traits.consumption_rate > 0.0 => {
                 let best = data.nearby_agents.iter()
-                    .filter(|a| a.distance < data.contact_radius && a.reserve > 0.0)
+                    .filter(|a| a.distance < data.contact_radius && a.structure > 0.0)
                     .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
 
                 if let Some(target) = best {
-                    let drain = self.traits.consumption_rate.min(target.reserve.max(0.0));
+                    let drain = self.traits.consumption_rate.min(target.structure.max(0.0));
                     if drain > 0.0 {
                         return event::Response {
                             ack: event::Ack::Ack,
@@ -851,10 +852,12 @@ impl World {
         carcass_grid: &mut crate::spatial::SpatialGrid,
         n: usize,
     ) -> std::collections::HashSet<usize> {
-        // Apply energy deltas from resolver — all flows enter/leave reserve
+        // Apply energy deltas from resolver.
+        // Consumption gains enter consumer's reserve.
+        // Consumption losses drain target's structure (not reserve).
         for i in 0..n {
             self.agents[i].reserve += result.consumption_gains[i];
-            self.agents[i].reserve -= result.consumption_losses[i];
+            self.agents[i].structure -= result.consumption_losses[i];
             self.agents[i].reserve += result.decomposition_gains[i];
             self.agents[i].reserve += result.solar_gains[i];
             self.agents[i].reserve -= result.reproduction_investments[i];
@@ -1013,9 +1016,9 @@ impl World {
         let mut remaining: Vec<(usize, Agent)> = Vec::with_capacity(n);
         for (i, agent) in all_agents {
             if dead_agents.contains(&i) {
-                // Agent killed by resolver: carcass already created with structure energy.
-                // Dissipate everything except what went to carcass and consumption outflows.
-                let agent_total = pre_tick_energies[i] + agent.structure
+                // Agent killed by resolver (structure depleted): carcass created with
+                // remaining structure. Dissipate everything except what went to carcass.
+                let agent_total = pre_tick_energies[i] + pre_tick_structures[i]
                     + result.solar_gains[i]
                     + result.consumption_gains[i]
                     + result.decomposition_gains[i]
@@ -2405,32 +2408,31 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             reserve: 50.0,
-
             structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.add_agent(Agent {
             id: 0,
             position: (3.0, 0.0),
             reserve: 50.0,
-
-            structure: 0.0,
+            structure: 50.0,
             nutrient: 0.0,
             traits: zero_traits(),
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.step();
-        // Consumer should have gained energy, target should have lost energy
+        // Consumer gains energy in reserve, target loses structure (not reserve)
         let consumer = &world.agents()[0];
         let target = &world.agents()[1];
-        // Drained = consumption_rate = 2.0, gained = 2.0 * 0.5 = 1.0
+        // Drained from structure = consumption_rate = 2.0, gained = 2.0 * 0.5 = 1.0
         assert_eq!(consumer.reserve, 50.0 + 1.0);
-        assert_eq!(target.reserve, 50.0 - 2.0);
+        assert_eq!(target.structure, 50.0 - 2.0);
+        assert_eq!(target.reserve, 50.0); // reserve unchanged
     }
 
     #[test]
@@ -2456,34 +2458,33 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             reserve: 50.0,
-
             structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 3.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
             reserve: 50.0,
-
-            structure: 0.0,
+            structure: 50.0,
             nutrient: 0.0,
             traits: zero_traits(),
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.step();
-        // Drain = 3.0, gained = 3.0 * 0.7 = 2.1, dissipated = 3.0 * 0.3 = 0.9
+        // Drain from structure = 3.0, gained = 3.0 * 0.7 = 2.1, dissipated = 3.0 * 0.3 = 0.9
         assert!((world.agents()[0].reserve - 52.1).abs() < 1e-5);
-        assert!((world.agents()[1].reserve - 47.0).abs() < 1e-5);
+        assert!((world.agents()[1].structure - 47.0).abs() < 1e-5); // structure drained, not reserve
+        assert!((world.agents()[1].reserve - 50.0).abs() < 1e-5); // reserve unchanged
         assert!((world.dissipated_energy() - 0.9).abs() < 1e-5);
     }
 
     #[test]
-    fn consumed_agent_becomes_carcass_at_zero_energy() {
+    fn consumed_agent_becomes_carcass_at_zero_structure() {
         let params = WorldParameters {
             solar_flux_magnitude: 0.0,
             base_metabolic_rate: 0.0,
@@ -2505,29 +2506,27 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             reserve: 50.0,
-
             structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 10.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            reserve: 5.0,
-
-            structure: 0.0,
+            reserve: 50.0,
+            structure: 5.0,
             nutrient: 0.0,
             traits: zero_traits(),
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.step();
-        // Drain capped at target's energy = 5.0
+        // Drain capped at target's structure = 5.0
         // Consumer gains 5.0 * 0.5 = 2.5
-        // Target dies → carcass with 0 energy (fully drained)
+        // Target dies (structure depleted) → carcass with 0 energy
         assert_eq!(world.agents().len(), 1);
         assert!((world.agents()[0].reserve - 52.5).abs() < 1e-5);
         assert_eq!(world.carcasses().len(), 1);
@@ -2700,29 +2699,27 @@ mod tests {
             id: 0,
             position: (-48.0, 0.0),
             reserve: 50.0,
-
             structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.add_agent(Agent {
             id: 0,
             position: (48.0, 0.0),
             reserve: 50.0,
-
-            structure: 0.0,
+            structure: 50.0,
             nutrient: 0.0,
             traits: zero_traits(),
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.step();
-        // Should drain across boundary
+        // Should drain structure across boundary
         assert!((world.agents()[0].reserve - 51.0).abs() < 1e-5);
-        assert!((world.agents()[1].reserve - 48.0).abs() < 1e-5);
+        assert!((world.agents()[1].structure - 48.0).abs() < 1e-5);
     }
 
     #[test]
@@ -4428,12 +4425,11 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (1.0, 0.0),
             reserve: 50.0,
-
-            structure: 0.0,
+            structure: 50.0,
             nutrient: 0.0,
             traits: zero_traits(),
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.step();
         let consumed = world.event_log().by_kind(&EventKind::Consumed);
         assert_eq!(consumed.len(), 1);
@@ -4592,25 +4588,23 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             reserve: 100.0,
-
             structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 20.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            reserve: 5.0,
-
-            structure: 0.0,
+            reserve: 50.0,
+            structure: 5.0,
             nutrient: 0.0,
             traits: zero_traits(),
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.step();
         let log = world.event_log();
         let events = log.by_tick_range(0, 1);
@@ -4641,11 +4635,12 @@ spatial_decay_rate: 0.5,
     #[test]
     fn carcass_from_cascade_available_for_decomposition_same_tick() {
         use crate::event::EventKind;
-        // Metabolic costs weaken the target so consumption kills it without
-        // fully draining its biomass — the carcass retains pre-tick energy
-        // minus consumption losses, leaving something for the scavenger.
+        // Consumer fully drains target's structure, killing it.
+        // A pre-existing carcass is nearby for the scavenger to decompose
+        // in the same tick, verifying both consumption and decomposition
+        // events occur within a single tick.
         let params = WorldParameters {
-            base_metabolic_rate: 90.0,
+            base_metabolic_rate: 0.0,
             contact_radius: 5.0,
             consumption_efficiency: 0.5,
             decomposition_efficiency: 0.5,
@@ -4654,45 +4649,48 @@ spatial_decay_rate: 0.5,
         let mut found = false;
         for seed in 0..20u64 {
             let mut world = World::new(params.clone(), event_test_dist(), seed);
-            // Consumer: consumption_rate=15, kills target weakened by metabolism
+            // Consumer: consumption_rate=20, fully drains target's structure=5
             world.add_agent(Agent {
                 id: 0,
                 position: (0.0, 0.0),
                 reserve: 200.0,
-
                 structure: 0.0,
-            nutrient: 0.0,
+                nutrient: 0.0,
                 traits: TraitVector {
-                    consumption_rate: 15.0,
+                    consumption_rate: 20.0,
                     ..zero_traits()
                 },
-                            contact_time: 0,
-});
-            // Target: reserve=100, structure=90, after metabolic(90) → reserve=10,
-            // drained 10 → dead. Carcass energy = structure = 90.
+                contact_time: 0,
+            });
+            // Target with structure=5, killed by consumption
             world.add_agent(Agent {
                 id: 0,
                 position: (1.0, 0.0),
-                reserve: 100.0,
-                structure: 90.0,
+                reserve: 50.0,
+                structure: 5.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
                 contact_time: 0,
             });
-            // Scavenger: decomposes the newly-created carcass
+            // Scavenger with a pre-existing carcass to decompose
             world.add_agent(Agent {
                 id: 0,
                 position: (2.0, 0.0),
                 reserve: 200.0,
-
                 structure: 0.0,
-            nutrient: 0.0,
+                nutrient: 0.0,
                 traits: TraitVector {
                     scavenging_rate: 10.0,
                     ..zero_traits()
                 },
-                            contact_time: 0,
-});
+                contact_time: 0,
+            });
+            world.add_carcass(Carcass {
+                id: 99,
+                position: (2.0, 1.0),
+                energy: 20.0,
+                nutrient: 0.0,
+            });
             world.step();
             let log = world.event_log();
             let consumed = log.by_kind(&EventKind::Consumed);
@@ -4708,7 +4706,7 @@ spatial_decay_rate: 0.5,
         }
         assert!(
             found,
-            "at least one seed should produce same-tick cascade: consumption → carcass → decomposition"
+            "at least one seed should produce same-tick cascade: consumption and decomposition"
         );
     }
 
@@ -4726,7 +4724,6 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             reserve: 50.0,
-
             structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
@@ -4734,18 +4731,17 @@ spatial_decay_rate: 0.5,
                 scavenging_rate: 3.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
             reserve: 50.0,
-
-            structure: 0.0,
+            structure: 50.0,
             nutrient: 0.0,
             traits: zero_traits(),
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.add_carcass(Carcass {
             id: 99,
             position: (0.0, 1.0),
@@ -4939,30 +4935,28 @@ spatial_decay_rate: 0.5,
         };
         let mut world = World::new(params, dist, 42);
 
-        // Consumer at origin kills victim at (1,0)
+        // Consumer at origin kills victim at (1,0) by depleting structure
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
             reserve: 100.0,
-
             structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 100.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            reserve: 1.0,
-
-            structure: 0.0,
+            reserve: 50.0,
+            structure: 1.0,
             nutrient: 0.0,
             traits: zero_traits(),
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         // Observer A: close to the death (dist ~2 from death at (1,0))
         world.add_agent(Agent {
             id: 0,
@@ -5198,8 +5192,8 @@ spatial_decay_rate: 0.5,
             feeding_gradient: (0.0, 0.0),
             carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![
-                NearbyAgent { id: 10, distance: 4.0, reserve: 50.0, traits: zero_traits() },
-                NearbyAgent { id: 20, distance: 2.0, reserve: 30.0, traits: zero_traits() },
+                NearbyAgent { id: 10, distance: 4.0, reserve: 50.0, structure: 50.0, traits: zero_traits() },
+                NearbyAgent { id: 20, distance: 2.0, reserve: 30.0, structure: 30.0, traits: zero_traits() },
             ],
             nearby_carcasses: vec![],
             contact_radius: 5.0,
@@ -5235,7 +5229,7 @@ spatial_decay_rate: 0.5,
             feeding_gradient: (0.0, 0.0),
             carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![
-                NearbyAgent { id: 10, distance: 2.0, reserve: 50.0, traits: zero_traits() },
+                NearbyAgent { id: 10, distance: 2.0, reserve: 50.0, structure: 50.0, traits: zero_traits() },
             ],
             nearby_carcasses: vec![],
             contact_radius: 5.0,
@@ -5314,7 +5308,7 @@ spatial_decay_rate: 0.5,
             carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![
                 NearbyAgent {
-                    id: 2, distance: 2.0, reserve: 100.0,
+                    id: 2, distance: 2.0, reserve: 100.0, structure: 0.0,
  traits: TraitVector {
                         mobility: 1.0,
                         mate_selectivity: 5.0,
@@ -5363,7 +5357,7 @@ spatial_decay_rate: 0.5,
             carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![
                 NearbyAgent {
-                    id: 2, distance: 1.0, reserve: 100.0,
+                    id: 2, distance: 1.0, reserve: 100.0, structure: 0.0,
  traits: TraitVector {
                         mate_selectivity: 5.0,
                         reproductive_investment: 10.0,
@@ -5406,7 +5400,7 @@ spatial_decay_rate: 0.5,
             feeding_gradient: (0.0, 0.0),
             carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![
-                NearbyAgent { id: 10, distance: 2.0, reserve: 50.0, traits: zero_traits() },
+                NearbyAgent { id: 10, distance: 2.0, reserve: 50.0, structure: 50.0, traits: zero_traits() },
             ],
             nearby_carcasses: vec![
                 NearbyCarcass { id: 20, distance: 1.0, energy: 30.0 },
@@ -5440,18 +5434,18 @@ spatial_decay_rate: 0.5,
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0,
- structure: 0.0,
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector { consumption_rate: 2.0, ..zero_traits() },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.add_agent(Agent {
             id: 0, position: (3.0, 0.0), reserve: 50.0,
- structure: 0.0,
+            structure: 50.0,
             nutrient: 0.0,
             traits: zero_traits(),
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
 
         // Before step: construct what receive() would return
         let consumer = &world.agents()[0];
@@ -5461,7 +5455,7 @@ spatial_decay_rate: 0.5,
             feeding_gradient: (0.0, 0.0), carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![NearbyAgent {
                 id: target.id, distance: dist_between,
-                reserve: target.reserve, traits: target.traits,
+                reserve: target.reserve, structure: target.structure, traits: target.traits,
             }],
             nearby_carcasses: vec![],
             contact_radius: 5.0,
@@ -5478,8 +5472,9 @@ spatial_decay_rate: 0.5,
         // Now run step() — should produce the same outcome
         world.step();
 
+        // Consumer gains in reserve, target loses structure
         assert_eq!(world.agents()[0].reserve, 50.0 + expected_drain * 0.5);
-        assert_eq!(world.agents()[1].reserve, 50.0 - expected_drain);
+        assert_eq!(world.agents()[1].structure, 50.0 - expected_drain);
     }
 
     #[test]
@@ -5741,12 +5736,11 @@ spatial_decay_rate: 0.5,
         };
         let mut world = World::new(params, dist, 42);
 
-        // Consumer at (0,0) — will kill the prey
+        // Consumer at (0,0) — will kill the prey by depleting structure
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
             reserve: 100.0,
-
             structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
@@ -5754,22 +5748,21 @@ spatial_decay_rate: 0.5,
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
-        // Prey at (2,0) — within contact radius, low energy to ensure death
+            contact_time: 0,
+        });
+        // Prey at (2,0) — within contact radius, low structure to ensure death
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            reserve: 10.0,
-
-            structure: 0.0,
+            reserve: 50.0,
+            structure: 10.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         // Observer at (4,0) — non-consumer, will NACK Consumed but should receive Died
         world.add_agent(Agent {
             id: 0,
@@ -5942,20 +5935,19 @@ spatial_decay_rate: 0.5,
             },
                     contact_time: 0,
 });
-        // Prey
+        // Prey (needs structure for consumption to work)
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
             reserve: 1000.0,
-
-            structure: 0.0,
+            structure: 1000.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         // Non-consumer observer — will NACK Consumed, then die from metabolic cost
         world.add_agent(Agent {
             id: 0,
@@ -6029,25 +6021,23 @@ spatial_decay_rate: 0.5,
             id: 0,
             position: (0.0, 0.0),
             reserve: 100.0,
-
             structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 20.0,
                 ..zero_traits()
             },
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            reserve: 5.0,
-
-            structure: 0.0,
+            reserve: 50.0,
+            structure: 5.0,
             nutrient: 0.0,
             traits: zero_traits(),
-                    contact_time: 0,
-});
+            contact_time: 0,
+        });
         world.step();
         let log = world.event_log();
         let events = log.by_tick_range(0, 1);
@@ -6813,6 +6803,74 @@ spatial_decay_rate: 0.5,
         assert!(
             world.carcasses()[0].energy.abs() < 1e-3,
             "carcass should have 0 structure energy"
+        );
+    }
+
+    #[test]
+    fn partially_consumed_agent_survives_and_regrows_structure() {
+        // A producer with structure gets partially consumed. With growth enabled
+        // and solar income, the agent survives and can regrow.
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.5,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            growth_efficiency: 0.5,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        // Run with consumer and without consumer to verify consumption drains structure
+        let mut world_consumed = World::new(params.clone(), dist.clone(), 42);
+        world_consumed.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 20.0,
+            nutrient: 0.0, traits: TraitVector {
+                photosynthetic_absorption: 1.0, ..zero_traits()
+            }, contact_time: 0,
+        });
+        world_consumed.add_agent(Agent {
+            id: 0, position: (2.0, 0.0), reserve: 50.0, structure: 0.0,
+            nutrient: 0.0, traits: TraitVector {
+                consumption_rate: 5.0, ..zero_traits()
+            }, contact_time: 0,
+        });
+
+        let mut world_baseline = World::new(params.clone(), dist.clone(), 42);
+        world_baseline.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 20.0,
+            nutrient: 0.0, traits: TraitVector {
+                photosynthetic_absorption: 1.0, ..zero_traits()
+            }, contact_time: 0,
+        });
+
+        world_consumed.step();
+        world_baseline.step();
+
+        // Producer should survive and have less structure than baseline
+        assert!(
+            world_consumed.agents().len() >= 2,
+            "both agents should survive tick 1"
+        );
+        let consumed_structure = world_consumed.agents()[0].structure;
+        let baseline_structure = world_baseline.agents()[0].structure;
+        assert!(
+            consumed_structure < baseline_structure,
+            "consumed producer ({}) should have less structure than baseline ({})",
+            consumed_structure, baseline_structure
+        );
+        // The difference should be exactly the drain amount (5.0)
+        assert!(
+            (baseline_structure - consumed_structure - 5.0).abs() < 1e-3,
+            "structure difference should be 5.0 (drain amount), got {}",
+            baseline_structure - consumed_structure
         );
     }
 }
