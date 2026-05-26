@@ -144,7 +144,31 @@ impl TraitVector {
 
     /// Number of trait dimensions.
     pub const NUM_DIMS: usize = 11;
+
+    /// Budget trait indices: these compete under the L1 constraint (sum to 1.0).
+    pub const BUDGET_INDICES: [usize; 7] = [0, 1, 2, 3, 4, 5, 10];
+
+    /// Clamp budget traits to non-negative and rescale so they sum to 1.0.
+    pub fn normalize_budget(&mut self) {
+        for &i in &Self::BUDGET_INDICES {
+            let v = self.get(i).max(0.0);
+            self.set(i, v);
+        }
+        let sum: f32 = Self::BUDGET_INDICES.iter().map(|&i| self.get(i)).sum();
+        if sum > 0.0 {
+            for &i in &Self::BUDGET_INDICES {
+                self.set(i, self.get(i) / sum);
+            }
+        }
+    }
 }
+
+fn default_wear_rate() -> f32 { 0.1 }
+fn default_wear_degradation_steepness() -> f32 { 1.0 }
+fn default_somatic_maintenance_cost_coefficient() -> f32 { 0.1 }
+fn default_use_wear_rate() -> f32 { 0.01 }
+fn default_structure_maintenance_coefficient() -> f32 { 0.01 }
+fn default_repair_decay() -> f32 { 1.0 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldParameters {
@@ -173,21 +197,18 @@ pub struct WorldParameters {
     /// Fraction of surplus reserve converted to structure each tick (0.0–1.0).
     #[serde(default)]
     pub growth_efficiency: f32,
-    /// Per-tick wear accumulation rate. Each functional trait accumulates
-    /// `wear_rate * nominal_magnitude` wear per tick.
-    #[serde(default)]
+    #[serde(default = "default_wear_rate")]
     pub wear_rate: f32,
-    /// Steepness of exponential degradation: effective = nominal * exp(-k * wear).
-    #[serde(default)]
+    #[serde(default = "default_wear_degradation_steepness")]
     pub wear_degradation_steepness: f32,
-    /// Energy cost per unit somatic_maintenance trait per tick (reserve → heat).
-    #[serde(default)]
+    #[serde(default = "default_somatic_maintenance_cost_coefficient")]
     pub somatic_maintenance_cost_coefficient: f32,
-    /// Per-tick use-dependent wear rate. Each functional trait accumulates
-    /// `use_wear_rate * throughput` additional wear per tick, where throughput
-    /// is the actual energy/distance/count processed through that trait.
-    #[serde(default)]
+    #[serde(default = "default_use_wear_rate")]
     pub use_wear_rate: f32,
+    #[serde(default = "default_structure_maintenance_coefficient")]
+    pub structure_maintenance_coefficient: f32,
+    #[serde(default = "default_repair_decay")]
+    pub repair_decay: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -914,7 +935,8 @@ impl World {
                 + agent.traits.consumption_rate * self.params.consumption_maintenance_cost
                 + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost
                 + agent.traits.nutrient_absorption * self.params.nutrient_absorption_maintenance_cost
-                + agent.traits.somatic_maintenance * self.params.somatic_maintenance_cost_coefficient;
+                + agent.traits.somatic_maintenance * self.params.somatic_maintenance_cost_coefficient
+                + agent.structure * self.params.structure_maintenance_coefficient;
             agent.reserve -= metabolic_cost + movement_cost;
         }
     }
@@ -1022,13 +1044,15 @@ impl World {
     /// somatic_maintenance trait. Repair is whole-organism: all traits
     /// receive equal repair. Wear cannot go below zero.
     fn apply_somatic_repair(&mut self) {
+        let decay = self.params.repair_decay;
         for agent in self.agents.iter_mut() {
-            let repair = agent.traits.somatic_maintenance;
-            if repair <= 0.0 {
+            let base_repair = agent.traits.somatic_maintenance;
+            if base_repair <= 0.0 {
                 continue;
             }
             for ft in 0..FUNCTIONAL_TRAIT_COUNT {
-                agent.wear[ft] = (agent.wear[ft] - repair).max(0.0);
+                let effective_repair = base_repair * (-decay * agent.wear[ft]).exp();
+                agent.wear[ft] = (agent.wear[ft] - effective_repair).max(0.0);
             }
         }
     }
@@ -1185,9 +1209,8 @@ impl World {
                 + agent.traits.consumption_rate * self.params.consumption_maintenance_cost
                 + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost
                 + agent.traits.nutrient_absorption * self.params.nutrient_absorption_maintenance_cost
-                + agent.traits.somatic_maintenance * self.params.somatic_maintenance_cost_coefficient;
-            // Movement cost for next tick is unknown, so retain extra margin.
-            // Using 2x metabolic cost ensures reserve > 0 after next metabolism.
+                + agent.traits.somatic_maintenance * self.params.somatic_maintenance_cost_coefficient
+                + agent.structure * self.params.structure_maintenance_coefficient;
             let retention = metabolic_cost * 2.0;
             let surplus = (agent.reserve - retention).max(0.0);
             if surplus <= 0.0 {
@@ -1539,6 +1562,8 @@ mod tests {
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
             use_wear_rate: 0.0,
+            structure_maintenance_coefficient: 0.0,
+            repair_decay: 0.0,
         }
     }
 
@@ -3757,6 +3782,8 @@ mod tests {
     fn uniform_crossover_draws_each_dimension_from_one_parent() {
         let mut from_a_counts = [0u32; TraitVector::NUM_DIMS];
         let total_offspring = 200;
+        let parent_a_vals: [f32; 11] = [0.5, 0.1, 0.05, 0.1, 0.05, 0.1, 200.0, 5.0, 10.0, 0.0, 0.1];
+        let parent_b_vals: [f32; 11] = [0.05, 0.05, 0.1, 0.05, 0.5, 0.05, 201.0, 6.0, 11.0, 0.0, 0.2];
 
         for seed in 0..total_offspring {
             let params = WorldParameters {
@@ -3781,60 +3808,66 @@ mod tests {
                 initial_energy_per_agent: 100.0,
             };
             let mut world = World::new(params, dist, seed);
-            // Parents with distinct trait values per dimension so we can tell who contributed
+            // Parents with distinct, L1-normalized budget traits so we can
+            // tell who contributed each dimension after normalize_budget.
+            // Parent A: budget heavy on photo (0.5) + low others
+            // Parent B: budget heavy on mobility (0.5) + low others
+            // Non-budget traits use distinct values directly.
             world.add_agent(Agent {
                 id: 0,
                 position: (0.0, 0.0),
                 reserve: 100.0,
-
                 structure: 0.0,
-            nutrient: 0.0,
+                nutrient: 0.0,
                 traits: TraitVector {
-                    photosynthetic_absorption: 1.0,
-                    consumption_rate: 1.0,
-                    scavenging_rate: 1.0,
-                    nutrient_absorption: 1.0,
-                    mobility: 1.0,
-                    chemotaxis_sensitivity: 1.0,
-                    mate_selectivity: 100.0,
-                    sensing_range: 1.0,
+                    photosynthetic_absorption: 0.5,
+                    consumption_rate: 0.1,
+                    scavenging_rate: 0.05,
+                    nutrient_absorption: 0.1,
+                    mobility: 0.05,
+                    chemotaxis_sensitivity: 0.1,
+                    mate_selectivity: 200.0,
+                    sensing_range: 5.0,
                     reproductive_investment: 10.0,
-                    fecundity: 1.0,
-                    somatic_maintenance: 1.0,
+                    fecundity: 0.0,
+                    somatic_maintenance: 0.1,
                 },
-                            contact_time: 0,
-                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
-});
+                contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
+            });
             world.add_agent(Agent {
                 id: 0,
                 position: (1.0, 0.0),
                 reserve: 100.0,
-
                 structure: 0.0,
-            nutrient: 0.0,
+                nutrient: 0.0,
                 traits: TraitVector {
-                    photosynthetic_absorption: 2.0,
-                    consumption_rate: 2.0,
-                    scavenging_rate: 2.0,
-                    nutrient_absorption: 2.0,
-                    mobility: 2.0,
-                    chemotaxis_sensitivity: 2.0,
-                    mate_selectivity: 101.0,
-                    sensing_range: 2.0,
-                    reproductive_investment: 20.0,
-                    fecundity: 2.0,
-                    somatic_maintenance: 2.0,
+                    photosynthetic_absorption: 0.05,
+                    consumption_rate: 0.05,
+                    scavenging_rate: 0.1,
+                    nutrient_absorption: 0.05,
+                    mobility: 0.5,
+                    chemotaxis_sensitivity: 0.05,
+                    mate_selectivity: 201.0,
+                    sensing_range: 6.0,
+                    reproductive_investment: 11.0,
+                    fecundity: 0.0,
+                    somatic_maintenance: 0.2,
                 },
-                            contact_time: 0,
-                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
-});
+                contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
+            });
             world.step();
             assert_eq!(world.agents().len(), 3);
             let child = &world.agents()[2];
-            let parent_a_vals = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0, 1.0, 10.0, 1.0, 1.0];
             for dim in 0..TraitVector::NUM_DIMS {
+                if (parent_a_vals[dim] - parent_b_vals[dim]).abs() < 1e-5 {
+                    continue;
+                }
                 let val = child.traits.get(dim);
-                if (val - parent_a_vals[dim]).abs() < 1e-5 {
+                let dist_a = (val - parent_a_vals[dim]).abs();
+                let dist_b = (val - parent_b_vals[dim]).abs();
+                if dist_a < dist_b {
                     from_a_counts[dim] += 1;
                 }
             }
@@ -3843,6 +3876,9 @@ mod tests {
         // Each dimension should be ~50% from parent A (binomial, p=0.5, n=200)
         // 99% CI is roughly [78, 122] for 200 trials
         for dim in 0..TraitVector::NUM_DIMS {
+            if (parent_a_vals[dim] - parent_b_vals[dim]).abs() < 1e-5 {
+                continue;
+            }
             let count = from_a_counts[dim];
             assert!(
                 count > 60 && count < 140,
@@ -4989,6 +5025,8 @@ spatial_decay_rate: 0.5,
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
             use_wear_rate: 0.0,
+            structure_maintenance_coefficient: 0.0,
+            repair_decay: 0.0,
         }
     }
 

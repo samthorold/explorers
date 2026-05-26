@@ -106,10 +106,12 @@ fn main() {
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
-            wear_rate: 0.0,
-            wear_degradation_steepness: 0.0,
-            somatic_maintenance_cost_coefficient: 0.0,
-            use_wear_rate: 0.0,
+            wear_rate: 0.1,
+            wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.1,
+            use_wear_rate: 0.01,
+            structure_maintenance_coefficient: 0.01,
+            repair_decay: 1.0,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -455,6 +457,8 @@ mod tests {
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
             use_wear_rate: 0.0,
+            structure_maintenance_coefficient: 0.0,
+            repair_decay: 0.0,
             },
             InitialDistribution {
                 mean_traits: TraitVector {
@@ -1000,6 +1004,11 @@ fn debug_panel_ui(
                     ui.add(bevy_egui::egui::Slider::new(&mut params.contact_radius, 1.0..=50.0).text("Contact radius"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.light_competition_radius, 1.0..=100.0).text("Light competition radius"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.growth_efficiency, 0.0..=1.0).text("Growth efficiency"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.wear_rate, 0.0..=1.0).text("Wear rate"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.wear_degradation_steepness, 0.0..=5.0).text("Wear degradation steepness"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.use_wear_rate, 0.0..=0.5).text("Use wear rate"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.structure_maintenance_coefficient, 0.0..=0.1).text("Structure maintenance"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.repair_decay, 0.0..=5.0).text("Repair decay"));
                 });
 
             ui.separator();

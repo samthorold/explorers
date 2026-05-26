@@ -165,6 +165,8 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
             use_wear_rate: 0.0,
+            structure_maintenance_coefficient: 0.0,
+            repair_decay: 0.0,
     };
 
     let dist = InitialDistribution {
