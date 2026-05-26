@@ -403,6 +403,43 @@ impl Agent {
     }
 }
 
+/// Complexity-dependent death threshold.
+///
+/// Returns the structure level below which an agent dies. Derived from
+/// the normalised entropy of the L1-normalised trait vector:
+/// - Specialist (budget concentrated in few traits) → low threshold
+/// - Generalist (budget spread across many traits) → high threshold
+///
+/// The threshold is `normalised_entropy * max_threshold` where
+/// max_threshold is the trait budget (L1 sum). This means a perfectly
+/// uniform generalist's threshold approaches its total trait budget,
+/// while a pure specialist's threshold approaches zero.
+pub fn death_threshold(traits: &TraitVector) -> f32 {
+    let mut values = [0.0_f32; TraitVector::NUM_DIMS];
+    let mut sum = 0.0_f32;
+    for dim in 0..TraitVector::NUM_DIMS {
+        let v = traits.get(dim).max(0.0);
+        values[dim] = v;
+        sum += v;
+    }
+    if sum < 1e-10 {
+        return 0.0;
+    }
+    // Normalised entropy: H / ln(N)
+    let n = TraitVector::NUM_DIMS as f32;
+    let ln_n = n.ln();
+    let mut entropy = 0.0_f32;
+    for &v in &values {
+        let p = v / sum;
+        if p > 1e-10 {
+            entropy -= p * p.ln();
+        }
+    }
+    let normalised_entropy = entropy / ln_n;
+    // Scale by the trait budget so the threshold is in energy units
+    normalised_entropy * sum
+}
+
 /// Stoichiometric nutrient demand: number of non-zero trait dimensions.
 /// Agents with more active traits require more nutrient.
 pub fn stoichiometric_demand(traits: &TraitVector) -> f32 {
@@ -6871,6 +6908,384 @@ spatial_decay_rate: 0.5,
             (baseline_structure - consumed_structure - 5.0).abs() < 1e-3,
             "structure difference should be 5.0 (drain amount), got {}",
             baseline_structure - consumed_structure
+        );
+    }
+
+    #[test]
+    fn consumption_kills_generalist_above_zero_structure() {
+        // A generalist with evenly spread traits has a high death threshold (~1.0).
+        // A small bite that drops structure below threshold but keeps it above zero
+        // should kill the generalist. Without the threshold check, the agent would
+        // survive because structure > 0.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            consumption_efficiency: 0.5,
+            contact_radius: 5.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        // Generalist: budget spread across all 10 dims = 0.1 each, sum = 1.0
+        // death_threshold = 1.0 (normalised entropy = 1.0, sum = 1.0)
+        let generalist_traits = TraitVector {
+            photosynthetic_absorption: 0.1,
+            consumption_rate: 0.1,
+            scavenging_rate: 0.1,
+            nutrient_absorption: 0.1,
+            mobility: 0.1,
+            chemotaxis_sensitivity: 0.1,
+            mate_selectivity: 0.1,
+            sensing_range: 0.1,
+            reproductive_investment: 0.1,
+            fecundity: 0.1,
+        };
+        let gen_threshold = death_threshold(&generalist_traits);
+        assert!(
+            (gen_threshold - 1.0).abs() < 1e-5,
+            "precondition: generalist threshold should be ~1.0, got {}",
+            gen_threshold
+        );
+
+        // Consumer with small drain rate — just enough to drop below threshold
+        // but leave structure > 0
+        let consumer_traits = TraitVector {
+            consumption_rate: 0.2, // drains 0.2 per tick
+            ..zero_traits()
+        };
+
+        // Starting structure = 1.1, after drain of 0.2 → 0.9 < threshold 1.0
+        // but 0.9 > 0 — without threshold check, agent would survive
+        let starting_structure = 1.1;
+
+        let mut world = World::new(params.clone(), dist.clone(), 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0, traits: consumer_traits, contact_time: 0,
+        });
+        world.add_agent(Agent {
+            id: 0, position: (1.0, 0.0), reserve: 100.0, structure: starting_structure,
+            nutrient: 0.0, traits: generalist_traits, contact_time: 0,
+        });
+        world.step();
+
+        // The generalist should be dead: structure dropped below threshold
+        // even though structure is still > 0
+        let generalist_alive = world.agents().iter().any(|a| {
+            // Identify generalist by its distinctive trait pattern
+            (a.traits.photosynthetic_absorption - 0.1).abs() < 1e-5
+        });
+        assert!(
+            !generalist_alive,
+            "generalist should die when structure ({}) drops below threshold ({})",
+            starting_structure - 0.2, gen_threshold
+        );
+        // Carcass should exist with remaining structure (~0.9)
+        assert!(
+            world.carcasses().len() >= 1,
+            "dead generalist should produce a carcass"
+        );
+    }
+
+    #[test]
+    fn specialist_survives_damage_that_kills_generalist() {
+        // Same structural damage applied to both a specialist and generalist.
+        // Specialist (low threshold) should survive; generalist (high threshold) dies.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            consumption_efficiency: 0.5,
+            contact_radius: 5.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        // Specialist: all budget in one trait, threshold ≈ 0
+        let specialist_traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+
+        // Generalist: budget spread evenly, threshold ≈ 1.0
+        let generalist_traits = TraitVector {
+            photosynthetic_absorption: 0.1,
+            consumption_rate: 0.1,
+            scavenging_rate: 0.1,
+            nutrient_absorption: 0.1,
+            mobility: 0.1,
+            chemotaxis_sensitivity: 0.1,
+            mate_selectivity: 0.1,
+            sensing_range: 0.1,
+            reproductive_investment: 0.1,
+            fecundity: 0.1,
+        };
+
+        let consumer_traits = TraitVector {
+            consumption_rate: 0.3,
+            ..zero_traits()
+        };
+
+        // Both targets start with structure=1.1
+        // After drain of 0.3: structure=0.8
+        // Specialist threshold ≈ 0: 0.8 > 0, survives
+        // Generalist threshold ≈ 1.0: 0.8 < 1.0, dies
+
+        // Test specialist survives
+        let mut world_spec = World::new(params.clone(), dist.clone(), 42);
+        world_spec.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0, traits: consumer_traits, contact_time: 0,
+        });
+        world_spec.add_agent(Agent {
+            id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 1.1,
+            nutrient: 0.0, traits: specialist_traits, contact_time: 0,
+        });
+        world_spec.step();
+        assert_eq!(
+            world_spec.agents().len(), 2,
+            "specialist should survive: structure after consumption > threshold"
+        );
+
+        // Test generalist dies
+        let mut world_gen = World::new(params.clone(), dist.clone(), 42);
+        world_gen.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0, traits: consumer_traits, contact_time: 0,
+        });
+        world_gen.add_agent(Agent {
+            id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 1.1,
+            nutrient: 0.0, traits: generalist_traits, contact_time: 0,
+        });
+        world_gen.step();
+        assert!(
+            world_gen.agents().len() < 2,
+            "generalist should die: structure after consumption < threshold"
+        );
+    }
+
+    #[test]
+    fn threshold_death_carcass_retains_remaining_structure() {
+        // When a generalist dies from threshold-triggered death, the carcass
+        // should retain the remaining (below-threshold) structure, not zero.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            consumption_efficiency: 0.5,
+            contact_radius: 5.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        let generalist_traits = TraitVector {
+            photosynthetic_absorption: 0.1,
+            consumption_rate: 0.1,
+            scavenging_rate: 0.1,
+            nutrient_absorption: 0.1,
+            mobility: 0.1,
+            chemotaxis_sensitivity: 0.1,
+            mate_selectivity: 0.1,
+            sensing_range: 0.1,
+            reproductive_investment: 0.1,
+            fecundity: 0.1,
+        };
+        // threshold = 1.0
+
+        let consumer_traits = TraitVector {
+            consumption_rate: 0.3, // drains 0.3
+            ..zero_traits()
+        };
+
+        // structure=1.1 → after drain 0.3 → 0.8, which is below threshold 1.0
+        // Carcass should have energy = 0.8 (remaining structure)
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0, traits: consumer_traits, contact_time: 0,
+        });
+        world.add_agent(Agent {
+            id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 1.1,
+            nutrient: 0.0, traits: generalist_traits, contact_time: 0,
+        });
+        world.step();
+
+        // Find the carcass from the dead generalist
+        assert!(
+            !world.carcasses().is_empty(),
+            "should have at least one carcass"
+        );
+        let carcass = &world.carcasses()[0];
+        assert!(
+            (carcass.energy - 0.8).abs() < 1e-3,
+            "carcass should retain remaining structure (~0.8), got {}",
+            carcass.energy
+        );
+    }
+
+    #[test]
+    fn energy_balanced_through_threshold_death() {
+        // Run a scenario with threshold-triggered deaths and verify
+        // total energy is conserved (input = dissipated + retained).
+        let params = WorldParameters {
+            solar_flux_magnitude: 2.0,
+            base_metabolic_rate: 0.1,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            consumption_efficiency: 0.5,
+            contact_radius: 5.0,
+            growth_efficiency: 0.5,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+
+        // Generalist target will die from threshold
+        let generalist_traits = TraitVector {
+            photosynthetic_absorption: 0.1,
+            consumption_rate: 0.1,
+            scavenging_rate: 0.1,
+            nutrient_absorption: 0.1,
+            mobility: 0.1,
+            chemotaxis_sensitivity: 0.1,
+            mate_selectivity: 0.1,
+            sensing_range: 0.1,
+            reproductive_investment: 0.1,
+            fecundity: 0.1,
+        };
+
+        let consumer_traits = TraitVector {
+            consumption_rate: 0.3,
+            ..zero_traits()
+        };
+
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0,
+            nutrient: 0.0, traits: consumer_traits, contact_time: 0,
+        });
+        world.add_agent(Agent {
+            id: 0, position: (1.0, 0.0), reserve: 50.0, structure: 1.5,
+            nutrient: 0.0, traits: generalist_traits, contact_time: 0,
+        });
+
+        let initial_energy = 50.0 + 50.0 + 1.5; // reserve + reserve + structure
+
+        // Run a few ticks — the generalist should die from threshold death
+        for _ in 0..5 {
+            world.step();
+        }
+
+        let agent_energy: f32 = world.agents().iter()
+            .map(|a| a.reserve + a.structure).sum();
+        let carcass_energy: f32 = world.carcasses().iter()
+            .map(|c| c.energy).sum();
+        let total = agent_energy + carcass_energy + world.dissipated_energy();
+
+        // Energy should be conserved: initial + solar = final + dissipated
+        let solar = world.total_solar_input();
+        let expected = initial_energy + solar;
+        let diff = (total - expected).abs();
+        assert!(
+            diff < 1e-1,
+            "energy not balanced: agents={}, carcasses={}, dissipated={}, solar={}, \
+             total={}, expected={}, diff={}",
+            agent_energy, carcass_energy, world.dissipated_energy(),
+            solar, total, expected, diff
+        );
+    }
+
+    #[test]
+    fn zero_trait_vector_has_zero_death_threshold() {
+        let threshold = death_threshold(&zero_traits());
+        assert!(
+            threshold.abs() < 1e-10,
+            "zero trait vector should have zero threshold, got {}",
+            threshold
+        );
+    }
+
+    #[test]
+    fn generalist_has_higher_death_threshold_than_specialist() {
+        // A generalist with budget spread evenly should have a higher
+        // death threshold than a specialist with budget concentrated.
+        let specialist = TraitVector {
+            consumption_rate: 1.0,
+            ..zero_traits()
+        };
+        let generalist = TraitVector {
+            photosynthetic_absorption: 0.1,
+            consumption_rate: 0.1,
+            scavenging_rate: 0.1,
+            nutrient_absorption: 0.1,
+            mobility: 0.1,
+            chemotaxis_sensitivity: 0.1,
+            mate_selectivity: 0.1,
+            sensing_range: 0.1,
+            reproductive_investment: 0.1,
+            fecundity: 0.1,
+        };
+        let spec_threshold = death_threshold(&specialist);
+        let gen_threshold = death_threshold(&generalist);
+        assert!(
+            gen_threshold > spec_threshold,
+            "generalist threshold ({}) should exceed specialist ({})",
+            gen_threshold, spec_threshold
+        );
+        // Generalist with perfectly uniform distribution should have
+        // normalised entropy = 1.0, so threshold = 1.0 * sum = 1.0
+        assert!(
+            (gen_threshold - 1.0).abs() < 1e-5,
+            "perfectly uniform generalist threshold should be ~1.0, got {}",
+            gen_threshold
+        );
+    }
+
+    #[test]
+    fn specialist_has_near_zero_death_threshold() {
+        // A pure specialist with all budget in one trait should have
+        // a very low death threshold — tolerates maximum structural damage.
+        let specialist = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        let threshold = death_threshold(&specialist);
+        assert!(
+            threshold < 0.1,
+            "specialist threshold should be near zero, got {}",
+            threshold
+        );
+        assert!(
+            threshold >= 0.0,
+            "threshold must be non-negative, got {}",
+            threshold
         );
     }
 }
