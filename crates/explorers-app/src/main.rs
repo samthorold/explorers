@@ -106,6 +106,8 @@ fn main() {
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
+            wear_rate: 0.0,
+            wear_degradation_steepness: 0.0,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -438,6 +440,8 @@ mod tests {
                 nutrient_absorption_maintenance_cost: 0.0,
                 initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
+            wear_rate: 0.0,
+            wear_degradation_steepness: 0.0,
             },
             InitialDistribution {
                 mean_traits: TraitVector {
@@ -519,6 +523,7 @@ mod tests {
                 mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
             },
             contact_time: 0,
+            wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(explorers_sim::Agent {
             id: 0, position: (10.0, 10.0), reserve: 20.0,
@@ -530,6 +535,7 @@ mod tests {
                 mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
             },
             contact_time: 0,
+            wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_carcass(explorers_sim::Carcass {
             id: 99, position: (5.0, 5.0), energy: 15.0,
@@ -564,6 +570,7 @@ mod tests {
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                 },
                 contact_time: 0,
+                wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
             },
             explorers_sim::Agent {
                 id: 2, position: (20.0, 20.0), reserve: 50.0,
@@ -575,6 +582,7 @@ mod tests {
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                 },
                 contact_time: 0,
+                wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
             },
         ];
         let result = find_nearest_agent(&agents, (12.0, 12.0), 100.0);
@@ -601,6 +609,7 @@ mod tests {
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                 },
                 contact_time: 0,
+                wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
             },
             explorers_sim::Agent {
                 id: 2, position: (95.0, 95.0), reserve: 50.0,
@@ -612,6 +621,7 @@ mod tests {
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                 },
                 contact_time: 0,
+                wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
             },
         ];
         // Click at (97,97) — toroidally closer to agent 2 at (95,95) = dist 2.83

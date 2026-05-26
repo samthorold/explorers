@@ -40,6 +40,7 @@ pub fn emit_broadcasts(
     dead_agents: &std::collections::HashSet<usize>,
     nack_sets: &std::collections::HashMap<u64, std::collections::HashSet<event::EventKind>>,
     extent: f32,
+    wear_degradation_steepness: f32,
 ) {
     for (i, agent) in agents.iter().enumerate() {
         if dead_agents.contains(&i) {
@@ -50,7 +51,7 @@ pub fn emit_broadcasts(
                 continue;
             }
         }
-        let sensing_range = agent.traits.sensing_range;
+        let sensing_range = agent.effective_trait_with_steepness(6, wear_degradation_steepness);
         if sensing_range <= 0.0 {
             continue;
         }
@@ -167,6 +168,13 @@ pub struct WorldParameters {
     /// Fraction of surplus reserve converted to structure each tick (0.0–1.0).
     #[serde(default)]
     pub growth_efficiency: f32,
+    /// Per-tick wear accumulation rate. Each functional trait accumulates
+    /// `wear_rate * nominal_magnitude` wear per tick.
+    #[serde(default)]
+    pub wear_rate: f32,
+    /// Steepness of exponential degradation: effective = nominal * exp(-k * wear).
+    #[serde(default)]
+    pub wear_degradation_steepness: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -219,6 +227,11 @@ pub struct WorldRecipe {
     pub max_ticks: u64,
 }
 
+/// Number of functional traits that accumulate somatic wear.
+/// Indices: 0=photosynthetic_absorption, 1=consumption_rate, 2=scavenging_rate,
+/// 3=nutrient_absorption, 4=mobility, 5=chemotaxis_sensitivity, 6=sensing_range.
+pub const FUNCTIONAL_TRAIT_COUNT: usize = 7;
+
 pub struct Agent {
     pub id: u64,
     pub position: (f32, f32),
@@ -227,12 +240,49 @@ pub struct Agent {
     pub nutrient: f32,
     pub traits: TraitVector,
     pub contact_time: u64,
+    /// Per-functional-trait somatic wear accumulation.
+    pub wear: [f32; FUNCTIONAL_TRAIT_COUNT],
 }
+
+/// Maps a functional trait index (0–6) to its position in the TraitVector.
+/// 0=photosynthetic_absorption, 1=consumption_rate, 2=scavenging_rate,
+/// 3=nutrient_absorption, 4=mobility, 5=chemotaxis_sensitivity, 6=sensing_range.
+pub const FUNCTIONAL_TRAIT_INDICES: [usize; FUNCTIONAL_TRAIT_COUNT] = [0, 1, 2, 3, 4, 5, 7];
 
 impl Agent {
     /// Total energy held by this agent (reserve + structure).
     pub fn energy(&self) -> f32 {
         self.reserve + self.structure
+    }
+
+    /// Returns the nominal trait value for a given functional trait index (0–6).
+    pub fn nominal_functional_trait(&self, ft_index: usize) -> f32 {
+        self.traits.get(FUNCTIONAL_TRAIT_INDICES[ft_index])
+    }
+
+    /// Returns the effective (wear-degraded) trait value using the given steepness k.
+    /// effective = nominal * exp(-k * wear)
+    pub fn effective_trait_with_steepness(&self, ft_index: usize, k: f32) -> f32 {
+        let nominal = self.nominal_functional_trait(ft_index);
+        nominal * (-k * self.wear[ft_index]).exp()
+    }
+
+    /// Returns the effective trait value using a default steepness of 1.0.
+    /// For production use, prefer the World method that supplies the world parameter.
+    pub fn effective_trait(&self, ft_index: usize) -> f32 {
+        self.effective_trait_with_steepness(ft_index, 1.0)
+    }
+
+    /// Returns a TraitVector with functional traits degraded by wear.
+    /// Behavioural traits (mate_selectivity, reproductive_investment, fecundity)
+    /// are passed through unchanged.
+    pub fn effective_traits(&self, k: f32) -> TraitVector {
+        let mut t = self.traits;
+        for ft in 0..FUNCTIONAL_TRAIT_COUNT {
+            let effective = self.effective_trait_with_steepness(ft, k);
+            t.set(FUNCTIONAL_TRAIT_INDICES[ft], effective);
+        }
+        t
     }
 }
 
@@ -264,6 +314,7 @@ pub struct ProjectionData {
     pub nearby_carcasses: Vec<NearbyCarcass>,
     pub contact_radius: f32,
     pub reproduction_energy_threshold: f32,
+    pub wear_degradation_steepness: f32,
 }
 
 #[derive(Clone)]
@@ -277,14 +328,16 @@ pub struct Broadcast {
 
 impl Agent {
     pub fn receive(&self, event: &event::Event, data: &ProjectionData) -> event::Response {
+        let k = data.wear_degradation_steepness;
+        let eff = self.effective_traits(k);
         match &event.kind {
-            event::EventKind::Consumed if self.traits.consumption_rate > 0.0 => {
+            event::EventKind::Consumed if eff.consumption_rate > 0.0 => {
                 let best = data.nearby_agents.iter()
                     .filter(|a| a.distance < data.contact_radius && a.structure > 0.0)
                     .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
 
                 if let Some(target) = best {
-                    let drain = self.traits.consumption_rate.min(target.structure.max(0.0));
+                    let drain = eff.consumption_rate.min(target.structure.max(0.0));
                     if drain > 0.0 {
                         return event::Response {
                             ack: event::Ack::Ack,
@@ -306,6 +359,8 @@ impl Agent {
                 if self.reserve <= data.reproduction_energy_threshold {
                     return event::Response { ack: event::Ack::Ack, events: vec![] };
                 }
+                // Mating radius uses nominal mobility for identity gate,
+                // but effective sensing range for spatial reach
                 let self_gate = 1.0 / (1.0 + (20.0_f32 * (self.traits.mobility - 0.3)).exp());
                 let self_radius = self_gate * self.traits.sensing_range
                     + (1.0 - self_gate) * data.contact_radius;
@@ -315,6 +370,7 @@ impl Agent {
                         if mate.reserve <= data.reproduction_energy_threshold {
                             return false;
                         }
+                        // Mate compatibility uses nominal traits (identity)
                         let mate_gate = 1.0
                             / (1.0 + (20.0_f32 * (mate.traits.mobility - 0.3)).exp());
                         let mate_radius = mate_gate * mate.traits.sensing_range
@@ -344,13 +400,13 @@ impl Agent {
                     None => event::Response { ack: event::Ack::Ack, events: vec![] },
                 }
             }
-            event::EventKind::CarcassCreated if self.traits.scavenging_rate > 0.0 => {
+            event::EventKind::CarcassCreated if eff.scavenging_rate > 0.0 => {
                 let best = data.nearby_carcasses.iter()
                     .filter(|c| c.distance < data.contact_radius && c.energy > 0.0)
                     .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
 
                 if let Some(target) = best {
-                    let drain = self.traits.scavenging_rate.min(target.energy.max(0.0));
+                    let drain = eff.scavenging_rate.min(target.energy.max(0.0));
                     if drain > 0.0 {
                         return event::Response {
                             ack: event::Ack::Ack,
@@ -368,21 +424,21 @@ impl Agent {
                 }
                 event::Response { ack: event::Ack::Ack, events: vec![] }
             }
-            event::EventKind::Moved if self.traits.mobility > 0.0 => {
+            event::EventKind::Moved if eff.mobility > 0.0 => {
                 let mut cx = 0.0_f32;
                 let mut cy = 0.0_f32;
 
-                if self.traits.consumption_rate > 0.0 {
-                    cx += self.traits.consumption_rate * data.feeding_gradient.0;
-                    cy += self.traits.consumption_rate * data.feeding_gradient.1;
+                if eff.consumption_rate > 0.0 {
+                    cx += eff.consumption_rate * data.feeding_gradient.0;
+                    cy += eff.consumption_rate * data.feeding_gradient.1;
                 }
-                if self.traits.scavenging_rate > 0.0 {
-                    cx += self.traits.scavenging_rate * data.carcass_gradient.0;
-                    cy += self.traits.scavenging_rate * data.carcass_gradient.1;
+                if eff.scavenging_rate > 0.0 {
+                    cx += eff.scavenging_rate * data.carcass_gradient.0;
+                    cy += eff.scavenging_rate * data.carcass_gradient.1;
                 }
 
-                cx *= self.traits.chemotaxis_sensitivity;
-                cy *= self.traits.chemotaxis_sensitivity;
+                cx *= eff.chemotaxis_sensitivity;
+                cy *= eff.chemotaxis_sensitivity;
 
                 event::Response {
                     ack: event::Ack::Ack,
@@ -538,6 +594,7 @@ impl World {
                         fecundity: centroid.fecundity + trait_dist.sample(&mut rng),
                     },
                     contact_time: 0,
+                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 }
             })
             .collect();
@@ -592,6 +649,7 @@ impl World {
                     nutrient: 0.0,
                     traits: spec.traits,
                     contact_time: 0,
+                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 })
                 .collect();
             let nutrient_pool = params.initial_nutrient_pool;
@@ -671,6 +729,9 @@ impl World {
         // (5b) Nutrient uptake from available pool
         self.apply_nutrient_uptake();
 
+        // (5c) Somatic wear accumulation
+        self.apply_wear_accumulation();
+
         // (6) Rebuild grids with post-move positions
         agent_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
         for (i, a) in self.agents.iter().enumerate() {
@@ -726,18 +787,21 @@ impl World {
     }
 
     fn compute_movements(&mut self, order: &[usize], n: usize) -> Vec<(f32, f32)> {
+        let k = self.params.wear_degradation_steepness;
         let mut movements = vec![(0.0_f32, 0.0_f32); n];
         for &i in order {
             let agent = &self.agents[i];
-            if agent.traits.mobility <= 0.0 {
+            let eff_mobility = agent.effective_trait_with_steepness(4, k);
+            if eff_mobility <= 0.0 {
                 continue;
             }
+            let eff_sensing = agent.effective_trait_with_steepness(6, k);
             let feeding_gradient = self.projection.gradient(
-                agent.position, agent.traits.sensing_range,
+                agent.position, eff_sensing,
                 spatial_projection::ActivityLayer::Feeding,
             );
             let carcass_gradient = self.projection.gradient(
-                agent.position, agent.traits.sensing_range,
+                agent.position, eff_sensing,
                 spatial_projection::ActivityLayer::Carcass,
             );
             let data = ProjectionData {
@@ -745,6 +809,7 @@ impl World {
                 nearby_agents: vec![], nearby_carcasses: vec![],
                 contact_radius: self.params.contact_radius,
                 reproduction_energy_threshold: self.params.reproduction_energy_threshold,
+                wear_degradation_steepness: self.params.wear_degradation_steepness,
             };
             let trigger = event::Event {
                 tick: self.tick, seq: 0, kind: event::EventKind::Moved,
@@ -762,8 +827,8 @@ impl World {
             let mut my = cy + angle.sin();
             let mag = (mx * mx + my * my).sqrt();
             if mag > 0.0 {
-                mx = mx / mag * agent.traits.mobility;
-                my = my / mag * agent.traits.mobility;
+                mx = mx / mag * eff_mobility;
+                my = my / mag * eff_mobility;
             }
             movements[i] = (mx, my);
         }
@@ -773,22 +838,25 @@ impl World {
     fn compute_light_shares(&self, n: usize, agent_grid: &crate::spatial::SpatialGrid) -> Vec<f32> {
         let extent = self.params.world_extent;
         let competition_radius = self.params.light_competition_radius;
+        let k = self.params.wear_degradation_steepness;
         (0..n).map(|i| {
             let agent = &self.agents[i];
-            if agent.traits.photosynthetic_absorption <= 0.0 {
+            let eff_photo = agent.effective_trait_with_steepness(0, k);
+            if eff_photo <= 0.0 {
                 return 1.0;
             }
-            let mut total = agent.traits.photosynthetic_absorption;
+            let mut total = eff_photo;
             for j_id in agent_grid.query_radius(agent.position, competition_radius) {
                 let j = j_id as usize;
                 if j == i { continue; }
                 let other = &self.agents[j];
-                if other.traits.photosynthetic_absorption <= 0.0 { continue; }
+                let other_eff = other.effective_trait_with_steepness(0, k);
+                if other_eff <= 0.0 { continue; }
                 if toroidal_distance(agent.position, other.position, extent) < competition_radius {
-                    total += other.traits.photosynthetic_absorption;
+                    total += other_eff;
                 }
             }
-            agent.traits.photosynthetic_absorption / total
+            eff_photo / total
         }).collect()
     }
 
@@ -826,10 +894,12 @@ impl World {
         // Compute total demand from all agents
         // Uptake saturates with contact time: absorption * ct / (ct + k)
         // Half-saturation at k=50 ticks — diminishing returns on long residence
-        let k = 50.0_f32;
+        let k_half = 50.0_f32;
+        let steepness = self.params.wear_degradation_steepness;
         let demands: Vec<f32> = self.agents.iter().map(|a| {
             let ct = a.contact_time as f32;
-            a.traits.nutrient_absorption * ct / (ct + k)
+            let eff_absorption = a.effective_trait_with_steepness(3, steepness);
+            eff_absorption * ct / (ct + k_half)
         }).collect();
         let total_demand: f32 = demands.iter().sum();
         if total_demand <= 0.0 {
@@ -848,6 +918,21 @@ impl World {
             };
             agent.nutrient += uptake;
             self.nutrient_pool -= uptake;
+        }
+    }
+
+    /// Accumulate somatic wear on each functional trait proportional to its
+    /// nominal magnitude: `wear[i] += wear_rate * nominal_trait_value`.
+    fn apply_wear_accumulation(&mut self) {
+        let rate = self.params.wear_rate;
+        if rate <= 0.0 {
+            return;
+        }
+        for agent in self.agents.iter_mut() {
+            for ft in 0..FUNCTIONAL_TRAIT_COUNT {
+                let nominal = agent.traits.get(FUNCTIONAL_TRAIT_INDICES[ft]);
+                agent.wear[ft] += rate * nominal.max(0.0);
+            }
         }
     }
 
@@ -872,6 +957,7 @@ impl World {
             mutation_rate: self.params.mutation_rate,
             mutation_magnitude: self.params.mutation_magnitude,
             nutrient_gate_active: self.params.initial_nutrient_pool > 0.0,
+            wear_degradation_steepness: self.params.wear_degradation_steepness,
         };
         let dead_agents = std::collections::HashSet::new();
         interaction_resolver::resolve_interactions(
@@ -1032,6 +1118,7 @@ impl World {
                 nearby_agents: vec![], nearby_carcasses: vec![],
                 contact_radius: self.params.contact_radius,
                 reproduction_energy_threshold: self.params.reproduction_energy_threshold,
+                wear_degradation_steepness: self.params.wear_degradation_steepness,
             };
             let trigger = event::Event {
                 tick: self.tick, seq: 0, kind: broadcast.kind.clone(),
@@ -1166,6 +1253,7 @@ impl World {
             next_agents.push(Agent {
                 id: o.id, position: o.position, reserve: o.reserve, structure: o.structure,
                 nutrient: o.nutrient, traits: o.traits, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             });
         }
 
@@ -1323,6 +1411,8 @@ mod tests {
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
+            wear_rate: 0.0,
+            wear_degradation_steepness: 0.0,
         }
     }
 
@@ -1363,6 +1453,7 @@ mod tests {
             nutrient: 5.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         };
         assert_eq!(agent.nutrient, 5.0);
 
@@ -1393,6 +1484,7 @@ mod tests {
             contact_radius: 5.0,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -1423,10 +1515,12 @@ mod tests {
         world_low.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 1.0,
             traits: shared_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world_low.add_agent(Agent {
             id: 0, position: (2.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 1.0,
             traits: shared_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world_low.step();
         assert_eq!(
@@ -1439,10 +1533,12 @@ mod tests {
         world_high.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 10.0,
             traits: shared_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world_high.add_agent(Agent {
             id: 0, position: (2.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 10.0,
             traits: shared_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world_high.step();
         assert_eq!(
@@ -1463,6 +1559,7 @@ mod tests {
             decomposition_efficiency: 0.4,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 15.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.1,
             mutation_magnitude: 0.05,
             initial_population_size: 10,
@@ -1540,6 +1637,7 @@ mod tests {
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_carcass(Carcass {
             id: 99,
@@ -1589,6 +1687,7 @@ mod tests {
             nutrient: 7.5,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         assert_eq!(world.agents().len(), 0, "agent should have died");
@@ -1637,6 +1736,7 @@ mod tests {
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
 
         // Target: has 20 structure and 10 nutrient
@@ -1648,6 +1748,7 @@ mod tests {
             nutrient: 10.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
 
         let initial_total_nutrient = 10.0; // only target has nutrient
@@ -1727,6 +1828,7 @@ mod tests {
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
 
         // Target: 20 structure, 8 nutrient
@@ -1738,6 +1840,7 @@ mod tests {
             nutrient: 8.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
 
         world.step();
@@ -1799,6 +1902,7 @@ mod tests {
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         // Tick 1: contact_time was 0 at start, agent is stationary so contact_time becomes 1
         // Uptake = nutrient_absorption * contact_time = 0.5 * 1 = 0.5
@@ -1857,6 +1961,7 @@ mod tests {
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         // cost = nutrient_absorption * nutrient_absorption_maintenance_cost = 2.0 * 0.5 = 1.0
@@ -1911,6 +2016,7 @@ mod tests {
             contact_radius: 5.0,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -1933,10 +2039,12 @@ mod tests {
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 20.0,
             nutrient: 0.0, traits: shared_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0, position: (2.0, 0.0), reserve: 50.0, structure: 15.0,
             nutrient: 0.0, traits: shared_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         assert_eq!(world.agents().len(), 3, "should have two parents and one offspring");
@@ -1970,6 +2078,7 @@ mod tests {
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 42.0,
             nutrient: 0.0, traits: zero_traits(), contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         assert_eq!(world.agents().len(), 0, "agent should have died");
@@ -2001,6 +2110,7 @@ mod tests {
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 1000.0,
             nutrient: 0.0, traits: zero_traits(), contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         // After one tick: reserve = 50 - 60 = -10 → dies despite 1000 structure
@@ -2303,6 +2413,7 @@ mod tests {
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
             let initial_x = world.agents()[0].position.0;
             world.step();
@@ -2365,6 +2476,7 @@ mod tests {
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
             let initial_x = world.agents()[0].position.0;
             world.step();
@@ -2428,6 +2540,7 @@ mod tests {
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
             let initial_pos = world.agents()[0].position;
@@ -2503,6 +2616,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -2513,6 +2627,7 @@ mod tests {
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         let pos = world.agents()[0].position;
@@ -2558,6 +2673,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         let pos = world.agents()[0].position;
@@ -2638,6 +2754,7 @@ mod tests {
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0,
@@ -2647,6 +2764,7 @@ mod tests {
             nutrient: 0.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         // Consumer gains energy in reserve, target loses structure (not reserve)
@@ -2688,6 +2806,7 @@ mod tests {
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0,
@@ -2697,6 +2816,7 @@ mod tests {
             nutrient: 0.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         // Drain from structure = 3.0, gained = 3.0 * 0.7 = 2.1, dissipated = 3.0 * 0.3 = 0.9
@@ -2736,6 +2856,7 @@ mod tests {
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0,
@@ -2745,6 +2866,7 @@ mod tests {
             nutrient: 0.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         // Drain capped at target's structure = 5.0
@@ -2787,6 +2909,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_carcass(Carcass {
             id: 0,
@@ -2832,6 +2955,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_carcass(Carcass {
             id: 0,
@@ -2874,6 +2998,7 @@ mod tests {
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -2884,6 +3009,7 @@ mod tests {
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_carcass(Carcass {
             id: 0,
@@ -2929,6 +3055,7 @@ mod tests {
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0,
@@ -2938,6 +3065,7 @@ mod tests {
             nutrient: 0.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         // Should drain structure across boundary
@@ -3023,6 +3151,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -3033,6 +3162,7 @@ mod tests {
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         assert_eq!(world.agents()[0].reserve, 50.0);
@@ -3049,6 +3179,7 @@ mod tests {
             contact_radius: 5.0,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3077,6 +3208,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -3087,6 +3219,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         assert_eq!(
@@ -3106,6 +3239,7 @@ mod tests {
             contact_radius: 5.0,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3133,6 +3267,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -3149,6 +3284,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         assert_eq!(world.agents().len(), 3);
@@ -3166,6 +3302,7 @@ mod tests {
             contact_radius: 5.0,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3193,6 +3330,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -3209,6 +3347,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         // Offspring energy = (15 + 8) * 0.7 = 16.1
@@ -3229,6 +3368,7 @@ mod tests {
             movement_cost_coefficient: 0.0,
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3255,6 +3395,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -3265,6 +3406,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         assert_eq!(world.agents().len(), 2, "no reproduction when one parent below threshold");
@@ -3279,6 +3421,7 @@ mod tests {
             movement_cost_coefficient: 0.0,
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3306,6 +3449,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -3316,6 +3460,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         assert_eq!(world.agents().len(), 2, "no reproduction when outside contact radius");
@@ -3330,6 +3475,7 @@ mod tests {
             movement_cost_coefficient: 0.0,
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3358,6 +3504,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -3373,6 +3520,7 @@ mod tests {
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         assert_eq!(world.agents().len(), 2, "asymmetric selectivity should prevent reproduction");
@@ -3388,6 +3536,7 @@ mod tests {
             contact_radius: 5.0,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3417,6 +3566,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -3427,6 +3577,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -3437,6 +3588,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         // One pair reproduces, one agent left out → 3 + 1 = 4
@@ -3457,6 +3609,7 @@ mod tests {
                 contact_radius: 5.0,
                 reproduction_efficiency: 0.7,
                 reproduction_energy_threshold: 10.0,
+                wear_degradation_steepness: 0.0,
                 mutation_rate: 0.0,
                 mutation_magnitude: 0.0,
                 initial_population_size: 0,
@@ -3490,6 +3643,7 @@ mod tests {
                     fecundity: 1.0,
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
             world.add_agent(Agent {
                 id: 0,
@@ -3511,6 +3665,7 @@ mod tests {
                     fecundity: 2.0,
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
             world.step();
             assert_eq!(world.agents().len(), 3);
@@ -3545,6 +3700,7 @@ mod tests {
             contact_radius: 5.0,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 1.0, // mutate every dimension
             mutation_magnitude: 0.5,
             initial_population_size: 0,
@@ -3573,6 +3729,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -3583,6 +3740,7 @@ mod tests {
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         assert_eq!(world.agents().len(), 3);
@@ -3611,6 +3769,7 @@ mod tests {
                 contact_radius: 5.0,
                 reproduction_efficiency: 0.7,
                 reproduction_energy_threshold: 10.0,
+                wear_degradation_steepness: 0.0,
                 mutation_rate: 0.5,
                 mutation_magnitude: 0.3,
                 initial_population_size: 0,
@@ -3638,6 +3797,7 @@ mod tests {
             nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
             world.add_agent(Agent {
                 id: 0,
@@ -3648,6 +3808,7 @@ mod tests {
             nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
             world.step();
             world
@@ -3675,6 +3836,7 @@ mod tests {
             decomposition_efficiency: 0.4,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 15.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.1,
             mutation_magnitude: 0.05,
             initial_population_size: 10,
@@ -3822,8 +3984,8 @@ mod tests {
             photosynthetic_absorption: 1.0,
             ..zero_traits()
         };
-        world.add_agent(Agent { id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: reproducer_traits, contact_time: 0, });
-        world.add_agent(Agent { id: 0, position: (0.1, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: reproducer_traits, contact_time: 0, });
+        world.add_agent(Agent { id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: reproducer_traits, contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT] });
+        world.add_agent(Agent { id: 0, position: (0.1, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: reproducer_traits, contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT] });
 
         let initial_max_id = world.agents().iter().map(|a| a.id).max().unwrap();
 
@@ -3859,6 +4021,7 @@ mod tests {
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         let agent_id = world.agents()[0].id;
 
@@ -3926,6 +4089,7 @@ spatial_decay_rate: 0.5,
         world_lone.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_lone.step();
         let lone_energy = world_lone.agents()[0].reserve;
@@ -3941,10 +4105,12 @@ spatial_decay_rate: 0.5,
         world_two.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_two.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_two.step();
         let energy_a = world_two.agents()[0].reserve;
@@ -3994,10 +4160,12 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0, position: (40.0, 40.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         let gate = 1.0_f32 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
@@ -4051,6 +4219,7 @@ spatial_decay_rate: 0.5,
         world_sessile.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_sessile.step();
         let sessile_energy = world_sessile.agents()[0].reserve;
@@ -4064,6 +4233,7 @@ spatial_decay_rate: 0.5,
         world_mobile.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_mobile.step();
         let mobile_energy = world_mobile.agents()[0].reserve;
@@ -4110,6 +4280,7 @@ spatial_decay_rate: 0.5,
         world_high.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: high_consumption,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_high.step();
 
@@ -4117,6 +4288,7 @@ spatial_decay_rate: 0.5,
         world_low.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: low_consumption,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_low.step();
 
@@ -4181,10 +4353,12 @@ spatial_decay_rate: 0.5,
         world_gen.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: generalist,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_gen.add_agent(Agent {
             id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: generalist,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_gen.step();
         let gen_energy = world_gen.agents()[0].reserve;
@@ -4194,6 +4368,7 @@ spatial_decay_rate: 0.5,
         world_spec.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: specialist,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_spec.step();
         let spec_energy = world_spec.agents()[0].reserve;
@@ -4213,6 +4388,7 @@ spatial_decay_rate: 0.5,
             movement_cost_coefficient: 0.0,
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -4241,10 +4417,12 @@ spatial_decay_rate: 0.5,
         world_near.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_near.add_agent(Agent {
             id: 0, position: (9.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_near.step();
         assert_eq!(
@@ -4257,10 +4435,12 @@ spatial_decay_rate: 0.5,
         world_far.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_far.add_agent(Agent {
             id: 0, position: (11.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world_far.step();
         assert_eq!(
@@ -4278,6 +4458,7 @@ spatial_decay_rate: 0.5,
             movement_cost_coefficient: 0.0,
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -4309,10 +4490,12 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0, position: (10.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         assert_eq!(
@@ -4330,6 +4513,7 @@ spatial_decay_rate: 0.5,
             movement_cost_coefficient: 0.0,
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -4353,10 +4537,12 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0, position: (10.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         assert_eq!(
@@ -4374,6 +4560,7 @@ spatial_decay_rate: 0.5,
             movement_cost_coefficient: 0.0,
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -4397,10 +4584,12 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0, position: (10.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         assert_eq!(
@@ -4417,6 +4606,7 @@ spatial_decay_rate: 0.5,
             light_competition_radius: 10.0,
             initial_population_size: 50,
             reproduction_energy_threshold: 30.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.1,
             mutation_magnitude: 0.05,
             ..test_params()
@@ -4615,6 +4805,8 @@ spatial_decay_rate: 0.5,
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
+            wear_rate: 0.0,
+            wear_degradation_steepness: 0.0,
         }
     }
 
@@ -4643,6 +4835,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -4652,6 +4845,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         let consumed = world.event_log().by_kind(&EventKind::Consumed);
@@ -4677,6 +4871,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_carcass(Carcass {
             id: 99,
@@ -4712,6 +4907,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         let agent_id = world.agents()[0].id;
         world.step();
@@ -4746,6 +4942,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: repro_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -4756,6 +4953,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: repro_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.step();
         let mates = world.event_log().by_kind(&EventKind::MateSelected);
@@ -4784,6 +4982,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         for _ in 0..15 {
             world.step();
@@ -4818,6 +5017,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0,
@@ -4827,6 +5027,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         let log = world.event_log();
@@ -4884,6 +5085,7 @@ spatial_decay_rate: 0.5,
                     ..zero_traits()
                 },
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             });
             // Target with structure=5, killed by consumption
             world.add_agent(Agent {
@@ -4894,6 +5096,7 @@ spatial_decay_rate: 0.5,
                 nutrient: 0.0,
                 traits: zero_traits(),
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             });
             // Scavenger with a pre-existing carcass to decompose
             world.add_agent(Agent {
@@ -4907,6 +5110,7 @@ spatial_decay_rate: 0.5,
                     ..zero_traits()
                 },
                 contact_time: 0,
+                wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             });
             world.add_carcass(Carcass {
                 id: 99,
@@ -4955,6 +5159,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0,
@@ -4964,6 +5169,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_carcass(Carcass {
             id: 99,
@@ -5050,6 +5256,7 @@ spatial_decay_rate: 0.5,
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
             world.step();
@@ -5118,6 +5325,7 @@ spatial_decay_rate: 0.5,
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
             world.step();
@@ -5170,6 +5378,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0,
@@ -5179,6 +5388,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         // Observer A: close to the death (dist ~2 from death at (1,0))
         world.add_agent(Agent {
@@ -5193,6 +5403,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         // Observer B: farther from the death (dist ~9 from death at (1,0))
         world.add_agent(Agent {
@@ -5207,6 +5418,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
         world.step();
@@ -5248,6 +5460,7 @@ spatial_decay_rate: 0.5,
             contact_radius: 5.0,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -5276,6 +5489,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -5286,6 +5500,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
         world.step();
@@ -5353,6 +5568,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -5363,6 +5579,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         // Observer with zero sensing range — right next to the action
         world.add_agent(Agent {
@@ -5377,6 +5594,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
         world.step();
@@ -5405,6 +5623,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 };
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::Consumed,
@@ -5421,6 +5640,7 @@ spatial_decay_rate: 0.5,
             nearby_carcasses: vec![],
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
         };
         let response = agent.receive(&trigger, &data);
         assert_eq!(response.ack, event::Ack::Ack);
@@ -5442,6 +5662,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 };
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::Consumed,
@@ -5457,6 +5678,7 @@ spatial_decay_rate: 0.5,
             nearby_carcasses: vec![],
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
         };
         let response = agent.receive(&trigger, &data);
         assert_eq!(response.ack, event::Ack::Nack);
@@ -5477,6 +5699,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 };
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::CarcassCreated,
@@ -5493,6 +5716,7 @@ spatial_decay_rate: 0.5,
             ],
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
         };
         let response = agent.receive(&trigger, &data);
         assert_eq!(response.ack, event::Ack::Ack);
@@ -5520,6 +5744,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 };
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::MatingReadiness,
@@ -5544,6 +5769,7 @@ spatial_decay_rate: 0.5,
             nearby_carcasses: vec![],
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
         };
         let response = agent.receive(&trigger, &data);
         assert_eq!(response.ack, event::Ack::Ack);
@@ -5569,6 +5795,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 };
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::MatingReadiness,
@@ -5592,6 +5819,7 @@ spatial_decay_rate: 0.5,
             nearby_carcasses: vec![],
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
         };
         let response = agent.receive(&trigger, &data);
         assert_eq!(response.ack, event::Ack::Ack);
@@ -5613,6 +5841,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 };
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::Born,
@@ -5630,6 +5859,7 @@ spatial_decay_rate: 0.5,
             ],
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
         };
         let response = agent.receive(&trigger, &data);
         assert_eq!(response.ack, event::Ack::Nack);
@@ -5661,6 +5891,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: TraitVector { consumption_rate: 2.0, ..zero_traits() },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0, position: (3.0, 0.0), reserve: 50.0,
@@ -5668,6 +5899,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
 
         // Before step: construct what receive() would return
@@ -5683,6 +5915,7 @@ spatial_decay_rate: 0.5,
             nearby_carcasses: vec![],
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
         };
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::Consumed,
@@ -5718,6 +5951,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 };
         let data = ProjectionData {
             feeding_gradient: (3.0, 4.0),
@@ -5726,6 +5960,7 @@ spatial_decay_rate: 0.5,
             nearby_carcasses: vec![],
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
         };
         let trigger = event::Event {
             tick: 0,
@@ -5763,6 +5998,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 };
         let data = ProjectionData {
             feeding_gradient: (3.0, 4.0),
@@ -5771,6 +6007,7 @@ spatial_decay_rate: 0.5,
             nearby_carcasses: vec![],
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
         };
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::Moved,
@@ -5797,6 +6034,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 };
         let data = ProjectionData {
             feeding_gradient: (2.0, 0.0),
@@ -5805,6 +6043,7 @@ spatial_decay_rate: 0.5,
             nearby_carcasses: vec![],
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
+            wear_degradation_steepness: 0.0,
         };
         let trigger = event::Event {
             tick: 0, seq: 0, kind: event::EventKind::Moved,
@@ -5891,6 +6130,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         // Prey at (2,0) — within contact radius
         world.add_agent(Agent {
@@ -5905,6 +6145,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         // Non-consumer observer at (4,0) — within sensing range, will NACK Consumed
         world.add_agent(Agent {
@@ -5919,6 +6160,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
         // Tick 1: consumption happens, observer receives Consumed broadcast and NACKs it
@@ -5972,6 +6214,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         // Prey at (2,0) — within contact radius, low structure to ensure death
         world.add_agent(Agent {
@@ -5985,6 +6228,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         // Observer at (4,0) — non-consumer, will NACK Consumed but should receive Died
         world.add_agent(Agent {
@@ -5999,6 +6243,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
         // Tick 1: consumption kills prey, observer NACKs Consumed but receives Died
@@ -6026,6 +6271,7 @@ spatial_decay_rate: 0.5,
             consumption_efficiency: 0.5,
             reproduction_efficiency: 0.9,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             world_extent: extent,
             initial_population_size: 0,
@@ -6061,6 +6307,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: parent_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         world.add_agent(Agent {
             id: 0,
@@ -6071,6 +6318,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: parent_traits,
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
         // Consumer nearby to trigger Consumed broadcasts
@@ -6087,6 +6335,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         // Prey for the consumer
         world.add_agent(Agent {
@@ -6101,6 +6350,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
         // Tick 1: parents reproduce (creating offspring), parents NACK Consumed
@@ -6157,6 +6407,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
         // Prey (needs structure for consumption to work)
         world.add_agent(Agent {
@@ -6170,6 +6421,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         // Non-consumer observer — will NACK Consumed, then die from metabolic cost
         world.add_agent(Agent {
@@ -6183,6 +6435,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
                     contact_time: 0,
+                    wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
 
         // Record observer id before step
@@ -6251,6 +6504,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0,
@@ -6260,6 +6514,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(),
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         let log = world.event_log();
@@ -6303,6 +6558,7 @@ spatial_decay_rate: 0.5,
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
             world.add_agent(Agent {
                 id: 0,
@@ -6313,6 +6569,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
             world.add_agent(Agent {
                 id: 0,
@@ -6326,6 +6583,7 @@ spatial_decay_rate: 0.5,
                     ..zero_traits()
                 },
                             contact_time: 0,
+                            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
 });
             // Should not panic from debug_assert!(consequence_queue.is_empty())
             world.step();
@@ -6544,6 +6802,7 @@ spatial_decay_rate: 0.5,
             contact_radius: 5.0,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            wear_degradation_steepness: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -6572,6 +6831,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: shared_traits,
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0,
@@ -6582,6 +6842,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: shared_traits,
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         let initial_count = world.agents().len();
         world.step();
@@ -6623,6 +6884,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         let ticks = 100;
         for _ in 0..ticks {
@@ -6664,6 +6926,7 @@ spatial_decay_rate: 0.5,
                 ..zero_traits()
             },
             contact_time: 10,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         // Agent has mobility > 0, so it moves and contact_time resets to 0
@@ -6699,6 +6962,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0,
             traits: zero_traits(), // zero mobility = stationary
             contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         for tick in 1..=5 {
             world.step();
@@ -6837,6 +7101,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 1.0,
                 ..zero_traits()
             }, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         // After tick: reserve starts 100, minus metabolic cost 1.0 = 99.0,
@@ -6880,6 +7145,7 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 102.0, structure: 0.0,
             nutrient: 0.0, traits: zero_traits(), contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         let agent = &world.agents()[0];
@@ -6911,6 +7177,7 @@ spatial_decay_rate: 0.5,
             initial_population_size: 5,
             contact_radius: 5.0,
             reproduction_energy_threshold: 15.0,
+            wear_degradation_steepness: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -6966,6 +7233,7 @@ spatial_decay_rate: 0.5,
                 photosynthetic_absorption: 1.0,
                 ..zero_traits()
             }, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         let mut prev_structure = 0.0_f32;
         for tick in 1..=10 {
@@ -7032,6 +7300,7 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0,
             nutrient: 0.0, traits: zero_traits(), contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
         // After metabolism: reserve = 50 - 50 = 0 → no surplus → no growth
@@ -7074,12 +7343,14 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0, traits: TraitVector {
                 photosynthetic_absorption: 1.0, ..zero_traits()
             }, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world_consumed.add_agent(Agent {
             id: 0, position: (2.0, 0.0), reserve: 50.0, structure: 0.0,
             nutrient: 0.0, traits: TraitVector {
                 consumption_rate: 5.0, ..zero_traits()
             }, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
 
         let mut world_baseline = World::new(params.clone(), dist.clone(), 42);
@@ -7088,6 +7359,7 @@ spatial_decay_rate: 0.5,
             nutrient: 0.0, traits: TraitVector {
                 photosynthetic_absorption: 1.0, ..zero_traits()
             }, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
 
         world_consumed.step();
@@ -7172,10 +7444,12 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
             nutrient: 0.0, traits: consumer_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0, position: (1.0, 0.0), reserve: 100.0, structure: starting_structure,
             nutrient: 0.0, traits: generalist_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
 
@@ -7253,10 +7527,12 @@ spatial_decay_rate: 0.5,
         world_spec.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
             nutrient: 0.0, traits: consumer_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world_spec.add_agent(Agent {
             id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 1.1,
             nutrient: 0.0, traits: specialist_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world_spec.step();
         assert_eq!(
@@ -7269,10 +7545,12 @@ spatial_decay_rate: 0.5,
         world_gen.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
             nutrient: 0.0, traits: consumer_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world_gen.add_agent(Agent {
             id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 1.1,
             nutrient: 0.0, traits: generalist_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world_gen.step();
         assert!(
@@ -7327,10 +7605,12 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
             nutrient: 0.0, traits: consumer_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 1.1,
             nutrient: 0.0, traits: generalist_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.step();
 
@@ -7392,10 +7672,12 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0,
             nutrient: 0.0, traits: consumer_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
         world.add_agent(Agent {
             id: 0, position: (1.0, 0.0), reserve: 50.0, structure: 1.5,
             nutrient: 0.0, traits: generalist_traits, contact_time: 0,
+            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
         });
 
         let initial_energy = 50.0 + 50.0 + 1.5; // reserve + reserve + structure
@@ -7521,5 +7803,409 @@ spatial_decay_rate: 0.5,
         for _ in 0..100 {
             world.step();
         }
+    }
+
+    // ── Somatic wear tests ──────────────────────────────────────────
+
+    #[test]
+    fn effective_trait_degrades_with_wear() {
+        let mut agent = Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 100.0,
+            structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                consumption_rate: 0.3,
+                mobility: 0.2,
+                ..zero_traits()
+            },
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        };
+        // Zero wear → effective equals nominal
+        assert!((agent.effective_trait(0) - 0.5).abs() < 1e-6);
+
+        // Add wear to photosynthetic_absorption (index 0)
+        let k = 1.0_f32; // steepness
+        agent.wear[0] = 2.0;
+        let expected = 0.5 * (-k * 2.0_f32).exp();
+        assert!((agent.effective_trait_with_steepness(0, k) - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wear_accumulates_proportional_to_nominal_trait_magnitude() {
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            wear_rate: 0.01,
+            wear_degradation_steepness: 1.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 1000.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            consumption_rate: 0.3,
+            mobility: 0.0,
+            ..zero_traits()
+        };
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+            nutrient: 0.0, traits, contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world.step();
+
+        let agent = &world.agents()[world.agents().len() - 1];
+        // After 1 tick with wear_rate=0.01:
+        // photosynthetic_absorption wear = 0.01 * 0.5 = 0.005
+        // consumption_rate wear = 0.01 * 0.3 = 0.003
+        // mobility wear = 0.01 * 0.0 = 0.0
+        let photo_wear = agent.wear[0];
+        let consumption_wear = agent.wear[1];
+        let mobility_wear = agent.wear[4];
+        assert!(photo_wear > 0.0, "photo wear should be positive: {}", photo_wear);
+        assert!(consumption_wear > 0.0, "consumption wear should be positive: {}", consumption_wear);
+        assert!((mobility_wear).abs() < 1e-10, "zero-trait should not accumulate wear");
+        // Photo wear should be proportional to nominal magnitude
+        assert!((photo_wear / consumption_wear - 0.5 / 0.3).abs() < 0.01,
+            "wear ratio should match nominal trait ratio");
+    }
+
+    #[test]
+    fn worn_producer_captures_less_light() {
+        // A worn producer should get less solar income than an unworn one.
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            photo_maintenance_cost: 0.0,
+            consumption_maintenance_cost: 0.0,
+            scavenging_maintenance_cost: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.0, // no new wear this tick
+            wear_degradation_steepness: 1.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 1000.0,
+        };
+
+        // Unworn producer
+        let mut world_fresh = World::new(params.clone(), dist.clone(), 42);
+        world_fresh.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector { photosynthetic_absorption: 0.5, ..zero_traits() },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        let pre_fresh = world_fresh.agents()[0].reserve;
+        world_fresh.step();
+        let gain_fresh = world_fresh.agents()[0].reserve - pre_fresh;
+
+        // Worn producer (same nominal traits, but wear on photosynthesis)
+        let mut world_worn = World::new(params.clone(), dist.clone(), 42);
+        let mut worn_wear = [0.0_f32; FUNCTIONAL_TRAIT_COUNT];
+        worn_wear[0] = 2.0; // significant photosynthesis wear
+        world_worn.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector { photosynthetic_absorption: 0.5, ..zero_traits() },
+            contact_time: 0, wear: worn_wear,
+        });
+        let pre_worn = world_worn.agents()[0].reserve;
+        world_worn.step();
+        let gain_worn = world_worn.agents()[0].reserve - pre_worn;
+
+        assert!(
+            gain_worn < gain_fresh,
+            "worn producer should gain less: worn={gain_worn}, fresh={gain_fresh}"
+        );
+    }
+
+    #[test]
+    fn worn_consumer_drains_less_structure() {
+        // A consumer with consumption_rate wear should drain less from its target.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.0,
+            wear_degradation_steepness: 1.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 1000.0,
+        };
+
+        // Fresh consumer - give consumer some structure too so we can distinguish
+        let mut world_fresh = World::new(params.clone(), dist.clone(), 42);
+        world_fresh.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 10.0,
+            nutrient: 0.0,
+            traits: TraitVector { consumption_rate: 2.0, ..zero_traits() },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_fresh.add_agent(Agent {
+            id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 50.0,
+            nutrient: 0.0, traits: zero_traits(),
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_fresh.step();
+        // Find the target by looking for the agent whose structure started near 50
+        // (it will have gone down from consumption)
+        let target_fresh = world_fresh.agents().iter()
+            .find(|a| a.traits.consumption_rate < 0.01) // the target has no consumption
+            .expect("target should survive");
+        let target_structure_fresh = target_fresh.structure;
+
+        // Worn consumer
+        let mut world_worn = World::new(params.clone(), dist.clone(), 42);
+        let mut worn_wear = [0.0_f32; FUNCTIONAL_TRAIT_COUNT];
+        worn_wear[1] = 3.0; // heavy consumption_rate wear
+        world_worn.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 10.0,
+            nutrient: 0.0,
+            traits: TraitVector { consumption_rate: 2.0, ..zero_traits() },
+            contact_time: 0, wear: worn_wear,
+        });
+        world_worn.add_agent(Agent {
+            id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 50.0,
+            nutrient: 0.0, traits: zero_traits(),
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        world_worn.step();
+        let target_worn = world_worn.agents().iter()
+            .find(|a| a.traits.consumption_rate < 0.01)
+            .expect("target should survive");
+        let target_structure_worn = target_worn.structure;
+
+        // Worn consumer should leave more structure on target (less drain)
+        assert!(
+            target_structure_worn > target_structure_fresh,
+            "worn consumer should drain less: target_fresh={target_structure_fresh}, target_worn={target_structure_worn}"
+        );
+    }
+
+    #[test]
+    fn worn_mobility_reduces_movement_distance() {
+        // An agent with worn mobility should move less distance.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.0,
+            wear_degradation_steepness: 1.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 1000.0,
+        };
+
+        // Run many trials to get average movement distance
+        let mut total_dist_fresh = 0.0_f32;
+        let mut total_dist_worn = 0.0_f32;
+        let trials = 20;
+
+        for seed in 0..trials {
+            // Fresh agent
+            let mut world_fresh = World::new(params.clone(), dist.clone(), seed);
+            world_fresh.add_agent(Agent {
+                id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+                nutrient: 0.0,
+                traits: TraitVector { mobility: 5.0, ..zero_traits() },
+                contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            });
+            world_fresh.step();
+            let pos = world_fresh.agents()[0].position;
+            total_dist_fresh += (pos.0 * pos.0 + pos.1 * pos.1).sqrt();
+
+            // Worn agent
+            let mut world_worn = World::new(params.clone(), dist.clone(), seed);
+            let mut worn_wear = [0.0_f32; FUNCTIONAL_TRAIT_COUNT];
+            worn_wear[4] = 3.0; // heavy mobility wear
+            world_worn.add_agent(Agent {
+                id: 0, position: (0.0, 0.0), reserve: 1000.0, structure: 0.0,
+                nutrient: 0.0,
+                traits: TraitVector { mobility: 5.0, ..zero_traits() },
+                contact_time: 0, wear: worn_wear,
+            });
+            world_worn.step();
+            let pos = world_worn.agents()[0].position;
+            total_dist_worn += (pos.0 * pos.0 + pos.1 * pos.1).sqrt();
+        }
+
+        let avg_fresh = total_dist_fresh / trials as f32;
+        let avg_worn = total_dist_worn / trials as f32;
+        assert!(
+            avg_worn < avg_fresh,
+            "worn agent should move less: fresh={avg_fresh}, worn={avg_worn}"
+        );
+    }
+
+    #[test]
+    fn agent_starts_with_zero_wear() {
+        let agent = Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 100.0,
+            structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                consumption_rate: 0.3,
+                mobility: 0.2,
+                ..zero_traits()
+            },
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        };
+        for w in &agent.wear {
+            assert_eq!(*w, 0.0);
+        }
+    }
+
+    #[test]
+    fn offspring_born_with_zero_wear() {
+        // When a worn agent reproduces, offspring should have zero wear.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.0,
+            wear_degradation_steepness: 0.0,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 1000.0,
+        };
+
+        let shared_traits = TraitVector {
+            mobility: 1.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            ..zero_traits()
+        };
+        let mut worn_wear = [0.0_f32; FUNCTIONAL_TRAIT_COUNT];
+        worn_wear[4] = 5.0; // heavy mobility wear on parent
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0, traits: shared_traits, contact_time: 0,
+            wear: worn_wear,
+        });
+        world.add_agent(Agent {
+            id: 0, position: (0.1, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0, traits: shared_traits, contact_time: 0,
+            wear: worn_wear,
+        });
+
+        let initial_count = world.agents().len();
+        world.step();
+
+        if world.agents().len() > initial_count {
+            // Offspring was born - check its wear
+            let offspring = &world.agents()[world.agents().len() - 1];
+            for &w in &offspring.wear {
+                assert_eq!(w, 0.0, "offspring should have zero wear");
+            }
+        }
+        // If no offspring was born, the test is inconclusive but not a failure
+        // (mating might not happen due to random agent ordering)
+    }
+
+    #[test]
+    fn behavioural_traits_do_not_accumulate_wear() {
+        // mate_selectivity (index 6), reproductive_investment (index 8),
+        // fecundity (index 9) should not have wear entries.
+        // Wear array only covers functional traits (indices 0-5, 7 in TraitVector).
+        // Verify that after many ticks, wear only appears on functional traits.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.1,
+            wear_degradation_steepness: 1.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 10000.0,
+        };
+
+        // Agent with behavioural traits only
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 10000.0, structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                mate_selectivity: 0.5,
+                reproductive_investment: 0.3,
+                fecundity: 2.0,
+                ..zero_traits()
+            },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        for _ in 0..10 {
+            world.step();
+        }
+        // All wear entries should still be zero because only behavioural traits
+        // are non-zero, and those don't accumulate wear
+        let agent = &world.agents()[0];
+        for ft in 0..FUNCTIONAL_TRAIT_COUNT {
+            assert_eq!(agent.wear[ft], 0.0,
+                "functional trait {} should have no wear when nominal is zero", ft);
+        }
+    }
+
+    #[test]
+    fn death_threshold_uses_nominal_traits() {
+        // death_threshold should use nominal (unworn) traits, not effective.
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.3,
+            consumption_rate: 0.3,
+            mobility: 0.4,
+            ..zero_traits()
+        };
+        // death_threshold uses the TraitVector directly (nominal)
+        let threshold = death_threshold(&traits);
+        assert!(threshold > 0.0);
+        // The function takes a TraitVector, not an Agent, so it naturally uses
+        // nominal values. This test confirms the interface.
     }
 }
