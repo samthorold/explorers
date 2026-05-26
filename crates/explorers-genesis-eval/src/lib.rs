@@ -583,6 +583,7 @@ mod tests {
             growth_efficiency: 0.0,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
         }
     }
 
@@ -599,6 +600,7 @@ mod tests {
                 sensing_range: 5.0,
                 reproductive_investment: 0.3,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.5,
             initial_cluster_count: 2,
@@ -796,6 +798,7 @@ mod tests {
             growth_efficiency: 0.0,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
@@ -809,6 +812,7 @@ mod tests {
                 sensing_range: 0.0,
                 reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -861,6 +865,7 @@ mod tests {
             sensing_range: vals[6],
             reproductive_investment: vals[7],
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
         }
     }
 

@@ -17,11 +17,15 @@
     "photo_maintenance_cost": 0.01,
     "consumption_maintenance_cost": 0.01,
     "scavenging_maintenance_cost": 0.01,
-    "spatial_decay_rate": 0.5
+    "spatial_decay_rate": 0.5,
+    "somatic_maintenance_cost_coefficient": 0.1
   },
   "agents": [
     {
-      "position": [10.0, 10.0],
+      "position": [
+        10.0,
+        10.0
+      ],
       "reserve": 100.0,
       "traits": {
         "photosynthetic_absorption": 0.8,
@@ -31,11 +35,15 @@
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 0.1,
         "sensing_range": 0.1,
-        "reproductive_investment": 0.0
+        "reproductive_investment": 0.0,
+        "somatic_maintenance": 0.05
       }
     },
     {
-      "position": [-20.0, 15.0],
+      "position": [
+        -20.0,
+        15.0
+      ],
       "reserve": 80.0,
       "traits": {
         "photosynthetic_absorption": 0.0,
@@ -45,11 +53,15 @@
         "chemotaxis_sensitivity": 0.1,
         "mate_selectivity": 0.0,
         "sensing_range": 5.0,
-        "reproductive_investment": 0.0
+        "reproductive_investment": 0.0,
+        "somatic_maintenance": 0.02
       }
     },
     {
-      "position": [0.0, -10.0],
+      "position": [
+        0.0,
+        -10.0
+      ],
       "reserve": 60.0,
       "traits": {
         "photosynthetic_absorption": 0.0,
@@ -59,7 +71,8 @@
         "chemotaxis_sensitivity": 0.2,
         "mate_selectivity": 0.0,
         "sensing_range": 3.0,
-        "reproductive_investment": 0.1
+        "reproductive_investment": 0.1,
+        "somatic_maintenance": 0.03
       }
     }
   ],

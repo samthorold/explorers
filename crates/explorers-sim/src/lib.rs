@@ -88,6 +88,8 @@ pub struct TraitVector {
     pub reproductive_investment: f32,
     #[serde(default)]
     pub fecundity: f32,
+    #[serde(default)]
+    pub somatic_maintenance: f32,
 }
 
 impl TraitVector {
@@ -102,7 +104,8 @@ impl TraitVector {
         let d7 = self.sensing_range - other.sensing_range;
         let d8 = self.reproductive_investment - other.reproductive_investment;
         let d9 = self.fecundity - other.fecundity;
-        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5 + d6 * d6 + d7 * d7 + d8 * d8 + d9 * d9).sqrt()
+        let d10 = self.somatic_maintenance - other.somatic_maintenance;
+        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5 + d6 * d6 + d7 * d7 + d8 * d8 + d9 * d9 + d10 * d10).sqrt()
     }
 
     pub fn get(&self, index: usize) -> f32 {
@@ -117,6 +120,7 @@ impl TraitVector {
             7 => self.sensing_range,
             8 => self.reproductive_investment,
             9 => self.fecundity,
+            10 => self.somatic_maintenance,
             _ => unreachable!(),
         }
     }
@@ -133,12 +137,13 @@ impl TraitVector {
             7 => self.sensing_range = value,
             8 => self.reproductive_investment = value,
             9 => self.fecundity = value,
+            10 => self.somatic_maintenance = value,
             _ => unreachable!(),
         }
     }
 
     /// Number of trait dimensions.
-    pub const NUM_DIMS: usize = 10;
+    pub const NUM_DIMS: usize = 11;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -175,6 +180,9 @@ pub struct WorldParameters {
     /// Steepness of exponential degradation: effective = nominal * exp(-k * wear).
     #[serde(default)]
     pub wear_degradation_steepness: f32,
+    /// Energy cost per unit somatic_maintenance trait per tick (reserve → heat).
+    #[serde(default)]
+    pub somatic_maintenance_cost_coefficient: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -562,6 +570,7 @@ impl World {
                     sensing_range: mean.sensing_range,
                     reproductive_investment: mean.reproductive_investment,
                     fecundity: mean.fecundity,
+                    somatic_maintenance: mean.somatic_maintenance,
                 }
             })
             .collect();
@@ -592,6 +601,7 @@ impl World {
                         reproductive_investment: centroid.reproductive_investment
                             + trait_dist.sample(&mut rng),
                         fecundity: centroid.fecundity + trait_dist.sample(&mut rng),
+                        somatic_maintenance: centroid.somatic_maintenance + trait_dist.sample(&mut rng),
                     },
                     contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
@@ -731,6 +741,9 @@ impl World {
 
         // (5c) Somatic wear accumulation
         self.apply_wear_accumulation();
+
+        // (5d) Somatic repair — reduces wear proportional to somatic_maintenance trait
+        self.apply_somatic_repair();
 
         // (6) Rebuild grids with post-move positions
         agent_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
@@ -882,7 +895,8 @@ impl World {
                 + agent.traits.photosynthetic_absorption * self.params.photo_maintenance_cost
                 + agent.traits.consumption_rate * self.params.consumption_maintenance_cost
                 + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost
-                + agent.traits.nutrient_absorption * self.params.nutrient_absorption_maintenance_cost;
+                + agent.traits.nutrient_absorption * self.params.nutrient_absorption_maintenance_cost
+                + agent.traits.somatic_maintenance * self.params.somatic_maintenance_cost_coefficient;
             agent.reserve -= metabolic_cost + movement_cost;
         }
     }
@@ -932,6 +946,21 @@ impl World {
             for ft in 0..FUNCTIONAL_TRAIT_COUNT {
                 let nominal = agent.traits.get(FUNCTIONAL_TRAIT_INDICES[ft]);
                 agent.wear[ft] += rate * nominal.max(0.0);
+            }
+        }
+    }
+
+    /// Reduce wear on all functional traits proportional to the agent's
+    /// somatic_maintenance trait. Repair is whole-organism: all traits
+    /// receive equal repair. Wear cannot go below zero.
+    fn apply_somatic_repair(&mut self) {
+        for agent in self.agents.iter_mut() {
+            let repair = agent.traits.somatic_maintenance;
+            if repair <= 0.0 {
+                continue;
+            }
+            for ft in 0..FUNCTIONAL_TRAIT_COUNT {
+                agent.wear[ft] = (agent.wear[ft] - repair).max(0.0);
             }
         }
     }
@@ -1087,7 +1116,8 @@ impl World {
                 + agent.traits.photosynthetic_absorption * self.params.photo_maintenance_cost
                 + agent.traits.consumption_rate * self.params.consumption_maintenance_cost
                 + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost
-                + agent.traits.nutrient_absorption * self.params.nutrient_absorption_maintenance_cost;
+                + agent.traits.nutrient_absorption * self.params.nutrient_absorption_maintenance_cost
+                + agent.traits.somatic_maintenance * self.params.somatic_maintenance_cost_coefficient;
             // Movement cost for next tick is unknown, so retain extra margin.
             // Using 2x metabolic cost ensures reserve > 0 after next metabolism.
             let retention = metabolic_cost * 2.0;
@@ -1355,6 +1385,7 @@ mod tests {
             sensing_range: 0.7,
             reproductive_investment: 0.8,
         fecundity: 0.0,
+        somatic_maintenance: 0.0,
         };
         assert_eq!(traits.photosynthetic_absorption, 0.1);
         assert_eq!(traits.consumption_rate, 0.2);
@@ -1382,10 +1413,30 @@ mod tests {
             sensing_range: 0.0,
             reproductive_investment: 0.0,
             fecundity: 3.5,
+            somatic_maintenance: 0.0,
         };
         assert_eq!(traits.fecundity, 3.5);
         assert_eq!(traits.get(9), 3.5);
-        assert_eq!(TraitVector::NUM_DIMS, 10);
+    }
+
+    #[test]
+    fn trait_vector_has_somatic_maintenance_dimension() {
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.0,
+            consumption_rate: 0.0,
+            scavenging_rate: 0.0,
+            nutrient_absorption: 0.0,
+            mobility: 0.0,
+            chemotaxis_sensitivity: 0.0,
+            mate_selectivity: 0.0,
+            sensing_range: 0.0,
+            reproductive_investment: 0.0,
+            fecundity: 0.0,
+            somatic_maintenance: 0.15,
+        };
+        assert_eq!(traits.somatic_maintenance, 0.15);
+        assert_eq!(traits.get(10), 0.15);
+        assert_eq!(TraitVector::NUM_DIMS, 11);
     }
 
     fn test_params() -> WorldParameters {
@@ -1413,6 +1464,7 @@ mod tests {
             growth_efficiency: 0.0,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
         }
     }
 
@@ -1429,6 +1481,7 @@ mod tests {
                 sensing_range: 0.4,
                 reproductive_investment: 0.3,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -1485,6 +1538,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -1503,6 +1557,7 @@ mod tests {
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         // stoichiometric_demand for these traits: 3 non-zero dims
@@ -1560,6 +1615,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 15.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.1,
             mutation_magnitude: 0.05,
             initial_population_size: 10,
@@ -1580,6 +1636,7 @@ mod tests {
                 sensing_range: 5.0,
                 reproductive_investment: 5.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -2017,6 +2074,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -2033,6 +2091,7 @@ mod tests {
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         let mut world = World::new(params, dist, 42);
@@ -2151,6 +2210,7 @@ mod tests {
                 sensing_range: 0.0,
                 reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -2185,6 +2245,7 @@ mod tests {
                 sensing_range: 0.5,
                 reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -2233,6 +2294,7 @@ mod tests {
                 sensing_range,
                 reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -2270,6 +2332,7 @@ mod tests {
                 sensing_range: 0.0,
                 reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -2314,6 +2377,7 @@ mod tests {
                 sensing_range,
                 reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -2362,6 +2426,7 @@ mod tests {
             sensing_range: 0.0,
             reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
         }
     }
 
@@ -2710,6 +2775,7 @@ mod tests {
                 sensing_range: 0.0,
                 reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -3098,6 +3164,7 @@ mod tests {
                 sensing_range: 5.0,
                 reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -3180,6 +3247,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3197,6 +3265,7 @@ mod tests {
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         world.add_agent(Agent {
@@ -3240,6 +3309,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3264,6 +3334,7 @@ mod tests {
                 mate_selectivity: 10.0,
                 reproductive_investment: 15.0,
                 fecundity: 0.0,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             },
                     contact_time: 0,
@@ -3281,6 +3352,7 @@ mod tests {
                 mate_selectivity: 10.0,
                 reproductive_investment: 8.0,
                 fecundity: 0.0,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             },
                     contact_time: 0,
@@ -3303,6 +3375,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3327,6 +3400,7 @@ mod tests {
                 mate_selectivity: 10.0,
                 reproductive_investment: 15.0,
                 fecundity: 0.0,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             },
                     contact_time: 0,
@@ -3344,6 +3418,7 @@ mod tests {
                 mate_selectivity: 10.0,
                 reproductive_investment: 8.0,
                 fecundity: 0.0,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             },
                     contact_time: 0,
@@ -3369,6 +3444,7 @@ mod tests {
             contact_radius: 5.0,
             reproduction_energy_threshold: 50.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3385,6 +3461,7 @@ mod tests {
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         world.add_agent(Agent {
@@ -3422,6 +3499,7 @@ mod tests {
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3438,6 +3516,7 @@ mod tests {
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         world.add_agent(Agent {
@@ -3476,6 +3555,7 @@ mod tests {
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3501,6 +3581,7 @@ mod tests {
                 mate_selectivity: 10.0, // accepts trait dist < 10
                 reproductive_investment: 10.0,
                 fecundity: 0.0,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             },
                     contact_time: 0,
@@ -3517,6 +3598,7 @@ mod tests {
                 mate_selectivity: 0.5, // rejects trait dist >= 0.5
                 reproductive_investment: 10.0,
                 fecundity: 0.0,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             },
                     contact_time: 0,
@@ -3537,6 +3619,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -3554,6 +3637,7 @@ mod tests {
             mate_selectivity: 5.0,
             reproductive_investment: 5.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         // Three compatible agents all in contact — should produce at most 1 offspring (one pair)
@@ -3610,6 +3694,7 @@ mod tests {
                 reproduction_efficiency: 0.7,
                 reproduction_energy_threshold: 10.0,
                 wear_degradation_steepness: 0.0,
+                somatic_maintenance_cost_coefficient: 0.0,
                 mutation_rate: 0.0,
                 mutation_magnitude: 0.0,
                 initial_population_size: 0,
@@ -3641,6 +3726,7 @@ mod tests {
                     sensing_range: 1.0,
                     reproductive_investment: 10.0,
                     fecundity: 1.0,
+                    somatic_maintenance: 1.0,
                 },
                             contact_time: 0,
                             wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
@@ -3663,6 +3749,7 @@ mod tests {
                     sensing_range: 2.0,
                     reproductive_investment: 20.0,
                     fecundity: 2.0,
+                    somatic_maintenance: 2.0,
                 },
                             contact_time: 0,
                             wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
@@ -3670,7 +3757,7 @@ mod tests {
             world.step();
             assert_eq!(world.agents().len(), 3);
             let child = &world.agents()[2];
-            let parent_a_vals = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0, 1.0, 10.0, 1.0];
+            let parent_a_vals = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 100.0, 1.0, 10.0, 1.0, 1.0];
             for dim in 0..TraitVector::NUM_DIMS {
                 let val = child.traits.get(dim);
                 if (val - parent_a_vals[dim]).abs() < 1e-5 {
@@ -3701,6 +3788,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 1.0, // mutate every dimension
             mutation_magnitude: 0.5,
             initial_population_size: 0,
@@ -3718,6 +3806,7 @@ mod tests {
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         world.add_agent(Agent {
@@ -3770,6 +3859,7 @@ mod tests {
                 reproduction_efficiency: 0.7,
                 reproduction_energy_threshold: 10.0,
                 wear_degradation_steepness: 0.0,
+                somatic_maintenance_cost_coefficient: 0.0,
                 mutation_rate: 0.5,
                 mutation_magnitude: 0.3,
                 initial_population_size: 0,
@@ -3786,6 +3876,7 @@ mod tests {
                 mate_selectivity: 5.0,
                 reproductive_investment: 10.0,
                 fecundity: 0.0,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             };
             world.add_agent(Agent {
@@ -3837,6 +3928,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 15.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.1,
             mutation_magnitude: 0.05,
             initial_population_size: 10,
@@ -3855,6 +3947,7 @@ mod tests {
                 sensing_range: 5.0,
                 reproductive_investment: 5.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -3900,6 +3993,7 @@ mod tests {
                 sensing_range: 0.0,
                 reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -4389,6 +4483,7 @@ spatial_decay_rate: 0.5,
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -4407,6 +4502,7 @@ spatial_decay_rate: 0.5,
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
 
@@ -4459,6 +4555,7 @@ spatial_decay_rate: 0.5,
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -4477,6 +4574,7 @@ spatial_decay_rate: 0.5,
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         let mobile_traits = TraitVector {
@@ -4485,6 +4583,7 @@ spatial_decay_rate: 0.5,
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         world.add_agent(Agent {
@@ -4514,6 +4613,7 @@ spatial_decay_rate: 0.5,
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -4532,6 +4632,7 @@ spatial_decay_rate: 0.5,
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         world.add_agent(Agent {
@@ -4561,6 +4662,7 @@ spatial_decay_rate: 0.5,
             contact_radius: 5.0,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -4579,6 +4681,7 @@ spatial_decay_rate: 0.5,
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         world.add_agent(Agent {
@@ -4607,6 +4710,7 @@ spatial_decay_rate: 0.5,
             initial_population_size: 50,
             reproduction_energy_threshold: 30.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.1,
             mutation_magnitude: 0.05,
             ..test_params()
@@ -4623,6 +4727,7 @@ spatial_decay_rate: 0.5,
                 sensing_range: 8.0,
                 reproductive_investment: 15.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 3,
@@ -4685,6 +4790,7 @@ spatial_decay_rate: 0.5,
                 sensing_range: 8.0,
                 reproductive_investment: 15.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 3,
@@ -4807,6 +4913,7 @@ spatial_decay_rate: 0.5,
             growth_efficiency: 0.0,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
         }
     }
 
@@ -5461,6 +5568,7 @@ spatial_decay_rate: 0.5,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -5741,6 +5849,7 @@ spatial_decay_rate: 0.5,
                 mate_selectivity: 5.0,
                 reproductive_investment: 10.0,
                 fecundity: 0.0,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             },
                     contact_time: 0,
@@ -5762,6 +5871,7 @@ spatial_decay_rate: 0.5,
                         mate_selectivity: 5.0,
                         reproductive_investment: 10.0,
                         fecundity: 0.0,
+                        somatic_maintenance: 0.0,
                         ..zero_traits()
                     },
                 },
@@ -5792,6 +5902,7 @@ spatial_decay_rate: 0.5,
                 mate_selectivity: 5.0,
                 reproductive_investment: 10.0,
                 fecundity: 0.0,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             },
                     contact_time: 0,
@@ -5812,6 +5923,7 @@ spatial_decay_rate: 0.5,
                         mate_selectivity: 5.0,
                         reproductive_investment: 10.0,
                         fecundity: 0.0,
+                        somatic_maintenance: 0.0,
                         ..zero_traits()
                     },
                 },
@@ -6272,6 +6384,7 @@ spatial_decay_rate: 0.5,
             reproduction_efficiency: 0.9,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             world_extent: extent,
             initial_population_size: 0,
@@ -6297,6 +6410,7 @@ spatial_decay_rate: 0.5,
             sensing_range: 20.0,
             reproductive_investment: 5.0,
         fecundity: 0.0,
+        somatic_maintenance: 0.0,
         };
         world.add_agent(Agent {
             id: 0,
@@ -6803,6 +6917,7 @@ spatial_decay_rate: 0.5,
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             initial_population_size: 0,
@@ -6820,6 +6935,7 @@ spatial_decay_rate: 0.5,
             mate_selectivity: 5.0,
             reproductive_investment: 10.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
             ..zero_traits()
         };
         world.add_agent(Agent {
@@ -7178,6 +7294,7 @@ spatial_decay_rate: 0.5,
             contact_radius: 5.0,
             reproduction_energy_threshold: 15.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -7408,19 +7525,21 @@ spatial_decay_rate: 0.5,
             initial_energy_per_agent: 100.0,
         };
 
-        // Generalist: budget spread across all 10 dims = 0.1 each, sum = 1.0
+        // Generalist: budget spread across all dims equally, sum = 1.0
         // death_threshold = 1.0 (normalised entropy = 1.0, sum = 1.0)
+        let v = 1.0 / TraitVector::NUM_DIMS as f32;
         let generalist_traits = TraitVector {
-            photosynthetic_absorption: 0.1,
-            consumption_rate: 0.1,
-            scavenging_rate: 0.1,
-            nutrient_absorption: 0.1,
-            mobility: 0.1,
-            chemotaxis_sensitivity: 0.1,
-            mate_selectivity: 0.1,
-            sensing_range: 0.1,
-            reproductive_investment: 0.1,
-            fecundity: 0.1,
+            photosynthetic_absorption: v,
+            consumption_rate: v,
+            scavenging_rate: v,
+            nutrient_absorption: v,
+            mobility: v,
+            chemotaxis_sensitivity: v,
+            mate_selectivity: v,
+            sensing_range: v,
+            reproductive_investment: v,
+            fecundity: v,
+            somatic_maintenance: v,
         };
         let gen_threshold = death_threshold(&generalist_traits);
         assert!(
@@ -7510,6 +7629,7 @@ spatial_decay_rate: 0.5,
             sensing_range: 0.1,
             reproductive_investment: 0.1,
             fecundity: 0.1,
+            somatic_maintenance: 0.0,
         };
 
         let consumer_traits = TraitVector {
@@ -7591,6 +7711,7 @@ spatial_decay_rate: 0.5,
             sensing_range: 0.1,
             reproductive_investment: 0.1,
             fecundity: 0.1,
+            somatic_maintenance: 0.0,
         };
         // threshold = 1.0
 
@@ -7661,6 +7782,7 @@ spatial_decay_rate: 0.5,
             sensing_range: 0.1,
             reproductive_investment: 0.1,
             fecundity: 0.1,
+            somatic_maintenance: 0.0,
         };
 
         let consumer_traits = TraitVector {
@@ -7724,17 +7846,19 @@ spatial_decay_rate: 0.5,
             consumption_rate: 1.0,
             ..zero_traits()
         };
+        let v = 1.0 / TraitVector::NUM_DIMS as f32;
         let generalist = TraitVector {
-            photosynthetic_absorption: 0.1,
-            consumption_rate: 0.1,
-            scavenging_rate: 0.1,
-            nutrient_absorption: 0.1,
-            mobility: 0.1,
-            chemotaxis_sensitivity: 0.1,
-            mate_selectivity: 0.1,
-            sensing_range: 0.1,
-            reproductive_investment: 0.1,
-            fecundity: 0.1,
+            photosynthetic_absorption: v,
+            consumption_rate: v,
+            scavenging_rate: v,
+            nutrient_absorption: v,
+            mobility: v,
+            chemotaxis_sensitivity: v,
+            mate_selectivity: v,
+            sensing_range: v,
+            reproductive_investment: v,
+            fecundity: v,
+            somatic_maintenance: v,
         };
         let spec_threshold = death_threshold(&specialist);
         let gen_threshold = death_threshold(&generalist);
@@ -7843,6 +7967,7 @@ spatial_decay_rate: 0.5,
             movement_cost_coefficient: 0.0,
             wear_rate: 0.01,
             wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -7895,6 +8020,7 @@ spatial_decay_rate: 0.5,
             initial_population_size: 0,
             wear_rate: 0.0, // no new wear this tick
             wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -7947,6 +8073,7 @@ spatial_decay_rate: 0.5,
             initial_population_size: 0,
             wear_rate: 0.0,
             wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -8016,6 +8143,7 @@ spatial_decay_rate: 0.5,
             initial_population_size: 0,
             wear_rate: 0.0,
             wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -8099,6 +8227,7 @@ spatial_decay_rate: 0.5,
             initial_population_size: 0,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             reproduction_energy_threshold: 10.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -8159,6 +8288,7 @@ spatial_decay_rate: 0.5,
             initial_population_size: 0,
             wear_rate: 0.1,
             wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -8177,6 +8307,7 @@ spatial_decay_rate: 0.5,
                 mate_selectivity: 0.5,
                 reproductive_investment: 0.3,
                 fecundity: 2.0,
+                somatic_maintenance: 0.0,
                 ..zero_traits()
             },
             contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
@@ -8190,6 +8321,175 @@ spatial_decay_rate: 0.5,
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
             assert_eq!(agent.wear[ft], 0.0,
                 "functional trait {} should have no wear when nominal is zero", ft);
+        }
+    }
+
+    #[test]
+    fn somatic_maintenance_costs_energy() {
+        // An agent with somatic_maintenance > 0 and a nonzero cost coefficient
+        // should lose more reserve per tick than one with somatic_maintenance = 0.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.0,
+            wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 1.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 10000.0,
+        };
+
+        // Agent with maintenance
+        let mut world = World::new(params.clone(), dist.clone(), 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                somatic_maintenance: 0.5,
+                ..zero_traits()
+            },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+
+        // Agent without maintenance
+        let mut world_no = World::new(params, dist, 42);
+        world_no.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                somatic_maintenance: 0.0,
+                ..zero_traits()
+            },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+
+        world.step();
+        world_no.step();
+
+        let reserve_with = world.agents()[0].reserve;
+        let reserve_without = world_no.agents()[0].reserve;
+        assert!(
+            reserve_with < reserve_without,
+            "somatic maintenance should cost energy: with={}, without={}",
+            reserve_with, reserve_without
+        );
+        // The cost should be coefficient * trait_value = 1.0 * 0.5 = 0.5 per tick
+        let cost = reserve_without - reserve_with;
+        assert!(
+            (cost - 0.5).abs() < 0.01,
+            "maintenance cost should be ~0.5 (coefficient * trait), got {}",
+            cost
+        );
+    }
+
+    #[test]
+    fn somatic_maintenance_reduces_wear() {
+        // An agent with somatic_maintenance > 0 should have less wear after
+        // ticks than an agent with somatic_maintenance = 0.
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.1,
+            wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0, // no energy cost for this test
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 10000.0,
+        };
+
+        // Agent with repair
+        let mut world_repair = World::new(params.clone(), dist.clone(), 42);
+        world_repair.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 10000.0, structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                somatic_maintenance: 0.2,
+                ..zero_traits()
+            },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+
+        // Agent without repair
+        let mut world_no_repair = World::new(params, dist, 42);
+        world_no_repair.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 10000.0, structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                somatic_maintenance: 0.0,
+                ..zero_traits()
+            },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+
+        for _ in 0..10 {
+            world_repair.step();
+            world_no_repair.step();
+        }
+
+        let wear_with_repair = world_repair.agents()[0].wear[0];
+        let wear_without_repair = world_no_repair.agents()[0].wear[0];
+        assert!(
+            wear_with_repair < wear_without_repair,
+            "agent with somatic maintenance should have less wear: {} vs {}",
+            wear_with_repair, wear_without_repair
+        );
+    }
+
+    #[test]
+    fn somatic_repair_cannot_reduce_wear_below_zero() {
+        // High somatic maintenance should not push wear negative.
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            wear_rate: 0.001, // very low wear rate
+            wear_degradation_steepness: 1.0,
+            somatic_maintenance_cost_coefficient: 0.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 10000.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 10000.0, structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.1,
+                somatic_maintenance: 0.9, // very high repair
+                ..zero_traits()
+            },
+            contact_time: 0, wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+        for _ in 0..10 {
+            world.step();
+        }
+        let agent = &world.agents()[0];
+        for ft in 0..FUNCTIONAL_TRAIT_COUNT {
+            assert!(agent.wear[ft] >= 0.0,
+                "wear for functional trait {} should not be negative: {}",
+                ft, agent.wear[ft]);
         }
     }
 

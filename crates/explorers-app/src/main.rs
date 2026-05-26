@@ -108,6 +108,7 @@ fn main() {
             growth_efficiency: 0.0,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -120,6 +121,7 @@ fn main() {
                     mate_selectivity: 0.5,
                     sensing_range: 0.4,
                     reproductive_investment: 0.3, fecundity: 0.0,
+                    somatic_maintenance: 0.0,
                 },
                 trait_covariance: 0.1,
                 initial_cluster_count: 1,
@@ -202,6 +204,7 @@ mod tests {
             mate_selectivity: 0.0,
             sensing_range: 0.0,
             reproductive_investment: 0.0, fecundity: 0.0,
+            somatic_maintenance: 0.0,
         };
         let color = trophic_color(&traits, 100.0);
         let rgba = color.to_srgba();
@@ -222,6 +225,7 @@ mod tests {
             mate_selectivity: 0.0,
             sensing_range: 0.0,
             reproductive_investment: 0.0, fecundity: 0.0,
+            somatic_maintenance: 0.0,
         };
         let color = trophic_color(&traits, 100.0);
         let rgba = color.to_srgba();
@@ -242,6 +246,7 @@ mod tests {
             mate_selectivity: 0.0,
             sensing_range: 0.0,
             reproductive_investment: 0.0, fecundity: 0.0,
+            somatic_maintenance: 0.0,
         };
         let color = trophic_color(&traits, 100.0);
         let rgba = color.to_srgba();
@@ -262,6 +267,7 @@ mod tests {
             mate_selectivity: 0.0,
             sensing_range: 0.0,
             reproductive_investment: 0.0, fecundity: 0.0,
+            somatic_maintenance: 0.0,
         };
         let bright = trophic_color(&traits, 100.0).to_srgba();
         let dim = trophic_color(&traits, 10.0).to_srgba();
@@ -282,6 +288,7 @@ mod tests {
             sensing_range: 0.0,
             reproductive_investment: 0.0,
             fecundity: 0.0,
+            somatic_maintenance: 0.0,
         };
         // Same total energy (100), but different reserve values
         let high_reserve = trophic_color(&traits, 80.0).to_srgba(); // reserve=80
@@ -301,18 +308,21 @@ mod tests {
                 nutrient_absorption: 0.0,
             mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
             sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+            somatic_maintenance: 0.0,
         };
         let consumer = TraitVector {
             photosynthetic_absorption: 0.1, consumption_rate: 0.8, scavenging_rate: 0.1,
                 nutrient_absorption: 0.0,
             mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
             sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+            somatic_maintenance: 0.0,
         };
         let decomposer = TraitVector {
             photosynthetic_absorption: 0.1, consumption_rate: 0.1, scavenging_rate: 0.8,
                 nutrient_absorption: 0.0,
             mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
             sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+            somatic_maintenance: 0.0,
         };
         assert_eq!(dominant_role(&producer), "producers");
         assert_eq!(dominant_role(&consumer), "consumers");
@@ -442,6 +452,7 @@ mod tests {
             growth_efficiency: 0.0,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
+            somatic_maintenance_cost_coefficient: 0.0,
             },
             InitialDistribution {
                 mean_traits: TraitVector {
@@ -454,6 +465,7 @@ mod tests {
                     mate_selectivity: 0.5,
                     sensing_range: 0.4,
                     reproductive_investment: 0.3, fecundity: 0.0,
+                    somatic_maintenance: 0.0,
                 },
                 trait_covariance: 0.1,
                 initial_cluster_count: 1,
@@ -521,6 +533,7 @@ mod tests {
                 photosynthetic_absorption: 1.0, consumption_rate: 0.0,
                 scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                somatic_maintenance: 0.0,
             },
             contact_time: 0,
             wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -533,6 +546,7 @@ mod tests {
                 photosynthetic_absorption: 1.0, consumption_rate: 0.0,
                 scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                somatic_maintenance: 0.0,
             },
             contact_time: 0,
             wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -568,6 +582,7 @@ mod tests {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
                     scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                    somatic_maintenance: 0.0,
                 },
                 contact_time: 0,
                 wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -580,6 +595,7 @@ mod tests {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
                     scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                    somatic_maintenance: 0.0,
                 },
                 contact_time: 0,
                 wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -607,6 +623,7 @@ mod tests {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
                     scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                    somatic_maintenance: 0.0,
                 },
                 contact_time: 0,
                 wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -619,6 +636,7 @@ mod tests {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
                     scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                    somatic_maintenance: 0.0,
                 },
                 contact_time: 0,
                 wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -1017,6 +1035,7 @@ fn debug_panel_ui(
                                 ui.label(format!("  sensing_range: {:.3}", agent.traits.sensing_range));
                                 ui.label(format!("  reproductive_investment: {:.3}", agent.traits.reproductive_investment));
                                 ui.label(format!("  fecundity: {:.3}", agent.traits.fecundity));
+                                ui.label(format!("  somatic_maintenance: {:.3}", agent.traits.somatic_maintenance));
                             } else {
                                 ui.label(format!("Agent {} no longer alive", agent_id));
                             }
