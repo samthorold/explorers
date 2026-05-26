@@ -230,6 +230,8 @@ pub struct AgentSpec {
     #[serde(alias = "energy")]
     pub reserve: f32,
     pub traits: TraitVector,
+    #[serde(default)]
+    pub nutrient: f32,
 }
 
 fn deserialize_position<'de, D>(deserializer: D) -> Result<(f32, f32), D::Error>
@@ -682,7 +684,7 @@ impl World {
                     position: spec.position,
                     reserve: spec.reserve,
                     structure: 0.0,
-                    nutrient: 0.0,
+                    nutrient: spec.nutrient,
                     traits: spec.traits,
                     contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
@@ -1104,6 +1106,7 @@ impl World {
             self.agents[i].reserve += result.decomposition_gains[i];
             self.agents[i].reserve += result.solar_gains[i];
             self.agents[i].reserve -= result.reproduction_investments[i];
+            self.agents[i].nutrient -= result.nutrient_donations[i];
         }
         self.dissipated_energy += result.dissipated_energy;
         self.total_solar_input += result.total_solar_input;
@@ -6893,6 +6896,7 @@ spatial_decay_rate: 0.5,
                 AgentSpec {
                     position: (10.0, 20.0),
                     reserve: 50.0,
+                    nutrient: 0.0,
                     traits: TraitVector {
                         photosynthetic_absorption: 0.8,
                         ..zero_traits()
@@ -6901,6 +6905,7 @@ spatial_decay_rate: 0.5,
                 AgentSpec {
                     position: (-5.0, 3.0),
                     reserve: 75.0,
+                    nutrient: 0.0,
                     traits: TraitVector {
                         consumption_rate: 0.7,
                         mobility: 0.2,
@@ -8920,4 +8925,5 @@ spatial_decay_rate: 0.5,
         // The function takes a TraitVector, not an Agent, so it naturally uses
         // nominal values. This test confirms the interface.
     }
+
 }

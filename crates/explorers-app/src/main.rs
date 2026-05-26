@@ -994,7 +994,7 @@ fn debug_panel_ui(
                 .default_open(true)
                 .show(ui, |ui| {
                     let params = sim.0.params_mut();
-                    ui.add(bevy_egui::egui::Slider::new(&mut params.solar_flux_magnitude, 0.0..=10.0).text("Solar flux"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.solar_flux_magnitude, 0.0..=200.0).text("Solar flux"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.base_metabolic_rate, 0.0..=2.0).text("Base metabolic rate"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.photo_maintenance_cost, 0.0..=0.5).text("Photo maintenance"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.consumption_maintenance_cost, 0.0..=0.5).text("Consumption maintenance"));
