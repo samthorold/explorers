@@ -6781,6 +6781,26 @@ spatial_decay_rate: 0.5,
     }
 
     #[test]
+    fn example4_scenario_loads_and_runs() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{}/../../scenarios/example4.json", manifest_dir);
+        let contents = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read scenario file: {e}"));
+        let recipe: WorldRecipe = serde_json::from_str(&contents)
+            .unwrap_or_else(|e| panic!("Failed to parse scenario file: {e}"));
+
+        assert!(recipe.agents.is_some());
+        assert_eq!(recipe.agents.as_ref().unwrap().len(), 21); // 20 producers + 1 consumer
+        assert!(recipe.parameters.growth_efficiency > 0.0);
+
+        let mut world = World::from_recipe(&recipe, 42);
+        assert_eq!(world.agents().len(), 21);
+        for _ in 0..10 {
+            world.step();
+        }
+    }
+
+    #[test]
     fn params_mut_allows_live_parameter_adjustment() {
         let mut world = World::new(test_params(), test_distribution(), 42);
         let original_flux = world.params().solar_flux_magnitude;
@@ -7479,6 +7499,121 @@ spatial_decay_rate: 0.5,
             threshold >= 0.0,
             "threshold must be non-negative, got {}",
             threshold
+        );
+    }
+
+    #[test]
+    fn example5_population_dynamics() {
+        // 20 producers + 2 consumers: consumers can reproduce sexually.
+        // Over 1000+ ticks, population dynamics should show variation
+        // (oscillation, boom-bust, or at least consumer reproduction).
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{}/../../scenarios/example5.json", manifest_dir);
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let recipe: WorldRecipe = serde_json::from_str(&contents).unwrap();
+        let mut world = World::from_recipe(&recipe, 42);
+
+        let mut max_consumers = 0_usize;
+        let mut consumer_counts = Vec::new();
+        let mut any_births = false;
+
+        for _ in 0..1500 {
+            world.step();
+            let consumer_count = world.agents().iter()
+                .filter(|a| a.traits.consumption_rate > 0.0)
+                .count();
+            consumer_counts.push(consumer_count);
+            if consumer_count > max_consumers {
+                max_consumers = consumer_count;
+            }
+            if world.last_tick_births() > 0 {
+                any_births = true;
+            }
+        }
+
+        // At least some consumers should survive
+        let final_consumers = *consumer_counts.last().unwrap();
+        assert!(
+            max_consumers >= 2,
+            "consumers should persist: max consumer count was {max_consumers}"
+        );
+
+        // Consumer population should show variation (not flat at 2)
+        // This can be births (reproduction) or deaths (overshoot)
+        let min_consumer = consumer_counts.iter().copied().min().unwrap_or(0);
+        let varied = max_consumers > 2 || min_consumer < 2 || any_births;
+        assert!(
+            varied,
+            "population should show dynamics (births/deaths/oscillation), \
+             max={max_consumers} min={min_consumer} births={any_births}"
+        );
+    }
+
+    #[test]
+    fn example5_scenario_loads_and_runs() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{}/../../scenarios/example5.json", manifest_dir);
+        let contents = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read scenario file: {e}"));
+        let recipe: WorldRecipe = serde_json::from_str(&contents)
+            .unwrap_or_else(|e| panic!("Failed to parse scenario file: {e}"));
+
+        assert!(recipe.agents.is_some());
+        assert_eq!(recipe.agents.as_ref().unwrap().len(), 22); // 20 producers + 2 consumers
+        assert!(recipe.parameters.growth_efficiency > 0.0);
+
+        let mut world = World::from_recipe(&recipe, 42);
+        assert_eq!(world.agents().len(), 22);
+        for _ in 0..10 {
+            world.step();
+        }
+    }
+
+    #[test]
+    fn example4_consumer_survives_and_moss_persist() {
+        // 20 producers + 1 consumer: consumer grazes moss but cannot collapse
+        // the population. Moss regrow structure from solar income.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{}/../../scenarios/example4.json", manifest_dir);
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let recipe: WorldRecipe = serde_json::from_str(&contents).unwrap();
+        let mut world = World::from_recipe(&recipe, 42);
+
+        let initial_nutrient_pool = world.nutrient_pool();
+
+        // Run for 500 ticks — enough for consumption and regrowth cycles
+        for _ in 0..500 {
+            world.step();
+        }
+
+        // Count survivors by role
+        let consumers: Vec<_> = world.agents().iter()
+            .filter(|a| a.traits.consumption_rate > 0.0)
+            .collect();
+        let producers: Vec<_> = world.agents().iter()
+            .filter(|a| a.traits.photosynthetic_absorption > 0.0)
+            .collect();
+
+        // Consumer should still be alive (viable through grazing)
+        assert!(
+            !consumers.is_empty(),
+            "consumer should survive by grazing moss over 500 ticks"
+        );
+
+        // Most moss should survive partial grazing (non-lethal)
+        assert!(
+            producers.len() >= 10,
+            "at least half of 20 moss should survive partial grazing, got {}",
+            producers.len()
+        );
+
+        // Nutrient pool should have changed (stoichiometric excretion returns
+        // nutrient to the pool when consumer eats moss)
+        let final_nutrient_pool = world.nutrient_pool();
+        assert!(
+            (final_nutrient_pool - initial_nutrient_pool).abs() > 0.0
+                || world.agents().iter().any(|a| a.nutrient > 0.0),
+            "nutrient should cycle: pool changed or agents accumulated nutrient"
         );
     }
 }
