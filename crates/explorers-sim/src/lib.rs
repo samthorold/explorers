@@ -918,6 +918,30 @@ impl World {
             });
         }
 
+        // Transfer nutrient proportionally during consumption of living agents
+        for ev in result.events.iter().filter(|e| e.kind == event::EventKind::Consumed) {
+            let target_id = ev.target.unwrap();
+            let consumer_id = ev.source;
+            if let Some(ti) = (0..n).find(|&j| self.agents[j].id == target_id) {
+                let structure_before = self.agents[ti].structure + result.consumption_losses[ti];
+                if structure_before > 0.0 {
+                    let fraction = ev.energy_delta / structure_before;
+                    let nutrient_released = self.agents[ti].nutrient * fraction;
+                    // Consumer retains nutrient per stoichiometric demand
+                    let consumer_idx = (0..n).find(|&j| self.agents[j].id == consumer_id);
+                    if let Some(ci) = consumer_idx {
+                        let demand = stoichiometric_demand(&self.agents[ci].traits);
+                        let retained = nutrient_released.min(demand - self.agents[ci].nutrient).max(0.0);
+                        self.agents[ci].nutrient += retained;
+                        self.nutrient_pool += nutrient_released - retained;
+                    } else {
+                        self.nutrient_pool += nutrient_released;
+                    }
+                    self.agents[ti].nutrient -= nutrient_released;
+                }
+            }
+        }
+
         // Sync carcass energy drains from decomposition and release nutrient to pool
         for ev in result.events.iter().filter(|e| e.kind == event::EventKind::Decomposed) {
             let carcass_id = ev.target.unwrap();
@@ -1580,6 +1604,175 @@ mod tests {
             (world.carcasses()[0].nutrient - 7.5).abs() < 1e-5,
             "carcass should inherit agent nutrient: {}",
             world.carcasses()[0].nutrient
+        );
+    }
+
+    #[test]
+    fn consumption_transfers_nutrient_proportionally_with_stoichiometric_excretion() {
+        // Consumer drains structure from target; nutrient transfers proportionally.
+        // Consumer retains nutrient up to stoichiometric demand, excess goes to pool.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            initial_nutrient_pool: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            growth_efficiency: 0.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+
+        // Consumer: 1 non-zero trait dim (consumption_rate) => demand = 1.0
+        // Starts with 0 nutrient, so can retain up to 1.0
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                consumption_rate: 5.0, // drains 5 structure per tick
+                ..zero_traits()
+            },
+            contact_time: 0,
+        });
+
+        // Target: has 20 structure and 10 nutrient
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0),
+            reserve: 50.0,
+            structure: 20.0,
+            nutrient: 10.0,
+            traits: zero_traits(),
+            contact_time: 0,
+        });
+
+        let initial_total_nutrient = 10.0; // only target has nutrient
+        world.step();
+
+        // Consumer drains 5 structure out of 20 => fraction = 5/20 = 0.25
+        // Nutrient released from target = 10.0 * 0.25 = 2.5
+        // Consumer demand = 1.0 (one non-zero trait: consumption_rate)
+        // Consumer retains min(2.5, 1.0 - 0.0) = 1.0
+        // Excess to pool = 2.5 - 1.0 = 1.5
+        let consumer = &world.agents()[0];
+        let target = &world.agents()[1];
+
+        assert!(
+            (consumer.nutrient - 1.0).abs() < 1e-3,
+            "consumer should retain nutrient up to demand (1.0), got {}",
+            consumer.nutrient
+        );
+
+        // Target loses proportional nutrient: 10.0 * (5/20) = 2.5
+        assert!(
+            (target.nutrient - 7.5).abs() < 1e-3,
+            "target should lose proportional nutrient, got {} (expected 7.5)",
+            target.nutrient
+        );
+
+        // Pool gets excess: 2.5 - 1.0 = 1.5
+        assert!(
+            (world.nutrient_pool() - 1.5).abs() < 1e-3,
+            "pool should receive excess nutrient (1.5), got {}",
+            world.nutrient_pool()
+        );
+
+        // Conservation: total nutrient unchanged
+        let agent_nutrient: f32 = world.agents().iter().map(|a| a.nutrient).sum();
+        let carcass_nutrient: f32 = world.carcasses().iter().map(|c| c.nutrient).sum();
+        let total = world.nutrient_pool() + agent_nutrient + carcass_nutrient;
+        assert!(
+            (total - initial_total_nutrient).abs() < 1e-3,
+            "nutrient must be conserved: total={}, initial={}, diff={}",
+            total, initial_total_nutrient, (total - initial_total_nutrient).abs()
+        );
+    }
+
+    #[test]
+    fn consumption_excretion_all_to_pool_when_consumer_at_demand() {
+        // When consumer already has nutrient >= demand, all released nutrient goes to pool.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            initial_nutrient_pool: 0.0,
+            contact_radius: 5.0,
+            consumption_efficiency: 0.5,
+            growth_efficiency: 0.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+
+        // Consumer: demand = 1.0, already has 5.0 nutrient (well above demand)
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 0.0,
+            nutrient: 5.0,
+            traits: TraitVector {
+                consumption_rate: 10.0,
+                ..zero_traits()
+            },
+            contact_time: 0,
+        });
+
+        // Target: 20 structure, 8 nutrient
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0),
+            reserve: 50.0,
+            structure: 20.0,
+            nutrient: 8.0,
+            traits: zero_traits(),
+            contact_time: 0,
+        });
+
+        world.step();
+
+        let consumer = &world.agents()[0];
+        // Consumer already at 5.0, demand is 1.0 => retains 0 more
+        assert!(
+            (consumer.nutrient - 5.0).abs() < 1e-3,
+            "consumer at demand should not gain nutrient, got {}",
+            consumer.nutrient
+        );
+
+        // drain = 10.0 (consumption_rate, capped at structure=20), fraction = 10/20 = 0.5
+        // nutrient released = 8.0 * 0.5 = 4.0, all to pool
+        assert!(
+            (world.nutrient_pool() - 4.0).abs() < 1e-3,
+            "all released nutrient should go to pool, got {}",
+            world.nutrient_pool()
+        );
+
+        // Conservation
+        let total: f32 = world.nutrient_pool()
+            + world.agents().iter().map(|a| a.nutrient).sum::<f32>()
+            + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
+        assert!(
+            (total - 13.0).abs() < 1e-3,
+            "nutrient must be conserved: total={}, expected=13.0",
+            total
         );
     }
 
