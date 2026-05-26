@@ -223,10 +223,12 @@ pub fn resolve_interactions(
                     params.world_extent,
                 );
 
-                // Queue consequence: target death when structure depleted
-                if working_structures[target] <= 0.0 {
-                    // Carcass retains zero structure (fully consumed)
-                    let carcass_energy = 0.0_f32;
+                // Queue consequence: target death when structure drops below
+                // complexity-dependent threshold
+                let threshold = crate::death_threshold(&agents[target].traits);
+                if working_structures[target] <= 0.0 || working_structures[target] < threshold {
+                    // Carcass retains remaining structure (below-threshold)
+                    let carcass_energy = working_structures[target].max(0.0);
                     consequence_queue.push_high(event::Event {
                         tick,
                         seq: 0,
@@ -2673,10 +2675,10 @@ mod tests {
     }
 
     #[test]
-    fn consumption_death_triggers_only_when_structure_reaches_zero() {
-        // Target with structure=10, consumer with rate=5.
-        // Drain=5 from structure (10→5). Target survives.
-        // Second scenario: consumer with rate=15, drain=10 (capped). Structure→0. Dies.
+    fn consumption_death_triggers_when_structure_drops_to_threshold() {
+        // Target with zero_traits has threshold=0.
+        // structure=20, drain=15 → 5 remaining → survives.
+        // structure=10, drain=10 (capped) → 0 remaining → dies (at threshold).
         let make_agents = |target_structure: f32| {
             vec![
                 Agent {
