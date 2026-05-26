@@ -482,7 +482,8 @@ mod tests {
         let mut world = test_world(100.0);
         // Add some agents with known energy
         world.add_agent(explorers_sim::Agent {
-            id: 0, position: (0.0, 0.0), energy: 30.0,
+            id: 0, position: (0.0, 0.0), reserve: 30.0,
+ structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0, consumption_rate: 0.0,
@@ -492,7 +493,8 @@ mod tests {
             contact_time: 0,
         });
         world.add_agent(explorers_sim::Agent {
-            id: 0, position: (10.0, 10.0), energy: 20.0,
+            id: 0, position: (10.0, 10.0), reserve: 20.0,
+ structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0, consumption_rate: 0.0,
@@ -525,7 +527,8 @@ mod tests {
     fn find_nearest_agent_returns_closest() {
         let agents = vec![
             explorers_sim::Agent {
-                id: 1, position: (10.0, 10.0), energy: 50.0,
+                id: 1, position: (10.0, 10.0), reserve: 50.0,
+ structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
@@ -535,7 +538,8 @@ mod tests {
                 contact_time: 0,
             },
             explorers_sim::Agent {
-                id: 2, position: (20.0, 20.0), energy: 50.0,
+                id: 2, position: (20.0, 20.0), reserve: 50.0,
+ structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
@@ -560,7 +564,8 @@ mod tests {
     fn find_nearest_agent_handles_toroidal_wrapping() {
         let agents = vec![
             explorers_sim::Agent {
-                id: 1, position: (5.0, 5.0), energy: 50.0,
+                id: 1, position: (5.0, 5.0), reserve: 50.0,
+ structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
@@ -570,7 +575,8 @@ mod tests {
                 contact_time: 0,
             },
             explorers_sim::Agent {
-                id: 2, position: (95.0, 95.0), energy: 50.0,
+                id: 2, position: (95.0, 95.0), reserve: 50.0,
+ structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, consumption_rate: 0.0,
@@ -620,7 +626,7 @@ fn reconcile_entities(
 
     for agent in sim.0.agents() {
         if !existing_agents.contains(&agent.id) {
-            let color = trophic_color(&agent.traits, agent.energy);
+            let color = trophic_color(&agent.traits, agent.energy());
             commands.spawn((
                 Mesh2d(agent_mesh.0.clone()),
                 MeshMaterial2d(materials.add(ColorMaterial::from_color(color))),
@@ -636,7 +642,7 @@ fn reconcile_entities(
             transform.translation.x = agent.position.0;
             transform.translation.y = agent.position.1;
             if let Some(mat) = materials.get_mut(&material_handle.0) {
-                mat.color = trophic_color(&agent.traits, agent.energy);
+                mat.color = trophic_color(&agent.traits, agent.energy());
             }
         }
     }
@@ -706,7 +712,7 @@ struct EnergyBudget {
 }
 
 fn compute_energy_budget(world: &explorers_sim::World) -> EnergyBudget {
-    let living_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+    let living_energy: f32 = world.agents().iter().map(|a| a.energy()).sum();
     let carcass_energy: f32 = world.carcasses().iter().map(|c| c.energy).sum();
     EnergyBudget {
         living_energy,
@@ -944,7 +950,7 @@ fn debug_panel_ui(
                             if let Some(agent) = sim.0.agents().iter().find(|a| a.id == agent_id) {
                                 ui.label(format!("ID: {}", agent.id));
                                 ui.label(format!("Position: ({:.1}, {:.1})", agent.position.0, agent.position.1));
-                                ui.label(format!("Energy: {:.1}  (death at 0)", agent.energy));
+                                ui.label(format!("Reserve: {:.1}  (death at 0)", agent.reserve));
                                 ui.label(format!("Nutrient: {:.1}", agent.nutrient));
                                 let repro_threshold = sim.0.params().reproduction_energy_threshold;
                                 let demand = explorers_sim::stoichiometric_demand(&agent.traits);

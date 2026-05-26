@@ -181,7 +181,9 @@ pub struct AgentSpec {
         serialize_with = "serialize_position"
     )]
     pub position: (f32, f32),
-    pub energy: f32,
+    /// Starting reserve for this agent. Accepts "energy" in JSON for backward compatibility.
+    #[serde(alias = "energy")]
+    pub reserve: f32,
     pub traits: TraitVector,
 }
 
@@ -217,10 +219,18 @@ pub struct WorldRecipe {
 pub struct Agent {
     pub id: u64,
     pub position: (f32, f32),
-    pub energy: f32,
+    pub reserve: f32,
+    pub structure: f32,
     pub nutrient: f32,
     pub traits: TraitVector,
     pub contact_time: u64,
+}
+
+impl Agent {
+    /// Total energy held by this agent (reserve + structure).
+    pub fn energy(&self) -> f32 {
+        self.reserve + self.structure
+    }
 }
 
 pub struct Carcass {
@@ -233,7 +243,7 @@ pub struct Carcass {
 pub struct NearbyAgent {
     pub id: u64,
     pub distance: f32,
-    pub energy: f32,
+    pub reserve: f32,
     pub traits: TraitVector,
 }
 
@@ -266,11 +276,11 @@ impl Agent {
         match &event.kind {
             event::EventKind::Consumed if self.traits.consumption_rate > 0.0 => {
                 let best = data.nearby_agents.iter()
-                    .filter(|a| a.distance < data.contact_radius && a.energy > 0.0)
+                    .filter(|a| a.distance < data.contact_radius && a.reserve > 0.0)
                     .min_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
 
                 if let Some(target) = best {
-                    let drain = self.traits.consumption_rate.min(target.energy.max(0.0));
+                    let drain = self.traits.consumption_rate.min(target.reserve.max(0.0));
                     if drain > 0.0 {
                         return event::Response {
                             ack: event::Ack::Ack,
@@ -289,7 +299,7 @@ impl Agent {
                 event::Response { ack: event::Ack::Ack, events: vec![] }
             }
             event::EventKind::MatingReadiness => {
-                if self.energy <= data.reproduction_energy_threshold {
+                if self.reserve <= data.reproduction_energy_threshold {
                     return event::Response { ack: event::Ack::Ack, events: vec![] };
                 }
                 let self_gate = 1.0 / (1.0 + (20.0_f32 * (self.traits.mobility - 0.3)).exp());
@@ -298,7 +308,7 @@ impl Agent {
 
                 let best = data.nearby_agents.iter()
                     .filter(|mate| {
-                        if mate.energy <= data.reproduction_energy_threshold {
+                        if mate.reserve <= data.reproduction_energy_threshold {
                             return false;
                         }
                         let mate_gate = 1.0
@@ -467,7 +477,8 @@ impl World {
                 Agent {
                     id: id as u64,
                     position: (x, y),
-                    energy: distribution.initial_energy_per_agent,
+                    reserve: distribution.initial_energy_per_agent,
+                    structure: 0.0,
                     nutrient: 0.0,
                     traits: TraitVector {
                         photosynthetic_absorption: centroid.photosynthetic_absorption
@@ -535,7 +546,8 @@ impl World {
                 .map(|(i, spec)| Agent {
                     id: i as u64,
                     position: spec.position,
-                    energy: spec.energy,
+                    reserve: spec.reserve,
+                    structure: 0.0,
                     nutrient: 0.0,
                     traits: spec.traits,
                     contact_time: 0,
@@ -611,7 +623,8 @@ impl World {
         // (5) Compute movement vectors and apply metabolic costs
         let movements = self.compute_movements(&order, n);
         let light_shares = self.compute_light_shares(n, &agent_grid);
-        let pre_tick_energies: Vec<f32> = self.agents.iter().map(|a| a.energy).collect();
+        let pre_tick_energies: Vec<f32> = self.agents.iter().map(|a| a.reserve).collect();
+        let pre_tick_structures: Vec<f32> = self.agents.iter().map(|a| a.structure).collect();
         self.apply_movement_and_metabolism(&movements);
 
         // (5b) Nutrient uptake from available pool
@@ -623,14 +636,15 @@ impl World {
             agent_grid.insert(i as u64, a.position);
         }
 
-        // (7) Create energy ledger: record initial endowments
+        // (7) Create energy ledger: record initial endowments (reserve + structure)
         let mut ledger = energy_ledger::EnergyLedger::new();
-        for (i, &pre_energy) in pre_tick_energies.iter().enumerate() {
-            if pre_energy > 0.0 {
+        for (i, (&pre_reserve, &pre_structure)) in pre_tick_energies.iter().zip(pre_tick_structures.iter()).enumerate() {
+            let pre_total = pre_reserve + pre_structure;
+            if pre_total > 0.0 {
                 ledger.record(
                     energy_ledger::EnergyEndpoint::Endowment,
                     energy_ledger::EnergyEndpoint::Agent(self.agents[i].id),
-                    pre_energy,
+                    pre_total,
                 );
             }
         }
@@ -647,7 +661,7 @@ impl World {
         // (8) Call resolver — records interaction flows in ledger
         let resolver_result = self.call_resolver(
             &agent_grid, &carcass_grid, &order, &pre_tick_energies,
-            &light_shares, &mut ledger,
+            &pre_tick_structures, &light_shares, &mut ledger,
         );
 
         // (9) Apply resolver output
@@ -757,7 +771,7 @@ impl World {
                 + agent.traits.consumption_rate * self.params.consumption_maintenance_cost
                 + agent.traits.scavenging_rate * self.params.scavenging_maintenance_cost
                 + agent.traits.nutrient_absorption * self.params.nutrient_absorption_maintenance_cost;
-            agent.energy -= metabolic_cost + movement_cost;
+            agent.reserve -= metabolic_cost + movement_cost;
         }
     }
 
@@ -799,6 +813,7 @@ impl World {
         carcass_grid: &crate::spatial::SpatialGrid,
         order: &[usize],
         pre_tick_energies: &[f32],
+        agent_structures: &[f32],
         light_shares: &[f32],
         ledger: &mut energy_ledger::EnergyLedger,
     ) -> interaction_resolver::ResolverResult {
@@ -818,7 +833,7 @@ impl World {
         interaction_resolver::resolve_interactions(
             &self.agents, agent_grid, carcass_grid, &self.carcasses,
             &resolver_params, order, &dead_agents, &self.nack_sets,
-            self.tick, pre_tick_energies, light_shares,
+            self.tick, pre_tick_energies, agent_structures, light_shares,
             &mut self.rng, self.next_agent_id, ledger,
         )
     }
@@ -829,13 +844,13 @@ impl World {
         carcass_grid: &mut crate::spatial::SpatialGrid,
         n: usize,
     ) -> std::collections::HashSet<usize> {
-        // Apply energy deltas from resolver
+        // Apply energy deltas from resolver — all flows enter/leave reserve
         for i in 0..n {
-            self.agents[i].energy += result.consumption_gains[i];
-            self.agents[i].energy -= result.consumption_losses[i];
-            self.agents[i].energy += result.decomposition_gains[i];
-            self.agents[i].energy += result.solar_gains[i];
-            self.agents[i].energy -= result.reproduction_investments[i];
+            self.agents[i].reserve += result.consumption_gains[i];
+            self.agents[i].reserve -= result.consumption_losses[i];
+            self.agents[i].reserve += result.decomposition_gains[i];
+            self.agents[i].reserve += result.solar_gains[i];
+            self.agents[i].reserve -= result.reproduction_investments[i];
         }
         self.dissipated_energy += result.dissipated_energy;
         self.total_solar_input += result.total_solar_input;
@@ -933,18 +948,42 @@ impl World {
             .map(|(_, c)| c)
             .collect();
 
-        let remaining: Vec<(usize, Agent)> = self.agents.drain(..)
-            .enumerate()
-            .filter(|(i, _)| !dead_agents.contains(i))
-            .collect();
+        // Account for agents killed by the resolver (consumption cascade).
+        // Their carcass got their structure; remaining reserve is dissipated.
+        let all_agents: Vec<(usize, Agent)> = self.agents.drain(..).enumerate().collect();
+        let mut remaining: Vec<(usize, Agent)> = Vec::with_capacity(n);
+        for (i, agent) in all_agents {
+            if dead_agents.contains(&i) {
+                // Agent killed by resolver: carcass already created with structure energy.
+                // Dissipate everything except what went to carcass and consumption outflows.
+                let agent_total = pre_tick_energies[i] + agent.structure
+                    + result.solar_gains[i]
+                    + result.consumption_gains[i]
+                    + result.decomposition_gains[i]
+                    - result.consumption_losses[i]
+                    - result.reproduction_investments[i];
+                let carcass_energy = agent.structure;
+                let dissipation = (agent_total - carcass_energy).max(0.0);
+                self.dissipated_energy += dissipation;
+                if carcass_energy > 0.0 {
+                    // Carcass flow already recorded by resolver
+                }
+                if dissipation > 0.0 {
+                    ledger.record(
+                        energy_ledger::EnergyEndpoint::Agent(agent.id),
+                        energy_ledger::EnergyEndpoint::Dissipation,
+                        dissipation,
+                    );
+                }
+            } else {
+                remaining.push((i, agent));
+            }
+        }
 
         for (i, agent) in remaining {
-            if agent.energy <= 0.0 {
-                // Metabolic death: agent's pre-tick biomass becomes carcass,
-                // any gains this tick are dissipated along with metabolic costs.
-                let carcass_energy =
-                    (pre_tick_energies[i] - result.consumption_losses[i]
-                     - result.reproduction_investments[i]).max(0.0);
+            if agent.reserve <= 0.0 {
+                // Starvation: reserve depleted. Carcass retains the agent's structure.
+                let carcass_energy = agent.structure;
                 self.emit(event::EventKind::Died, agent.id, None, 0.0, Some(agent.position));
                 self.emit(event::EventKind::CarcassCreated, agent.id, None,
                     carcass_energy, Some(agent.position));
@@ -952,13 +991,21 @@ impl World {
                     id: agent.id, position: agent.position, energy: carcass_energy,
                     nutrient: agent.nutrient,
                 });
-                let gains_dissipated = result.solar_gains[i]
-                    + result.consumption_gains[i]
-                    + result.decomposition_gains[i];
-                self.dissipated_energy += gains_dissipated;
 
-                // Record death flows in ledger: carcass gets biomass,
-                // everything else the agent had is dissipated (metabolic + gains)
+                // Dissipate: everything the agent had except what goes to carcass.
+                // Agent's total energy this tick = pre_tick_reserve + structure
+                //   + gains - consumption_losses - reproduction_investments
+                // Carcass gets structure; the rest is dissipated.
+                let agent_total = pre_tick_energies[i] + agent.structure
+                    + result.solar_gains[i]
+                    + result.consumption_gains[i]
+                    + result.decomposition_gains[i]
+                    - result.consumption_losses[i]
+                    - result.reproduction_investments[i];
+                let agent_total_dissipation = (agent_total - carcass_energy).max(0.0);
+                self.dissipated_energy += agent_total_dissipation;
+
+                // Record death flows in ledger
                 if carcass_energy > 0.0 {
                     ledger.record(
                         energy_ledger::EnergyEndpoint::Agent(agent.id),
@@ -966,16 +1013,6 @@ impl World {
                         carcass_energy,
                     );
                 }
-                // Total dissipation = endowment + gains - consumption_outflows
-                //   - reproduction_outflows - carcass
-                // (consumption and reproduction outflows already in resolver ledger)
-                let agent_total_dissipation = pre_tick_energies[i]
-                    + result.solar_gains[i]
-                    + result.consumption_gains[i]
-                    + result.decomposition_gains[i]
-                    - result.consumption_losses[i]
-                    - result.reproduction_investments[i]
-                    - carcass_energy;
                 if agent_total_dissipation > 0.0 {
                     ledger.record(
                         energy_ledger::EnergyEndpoint::Agent(agent.id),
@@ -984,13 +1021,15 @@ impl World {
                     );
                 }
             } else {
-                // Surviving agent: metabolic costs = endowment + input - final - repro
+                // Surviving agent: metabolic costs = pre_tick_total + input - final_total - repro
+                let pre_tick_total = pre_tick_energies[i] + agent.structure;
                 let total_input = result.solar_gains[i]
                     + result.consumption_gains[i]
                     + result.decomposition_gains[i]
                     - result.consumption_losses[i];
-                let costs = pre_tick_energies[i] + total_input
-                    - agent.energy - result.reproduction_investments[i];
+                let final_total = agent.reserve + agent.structure;
+                let costs = pre_tick_total + total_input
+                    - final_total - result.reproduction_investments[i];
                 self.dissipated_energy += costs;
 
                 // Record metabolic dissipation in ledger
@@ -1009,8 +1048,8 @@ impl World {
         self.last_tick_deaths = dead_agents.len() + (n - dead_agents.len() - next_agents.len());
         for o in &result.offspring {
             next_agents.push(Agent {
-                id: o.id, position: o.position, energy: o.energy, nutrient: o.nutrient,
-                traits: o.traits, contact_time: 0,
+                id: o.id, position: o.position, reserve: o.reserve, structure: o.structure,
+                nutrient: o.nutrient, traits: o.traits, contact_time: 0,
             });
         }
 
@@ -1201,7 +1240,9 @@ mod tests {
         let agent = Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 5.0,
             traits: zero_traits(),
             contact_time: 0,
@@ -1263,11 +1304,11 @@ mod tests {
         // Nutrient below demand: should NOT reproduce
         let mut world_low = World::new(params.clone(), dist.clone(), 42);
         world_low.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 1.0,
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 1.0,
             traits: shared_traits, contact_time: 0,
         });
         world_low.add_agent(Agent {
-            id: 0, position: (2.0, 0.0), energy: 50.0, nutrient: 1.0,
+            id: 0, position: (2.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 1.0,
             traits: shared_traits, contact_time: 0,
         });
         world_low.step();
@@ -1279,11 +1320,11 @@ mod tests {
         // Nutrient above demand: should reproduce
         let mut world_high = World::new(params.clone(), dist.clone(), 42);
         world_high.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 10.0,
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 10.0,
             traits: shared_traits, contact_time: 0,
         });
         world_high.add_agent(Agent {
-            id: 0, position: (2.0, 0.0), energy: 50.0, nutrient: 10.0,
+            id: 0, position: (2.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 10.0,
             traits: shared_traits, contact_time: 0,
         });
         world_high.step();
@@ -1373,7 +1414,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 100.0, // high enough to fully decompose
@@ -1423,7 +1466,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 7.5,
             traits: zero_traits(),
             contact_time: 0,
@@ -1459,7 +1504,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 nutrient_absorption: 0.5,
@@ -1515,7 +1562,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 nutrient_absorption: 2.0,
@@ -1526,9 +1575,9 @@ mod tests {
         world.step();
         // cost = nutrient_absorption * nutrient_absorption_maintenance_cost = 2.0 * 0.5 = 1.0
         assert!(
-            (world.agents()[0].energy - 99.0).abs() < 1e-5,
+            (world.agents()[0].reserve - 99.0).abs() < 1e-5,
             "energy after maintenance cost: {}",
-            world.agents()[0].energy
+            world.agents()[0].reserve
         );
     }
 
@@ -1538,7 +1587,7 @@ mod tests {
         let world2 = World::new(test_params(), test_distribution(), 42);
         for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
             assert_eq!(a.position, b.position);
-            assert_eq!(a.energy, b.energy);
+            assert_eq!(a.reserve, b.reserve);
             assert_eq!(a.traits.photosynthetic_absorption, b.traits.photosynthetic_absorption);
             assert_eq!(a.traits.consumption_rate, b.traits.consumption_rate);
             assert_eq!(a.traits.mobility, b.traits.mobility);
@@ -1558,9 +1607,121 @@ mod tests {
     }
 
     #[test]
-    fn agents_start_with_initial_energy() {
+    fn agents_start_with_initial_energy_as_reserve() {
         let world = World::new(test_params(), test_distribution(), 42);
-        assert!(world.agents().iter().all(|a| a.energy == 100.0));
+        assert!(world.agents().iter().all(|a| a.reserve == 100.0));
+        assert!(world.agents().iter().all(|a| a.structure == 0.0));
+    }
+
+    #[test]
+    fn newborn_agents_start_with_zero_structure() {
+        // When parents reproduce, offspring should have structure=0
+        // and all parental investment goes to reserve.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            contact_radius: 5.0,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let shared_traits = TraitVector {
+            mobility: 1.0,
+            mate_selectivity: 5.0,
+            reproductive_investment: 10.0,
+            fecundity: 0.0,
+            ..zero_traits()
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 20.0,
+            nutrient: 0.0, traits: shared_traits, contact_time: 0,
+        });
+        world.add_agent(Agent {
+            id: 0, position: (2.0, 0.0), reserve: 50.0, structure: 15.0,
+            nutrient: 0.0, traits: shared_traits, contact_time: 0,
+        });
+        world.step();
+        assert_eq!(world.agents().len(), 3, "should have two parents and one offspring");
+        // The offspring is the last agent (highest id)
+        let offspring = world.agents().iter().max_by_key(|a| a.id).unwrap();
+        assert_eq!(offspring.structure, 0.0, "newborn should have zero structure");
+        // All parental investment goes to reserve: (10+10)*0.7 = 14.0
+        assert!((offspring.reserve - 14.0).abs() < 1e-5,
+            "offspring reserve should be 14.0, got {}", offspring.reserve);
+    }
+
+    #[test]
+    fn carcass_energy_reflects_dead_agent_structure() {
+        // When an agent dies, the carcass energy should equal
+        // the dead agent's remaining structure, not reserve.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 200.0, // kills quickly
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 42.0,
+            nutrient: 0.0, traits: zero_traits(), contact_time: 0,
+        });
+        world.step();
+        assert_eq!(world.agents().len(), 0, "agent should have died");
+        assert_eq!(world.carcasses().len(), 1);
+        assert!((world.carcasses()[0].energy - 42.0).abs() < 1e-5,
+            "carcass energy should equal agent's structure (42.0), got {}",
+            world.carcasses()[0].energy);
+    }
+
+    #[test]
+    fn death_triggers_when_reserve_reaches_zero() {
+        // An agent should die when reserve reaches zero,
+        // regardless of how much structure it has.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 60.0,
+            sensing_cost_coefficient: 0.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 100.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 1000.0,
+            nutrient: 0.0, traits: zero_traits(), contact_time: 0,
+        });
+        world.step();
+        // After one tick: reserve = 50 - 60 = -10 → dies despite 1000 structure
+        assert_eq!(world.agents().len(), 0, "agent should die when reserve hits zero");
+        assert_eq!(world.carcasses().len(), 1);
+        assert!((world.carcasses()[0].energy - 1000.0).abs() < 1e-5,
+            "carcass should retain all structure");
     }
 
     #[test]
@@ -1603,7 +1764,8 @@ mod tests {
         world.step();
         assert_eq!(world.agents().len(), 0);
         assert_eq!(world.carcasses().len(), 1);
-        assert_eq!(world.carcasses()[0].energy, 100.0);
+        // Carcass energy = agent's remaining structure (agents start with structure=0)
+        assert_eq!(world.carcasses()[0].energy, 0.0);
     }
 
     #[test]
@@ -1633,11 +1795,11 @@ mod tests {
             initial_energy_per_agent: 10.0,
         };
         let mut world = World::new(params, dist, 42);
-        let initial_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        let initial_energy: f32 = world.agents().iter().map(|a| a.energy()).sum();
         for _ in 0..50 {
             world.step();
         }
-        let living_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        let living_energy: f32 = world.agents().iter().map(|a| a.energy()).sum();
         let carcass_energy: f32 = world.carcasses().iter().map(|c| c.energy).sum();
         let total = living_energy + carcass_energy + world.dissipated_energy();
         let expected = initial_energy + world.total_solar_input();
@@ -1764,7 +1926,7 @@ mod tests {
         let mut world = World::new(params, dist, 42);
         world.step();
         let expected_cost = 0.5 + sensing_range * 0.1;
-        assert_eq!(world.agents()[0].energy, 100.0 - expected_cost);
+        assert_eq!(world.agents()[0].reserve, 100.0 - expected_cost);
     }
 
     #[test]
@@ -1843,7 +2005,9 @@ mod tests {
             world.add_agent(Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 1.0,
@@ -1902,7 +2066,9 @@ mod tests {
             world.add_agent(Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     scavenging_rate: 1.0,
@@ -1964,7 +2130,9 @@ mod tests {
             world.add_agent(Agent {
                 id: 0,
                 position: (-48.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 1.0,
@@ -2009,7 +2177,7 @@ mod tests {
         }
         for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
             assert_eq!(a.position, b.position);
-            assert_eq!(a.energy, b.energy);
+            assert_eq!(a.reserve, b.reserve);
         }
     }
 
@@ -2037,7 +2205,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (48.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 1.0,
@@ -2051,7 +2221,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (-48.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -2091,7 +2263,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mobility,
@@ -2105,9 +2279,9 @@ mod tests {
         let expected_cost = distance_moved * movement_cost_coefficient;
         let expected_energy = 100.0 - expected_cost;
         assert!(
-            (world.agents()[0].energy - expected_energy).abs() < 1e-5,
+            (world.agents()[0].reserve - expected_energy).abs() < 1e-5,
             "energy={}, expected={}",
-            world.agents()[0].energy,
+            world.agents()[0].reserve,
             expected_energy
         );
     }
@@ -2141,10 +2315,10 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         let initial_pos = world.agents()[0].position;
-        let initial_energy = world.agents()[0].energy;
+        let initial_energy = world.agents()[0].reserve;
         world.step();
         assert_eq!(world.agents()[0].position, initial_pos);
-        assert_eq!(world.agents()[0].energy, initial_energy);
+        assert_eq!(world.agents()[0].reserve, initial_energy);
     }
 
     #[test]
@@ -2170,7 +2344,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
@@ -2181,7 +2357,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (3.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -2191,8 +2369,8 @@ mod tests {
         let consumer = &world.agents()[0];
         let target = &world.agents()[1];
         // Drained = consumption_rate = 2.0, gained = 2.0 * 0.5 = 1.0
-        assert_eq!(consumer.energy, 50.0 + 1.0);
-        assert_eq!(target.energy, 50.0 - 2.0);
+        assert_eq!(consumer.reserve, 50.0 + 1.0);
+        assert_eq!(target.reserve, 50.0 - 2.0);
     }
 
     #[test]
@@ -2217,7 +2395,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 3.0,
@@ -2228,15 +2408,17 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
         world.step();
         // Drain = 3.0, gained = 3.0 * 0.7 = 2.1, dissipated = 3.0 * 0.3 = 0.9
-        assert!((world.agents()[0].energy - 52.1).abs() < 1e-5);
-        assert!((world.agents()[1].energy - 47.0).abs() < 1e-5);
+        assert!((world.agents()[0].reserve - 52.1).abs() < 1e-5);
+        assert!((world.agents()[1].reserve - 47.0).abs() < 1e-5);
         assert!((world.dissipated_energy() - 0.9).abs() < 1e-5);
     }
 
@@ -2262,7 +2444,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 10.0,
@@ -2273,7 +2457,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 5.0,
+            reserve: 5.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -2283,7 +2469,7 @@ mod tests {
         // Consumer gains 5.0 * 0.5 = 2.5
         // Target dies → carcass with 0 energy (fully drained)
         assert_eq!(world.agents().len(), 1);
-        assert!((world.agents()[0].energy - 52.5).abs() < 1e-5);
+        assert!((world.agents()[0].reserve - 52.5).abs() < 1e-5);
         assert_eq!(world.carcasses().len(), 1);
         assert_eq!(world.carcasses()[0].energy, 0.0);
     }
@@ -2310,7 +2496,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 4.0,
@@ -2326,7 +2514,7 @@ mod tests {
         });
         world.step();
         // Drain = 4.0, gained = 4.0 * 0.6 = 2.4, dissipated = 4.0 * 0.4 = 1.6
-        assert!((world.agents()[0].energy - 52.4).abs() < 1e-5);
+        assert!((world.agents()[0].reserve - 52.4).abs() < 1e-5);
         assert!((world.carcasses()[0].energy - 16.0).abs() < 1e-5);
         assert!((world.dissipated_energy() - 1.6).abs() < 1e-5);
     }
@@ -2353,7 +2541,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 10.0,
@@ -2370,7 +2560,7 @@ mod tests {
         world.step();
         // Drain capped at carcass energy = 6.0
         // Gained = 6.0 * 0.5 = 3.0, dissipated = 6.0 * 0.5 = 3.0
-        assert!((world.agents()[0].energy - 53.0).abs() < 1e-5);
+        assert!((world.agents()[0].reserve - 53.0).abs() < 1e-5);
         assert_eq!(world.carcasses().len(), 0);
         assert!((world.dissipated_energy() - 3.0).abs() < 1e-5);
     }
@@ -2396,7 +2586,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -2404,7 +2596,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -2416,8 +2610,8 @@ mod tests {
             nutrient: 0.0,
         });
         world.step();
-        assert_eq!(world.agents()[0].energy, 50.0);
-        assert_eq!(world.agents()[1].energy, 50.0);
+        assert_eq!(world.agents()[0].reserve, 50.0);
+        assert_eq!(world.agents()[1].reserve, 50.0);
         assert_eq!(world.carcasses()[0].energy, 20.0);
     }
 
@@ -2445,7 +2639,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (-48.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
@@ -2456,15 +2652,17 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (48.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
         world.step();
         // Should drain across boundary
-        assert!((world.agents()[0].energy - 51.0).abs() < 1e-5);
-        assert!((world.agents()[1].energy - 48.0).abs() < 1e-5);
+        assert!((world.agents()[0].reserve - 51.0).abs() < 1e-5);
+        assert!((world.agents()[1].reserve - 48.0).abs() < 1e-5);
     }
 
     #[test]
@@ -2498,11 +2696,11 @@ mod tests {
             initial_energy_per_agent: 20.0,
         };
         let mut world = World::new(params, dist, 42);
-        let initial_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        let initial_energy: f32 = world.agents().iter().map(|a| a.energy()).sum();
         for _ in 0..50 {
             world.step();
         }
-        let living_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        let living_energy: f32 = world.agents().iter().map(|a| a.energy()).sum();
         let carcass_energy: f32 = world.carcasses().iter().map(|c| c.energy).sum();
         let total = living_energy + carcass_energy + world.dissipated_energy();
         let expected = initial_energy + world.total_solar_input();
@@ -2536,7 +2734,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
@@ -2547,14 +2747,16 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (10.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
 });
         world.step();
-        assert_eq!(world.agents()[0].energy, 50.0);
-        assert_eq!(world.agents()[1].energy, 50.0);
+        assert_eq!(world.agents()[0].reserve, 50.0);
+        assert_eq!(world.agents()[1].reserve, 50.0);
     }
 
     #[test]
@@ -2589,7 +2791,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -2597,7 +2801,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -2635,7 +2841,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mobility: 1.0,
@@ -2649,7 +2857,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mobility: 1.0,
@@ -2662,8 +2872,8 @@ mod tests {
 });
         world.step();
         assert_eq!(world.agents().len(), 3);
-        assert!((world.agents()[0].energy - 35.0).abs() < 1e-5, "parent A: {}", world.agents()[0].energy);
-        assert!((world.agents()[1].energy - 42.0).abs() < 1e-5, "parent B: {}", world.agents()[1].energy);
+        assert!((world.agents()[0].reserve - 35.0).abs() < 1e-5, "parent A: {}", world.agents()[0].reserve);
+        assert!((world.agents()[1].reserve - 42.0).abs() < 1e-5, "parent B: {}", world.agents()[1].reserve);
     }
 
     #[test]
@@ -2691,7 +2901,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mobility: 1.0,
@@ -2705,7 +2917,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mobility: 1.0,
@@ -2720,9 +2934,9 @@ mod tests {
         // Offspring energy = (15 + 8) * 0.7 = 16.1
         let offspring = &world.agents()[2];
         assert!(
-            (offspring.energy - 16.1).abs() < 1e-5,
+            (offspring.reserve - 16.1).abs() < 1e-5,
             "offspring energy: {}",
-            offspring.energy
+            offspring.reserve
         );
     }
 
@@ -2756,7 +2970,8 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 40.0, // below threshold of 50
+            reserve: 40.0, // below threshold of 50
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -2764,7 +2979,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -2803,7 +3020,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -2811,7 +3030,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (20.0, 0.0), // far outside contact_radius of 5
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -2846,7 +3067,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mate_selectivity: 10.0, // accepts trait dist < 10
@@ -2859,7 +3082,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mate_selectivity: 0.5, // rejects trait dist >= 0.5
@@ -2906,7 +3131,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -2914,7 +3141,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -2922,7 +3151,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -2962,7 +3193,9 @@ mod tests {
             world.add_agent(Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0,
@@ -2981,7 +3214,9 @@ mod tests {
             world.add_agent(Agent {
                 id: 0,
                 position: (1.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 2.0,
@@ -3052,7 +3287,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -3060,7 +3297,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -3113,7 +3352,9 @@ mod tests {
             world.add_agent(Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
@@ -3121,7 +3362,9 @@ mod tests {
             world.add_agent(Agent {
                 id: 0,
                 position: (1.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: shared_traits,
                             contact_time: 0,
@@ -3133,7 +3376,7 @@ mod tests {
         let w2 = make_world(42);
         assert_eq!(w1.agents().len(), w2.agents().len());
         for (a, b) in w1.agents().iter().zip(w2.agents().iter()) {
-            assert_eq!(a.energy, b.energy);
+            assert_eq!(a.reserve, b.reserve);
             for dim in 0..TraitVector::NUM_DIMS {
                 assert_eq!(a.traits.get(dim), b.traits.get(dim));
             }
@@ -3176,11 +3419,11 @@ mod tests {
             initial_energy_per_agent: 30.0,
         };
         let mut world = World::new(params, dist, 42);
-        let initial_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        let initial_energy: f32 = world.agents().iter().map(|a| a.energy()).sum();
         for _ in 0..50 {
             world.step();
         }
-        let living_energy: f32 = world.agents().iter().map(|a| a.energy).sum();
+        let living_energy: f32 = world.agents().iter().map(|a| a.energy()).sum();
         let carcass_energy: f32 = world.carcasses().iter().map(|c| c.energy).sum();
         let total = living_energy + carcass_energy + world.dissipated_energy();
         let expected = initial_energy + world.total_solar_input();
@@ -3221,7 +3464,7 @@ mod tests {
             initial_energy_per_agent: 100.0,
         };
         let mut world = World::new(params, dist, 42);
-        let initial_energy = world.agents()[0].energy;
+        let initial_energy = world.agents()[0].reserve;
         world.step();
         let mobility = world.agents()[0].traits.mobility;
         let mobility_gate = 1.0 / (1.0 + (20.0_f32 * (mobility - 0.3)).exp());
@@ -3231,7 +3474,7 @@ mod tests {
         let metabolic_cost = world.params().base_metabolic_rate
             + world.agents()[0].traits.sensing_range * world.params().sensing_cost_coefficient;
         let expected = initial_energy + photosynthesis - metabolic_cost;
-        assert_eq!(world.agents()[0].energy, expected);
+        assert_eq!(world.agents()[0].reserve, expected);
     }
 
     #[test]
@@ -3256,7 +3499,7 @@ mod tests {
         assert_eq!(world_direct.agents().len(), world_recipe.agents().len());
         for (a, b) in world_direct.agents().iter().zip(world_recipe.agents().iter()) {
             assert_eq!(a.position, b.position);
-            assert_eq!(a.energy, b.energy);
+            assert_eq!(a.reserve, b.reserve);
             assert_eq!(a.traits, b.traits);
         }
     }
@@ -3299,8 +3542,8 @@ mod tests {
             photosynthetic_absorption: 1.0,
             ..zero_traits()
         };
-        world.add_agent(Agent { id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: reproducer_traits, contact_time: 0, });
-        world.add_agent(Agent { id: 0, position: (0.1, 0.0), energy: 100.0, nutrient: 0.0, traits: reproducer_traits, contact_time: 0, });
+        world.add_agent(Agent { id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: reproducer_traits, contact_time: 0, });
+        world.add_agent(Agent { id: 0, position: (0.1, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: reproducer_traits, contact_time: 0, });
 
         let initial_max_id = world.agents().iter().map(|a| a.id).max().unwrap();
 
@@ -3330,7 +3573,9 @@ mod tests {
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 0.01,
+            reserve: 0.01,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -3399,11 +3644,11 @@ spatial_decay_rate: 0.5,
         // Lone producer gets full flux
         let mut world_lone = World::new(params.clone(), dist.clone(), 42);
         world_lone.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: producer,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
 });
         world_lone.step();
-        let lone_energy = world_lone.agents()[0].energy;
+        let lone_energy = world_lone.agents()[0].reserve;
         let gate = 1.0_f32 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
         let expected_full = 100.0 + 1.0 * 10.0 * gate;
         assert!(
@@ -3414,16 +3659,16 @@ spatial_decay_rate: 0.5,
         // Two co-located producers with equal absorption share equally
         let mut world_two = World::new(params.clone(), dist.clone(), 42);
         world_two.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: producer,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
 });
         world_two.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: producer,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
 });
         world_two.step();
-        let energy_a = world_two.agents()[0].energy;
-        let energy_b = world_two.agents()[1].energy;
+        let energy_a = world_two.agents()[0].reserve;
+        let energy_b = world_two.agents()[1].reserve;
         let expected_half = 100.0 + 1.0 * 10.0 * gate * 0.5;
         assert!(
             (energy_a - expected_half).abs() < 0.1,
@@ -3467,18 +3712,18 @@ spatial_decay_rate: 0.5,
         // Two producers far apart (> competition radius) don't compete
         let mut world = World::new(params.clone(), dist.clone(), 42);
         world.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: producer,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
 });
         world.add_agent(Agent {
-            id: 0, position: (40.0, 40.0), energy: 100.0, nutrient: 0.0, traits: producer,
+            id: 0, position: (40.0, 40.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: producer,
                     contact_time: 0,
 });
         world.step();
         let gate = 1.0_f32 / (1.0 + (20.0_f32 * (0.0 - 0.3)).exp());
         let expected_full = 100.0 + 1.0 * 10.0 * gate;
-        let energy_a = world.agents()[0].energy;
-        let energy_b = world.agents()[1].energy;
+        let energy_a = world.agents()[0].reserve;
+        let energy_b = world.agents()[1].reserve;
         assert!(
             (energy_a - expected_full).abs() < 0.1,
             "distant producer should get full flux, energy={energy_a}, expected={expected_full}"
@@ -3524,11 +3769,11 @@ spatial_decay_rate: 0.5,
 
         let mut world_sessile = World::new(params.clone(), dist.clone(), 42);
         world_sessile.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: sessile_traits,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
 });
         world_sessile.step();
-        let sessile_energy = world_sessile.agents()[0].energy;
+        let sessile_energy = world_sessile.agents()[0].reserve;
         // Sessile agent: gate ≈ 1.0, solar gain ≈ 1.0 * 10.0 = 10.0
         assert!(
             (sessile_energy - 110.0).abs() < 0.1,
@@ -3537,11 +3782,11 @@ spatial_decay_rate: 0.5,
 
         let mut world_mobile = World::new(params.clone(), dist.clone(), 42);
         world_mobile.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: mobile_traits,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
 });
         world_mobile.step();
-        let mobile_energy = world_mobile.agents()[0].energy;
+        let mobile_energy = world_mobile.agents()[0].reserve;
         // Mobile agent: gate ≈ 0.0, solar gain ≈ 0.0
         assert!(
             mobile_energy < 100.5,
@@ -3583,20 +3828,20 @@ spatial_decay_rate: 0.5,
 
         let mut world_high = World::new(params.clone(), dist.clone(), 42);
         world_high.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: high_consumption,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: high_consumption,
                     contact_time: 0,
 });
         world_high.step();
 
         let mut world_low = World::new(params.clone(), dist.clone(), 42);
         world_low.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: low_consumption,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: low_consumption,
                     contact_time: 0,
 });
         world_low.step();
 
-        let high_energy = world_high.agents()[0].energy;
-        let low_energy = world_low.agents()[0].energy;
+        let high_energy = world_high.agents()[0].reserve;
+        let low_energy = world_low.agents()[0].reserve;
 
         // consumption_maintenance_cost = 0.2
         // high: 100 - 5.0*0.2 = 99.0, low: 100 - 1.0*0.2 = 99.8
@@ -3654,24 +3899,24 @@ spatial_decay_rate: 0.5,
         // Crowded generalist: two generalists near each other share light + pay maintenance
         let mut world_gen = World::new(params.clone(), dist.clone(), 42);
         world_gen.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: generalist,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: generalist,
                     contact_time: 0,
 });
         world_gen.add_agent(Agent {
-            id: 0, position: (1.0, 0.0), energy: 100.0, nutrient: 0.0, traits: generalist,
+            id: 0, position: (1.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: generalist,
                     contact_time: 0,
 });
         world_gen.step();
-        let gen_energy = world_gen.agents()[0].energy;
+        let gen_energy = world_gen.agents()[0].reserve;
 
         // Lone specialist: no competition, no maintenance for unused traits
         let mut world_spec = World::new(params.clone(), dist.clone(), 42);
         world_spec.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 100.0, nutrient: 0.0, traits: specialist,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, nutrient: 0.0, traits: specialist,
                     contact_time: 0,
 });
         world_spec.step();
-        let spec_energy = world_spec.agents()[0].energy;
+        let spec_energy = world_spec.agents()[0].reserve;
 
         assert!(
             gen_energy < spec_energy,
@@ -3714,11 +3959,11 @@ spatial_decay_rate: 0.5,
         // Two agents at distance 9.0 should reproduce (within 10.0)
         let mut world_near = World::new(params.clone(), dist.clone(), 42);
         world_near.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 0.0, traits: midpoint_traits,
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
 });
         world_near.add_agent(Agent {
-            id: 0, position: (9.0, 0.0), energy: 50.0, nutrient: 0.0, traits: midpoint_traits,
+            id: 0, position: (9.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
 });
         world_near.step();
@@ -3730,11 +3975,11 @@ spatial_decay_rate: 0.5,
         // Two agents at distance 11.0 should NOT reproduce (beyond 10.0)
         let mut world_far = World::new(params.clone(), dist.clone(), 42);
         world_far.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 0.0, traits: midpoint_traits,
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
 });
         world_far.add_agent(Agent {
-            id: 0, position: (11.0, 0.0), energy: 50.0, nutrient: 0.0, traits: midpoint_traits,
+            id: 0, position: (11.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: midpoint_traits,
                     contact_time: 0,
 });
         world_far.step();
@@ -3782,11 +4027,11 @@ spatial_decay_rate: 0.5,
             ..zero_traits()
         };
         world.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 0.0, traits: sessile_traits,
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
 });
         world.add_agent(Agent {
-            id: 0, position: (10.0, 0.0), energy: 50.0, nutrient: 0.0, traits: mobile_traits,
+            id: 0, position: (10.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
 });
         world.step();
@@ -3826,11 +4071,11 @@ spatial_decay_rate: 0.5,
             ..zero_traits()
         };
         world.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 0.0, traits: mobile_traits,
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
 });
         world.add_agent(Agent {
-            id: 0, position: (10.0, 0.0), energy: 50.0, nutrient: 0.0, traits: mobile_traits,
+            id: 0, position: (10.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: mobile_traits,
                     contact_time: 0,
 });
         world.step();
@@ -3870,11 +4115,11 @@ spatial_decay_rate: 0.5,
             ..zero_traits()
         };
         world.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 0.0, traits: sessile_traits,
+            id: 0, position: (0.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
 });
         world.add_agent(Agent {
-            id: 0, position: (10.0, 0.0), energy: 50.0, nutrient: 0.0, traits: sessile_traits,
+            id: 0, position: (10.0, 0.0), reserve: 50.0, structure: 0.0, nutrient: 0.0, traits: sessile_traits,
                     contact_time: 0,
 });
         world.step();
@@ -3927,11 +4172,11 @@ spatial_decay_rate: 0.5,
         for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
             assert_eq!(a.id, b.id);
             assert_eq!(a.position, b.position);
-            assert_eq!(a.energy, b.energy);
+            assert_eq!(a.reserve, b.reserve);
         }
 
         // Energy conservation
-        let total_agent_energy: f32 = world1.agents().iter().map(|a| a.energy).sum();
+        let total_agent_energy: f32 = world1.agents().iter().map(|a| a.energy()).sum();
         let total_carcass_energy: f32 = world1.carcasses().iter().map(|c| c.energy).sum();
         let initial_energy = 50.0 * 80.0;
         let expected = initial_energy + world1.total_solar_input();
@@ -4019,7 +4264,7 @@ spatial_decay_rate: 0.5,
         for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
             assert_eq!(a.id, b.id, "agent IDs diverged");
             assert_eq!(a.position, b.position, "positions diverged for agent {}", a.id);
-            assert_eq!(a.energy, b.energy, "energies diverged for agent {}", a.id);
+            assert_eq!(a.reserve, b.reserve, "energies diverged for agent {}", a.id);
         }
     }
 
@@ -4057,7 +4302,7 @@ spatial_decay_rate: 0.5,
         let ids1: Vec<u64> = world1.agents().iter().map(|a| a.id).collect();
         let ids2: Vec<u64> = world2.agents().iter().map(|a| a.id).collect();
         let any_differ = ids1.iter().zip(ids2.iter()).any(|(a, b)| a != b)
-            || world1.agents().iter().zip(world2.agents().iter()).any(|(a, b)| a.energy != b.energy);
+            || world1.agents().iter().zip(world2.agents().iter()).any(|(a, b)| a.reserve != b.reserve);
         assert!(any_differ, "different seeds should produce different outcomes");
     }
 
@@ -4108,7 +4353,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
@@ -4119,7 +4366,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -4139,7 +4388,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 10.0,
@@ -4175,7 +4426,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -4189,7 +4442,8 @@ spatial_decay_rate: 0.5,
         let created = world.event_log().by_kind(&EventKind::CarcassCreated);
         assert_eq!(created.len(), 1);
         assert_eq!(created[0].source, agent_id);
-        assert!(created[0].energy_delta > 0.0);
+        // Carcass energy = agent's structure (which is 0 for new agents)
+        assert_eq!(created[0].energy_delta, 0.0);
     }
 
     #[test]
@@ -4206,7 +4460,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: repro_traits,
                     contact_time: 0,
@@ -4214,7 +4470,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: repro_traits,
                     contact_time: 0,
@@ -4240,7 +4498,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -4270,7 +4530,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 20.0,
@@ -4281,7 +4543,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 5.0,
+            reserve: 5.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -4333,7 +4597,9 @@ spatial_decay_rate: 0.5,
             world.add_agent(Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 200.0,
+                reserve: 200.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 15.0,
@@ -4341,21 +4607,24 @@ spatial_decay_rate: 0.5,
                 },
                             contact_time: 0,
 });
-            // Target: energy=100, after metabolic(90) → 10, drained 10 → dead
-            // Carcass energy = max(0, 100 - 10) = 90 (biomass minus consumed)
+            // Target: reserve=100, structure=90, after metabolic(90) → reserve=10,
+            // drained 10 → dead. Carcass energy = structure = 90.
             world.add_agent(Agent {
                 id: 0,
                 position: (1.0, 0.0),
-                energy: 100.0,
-            nutrient: 0.0,
+                reserve: 100.0,
+                structure: 90.0,
+                nutrient: 0.0,
                 traits: zero_traits(),
-                            contact_time: 0,
-});
+                contact_time: 0,
+            });
             // Scavenger: decomposes the newly-created carcass
             world.add_agent(Agent {
                 id: 0,
                 position: (2.0, 0.0),
-                energy: 200.0,
+                reserve: 200.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     scavenging_rate: 10.0,
@@ -4395,7 +4664,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
@@ -4407,7 +4678,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -4485,7 +4758,9 @@ spatial_decay_rate: 0.5,
             world.add_agent(Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 1.0,
@@ -4550,7 +4825,9 @@ spatial_decay_rate: 0.5,
             world.add_agent(Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     scavenging_rate: 1.0,
@@ -4605,7 +4882,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 100.0,
@@ -4616,7 +4895,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 1.0,
+            reserve: 1.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -4625,7 +4906,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (3.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
@@ -4637,7 +4920,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (10.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
@@ -4707,7 +4992,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -4715,7 +5002,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
                     contact_time: 0,
@@ -4777,7 +5066,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 100.0,
@@ -4788,7 +5079,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 1.0,
+            reserve: 1.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -4797,7 +5090,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 0.0,
@@ -4823,7 +5118,9 @@ spatial_decay_rate: 0.5,
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
@@ -4840,8 +5137,8 @@ spatial_decay_rate: 0.5,
             feeding_gradient: (0.0, 0.0),
             carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![
-                NearbyAgent { id: 10, distance: 4.0, energy: 50.0, traits: zero_traits() },
-                NearbyAgent { id: 20, distance: 2.0, energy: 30.0, traits: zero_traits() },
+                NearbyAgent { id: 10, distance: 4.0, reserve: 50.0, traits: zero_traits() },
+                NearbyAgent { id: 20, distance: 2.0, reserve: 30.0, traits: zero_traits() },
             ],
             nearby_carcasses: vec![],
             contact_radius: 5.0,
@@ -4861,7 +5158,9 @@ spatial_decay_rate: 0.5,
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -4875,7 +5174,7 @@ spatial_decay_rate: 0.5,
             feeding_gradient: (0.0, 0.0),
             carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![
-                NearbyAgent { id: 10, distance: 2.0, energy: 50.0, traits: zero_traits() },
+                NearbyAgent { id: 10, distance: 2.0, reserve: 50.0, traits: zero_traits() },
             ],
             nearby_carcasses: vec![],
             contact_radius: 5.0,
@@ -4891,7 +5190,9 @@ spatial_decay_rate: 0.5,
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 scavenging_rate: 4.0,
@@ -4929,7 +5230,9 @@ spatial_decay_rate: 0.5,
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mobility: 1.0,
@@ -4950,8 +5253,8 @@ spatial_decay_rate: 0.5,
             carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![
                 NearbyAgent {
-                    id: 2, distance: 2.0, energy: 100.0,
-                    traits: TraitVector {
+                    id: 2, distance: 2.0, reserve: 100.0,
+ traits: TraitVector {
                         mobility: 1.0,
                         mate_selectivity: 5.0,
                         reproductive_investment: 10.0,
@@ -4977,7 +5280,9 @@ spatial_decay_rate: 0.5,
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
-            energy: 30.0,
+            reserve: 30.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mate_selectivity: 5.0,
@@ -4997,8 +5302,8 @@ spatial_decay_rate: 0.5,
             carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![
                 NearbyAgent {
-                    id: 2, distance: 1.0, energy: 100.0,
-                    traits: TraitVector {
+                    id: 2, distance: 1.0, reserve: 100.0,
+ traits: TraitVector {
                         mate_selectivity: 5.0,
                         reproductive_investment: 10.0,
                         fecundity: 0.0,
@@ -5020,7 +5325,9 @@ spatial_decay_rate: 0.5,
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 5.0,
@@ -5038,7 +5345,7 @@ spatial_decay_rate: 0.5,
             feeding_gradient: (0.0, 0.0),
             carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![
-                NearbyAgent { id: 10, distance: 2.0, energy: 50.0, traits: zero_traits() },
+                NearbyAgent { id: 10, distance: 2.0, reserve: 50.0, traits: zero_traits() },
             ],
             nearby_carcasses: vec![
                 NearbyCarcass { id: 20, distance: 1.0, energy: 30.0 },
@@ -5071,13 +5378,15 @@ spatial_decay_rate: 0.5,
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
-            id: 0, position: (0.0, 0.0), energy: 50.0,
+            id: 0, position: (0.0, 0.0), reserve: 50.0,
+ structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector { consumption_rate: 2.0, ..zero_traits() },
                     contact_time: 0,
 });
         world.add_agent(Agent {
-            id: 0, position: (3.0, 0.0), energy: 50.0,
+            id: 0, position: (3.0, 0.0), reserve: 50.0,
+ structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -5091,7 +5400,7 @@ spatial_decay_rate: 0.5,
             feeding_gradient: (0.0, 0.0), carcass_gradient: (0.0, 0.0),
             nearby_agents: vec![NearbyAgent {
                 id: target.id, distance: dist_between,
-                energy: target.energy, traits: target.traits,
+                reserve: target.reserve, traits: target.traits,
             }],
             nearby_carcasses: vec![],
             contact_radius: 5.0,
@@ -5108,8 +5417,8 @@ spatial_decay_rate: 0.5,
         // Now run step() — should produce the same outcome
         world.step();
 
-        assert_eq!(world.agents()[0].energy, 50.0 + expected_drain * 0.5);
-        assert_eq!(world.agents()[1].energy, 50.0 - expected_drain);
+        assert_eq!(world.agents()[0].reserve, 50.0 + expected_drain * 0.5);
+        assert_eq!(world.agents()[1].reserve, 50.0 - expected_drain);
     }
 
     #[test]
@@ -5119,7 +5428,9 @@ spatial_decay_rate: 0.5,
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 1.0,
@@ -5162,7 +5473,9 @@ spatial_decay_rate: 0.5,
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 1.0,
@@ -5193,7 +5506,9 @@ spatial_decay_rate: 0.5,
         let agent = Agent {
             id: 1,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 0.5,
@@ -5254,7 +5569,7 @@ spatial_decay_rate: 0.5,
         }
         for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
             assert_eq!(a.position, b.position, "positions must match");
-            assert_eq!(a.energy, b.energy, "energies must match");
+            assert_eq!(a.reserve, b.reserve, "energies must match");
         }
     }
 
@@ -5287,7 +5602,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
@@ -5300,7 +5617,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
@@ -5312,7 +5631,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (4.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
@@ -5363,7 +5684,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 200.0, // high enough to kill in one tick
@@ -5376,7 +5699,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 10.0,
+            reserve: 10.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
@@ -5388,7 +5713,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (4.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
@@ -5451,7 +5778,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: parent_traits,
                     contact_time: 0,
@@ -5459,7 +5788,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: parent_traits,
                     contact_time: 0,
@@ -5469,7 +5800,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (3.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
@@ -5482,7 +5815,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (4.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
@@ -5536,7 +5871,8 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 1000.0, // enough to survive
+            reserve: 1000.0, // enough to survive
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 2.0,
@@ -5549,7 +5885,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 1000.0,
+            reserve: 1000.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
@@ -5561,7 +5899,8 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (4.0, 0.0),
-            energy: 60.0, // dies after ~1 tick at 50.0 metabolic rate
+            reserve: 60.0, // dies after ~1 tick at 50.0 metabolic rate
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 sensing_range: 20.0,
@@ -5612,7 +5951,7 @@ spatial_decay_rate: 0.5,
         for (a, b) in world1.agents().iter().zip(world2.agents().iter()) {
             assert_eq!(a.id, b.id, "agent IDs must match");
             assert_eq!(a.position, b.position, "positions must match");
-            assert_eq!(a.energy, b.energy, "energies must match");
+            assert_eq!(a.reserve, b.reserve, "energies must match");
         }
     }
 
@@ -5628,7 +5967,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 consumption_rate: 20.0,
@@ -5639,7 +5980,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (1.0, 0.0),
-            energy: 5.0,
+            reserve: 5.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(),
                     contact_time: 0,
@@ -5677,7 +6020,9 @@ spatial_decay_rate: 0.5,
             world.add_agent(Agent {
                 id: 0,
                 position: (0.0, 0.0),
-                energy: 200.0,
+                reserve: 200.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     consumption_rate: 15.0,
@@ -5688,7 +6033,9 @@ spatial_decay_rate: 0.5,
             world.add_agent(Agent {
                 id: 0,
                 position: (1.0, 0.0),
-                energy: 100.0,
+                reserve: 100.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: zero_traits(),
                             contact_time: 0,
@@ -5696,7 +6043,9 @@ spatial_decay_rate: 0.5,
             world.add_agent(Agent {
                 id: 0,
                 position: (2.0, 0.0),
-                energy: 200.0,
+                reserve: 200.0,
+
+                structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
                     scavenging_rate: 10.0,
@@ -5768,10 +6117,10 @@ spatial_decay_rate: 0.5,
         let agents = recipe.agents.expect("agents field should be present");
         assert_eq!(agents.len(), 2);
         assert_eq!(agents[0].position, (10.0, 20.0));
-        assert_eq!(agents[0].energy, 50.0);
+        assert_eq!(agents[0].reserve, 50.0);
         assert_eq!(agents[0].traits.photosynthetic_absorption, 0.8);
         assert_eq!(agents[1].position, (-5.0, 3.0));
-        assert_eq!(agents[1].energy, 75.0);
+        assert_eq!(agents[1].reserve, 75.0);
         assert_eq!(agents[1].traits.consumption_rate, 0.7);
         assert!(recipe.initial_distribution.is_none());
     }
@@ -5784,7 +6133,7 @@ spatial_decay_rate: 0.5,
             agents: Some(vec![
                 AgentSpec {
                     position: (10.0, 20.0),
-                    energy: 50.0,
+                    reserve: 50.0,
                     traits: TraitVector {
                         photosynthetic_absorption: 0.8,
                         ..zero_traits()
@@ -5792,7 +6141,7 @@ spatial_decay_rate: 0.5,
                 },
                 AgentSpec {
                     position: (-5.0, 3.0),
-                    energy: 75.0,
+                    reserve: 75.0,
                     traits: TraitVector {
                         consumption_rate: 0.7,
                         mobility: 0.2,
@@ -5805,10 +6154,10 @@ spatial_decay_rate: 0.5,
         let world = World::from_recipe(&recipe, 42);
         assert_eq!(world.agents().len(), 2);
         assert_eq!(world.agents()[0].position, (10.0, 20.0));
-        assert_eq!(world.agents()[0].energy, 50.0);
+        assert_eq!(world.agents()[0].reserve, 50.0);
         assert_eq!(world.agents()[0].traits.photosynthetic_absorption, 0.8);
         assert_eq!(world.agents()[1].position, (-5.0, 3.0));
-        assert_eq!(world.agents()[1].energy, 75.0);
+        assert_eq!(world.agents()[1].reserve, 75.0);
         assert_eq!(world.agents()[1].traits.consumption_rate, 0.7);
     }
 
@@ -5898,7 +6247,7 @@ spatial_decay_rate: 0.5,
         assert_eq!(world_from_recipe.agents().len(), world_direct.agents().len());
         for (a, b) in world_from_recipe.agents().iter().zip(world_direct.agents().iter()) {
             assert_eq!(a.position, b.position);
-            assert_eq!(a.energy, b.energy);
+            assert_eq!(a.reserve, b.reserve);
             assert_eq!(a.traits, b.traits);
         }
     }
@@ -5943,7 +6292,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
             contact_time: 0,
@@ -5951,7 +6302,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (2.0, 0.0),
-            energy: 50.0,
+            reserve: 50.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: shared_traits,
             contact_time: 0,
@@ -5986,7 +6339,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0,
@@ -6026,7 +6381,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mobility: 5.0,
@@ -6062,7 +6419,9 @@ spatial_decay_rate: 0.5,
         world.add_agent(Agent {
             id: 0,
             position: (0.0, 0.0),
-            energy: 100.0,
+            reserve: 100.0,
+
+            structure: 0.0,
             nutrient: 0.0,
             traits: zero_traits(), // zero mobility = stationary
             contact_time: 0,

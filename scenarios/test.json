@@ -22,7 +22,7 @@
   "agents": [
     {
       "position": [10.0, 10.0],
-      "energy": 100.0,
+      "reserve": 100.0,
       "traits": {
         "photosynthetic_absorption": 0.8,
         "consumption_rate": 0.0,
@@ -36,7 +36,7 @@
     },
     {
       "position": [-20.0, 15.0],
-      "energy": 80.0,
+      "reserve": 80.0,
       "traits": {
         "photosynthetic_absorption": 0.0,
         "consumption_rate": 0.6,
@@ -50,7 +50,7 @@
     },
     {
       "position": [0.0, -10.0],
-      "energy": 60.0,
+      "reserve": 60.0,
       "traits": {
         "photosynthetic_absorption": 0.0,
         "consumption_rate": 0.0,
