@@ -148,11 +148,12 @@ pub fn metabolise(
     let mut events = Vec::new();
     let mut total_dissipated = 0.0_f32;
 
+    let exp = params.maintenance_cost_exponent;
     for agent in agents.iter_mut() {
         let cost = params.base_metabolic_rate
-            + agent.traits.photosynthetic_absorption * params.photo_maintenance_cost
-            + agent.traits.heterotrophy * params.heterotrophy_maintenance_cost
-            + agent.traits.mobility * params.mobility_maintenance_cost
+            + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
+            + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
+            + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
 
         agent.reserve -= cost;
@@ -180,15 +181,16 @@ pub fn grow(
     let mut events = Vec::new();
     let mut total_dissipated = 0.0_f32;
 
+    let exp = params.maintenance_cost_exponent;
     for agent in agents.iter_mut() {
         if agent.reserve <= 0.0 {
             continue;
         }
         // Retain enough reserve for next tick's metabolism
         let metabolic_cost = params.base_metabolic_rate
-            + agent.traits.photosynthetic_absorption * params.photo_maintenance_cost
-            + agent.traits.heterotrophy * params.heterotrophy_maintenance_cost
-            + agent.traits.mobility * params.mobility_maintenance_cost
+            + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
+            + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
+            + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
         let retention = metabolic_cost * 2.0;
         let surplus = (agent.reserve - retention).max(0.0);
@@ -1182,6 +1184,7 @@ mod tests {
             specification_nutrient_coefficient: 0.2,
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
+            maintenance_cost_exponent: 1.0,
         }
     }
 
@@ -4390,5 +4393,168 @@ mod tests {
             ..zero_traits()
         };
         assert_eq!(traits.get(6), 2.5);
+    }
+
+    #[test]
+    fn superlinear_maintenance_quadratic_pays_4x_for_double_trait() {
+        // With exponent=2.0, trait=1.0 pays 1.0^2 * cost = cost
+        // while trait=0.5 pays 0.5^2 * cost = 0.25 * cost → 4x ratio.
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            photo_maintenance_cost: 1.0,
+            heterotrophy_maintenance_cost: 0.0,
+            mobility_maintenance_cost: 0.0,
+            structure_maintenance_coefficient: 0.0,
+            maintenance_cost_exponent: 2.0,
+            ..test_params()
+        };
+
+        let mut agents_full = vec![make_agent(
+            1,
+            (0.0, 0.0),
+            100.0,
+            TraitVector {
+                photosynthetic_absorption: 1.0,
+                ..zero_traits()
+            },
+        )];
+        let mut agents_half = vec![make_agent(
+            2,
+            (0.0, 0.0),
+            100.0,
+            TraitVector {
+                photosynthetic_absorption: 0.5,
+                ..zero_traits()
+            },
+        )];
+
+        let (_, _) = metabolise(&mut agents_full, &params);
+        let (_, _) = metabolise(&mut agents_half, &params);
+
+        let cost_full = 100.0 - agents_full[0].reserve;
+        let cost_half = 100.0 - agents_half[0].reserve;
+
+        assert!(
+            (cost_full / cost_half - 4.0).abs() < 1e-6,
+            "trait=1.0 should pay 4x trait=0.5 under quadratic costs, got ratio {}",
+            cost_full / cost_half
+        );
+    }
+
+    #[test]
+    fn superlinear_maintenance_exponent_one_is_linear_regression() {
+        // With exponent=1.0 (default), trait=1.0 pays exactly 2x what trait=0.5 pays.
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            photo_maintenance_cost: 1.0,
+            heterotrophy_maintenance_cost: 0.0,
+            mobility_maintenance_cost: 0.0,
+            structure_maintenance_coefficient: 0.0,
+            maintenance_cost_exponent: 1.0,
+            ..test_params()
+        };
+
+        let mut agents_full = vec![make_agent(
+            1,
+            (0.0, 0.0),
+            100.0,
+            TraitVector {
+                photosynthetic_absorption: 1.0,
+                ..zero_traits()
+            },
+        )];
+        let mut agents_half = vec![make_agent(
+            2,
+            (0.0, 0.0),
+            100.0,
+            TraitVector {
+                photosynthetic_absorption: 0.5,
+                ..zero_traits()
+            },
+        )];
+
+        let (_, _) = metabolise(&mut agents_full, &params);
+        let (_, _) = metabolise(&mut agents_half, &params);
+
+        let cost_full = 100.0 - agents_full[0].reserve;
+        let cost_half = 100.0 - agents_half[0].reserve;
+
+        assert!(
+            (cost_full / cost_half - 2.0).abs() < 1e-6,
+            "exponent=1.0 should give linear 2x ratio, got {}",
+            cost_full / cost_half
+        );
+    }
+
+    #[test]
+    fn superlinear_maintenance_specialist_pays_more_per_trait_than_generalist() {
+        // Under quadratic costs with equal total trait sum:
+        //   generalist (0.5, 0.5): 0.5^2 + 0.5^2 = 0.50 total cost
+        //   specialist (1.0, 0.0): 1.0^2 + 0.0^2 = 1.00 total cost
+        // The specialist pays more in absolute maintenance. The anti-generalist
+        // mechanism works because each trait's *output* is proportional to its
+        // value (linear returns), but its *cost* grows superlinearly — so the
+        // specialist's single high trait is more cost-effective per unit of
+        // capability (1.0 capability for 1.0 cost) than the generalist's two
+        // moderate traits would need to be to match the specialist's single
+        // capability. The trade-off is economic: you pay dearly for a high
+        // trait, but you get full capability; spreading investment is cheaper
+        // in maintenance but yields less capability per dimension.
+
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            photo_maintenance_cost: 1.0,
+            heterotrophy_maintenance_cost: 1.0,
+            mobility_maintenance_cost: 0.0,
+            structure_maintenance_coefficient: 0.0,
+            maintenance_cost_exponent: 2.0,
+            ..test_params()
+        };
+
+        // Generalist: 0.5 in both photo and heterotrophy
+        let mut generalist = vec![make_agent(
+            1,
+            (0.0, 0.0),
+            100.0,
+            TraitVector {
+                photosynthetic_absorption: 0.5,
+                heterotrophy: 0.5,
+                ..zero_traits()
+            },
+        )];
+        // Specialist: 1.0 in photo, 0.0 in heterotrophy
+        let mut specialist = vec![make_agent(
+            2,
+            (0.0, 0.0),
+            100.0,
+            TraitVector {
+                photosynthetic_absorption: 1.0,
+                heterotrophy: 0.0,
+                ..zero_traits()
+            },
+        )];
+
+        let (_, _) = metabolise(&mut generalist, &params);
+        let (_, _) = metabolise(&mut specialist, &params);
+
+        let cost_generalist = 100.0 - generalist[0].reserve;
+        let cost_specialist = 100.0 - specialist[0].reserve;
+
+        // Under quadratic costs:
+        // generalist: 0.5^2 * 1.0 + 0.5^2 * 1.0 = 0.25 + 0.25 = 0.5
+        // specialist: 1.0^2 * 1.0 + 0.0^2 * 1.0 = 1.0 + 0.0 = 1.0
+        // Specialist actually pays MORE — superlinear costs penalise
+        // concentration, making specialisation expensive per unit capability.
+        // This is the correct mathematical result.
+        assert!(
+            cost_specialist > cost_generalist,
+            "under quadratic costs, specialist (1.0,0.0) should pay more ({}) \
+             than generalist (0.5,0.5) ({}) — superlinear costs penalise \
+             concentrated investment",
+            cost_specialist, cost_generalist
+        );
+        // Verify exact values
+        assert!((cost_generalist - 0.5).abs() < 1e-6);
+        assert!((cost_specialist - 1.0).abs() < 1e-6);
     }
 }

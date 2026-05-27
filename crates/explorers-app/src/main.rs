@@ -113,6 +113,7 @@ fn main() {
                 specification_nutrient_coefficient: 0.2,
                 reproductive_compatibility_distance: 2.0,
                 mobility_maintenance_cost: 0.0,
+                maintenance_cost_exponent: 1.0,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -419,6 +420,7 @@ mod tests {
                 specification_nutrient_coefficient: 0.2,
                 reproductive_compatibility_distance: 2.0,
                 mobility_maintenance_cost: 0.0,
+                maintenance_cost_exponent: 1.0,
             },
             InitialDistribution {
                 mean_traits: TraitVector {
