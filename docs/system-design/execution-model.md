@@ -18,8 +18,7 @@ A plain data structure. Each agent holds:
 - **structure** — embodied biomass (energy)
 - **nutrient** — incorporated nutrient
 - **position** — location on the physical surface
-- **traits** — heritable trait vector (L1-normalised budget)
-- **contact time** — consecutive ticks at current position
+- **traits** — heritable trait vector
 - **wear** — per-functional-trait somatic degradation
 
 These fields are defined by the [world rules](world-rules.md). Agents are automata — their traits determine their strategy. The tick loop derives what each agent does from its trait vector, spatial context, and current state. Agents do not emit intents, make decisions, or respond to events. The trait vector *is* the strategy; evolution selects strategies.
@@ -82,12 +81,12 @@ Autonomous phases change only one agent's state each. They run across all agents
 Autonomous phases, in the order they run:
 
 1. **Photosynthesise** — agents with photosynthetic absorption absorb energy from local solar flux into reserve. Light is shared proportionally among co-located producers (spatial grid query). Photosynthesis is unconditional — it is not exclusive with consumption or any other activity. The trait budget makes dual investment expensive, but the physics do not forbid it.
-2. **Absorb nutrients** — agents with nutrient absorption extract nutrient from the local available pool. Uptake depends on the agent's trait investment and contact time at current position.
+2. **Absorb nutrients** — agents with autotrophy investment extract nutrient from the local available pool. Uptake depends on the agent's autotrophy trait — the same infrastructure that captures light also extracts nutrients.
 3. **Metabolise** — agents pay fixed energy costs from reserve to heat: base rate, trait maintenance, somatic maintenance, structure maintenance. These costs are independent of activity — they are the price of existing with a given trait vector.
 4. **Grow** — agents convert reserve surplus to structure (lossy). Growth is automatic — a consequence of being well-fed, not a decision.
 5. **Wear** — agents' functional traits degrade from baseline accumulation and use-dependent wear. Somatic repair reduces wear proportional to the agent's somatic maintenance trait. (Runs after coordinated phases so the full tick's activity is accounted for.)
 6. **Check death thresholds** — agents whose reserve has reached zero (starvation) or whose structure has dropped below their complexity-dependent death threshold die, producing carcasses. (Runs after wear.)
-7. **Move** — agents reposition on the physical surface. Movement direction is derived from the agent's traits and current spatial context (nearby agents and carcasses, sensed via the spatial grid). Movement distance is scaled by effective mobility. Movement costs energy from reserve. Moving resets contact time. (Runs last — movement is an investment in next tick's positioning.)
+7. **Move** — agents reposition on the physical surface. Movement direction is derived from the agent's traits and current spatial context (nearby agents and carcasses, sensed via the spatial grid). Movement distance is scaled by effective mobility. Movement costs energy from reserve. (Runs last — movement is an investment in next tick's positioning.)
 
 The ordering of phases 1–4 follows energy flow direction: acquire before spend, spend before convert. Wear and death checks run after coordinated phases so that the full tick's activity is accounted for before evaluating degradation and survival. Movement runs last so that all phases in the current tick resolve at stable positions, and the energy spent on movement is bounded by what remains after all other costs.
 
@@ -95,7 +94,7 @@ The ordering of phases 1–4 follows energy flow direction: acquire before spend
 
 Movement at the end of the tick creates a unified pattern for all strategies:
 
-- **Sessile agents** harvest where they have been holding position. Contact time accumulates across ticks, increasing nutrient uptake effectiveness. They do not move (or barely move), preserving contact time and saving energy.
+- **Sessile agents** harvest where they are. They do not move (or barely move), saving energy. Their autotrophy investment captures light and extracts nutrients at their fixed position.
 - **Mobile agents** harvest at their current position (consumption resolves at held positions), then reposition for the next tick. The hunt spans ticks: reposition, then harvest. Movement cost is bounded by remaining reserve after all other income and costs.
 
 Both strategies follow the same pattern: position yourself, then harvest. Sessile agents position once and harvest indefinitely. Mobile agents reposition every tick and harvest the following tick.
@@ -115,7 +114,7 @@ Resolution happens in two passes within a single tick.
 Resolve all interactions that drain a target. Living agents and carcasses are resolved in a single pass — the proportional-split algorithm is the same regardless of target type.
 
 1. For each target (living or carcass), gather all agents with consumption or scavenging traits within contact range.
-2. Compute each consumer's effective demand using world physics (consumer traits, target traits, contact time, trophic efficiency, stoichiometric mismatch).
+2. Compute each consumer's effective demand using world physics (consumer traits, target traits, trophic efficiency, stoichiometric mismatch).
 3. If total demand exceeds target's available stock, apply **proportional split** — each consumer receives a share proportional to their demand relative to total demand. When total demand does not exceed supply, everyone gets exactly what the physics computed.
 4. Apply drains to target state.
 5. Targets whose structure drops below their complexity-dependent death threshold are marked dead. Carcasses created by deaths in this pass are not available for decomposition until the next tick — there is no re-entrant processing within a tick.
@@ -192,4 +191,4 @@ Events are not the execution mechanism. They do not flow through a queue. They d
 
 - **Functional forms.** How much energy a given trait investment produces, what the metabolic base rate is, what the growth conversion efficiency is — these are calibration, not execution model.
 - **Movement direction computation.** How agents derive movement direction from spatial context (chemotaxis, random walk components) is a world-rules detail, not execution model.
-- **Specific physics formulas.** Trophic efficiency curves, contact time saturation functions, defensive trait modifiers — these are world rules, not tick loop architecture.
+- **Specific physics formulas.** Trophic efficiency curves, defensive trait modifiers — these are world rules, not tick loop architecture.
