@@ -18,7 +18,7 @@ The criterion for promoting a derived property to a trait: **does independent ev
 
 ## Dimensions
 
-Six dimensions in three layers. The layers reflect different aspects of an agent's life history: how it allocates energy, how it acquires energy and moves, and how it reproduces.
+Seven dimensions in three layers. The layers reflect different aspects of an agent's life history: how it allocates energy, how it acquires energy and moves, and how it reproduces.
 
 ### Allocation layer
 
@@ -40,13 +40,19 @@ Autotrophy and heterotrophy are two independent dimensions, not a single spectru
 
 ### Reproduction layer
 
-Two dimensions describe how an agent reproduces.
+Three dimensions describe how an agent reproduces.
 
 **Fecundity.** How many offspring share the reproductive energy budget (determined by kappa). High fecundity = many poorly-provisioned offspring (r-strategy). Low fecundity = few well-provisioned offspring (K-strategy). The actual offspring count per event is stochastic (Poisson with mean = fecundity trait). This is the Smith & Fretwell (1974) offspring number-vs-quality trade-off and is independent of kappa — kappa determines the total budget, fecundity determines how it is divided.
 
 **Asexual propensity.** Capacity to reproduce without a mate. This is evolvable machinery, not a universal fallback. A lineage that has specialised into sexual reproduction has lost asexual capability — like wolves, which cannot reproduce asexually even if no mates are available. This distinction matters: asexual reproduction is not a free backup mode that all agents can access.
 
 Selection dynamics: in sparse populations, asexual capability is hugely valuable — it enables colonisation and persistence when mates are unavailable. In dense populations with available mates, sexual reproduction is favoured because recombination generates combinatorial diversity. When mates are available and sexual reproduction is the norm, asexual machinery becomes unused overhead — maintained at a cost for a capability that is never exercised. Whether a lineage is primarily sexual or asexual is emergent from these selection pressures, not prescribed.
+
+**Dispersal.** Investment in offspring dispersal capability — the structures and mechanisms that move propagules away from the parent. This is a life history trait: a dandelion's parachute seeds, an oak's heavy acorns, a fern's wind-borne spores, a coconut palm's buoyant fruit are all expressions of different dispersal investment strategies. Higher dispersal investment produces a wider dispersal kernel (offspring land farther from the parent on average). Lower investment produces offspring that land near the parent.
+
+Dispersal is independent of fecundity. An organism can produce many far-dispersing offspring (dandelion — high fecundity, high dispersal) or few nearby offspring (coconut — low fecundity, moderate dispersal). The dispersal-fecundity trade-off is not a mechanical coupling but a budgetary pressure: energy invested in dispersal structures is unavailable for offspring provisioning or number, enforced through superlinear maintenance costs on both dimensions.
+
+Dispersal is also independent of mobility. Sessile organisms disperse offspring through propagule structures (spores, seeds); mobile organisms' offspring may disperse under their own locomotion. Both modes are expressions of the same trait — investment in getting offspring away from the parent. The trait governs how far offspring land, regardless of the physical mechanism.
 
 ## No L1 budget constraint
 
