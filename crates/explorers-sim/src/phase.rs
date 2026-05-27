@@ -1791,7 +1791,7 @@ mod tests {
 
         // No usage: only baseline wear
         let no_usage = std::collections::HashMap::new();
-        let events_baseline = apply_wear(&mut agents, &params, &no_usage);
+        let _events_baseline = apply_wear(&mut agents, &params, &no_usage);
         let baseline_wear = agents[0].wear[0];
         assert!(baseline_wear > 0.0, "baseline wear should accumulate");
 
