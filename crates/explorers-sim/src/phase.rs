@@ -1047,11 +1047,9 @@ pub fn resolve_reproduction(
         agents[*b_idx].repro_reserve -= invest_b;
         agents[*b_idx].nutrient -= nutrient_b;
 
-        // Parent midpoint for dispersal
-        let mid_pos = (
-            (a_pos.0 + b_pos.0) / 2.0,
-            (a_pos.1 + b_pos.1) / 2.0,
-        );
+        // Parent midpoint for dispersal (toroidal-aware)
+        let (dx, dy) = crate::toroidal_displacement(a_pos, b_pos, extent);
+        let mid_pos = crate::wrap_position((a_pos.0 + dx / 2.0, a_pos.1 + dy / 2.0), extent);
 
         // Dispersal: sigma = average of parents' dispersal traits
         let dispersal_radius = (a_traits.dispersal + b_traits.dispersal) / 2.0;
@@ -4272,6 +4270,60 @@ mod tests {
         for child in &result.offspring {
             assert_eq!(child.traits.dispersal, 3.7,
                 "offspring should inherit parent's dispersal trait");
+        }
+    }
+
+    #[test]
+    fn sexual_reproduction_midpoint_wraps_on_torus() {
+        // Parents near opposite edges of the torus should produce offspring
+        // near the wrap edge, not at the naive average (0, 0).
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_efficiency: 1.0,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            world_extent: 100.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 1.0,
+            kappa: 0.5,
+            fecundity: 1.0,
+            dispersal: 0.0, // zero dispersal so offspring land exactly at midpoint
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (-48.0, 0.0), 100.0, traits),
+            make_agent(2, (48.0, 0.0), 100.0, traits),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
+
+        let dead_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (-48.0, 0.0));
+        grid.insert(1, (48.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty(), "should produce offspring");
+        for child in &result.offspring {
+            // The toroidal midpoint of (-48, 0) and (48, 0) on extent=100
+            // is at x = -48 + (-4/2) = -50 (equivalently +50), not 0.
+            // The offspring should be near the wrap edge (|x| close to 50).
+            let x = child.position.0;
+            assert!(
+                x.abs() > 40.0,
+                "offspring x={} should be near the wrap edge (|x| > 40), not near 0",
+                x
+            );
         }
     }
 
