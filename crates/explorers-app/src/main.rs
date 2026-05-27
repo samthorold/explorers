@@ -91,7 +91,7 @@ fn main() {
                 reproduction_efficiency: 0.7,
                 base_metabolic_rate: 0.1,
                 movement_cost_coefficient: 0.05,
-                sensing_cost_coefficient: 0.02,
+                sensing_range_coefficient: 10.0,
                 reproduction_energy_threshold: 50.0,
                 mutation_rate: 0.1,
                 mutation_magnitude: 0.05,
@@ -101,18 +101,17 @@ fn main() {
                 light_competition_radius: 20.0,
                 photo_maintenance_cost: 0.01,
                 heterotrophy_maintenance_cost: 0.01,
-
-
-            initial_nutrient_pool: 0.0,
-            growth_efficiency: 0.0,
-            wear_rate: 0.1,
-            wear_degradation_steepness: 1.0,
-            somatic_maintenance_cost_coefficient: 0.1,
-            use_wear_rate: 0.01,
-            structure_maintenance_coefficient: 0.01,
-            repair_decay: 1.0,
-            base_nutrient_ratio: 0.1,
-            specification_nutrient_coefficient: 0.2,
+                initial_nutrient_pool: 0.0,
+                growth_efficiency: 0.0,
+                wear_rate: 0.1,
+                wear_degradation_steepness: 1.0,
+                somatic_maintenance_cost_coefficient: 0.1,
+                use_wear_rate: 0.01,
+                structure_maintenance_coefficient: 0.01,
+                repair_decay: 1.0,
+                base_nutrient_ratio: 0.1,
+                specification_nutrient_coefficient: 0.2,
+                reproductive_compatibility_distance: 2.0,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -120,9 +119,6 @@ fn main() {
                     heterotrophy: 0.3,
 
                     mobility: 0.4,
-                    chemotaxis_sensitivity: 0.3,
-                    mate_selectivity: 0.5,
-                    sensing_range: 0.4,
                     reproductive_investment: 0.3, fecundity: 0.0,
                     somatic_maintenance: 0.0,
                 },
@@ -202,9 +198,6 @@ mod tests {
             heterotrophy: 0.0,
 
             mobility: 0.0,
-            chemotaxis_sensitivity: 0.0,
-            mate_selectivity: 0.0,
-            sensing_range: 0.0,
             reproductive_investment: 0.0, fecundity: 0.0,
             somatic_maintenance: 0.0,
         };
@@ -222,9 +215,6 @@ mod tests {
             heterotrophy: 1.0,
 
             mobility: 0.0,
-            chemotaxis_sensitivity: 0.0,
-            mate_selectivity: 0.0,
-            sensing_range: 0.0,
             reproductive_investment: 0.0, fecundity: 0.0,
             somatic_maintenance: 0.0,
         };
@@ -243,9 +233,6 @@ mod tests {
             heterotrophy: 1.0,
 
             mobility: 0.0,
-            chemotaxis_sensitivity: 0.0,
-            mate_selectivity: 0.0,
-            sensing_range: 0.0,
             reproductive_investment: 0.0, fecundity: 0.0,
             somatic_maintenance: 0.0,
         };
@@ -262,9 +249,6 @@ mod tests {
             heterotrophy: 0.0,
 
             mobility: 0.0,
-            chemotaxis_sensitivity: 0.0,
-            mate_selectivity: 0.0,
-            sensing_range: 0.0,
             reproductive_investment: 0.0, fecundity: 0.0,
             somatic_maintenance: 0.0,
         };
@@ -281,9 +265,6 @@ mod tests {
             heterotrophy: 0.0,
 
             mobility: 0.0,
-            chemotaxis_sensitivity: 0.0,
-            mate_selectivity: 0.0,
-            sensing_range: 0.0,
             reproductive_investment: 0.0,
             fecundity: 0.0,
             somatic_maintenance: 0.0,
@@ -303,16 +284,12 @@ mod tests {
     fn dominant_role_classification() {
         let producer = TraitVector {
             photosynthetic_absorption: 0.8, heterotrophy: 0.1,
-
-            mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
-            sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+            mobility: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
             somatic_maintenance: 0.0,
         };
         let consumer = TraitVector {
             photosynthetic_absorption: 0.1, heterotrophy: 0.8,
-
-            mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
-            sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+            mobility: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
             somatic_maintenance: 0.0,
         };
         assert_eq!(dominant_role(&producer), "producers");
@@ -425,7 +402,7 @@ mod tests {
                 reproduction_efficiency: 0.7,
                 base_metabolic_rate: 0.1,
                 movement_cost_coefficient: 0.05,
-                sensing_cost_coefficient: 0.02,
+                sensing_range_coefficient: 10.0,
                 reproduction_energy_threshold: 50.0,
                 mutation_rate: 0.1,
                 mutation_magnitude: 0.05,
@@ -435,18 +412,17 @@ mod tests {
                 light_competition_radius: 1000.0,
                 photo_maintenance_cost: 0.0,
                 heterotrophy_maintenance_cost: 0.0,
-
-    
                 initial_nutrient_pool: 0.0,
-            growth_efficiency: 0.0,
-            wear_rate: 0.0,
-            wear_degradation_steepness: 0.0,
-            somatic_maintenance_cost_coefficient: 0.0,
-            use_wear_rate: 0.0,
-            structure_maintenance_coefficient: 0.0,
-            repair_decay: 0.0,
-            base_nutrient_ratio: 0.1,
-            specification_nutrient_coefficient: 0.2,
+                growth_efficiency: 0.0,
+                wear_rate: 0.0,
+                wear_degradation_steepness: 0.0,
+                somatic_maintenance_cost_coefficient: 0.0,
+                use_wear_rate: 0.0,
+                structure_maintenance_coefficient: 0.0,
+                repair_decay: 0.0,
+                base_nutrient_ratio: 0.1,
+                specification_nutrient_coefficient: 0.2,
+                reproductive_compatibility_distance: 2.0,
             },
             InitialDistribution {
                 mean_traits: TraitVector {
@@ -454,9 +430,6 @@ mod tests {
                     heterotrophy: 0.3,
 
                     mobility: 0.4,
-                    chemotaxis_sensitivity: 0.3,
-                    mate_selectivity: 0.5,
-                    sensing_range: 0.4,
                     reproductive_investment: 0.3, fecundity: 0.0,
                     somatic_maintenance: 0.0,
                 },
@@ -524,8 +497,7 @@ mod tests {
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                mobility: 0.0, chemotaxis_sensitivity: 0.0,
-                mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                    mobility: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                 somatic_maintenance: 0.0,
             },
             contact_time: 0,
@@ -537,8 +509,7 @@ mod tests {
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                mobility: 0.0, chemotaxis_sensitivity: 0.0,
-                mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                    mobility: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                 somatic_maintenance: 0.0,
             },
             contact_time: 0,
@@ -549,9 +520,7 @@ mod tests {
             nutrient: 0.0,
             traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.0, heterotrophy: 0.0,
-                mobility: 0.0, chemotaxis_sensitivity: 0.0,
-                mate_selectivity: 0.0, sensing_range: 0.0,
-                reproductive_investment: 0.0, fecundity: 0.0,
+                mobility: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                 somatic_maintenance: 0.0,
             },
         });
@@ -580,8 +549,7 @@ mod tests {
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                    mobility: 0.0, chemotaxis_sensitivity: 0.0,
-                    mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                    mobility: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                     somatic_maintenance: 0.0,
                 },
                 contact_time: 0,
@@ -593,8 +561,7 @@ mod tests {
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                    mobility: 0.0, chemotaxis_sensitivity: 0.0,
-                    mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                    mobility: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                     somatic_maintenance: 0.0,
                 },
                 contact_time: 0,
@@ -621,8 +588,7 @@ mod tests {
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                    mobility: 0.0, chemotaxis_sensitivity: 0.0,
-                    mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                    mobility: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                     somatic_maintenance: 0.0,
                 },
                 contact_time: 0,
@@ -634,8 +600,7 @@ mod tests {
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                    mobility: 0.0, chemotaxis_sensitivity: 0.0,
-                    mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
+                    mobility: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                     somatic_maintenance: 0.0,
                 },
                 contact_time: 0,
@@ -1028,9 +993,6 @@ fn debug_panel_ui(
                                 ui.label(format!("  heterotrophy: {:.3}", agent.traits.heterotrophy));
 
                                 ui.label(format!("  mobility: {:.3}", agent.traits.mobility));
-                                ui.label(format!("  chemotaxis_sensitivity: {:.3}", agent.traits.chemotaxis_sensitivity));
-                                ui.label(format!("  mate_selectivity: {:.3}", agent.traits.mate_selectivity));
-                                ui.label(format!("  sensing_range: {:.3}", agent.traits.sensing_range));
                                 ui.label(format!("  reproductive_investment: {:.3}", agent.traits.reproductive_investment));
                                 ui.label(format!("  fecundity: {:.3}", agent.traits.fecundity));
                                 ui.label(format!("  somatic_maintenance: {:.3}", agent.traits.somatic_maintenance));

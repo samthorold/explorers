@@ -101,34 +101,32 @@ impl SearchResult {
 
 pub fn default_ranges() -> Vec<ParameterRange> {
     vec![
-        ParameterRange { name: "solar_flux_magnitude".into(), min: 1.0, max: 20.0 },
-        ParameterRange { name: "base_trophic_efficiency".into(), min: 0.1, max: 0.9 },
-        ParameterRange { name: "trophic_distance_decay".into(), min: 0.1, max: 5.0 },
-        ParameterRange { name: "reproduction_efficiency".into(), min: 0.1, max: 0.9 },
-        ParameterRange { name: "base_metabolic_rate".into(), min: 0.01, max: 0.5 },
-        ParameterRange { name: "movement_cost_coefficient".into(), min: 0.001, max: 0.1 },
-        ParameterRange { name: "sensing_cost_coefficient".into(), min: 0.001, max: 0.1 },
-        ParameterRange { name: "reproduction_energy_threshold".into(), min: 5.0, max: 50.0 },
-        ParameterRange { name: "mutation_rate".into(), min: 0.01, max: 0.5 },
-        ParameterRange { name: "mutation_magnitude".into(), min: 0.01, max: 0.5 },
-        ParameterRange { name: "contact_radius".into(), min: 0.5, max: 5.0 },
-        ParameterRange { name: "world_extent".into(), min: 20.0, max: 100.0 },
-        ParameterRange { name: "initial_population_size".into(), min: 5.0, max: 50.0 },
-        ParameterRange { name: "light_competition_radius".into(), min: 1.0, max: 20.0 },
-        ParameterRange { name: "photo_maintenance_cost".into(), min: 0.001, max: 0.1 },
-        ParameterRange { name: "heterotrophy_maintenance_cost".into(), min: 0.001, max: 0.1 },
-        ParameterRange { name: "mean_photosynthetic_absorption".into(), min: 0.0, max: 1.0 },
-        ParameterRange { name: "mean_heterotrophy".into(), min: 0.0, max: 1.0 },
-        ParameterRange { name: "mean_mobility".into(), min: 0.0, max: 1.0 },
-        ParameterRange { name: "mean_chemotaxis_sensitivity".into(), min: 0.0, max: 1.0 },
-        ParameterRange { name: "mean_mate_selectivity".into(), min: 0.0, max: 1.0 },
-        ParameterRange { name: "mean_sensing_range".into(), min: 0.5, max: 10.0 },
-        ParameterRange { name: "mean_reproductive_investment".into(), min: 0.0, max: 1.0 },
-        ParameterRange { name: "trait_covariance".into(), min: 0.1, max: 1.0 },
-        ParameterRange { name: "initial_cluster_count".into(), min: 1.0, max: 5.0 },
-        ParameterRange { name: "initial_energy_per_agent".into(), min: 1.0, max: 50.0 },
-        ParameterRange { name: "base_nutrient_ratio".into(), min: 0.01, max: 0.5 },
-        ParameterRange { name: "specification_nutrient_coefficient".into(), min: 0.01, max: 0.5 },
+        ParameterRange { name: "solar_flux_magnitude".into(), min: 1.0, max: 20.0 },           // 0
+        ParameterRange { name: "base_trophic_efficiency".into(), min: 0.1, max: 0.9 },         // 1
+        ParameterRange { name: "trophic_distance_decay".into(), min: 0.1, max: 5.0 },          // 2
+        ParameterRange { name: "reproduction_efficiency".into(), min: 0.1, max: 0.9 },         // 3
+        ParameterRange { name: "base_metabolic_rate".into(), min: 0.01, max: 0.5 },            // 4
+        ParameterRange { name: "movement_cost_coefficient".into(), min: 0.001, max: 0.1 },     // 5
+        ParameterRange { name: "sensing_range_coefficient".into(), min: 1.0, max: 30.0 },      // 6
+        ParameterRange { name: "reproduction_energy_threshold".into(), min: 5.0, max: 50.0 },  // 7
+        ParameterRange { name: "mutation_rate".into(), min: 0.01, max: 0.5 },                  // 8
+        ParameterRange { name: "mutation_magnitude".into(), min: 0.01, max: 0.5 },             // 9
+        ParameterRange { name: "contact_radius".into(), min: 0.5, max: 5.0 },                  // 10
+        ParameterRange { name: "world_extent".into(), min: 20.0, max: 100.0 },                 // 11
+        ParameterRange { name: "initial_population_size".into(), min: 5.0, max: 50.0 },        // 12
+        ParameterRange { name: "light_competition_radius".into(), min: 1.0, max: 20.0 },       // 13
+        ParameterRange { name: "photo_maintenance_cost".into(), min: 0.001, max: 0.1 },        // 14
+        ParameterRange { name: "heterotrophy_maintenance_cost".into(), min: 0.001, max: 0.1 },  // 15
+        ParameterRange { name: "reproductive_compatibility_distance".into(), min: 0.5, max: 5.0 }, // 16
+        ParameterRange { name: "mean_photosynthetic_absorption".into(), min: 0.0, max: 1.0 },  // 17
+        ParameterRange { name: "mean_heterotrophy".into(), min: 0.0, max: 1.0 },               // 18
+        ParameterRange { name: "mean_mobility".into(), min: 0.0, max: 1.0 },                   // 19
+        ParameterRange { name: "mean_reproductive_investment".into(), min: 0.0, max: 1.0 },     // 20
+        ParameterRange { name: "trait_covariance".into(), min: 0.1, max: 1.0 },                // 21
+        ParameterRange { name: "initial_cluster_count".into(), min: 1.0, max: 5.0 },           // 22
+        ParameterRange { name: "initial_energy_per_agent".into(), min: 1.0, max: 50.0 },       // 23
+        ParameterRange { name: "base_nutrient_ratio".into(), min: 0.01, max: 0.5 },            // 24
+        ParameterRange { name: "specification_nutrient_coefficient".into(), min: 0.01, max: 0.5 }, // 25
     ]
 }
 
@@ -145,7 +143,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         reproduction_efficiency: v(3) as f32,
         base_metabolic_rate: v(4) as f32,
         movement_cost_coefficient: v(5) as f32,
-        sensing_cost_coefficient: v(6) as f32,
+        sensing_range_coefficient: v(6) as f32,
         reproduction_energy_threshold: v(7) as f32,
         mutation_rate: v(8) as f32,
         mutation_magnitude: v(9) as f32,
@@ -155,6 +153,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         light_competition_radius: v(13) as f32,
         photo_maintenance_cost: v(14) as f32,
         heterotrophy_maintenance_cost: v(15) as f32,
+        reproductive_compatibility_distance: v(16) as f32,
         initial_nutrient_pool: 0.0,
         growth_efficiency: 0.0,
         wear_rate: 0.0,
@@ -163,25 +162,22 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         use_wear_rate: 0.0,
         structure_maintenance_coefficient: 0.0,
         repair_decay: 0.0,
-        base_nutrient_ratio: v(26) as f32,
-        specification_nutrient_coefficient: v(27) as f32,
+        base_nutrient_ratio: v(24) as f32,
+        specification_nutrient_coefficient: v(25) as f32,
     };
 
     let dist = InitialDistribution {
         mean_traits: TraitVector {
-            photosynthetic_absorption: v(16) as f32,
-            heterotrophy: v(17) as f32,
-            mobility: v(18) as f32,
-            chemotaxis_sensitivity: v(19) as f32,
-            mate_selectivity: v(20) as f32,
-            sensing_range: v(21) as f32,
-            reproductive_investment: v(22) as f32,
+            photosynthetic_absorption: v(17) as f32,
+            heterotrophy: v(18) as f32,
+            mobility: v(19) as f32,
+            reproductive_investment: v(20) as f32,
             fecundity: 0.0,
             somatic_maintenance: 0.0,
         },
-        trait_covariance: v(23) as f32,
-        initial_cluster_count: v(24).round() as u32,
-        initial_energy_per_agent: v(25) as f32,
+        trait_covariance: v(21) as f32,
+        initial_cluster_count: v(22).round() as u32,
+        initial_energy_per_agent: v(23) as f32,
     };
 
     (params, dist)

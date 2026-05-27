@@ -104,7 +104,7 @@ mod tests {
             reproduction_efficiency: 0.5,
             base_metabolic_rate: 0.1,
             movement_cost_coefficient: 0.01,
-            sensing_cost_coefficient: 0.01,
+            sensing_range_coefficient: 10.0,
             reproduction_energy_threshold: 20.0,
             mutation_rate: 0.1,
             mutation_magnitude: 0.1,
@@ -114,7 +114,6 @@ mod tests {
             light_competition_radius: 1000.0,
             photo_maintenance_cost: 0.0,
             heterotrophy_maintenance_cost: 0.0,
-
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
             wear_rate: 0.0,
@@ -125,6 +124,7 @@ mod tests {
             repair_decay: 0.0,
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
+            reproductive_compatibility_distance: 2.0,
         }
     }
 
@@ -134,9 +134,6 @@ mod tests {
                 photosynthetic_absorption: 0.8,
                 heterotrophy: 0.1,
                 mobility: 0.3,
-                chemotaxis_sensitivity: 0.2,
-                mate_selectivity: 0.5,
-                sensing_range: 3.0,
                 reproductive_investment: 0.3,
             fecundity: 0.0,
             somatic_maintenance: 0.0,

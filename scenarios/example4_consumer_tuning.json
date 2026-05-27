@@ -4,7 +4,6 @@
     "reproduction_efficiency": 0.7,
     "base_metabolic_rate": 0.3,
     "movement_cost_coefficient": 0.05,
-    "sensing_cost_coefficient": 0.02,
     "reproduction_energy_threshold": 15.0,
     "mutation_rate": 0.1,
     "mutation_magnitude": 0.05,
@@ -32,9 +31,6 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
         "somatic_maintenance": 0.05,
@@ -51,9 +47,6 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
         "somatic_maintenance": 0.05,
@@ -70,9 +63,6 @@
       "traits": {
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.15,
         "somatic_maintenance": 0.05,
@@ -89,9 +79,6 @@
       "traits": {
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.08,
         "somatic_maintenance": 0.05,
@@ -108,9 +95,6 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.2,
         "somatic_maintenance": 0.05,
@@ -127,9 +111,6 @@
       "traits": {
         "photosynthetic_absorption": 0.3,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
         "somatic_maintenance": 0.05,
@@ -146,9 +127,6 @@
       "traits": {
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.12,
         "somatic_maintenance": 0.05,
@@ -165,9 +143,6 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
         "somatic_maintenance": 0.05,
@@ -184,9 +159,6 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.15,
         "somatic_maintenance": 0.05,
@@ -203,9 +175,6 @@
       "traits": {
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.08,
         "somatic_maintenance": 0.05,
@@ -222,9 +191,6 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
         "somatic_maintenance": 0.05,
@@ -241,9 +207,6 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
         "somatic_maintenance": 0.05,
@@ -260,9 +223,6 @@
       "traits": {
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.15,
         "somatic_maintenance": 0.05,
@@ -279,9 +239,6 @@
       "traits": {
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.08,
         "somatic_maintenance": 0.05,
@@ -298,9 +255,6 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.2,
         "somatic_maintenance": 0.05,
@@ -317,9 +271,6 @@
       "traits": {
         "photosynthetic_absorption": 0.3,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
         "somatic_maintenance": 0.05,
@@ -336,9 +287,6 @@
       "traits": {
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.12,
         "somatic_maintenance": 0.05,
@@ -355,9 +303,6 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
         "somatic_maintenance": 0.05,
@@ -374,9 +319,6 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.15,
         "somatic_maintenance": 0.05,
@@ -393,9 +335,6 @@
       "traits": {
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
-        "chemotaxis_sensitivity": 0.0,
-        "mate_selectivity": 3.0,
-        "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.08,
         "somatic_maintenance": 0.05,
@@ -412,9 +351,6 @@
       "traits": {
         "photosynthetic_absorption": 0.0,
         "mobility": 0.3,
-        "chemotaxis_sensitivity": 0.5,
-        "mate_selectivity": 3.0,
-        "sensing_range": 10.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
         "somatic_maintenance": 0.02,
@@ -431,9 +367,6 @@
       "traits": {
         "photosynthetic_absorption": 0.0,
         "mobility": 0.3,
-        "chemotaxis_sensitivity": 0.5,
-        "mate_selectivity": 3.0,
-        "sensing_range": 10.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
         "somatic_maintenance": 0.02,
