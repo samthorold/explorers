@@ -124,6 +124,8 @@ mod tests {
             use_wear_rate: 0.0,
             structure_maintenance_coefficient: 0.0,
             repair_decay: 0.0,
+            base_nutrient_ratio: 0.1,
+            specification_nutrient_coefficient: 0.2,
         }
     }
 

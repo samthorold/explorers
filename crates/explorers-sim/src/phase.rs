@@ -388,7 +388,11 @@ pub fn resolve_drains(
                 let nutrient_transferred = target_nutrient * nutrient_fraction;
 
                 // Consumer retains up to stoichiometric demand
-                let consumer_demand = crate::stoichiometric_demand(&agents[consumer_idx].traits);
+                let consumer_demand = crate::stoichiometric_demand(
+                    &agents[consumer_idx].traits,
+                    agents[consumer_idx].structure,
+                    params,
+                );
                 let consumer_nutrient_need = consumer_demand * energy_gained;
                 let retained = nutrient_transferred.min(consumer_nutrient_need);
                 let excreted = nutrient_transferred - retained;
@@ -493,7 +497,11 @@ pub fn resolve_drains(
                 let nutrient_fraction = actual_drain / available;
                 let nutrient_transferred = carcass_nutrient * nutrient_fraction;
 
-                let consumer_demand = crate::stoichiometric_demand(&agents[consumer_idx].traits);
+                let consumer_demand = crate::stoichiometric_demand(
+                    &agents[consumer_idx].traits,
+                    agents[consumer_idx].structure,
+                    params,
+                );
                 let consumer_nutrient_need = consumer_demand * energy_gained;
                 let retained = nutrient_transferred.min(consumer_nutrient_need);
                 let excreted = nutrient_transferred - retained;
@@ -755,7 +763,7 @@ pub fn resolve_reproduction(
         .filter(|(_, a)| {
             !dead_ids.contains(&a.id)
                 && a.reserve >= params.reproduction_energy_threshold
-                && a.nutrient >= crate::stoichiometric_demand(&a.traits)
+                && a.nutrient >= crate::stoichiometric_demand(&a.traits, a.structure, params)
         })
         .map(|(i, _)| i)
         .collect();
@@ -1009,6 +1017,8 @@ mod tests {
             use_wear_rate: 0.0,
             structure_maintenance_coefficient: 0.0,
             repair_decay: 0.0,
+            base_nutrient_ratio: 0.1,
+            specification_nutrient_coefficient: 0.2,
         }
     }
 
@@ -2037,7 +2047,6 @@ mod tests {
         let params = test_params();
         let consumer_traits = TraitVector {
             heterotrophy: 2.0,
-            // Consumer has 1 nonzero trait -> stoichiometric_demand = 1.0
             ..zero_traits()
         };
         let target_traits = TraitVector {
@@ -2048,6 +2057,10 @@ mod tests {
             make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
             make_agent(2, (1.0, 0.0), 10.0, target_traits),
         ];
+        // Consumer needs structure for stoichiometric demand
+        // demand = structure * (base_ratio + spec_coeff * spec_sum)
+        //        = 5.0 * (0.1 + 0.2 * 2.0) = 5.0 * 0.5 = 2.5
+        agents[0].structure = 5.0;
         agents[1].structure = 10.0;
         agents[1].nutrient = 20.0; // nutrient-rich target
 
@@ -2065,14 +2078,14 @@ mod tests {
         // nutrient_fraction = 2.0 / 10.0 = 0.2
         // nutrient_transferred = 20.0 * 0.2 = 4.0
         // energy_gained = 2.0 * 0.5 = 1.0
-        // stoichiometric_demand for consumer = 1.0 (one nonzero trait)
-        // consumer_nutrient_need = 1.0 * 1.0 = 1.0
-        // retained = min(4.0, 1.0) = 1.0
-        // excreted = 4.0 - 1.0 = 3.0
-        assert!((agents[0].nutrient - 1.0).abs() < 1e-3,
-            "consumer should retain 1.0 nutrient, got {}", agents[0].nutrient);
-        assert!((nutrient_pool - 3.0).abs() < 1e-3,
-            "nutrient pool should receive 3.0 excess, got {}", nutrient_pool);
+        // stoichiometric_demand = 5.0 * (0.1 + 0.2 * 2.0) = 2.5
+        // consumer_nutrient_need = 2.5 * 1.0 = 2.5
+        // retained = min(4.0, 2.5) = 2.5
+        // excreted = 4.0 - 2.5 = 1.5
+        assert!((agents[0].nutrient - 2.5).abs() < 1e-3,
+            "consumer should retain 2.5 nutrient, got {}", agents[0].nutrient);
+        assert!((nutrient_pool - 1.5).abs() < 1e-3,
+            "nutrient pool should receive 1.5 excess, got {}", nutrient_pool);
         assert!((agents[1].nutrient - 16.0).abs() < 1e-3,
             "target nutrient should be 16.0 (20 - 4), got {}", agents[1].nutrient);
     }
@@ -2222,8 +2235,11 @@ mod tests {
             make_agent(1, (0.0, 0.0), 100.0, traits),
             make_agent(2, (1.0, 0.0), 100.0, traits),
         ];
-        // stoichiometric_demand for these traits = 4.0 (4 nonzero traits)
-        // Set nutrient below demand
+        // Give agents structure so stoichiometric demand is meaningful
+        // demand = 10.0 * (0.1 + 0.2 * 0.5) = 10.0 * 0.2 = 2.0
+        agents[0].structure = 10.0;
+        agents[1].structure = 10.0;
+        // Set nutrient below demand (2.0)
         agents[0].nutrient = 1.0;
         agents[1].nutrient = 1.0;
 

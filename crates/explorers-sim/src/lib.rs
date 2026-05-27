@@ -116,6 +116,8 @@ fn default_somatic_maintenance_cost_coefficient() -> f32 { 0.1 }
 fn default_use_wear_rate() -> f32 { 0.01 }
 fn default_structure_maintenance_coefficient() -> f32 { 0.01 }
 fn default_repair_decay() -> f32 { 1.0 }
+fn default_base_nutrient_ratio() -> f32 { 0.1 }
+fn default_specification_nutrient_coefficient() -> f32 { 0.2 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldParameters {
@@ -154,6 +156,12 @@ pub struct WorldParameters {
     pub structure_maintenance_coefficient: f32,
     #[serde(default = "default_repair_decay")]
     pub repair_decay: f32,
+    /// Base nutrient-to-energy ratio per unit structure.
+    #[serde(default = "default_base_nutrient_ratio")]
+    pub base_nutrient_ratio: f32,
+    /// How much each unit of specification investment adds to the nutrient ratio.
+    #[serde(default = "default_specification_nutrient_coefficient")]
+    pub specification_nutrient_coefficient: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -312,16 +320,20 @@ pub fn death_threshold(traits: &TraitVector) -> f32 {
     normalised_entropy * sum
 }
 
-/// Stoichiometric nutrient demand: number of non-zero trait dimensions.
-/// Agents with more active traits require more nutrient.
-pub fn stoichiometric_demand(traits: &TraitVector) -> f32 {
-    let mut count = 0.0_f32;
-    for dim in 0..TraitVector::NUM_DIMS {
-        if traits.get(dim).abs() > 1e-10 {
-            count += 1.0;
-        }
-    }
-    count
+/// Stoichiometric nutrient demand: structure × trait-derived ratio.
+///
+/// `demand = structure × (base_nutrient_ratio + specification_nutrient_coefficient × specification_sum)`
+/// where `specification_sum = autotrophy + heterotrophy + mobility`.
+///
+/// Larger agents need more nutrient. More specification investment means
+/// proportionally more nutrient per unit biomass.
+pub fn stoichiometric_demand(traits: &TraitVector, structure: f32, params: &WorldParameters) -> f32 {
+    let specification_sum = traits.photosynthetic_absorption.max(0.0)
+        + traits.heterotrophy.max(0.0)
+        + traits.mobility.max(0.0);
+    let ratio = params.base_nutrient_ratio
+        + params.specification_nutrient_coefficient * specification_sum;
+    structure * ratio
 }
 
 #[allow(dead_code)]
@@ -857,6 +869,8 @@ mod tests {
             use_wear_rate: 0.0,
             structure_maintenance_coefficient: 0.0,
             repair_decay: 0.0,
+            base_nutrient_ratio: 0.1,
+            specification_nutrient_coefficient: 0.2,
         }
     }
 
@@ -1083,14 +1097,71 @@ mod tests {
     }
 
     #[test]
-    fn stoichiometric_demand_counts_nonzero_traits() {
+    fn stoichiometric_demand_increases_with_specification() {
+        let params = test_params();
+        let structure = 5.0;
+        // Low specification: only autotrophy
+        let low_spec = TraitVector {
+            photosynthetic_absorption: 0.3,
+            ..zero_traits()
+        };
+        // High specification: autotrophy + heterotrophy + mobility
+        let high_spec = TraitVector {
+            photosynthetic_absorption: 0.3,
+            heterotrophy: 0.4,
+            mobility: 0.3,
+            ..zero_traits()
+        };
+        let demand_low = stoichiometric_demand(&low_spec, structure, &params);
+        let demand_high = stoichiometric_demand(&high_spec, structure, &params);
+        assert!(demand_high > demand_low,
+            "more specification investment should yield higher demand: low={}, high={}",
+            demand_low, demand_high);
+
+        // Non-specification traits (fecundity, mate_selectivity etc.) should NOT affect demand
+        let with_repro = TraitVector {
+            photosynthetic_absorption: 0.3,
+            fecundity: 5.0,
+            mate_selectivity: 10.0,
+            ..zero_traits()
+        };
+        let demand_repro = stoichiometric_demand(&with_repro, structure, &params);
+        assert!((demand_repro - demand_low).abs() < 1e-6,
+            "non-specification traits should not affect demand: low={}, with_repro={}",
+            demand_low, demand_repro);
+    }
+
+    #[test]
+    fn stoichiometric_demand_zero_traits_base_ratio_only() {
+        // With zero specification, demand = structure * base_ratio
+        let params = test_params();
+        let traits = zero_traits();
+        let demand = stoichiometric_demand(&traits, 10.0, &params);
+        let expected = 10.0 * params.base_nutrient_ratio;
+        assert!((demand - expected).abs() < 1e-6,
+            "zero-spec demand should be structure * base_ratio: got {}, expected {}",
+            demand, expected);
+    }
+
+    #[test]
+    fn stoichiometric_demand_scales_with_structure() {
+        let params = test_params();
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             heterotrophy: 0.3,
+            mobility: 0.2,
             ..zero_traits()
         };
-        assert_eq!(stoichiometric_demand(&traits), 2.0);
-        assert_eq!(stoichiometric_demand(&zero_traits()), 0.0);
+        // Zero structure → zero demand (newborns)
+        assert_eq!(stoichiometric_demand(&traits, 0.0, &params), 0.0);
+        // Positive structure → positive demand
+        let demand_small = stoichiometric_demand(&traits, 1.0, &params);
+        let demand_large = stoichiometric_demand(&traits, 10.0, &params);
+        assert!(demand_small > 0.0, "positive structure should yield positive demand");
+        assert!(demand_large > demand_small, "larger structure should yield larger demand");
+        // Demand is proportional to structure
+        let ratio = demand_large / demand_small;
+        assert!((ratio - 10.0).abs() < 1e-4, "demand should scale linearly with structure");
     }
 
     #[test]
@@ -1148,6 +1219,8 @@ mod tests {
             heterotrophy_maintenance_cost: 0.05,
             nutrient_absorption_maintenance_cost: 0.05,
             use_wear_rate: 0.01,
+            base_nutrient_ratio: 0.1,
+            specification_nutrient_coefficient: 0.2,
         }
     }
 

@@ -127,6 +127,8 @@ pub fn default_ranges() -> Vec<ParameterRange> {
         ParameterRange { name: "trait_covariance".into(), min: 0.1, max: 1.0 },
         ParameterRange { name: "initial_cluster_count".into(), min: 1.0, max: 5.0 },
         ParameterRange { name: "initial_energy_per_agent".into(), min: 1.0, max: 50.0 },
+        ParameterRange { name: "base_nutrient_ratio".into(), min: 0.01, max: 0.5 },
+        ParameterRange { name: "specification_nutrient_coefficient".into(), min: 0.01, max: 0.5 },
     ]
 }
 
@@ -162,6 +164,8 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         use_wear_rate: 0.0,
         structure_maintenance_coefficient: 0.0,
         repair_decay: 0.0,
+        base_nutrient_ratio: v(26) as f32,
+        specification_nutrient_coefficient: v(27) as f32,
     };
 
     let dist = InitialDistribution {
@@ -413,5 +417,27 @@ mod tests {
         let tc = ranges.iter().find(|r| r.name == "trait_covariance").unwrap();
         assert!((tc.min - 0.1).abs() < 1e-10);
         assert!((tc.max - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn stoichiometric_parameters_in_search_ranges() {
+        let ranges = default_ranges();
+        let bnr = ranges.iter().find(|r| r.name == "base_nutrient_ratio")
+            .expect("base_nutrient_ratio should be in search ranges");
+        assert!(bnr.min >= 0.0);
+        assert!(bnr.max > bnr.min);
+
+        let snc = ranges.iter().find(|r| r.name == "specification_nutrient_coefficient")
+            .expect("specification_nutrient_coefficient should be in search ranges");
+        assert!(snc.min >= 0.0);
+        assert!(snc.max > snc.min);
+
+        // decode at midpoint should produce non-zero values
+        let unit = vec![0.5; ranges.len()];
+        let (params, _) = decode(&unit, &ranges);
+        assert!(params.base_nutrient_ratio > 0.0,
+            "decoded base_nutrient_ratio should be positive");
+        assert!(params.specification_nutrient_coefficient > 0.0,
+            "decoded specification_nutrient_coefficient should be positive");
     }
 }
