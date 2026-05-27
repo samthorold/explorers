@@ -546,13 +546,44 @@ impl World {
         self.dissipated_energy += grow_dissipated;
         events.extend(grow_events);
 
-        // (coordinated phases placeholder -- consumption, reproduction not yet implemented)
+        // 5. Resolve drains (coordinated pass 1)
+        let drain_result = phase::resolve_drains(
+            &mut self.agents, &mut self.carcasses, &grid, &self.params, &mut self.nutrient_pool,
+        );
+        self.dissipated_energy += drain_result.dissipated;
+        events.extend(drain_result.events);
 
-        // 5. Wear
+        // Mark deaths from drain resolution
+        let drain_dead_ids: std::collections::HashSet<u64> = drain_result.dead_agents.iter().copied().collect();
+        for agent in self.agents.iter_mut() {
+            if drain_dead_ids.contains(&agent.id) {
+                events.push(event::Event {
+                    tick: 0,
+                    seq: 0,
+                    kind: event::EventKind::Died,
+                    source: agent.id,
+                    target: None,
+                    energy_delta: 0.0,
+                    position: Some(agent.position),
+                });
+                agent.reserve = 0.0; // mark for removal
+            }
+        }
+        // Add new carcasses from drain kills (not in this tick's spatial grid)
+        for c in drain_result.new_carcasses {
+            self.carcasses.push(c);
+        }
+
+        // Remove drain-killed agents before further phases
+        self.agents.retain(|a| !drain_dead_ids.contains(&a.id));
+
+        // (coordinated pass 2 -- reproduction not yet implemented)
+
+        // 7. Wear
         let wear_events = phase::apply_wear(&mut self.agents, &self.params);
         events.extend(wear_events);
 
-        // 6. Check death thresholds
+        // 8. Check death thresholds
         let (death_events, new_carcasses) = phase::check_death_thresholds(
             &mut self.agents, &self.params,
         );
