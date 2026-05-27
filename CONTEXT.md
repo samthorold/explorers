@@ -214,6 +214,10 @@ Identifying and tracking specific clusters in trait space over time. Performed v
 
 ### Simulation
 
+**Intent**:
+A thin declaration emitted by an agent each tick, naming what it wants to do without specifying magnitude or outcome. The interaction coordinator receives intents and computes what actually happens by applying world physics. An intent carries the verb (consume, decompose, reproduce, redistribute), the source agent, a target (for directed verbs), the agent's position, and its traits. Agents self-filter — they only emit intents they believe they can afford. Multiple intents per tick are permitted; the energy budget is the only constraint on how many actions fire.
+_Avoid_: action, command, request (intent emphasises that the outcome is not guaranteed — the coordinator arbitrates)
+
 **World genesis**:
 The process of generating a playable world. A parameterisation is evaluated as an ensemble of replicate runs (same parameters, different random seeds). Each run simulates a random initial population forward (off-screen). Degenerate runs are detected and terminated early. A parameterisation is accepted only when most runs in the ensemble produce sensible worlds. The player drops into a world with history.
 
