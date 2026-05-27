@@ -132,6 +132,7 @@ fn default_sensing_range_coefficient() -> f32 { 10.0 }
 fn default_reproductive_compatibility_distance() -> f32 { 2.0 }
 fn default_maintenance_cost_exponent() -> f32 { 1.0 }
 fn default_consumption_contact_half_saturation() -> f32 { 0.001 }
+fn default_nutrient_grid_cell_size() -> f32 { 10.0 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldParameters {
@@ -205,6 +206,10 @@ pub struct WorldParameters {
     /// Near-zero default makes this effectively a no-op for backward compat.
     #[serde(default = "default_consumption_contact_half_saturation")]
     pub consumption_contact_half_saturation: f32,
+    /// Cell size for the spatial nutrient grid. Nutrient is distributed across
+    /// a grid of cells; co-located agents share their cell's pool proportionally.
+    #[serde(default = "default_nutrient_grid_cell_size")]
+    pub nutrient_grid_cell_size: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -403,7 +408,7 @@ pub struct World {
     carcasses: Vec<Carcass>,
     dissipated_energy: f32,
     total_solar_input: f32,
-    nutrient_pool: f32,
+    nutrient_grid: spatial::NutrientGrid,
     seed: u64,
     rng: ChaCha8Rng,
     tick: u64,
@@ -478,14 +483,18 @@ impl World {
             })
             .collect();
 
-        let nutrient_pool = params.initial_nutrient_pool;
+        let nutrient_grid = spatial::NutrientGrid::new(
+            params.world_extent,
+            params.nutrient_grid_cell_size,
+            params.initial_nutrient_pool,
+        );
         Self {
             params,
             agents,
             carcasses: Vec::new(),
             dissipated_energy: 0.0,
             total_solar_input: 0.0,
-            nutrient_pool,
+            nutrient_grid,
             seed,
             rng,
             tick: 0,
@@ -518,14 +527,18 @@ impl World {
                     repro_reserve: 0.0,
                 })
                 .collect();
-            let nutrient_pool = params.initial_nutrient_pool;
+            let nutrient_grid = spatial::NutrientGrid::new(
+                params.world_extent,
+                params.nutrient_grid_cell_size,
+                params.initial_nutrient_pool,
+            );
             Self {
                 params,
                 agents: sim_agents,
                 carcasses: Vec::new(),
                 dissipated_energy: 0.0,
                 total_solar_input: 0.0,
-                nutrient_pool,
+                nutrient_grid,
                 seed,
                 rng,
                 tick: 0,
@@ -594,7 +607,7 @@ impl World {
 
         // 2. Absorb nutrients
         let nutrient_events = phase::absorb_nutrients(
-            &mut self.agents, &mut self.nutrient_pool, &self.params,
+            &mut self.agents, &mut self.nutrient_grid, &self.params,
         );
         events.extend(nutrient_events);
 
@@ -610,7 +623,7 @@ impl World {
 
         // 5. Resolve drains (coordinated pass 1)
         let drain_result = phase::resolve_drains(
-            &mut self.agents, &mut self.carcasses, &grid, &self.params, &mut self.nutrient_pool,
+            &mut self.agents, &mut self.carcasses, &grid, &self.params, &mut self.nutrient_grid,
         );
         self.dissipated_energy += drain_result.dissipated;
         events.extend(drain_result.events);
@@ -855,7 +868,15 @@ impl World {
     }
 
     pub fn nutrient_pool(&self) -> f32 {
-        self.nutrient_pool
+        self.nutrient_grid.total()
+    }
+
+    pub fn nutrient_grid(&self) -> &spatial::NutrientGrid {
+        &self.nutrient_grid
+    }
+
+    pub fn nutrient_grid_mut(&mut self) -> &mut spatial::NutrientGrid {
+        &mut self.nutrient_grid
     }
 
     pub fn dissipated_energy(&self) -> f32 {
@@ -951,6 +972,7 @@ mod tests {
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
             consumption_contact_half_saturation: 0.0,
+            nutrient_grid_cell_size: 10.0,
         }
     }
 
@@ -1417,6 +1439,7 @@ mod tests {
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
             consumption_contact_half_saturation: 0.0,
+            nutrient_grid_cell_size: 10.0,
         }
     }
 

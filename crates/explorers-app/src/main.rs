@@ -115,6 +115,7 @@ fn main() {
                 mobility_maintenance_cost: 0.0,
                 maintenance_cost_exponent: 1.0,
                 consumption_contact_half_saturation: 0.001,
+                nutrient_grid_cell_size: 10.0,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -423,6 +424,7 @@ mod tests {
                 mobility_maintenance_cost: 0.0,
                 maintenance_cost_exponent: 1.0,
                 consumption_contact_half_saturation: 0.001,
+                nutrient_grid_cell_size: 10.0,
             },
             InitialDistribution {
                 mean_traits: TraitVector {

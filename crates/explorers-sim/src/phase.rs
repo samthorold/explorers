@@ -82,54 +82,61 @@ pub fn photosynthesise(
     events
 }
 
-/// Absorb nutrients: uptake from available pool, scales with contact time
-/// (Michaelis-Menten saturation), proportional sharing when demand exceeds pool.
+/// Absorb nutrients: uptake from the local nutrient grid cell at each agent's
+/// position, proportional sharing within each cell when demand exceeds supply.
 pub fn absorb_nutrients(
     agents: &mut [Agent],
-    nutrient_pool: &mut f32,
+    nutrient_grid: &mut crate::spatial::NutrientGrid,
     params: &WorldParameters,
 ) -> Vec<Event> {
     let mut events = Vec::new();
-    if *nutrient_pool <= 0.0 {
-        return events;
-    }
 
     let k = params.wear_degradation_steepness;
 
-    // Compute each agent's demand — uptake is coupled to autotrophy.
-    // The same sessile infrastructure that captures light also extracts nutrients.
-    // Mobile autotroph unviability emerges from superlinear maintenance costs,
-    // not from a contact_time gate.
-    let demands: Vec<f32> = agents
-        .iter()
-        .map(|a| a.effective_trait_with_steepness(0, k))
-        .collect();
-    let total_demand: f32 = demands.iter().sum();
-    if total_demand <= 0.0 {
-        return events;
-    }
+    // Group agents by nutrient grid cell, with their demand.
+    let mut cell_agents: std::collections::HashMap<usize, Vec<(usize, f32)>> =
+        std::collections::HashMap::new();
 
-    let available = *nutrient_pool;
-    for (i, agent) in agents.iter_mut().enumerate() {
-        if demands[i] <= 0.0 {
+    for (i, agent) in agents.iter().enumerate() {
+        let demand = agent.effective_trait_with_steepness(0, k);
+        if demand <= 0.0 {
             continue;
         }
-        let uptake = if total_demand <= available {
-            demands[i]
-        } else {
-            demands[i] / total_demand * available
-        };
-        agent.nutrient += uptake;
-        *nutrient_pool -= uptake;
-        events.push(Event {
-            tick: 0,
-            seq: 0,
-            kind: EventKind::NutrientAbsorbed,
-            source: agent.id,
-            target: None,
-            energy_delta: uptake,
-            position: Some(agent.position),
-        });
+        let cell_idx = nutrient_grid.cell_index_for(agent.position);
+        cell_agents.entry(cell_idx).or_default().push((i, demand));
+    }
+
+    // Process each cell independently
+    for (cell_idx, agent_demands) in &cell_agents {
+        let cell_pool = nutrient_grid.cell_mut(*cell_idx);
+        if *cell_pool <= 0.0 {
+            continue;
+        }
+
+        let total_demand: f32 = agent_demands.iter().map(|(_, d)| *d).sum();
+        if total_demand <= 0.0 {
+            continue;
+        }
+
+        let available = *cell_pool;
+        for &(i, demand) in agent_demands {
+            let uptake = if total_demand <= available {
+                demand
+            } else {
+                demand / total_demand * available
+            };
+            agents[i].nutrient += uptake;
+            *cell_pool -= uptake;
+            events.push(Event {
+                tick: 0,
+                seq: 0,
+                kind: EventKind::NutrientAbsorbed,
+                source: agents[i].id,
+                target: None,
+                energy_delta: uptake,
+                position: Some(agents[i].position),
+            });
+        }
     }
     events
 }
@@ -306,7 +313,7 @@ pub fn resolve_drains(
     carcasses: &mut [Carcass],
     grid: &SpatialGrid,
     params: &WorldParameters,
-    nutrient_pool: &mut f32,
+    nutrient_grid: &mut crate::spatial::NutrientGrid,
 ) -> DrainResult {
     let mut events = Vec::new();
     let mut dissipated = 0.0_f32;
@@ -435,7 +442,8 @@ pub fn resolve_drains(
 
                 agents[drain.target_idx].nutrient -= nutrient_transferred;
                 agents[consumer_idx].nutrient += retained;
-                *nutrient_pool += excreted;
+                // Excrete excess nutrient to the local cell at the target's position
+                *nutrient_grid.at_position(agents[drain.target_idx].position) += excreted;
             }
 
             events.push(Event {
@@ -563,7 +571,8 @@ pub fn resolve_drains(
 
                 carcasses[carcass_idx].nutrient -= nutrient_transferred;
                 agents[consumer_idx].nutrient += retained;
-                *nutrient_pool += excreted;
+                // Excrete excess nutrient to the local cell at the carcass's position
+                *nutrient_grid.at_position(carcass_pos) += excreted;
             }
 
             events.push(Event {
@@ -1211,6 +1220,7 @@ mod tests {
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
             consumption_contact_half_saturation: 0.0,
+            nutrient_grid_cell_size: 10.0,
         }
     }
 
@@ -1382,9 +1392,9 @@ mod tests {
             ..zero_traits()
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
-        let mut pool = 100.0;
+        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
-        let events = absorb_nutrients(&mut agents, &mut pool, &params);
+        let events = absorb_nutrients(&mut agents, &mut grid, &params);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::NutrientAbsorbed);
@@ -1392,7 +1402,7 @@ mod tests {
         let expected = 0.5;
         assert!((agents[0].nutrient - expected).abs() < 1e-3,
             "uptake should equal effective autotrophy, got {}", agents[0].nutrient);
-        assert!((pool - (100.0 - expected)).abs() < 1e-3);
+        assert!((grid.total() - (100.0 - expected)).abs() < 1e-3);
     }
 
     #[test]
@@ -1406,9 +1416,11 @@ mod tests {
             make_agent(1, (0.0, 0.0), 10.0, traits),
             make_agent(2, (1.0, 0.0), 10.0, traits),
         ];
-        let mut pool = 0.1; // very small pool
+        // Place all nutrient in the cell where agents are
+        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        *grid.at_position((0.0, 0.0)) = 0.1;
 
-        let events = absorb_nutrients(&mut agents, &mut pool, &params);
+        let events = absorb_nutrients(&mut agents, &mut grid, &params);
 
         assert_eq!(events.len(), 2);
         // Both have same demand, so each gets half
@@ -1429,9 +1441,9 @@ mod tests {
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
         agents[0].contact_time = 0;
-        let mut pool = 100.0;
+        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
-        let events = absorb_nutrients(&mut agents, &mut pool, &params);
+        let events = absorb_nutrients(&mut agents, &mut grid, &params);
         assert_eq!(events.len(), 1, "agent with autotrophy should get nutrients regardless of contact_time");
         assert!(agents[0].nutrient > 0.0, "nutrient uptake should be positive");
     }
@@ -1446,9 +1458,9 @@ mod tests {
             ..zero_traits()
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
-        let mut pool = 100.0;
+        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
-        let events = absorb_nutrients(&mut agents, &mut pool, &params);
+        let events = absorb_nutrients(&mut agents, &mut grid, &params);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::NutrientAbsorbed);
@@ -1469,16 +1481,49 @@ mod tests {
             ..zero_traits()
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
-        let mut pool = 100.0;
+        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
-        let events = absorb_nutrients(&mut agents, &mut pool, &params);
+        let events = absorb_nutrients(&mut agents, &mut grid, &params);
 
         assert!(events.is_empty(),
             "zero-autotrophy agent should get no nutrient uptake events");
         assert!((agents[0].nutrient).abs() < 1e-6,
             "zero-autotrophy agent should have zero nutrient");
-        assert!((pool - 100.0).abs() < 1e-6,
+        assert!((grid.total() - 100.0).abs() < 1e-6,
             "pool should be unchanged when no uptake occurs");
+    }
+
+    #[test]
+    fn absorb_nutrients_agents_in_different_cells_see_independent_pools() {
+        // Two agents in different cells: each draws from its own local cell only.
+        // Place a nutrient-rich cell at one position and a nutrient-poor cell elsewhere.
+        let params = test_params();
+        let traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        // Agent A at (-40, 0), Agent B at (40, 0) — in different cells (cell_size=10)
+        let mut agents = vec![
+            make_agent(1, (-40.0, 0.0), 10.0, traits),
+            make_agent(2, (40.0, 0.0), 10.0, traits),
+        ];
+        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        // Give only agent A's cell nutrient
+        *grid.at_position((-40.0, 0.0)) = 5.0;
+        // Agent B's cell has zero
+
+        let _events = absorb_nutrients(&mut agents, &mut grid, &params);
+
+        // Agent A should have absorbed nutrient
+        assert!(agents[0].nutrient > 0.0,
+            "agent in nutrient-rich cell should absorb, got {}", agents[0].nutrient);
+        // Agent B should have absorbed nothing
+        assert!((agents[1].nutrient).abs() < 1e-6,
+            "agent in nutrient-poor cell should absorb nothing, got {}", agents[1].nutrient);
+        // Total nutrient conserved
+        let total = grid.total() + agents[0].nutrient + agents[1].nutrient;
+        assert!((total - 5.0).abs() < 1e-3,
+            "total nutrient should be conserved, got {}", total);
     }
 
     // --- Metabolise ---
@@ -2077,9 +2122,9 @@ mod tests {
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
 
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         // Consumer demand = effective consumption_rate = 0.4
@@ -2129,9 +2174,9 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         grid.insert(2, (0.5, 0.0));
 
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         // Total demand = 4.0, available = 2.0
@@ -2187,9 +2232,9 @@ mod tests {
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
 
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         // Consumer demand = 5.0, target structure = threshold * 1.5
@@ -2227,9 +2272,9 @@ mod tests {
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
 
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         // Target should be killed (drained to 0)
@@ -2278,9 +2323,9 @@ mod tests {
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
 
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         // From living target: drain 2.0, gain 2.0 * 0.5 = 1.0 (consumption_efficiency)
@@ -2623,9 +2668,9 @@ mod tests {
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
 
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         // Drain = 2.0 (demand <= supply of 10.0)
@@ -2638,10 +2683,60 @@ mod tests {
         // excreted = 4.0 - 2.5 = 1.5
         assert!((agents[0].nutrient - 2.5).abs() < 1e-3,
             "consumer should retain 2.5 nutrient, got {}", agents[0].nutrient);
-        assert!((nutrient_pool - 1.5).abs() < 1e-3,
-            "nutrient pool should receive 1.5 excess, got {}", nutrient_pool);
+        assert!((nutrient_grid.total() - 1.5).abs() < 1e-3,
+            "nutrient pool should receive 1.5 excess, got {}", nutrient_grid.total());
         assert!((agents[1].nutrient - 16.0).abs() < 1e-3,
             "target nutrient should be 16.0 (20 - 4), got {}", agents[1].nutrient);
+    }
+
+    #[test]
+    fn drain_nutrient_excretion_returns_to_local_cell() {
+        // Nutrient excreted during consumption goes to the nutrient grid cell
+        // at the target's position, not to a global pool.
+        let params = test_params();
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        // Place consumer and target far apart but within contact range
+        // (contact_radius is 5.0 in test_params)
+        let target_pos = (40.0, 0.0);
+        let consumer_pos = (41.0, 0.0);  // 1.0 away, within contact radius
+        let mut agents = vec![
+            make_agent(1, consumer_pos, 10.0, consumer_traits),
+            make_agent(2, target_pos, 10.0, target_traits),
+        ];
+        agents[0].structure = 5.0;
+        agents[1].structure = 10.0;
+        agents[1].nutrient = 20.0;
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, consumer_pos);
+        grid.insert(1, target_pos);
+
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let _result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+        );
+
+        // Excreted nutrient should be in the cell at the target's position
+        let target_cell_nutrient = *nutrient_grid.at_position(target_pos);
+        assert!(target_cell_nutrient > 0.0,
+            "excreted nutrient should be in target's cell, got {}", target_cell_nutrient);
+
+        // A distant cell should have zero
+        let distant_cell = *nutrient_grid.at_position((-40.0, -40.0));
+        assert!((distant_cell).abs() < 1e-6,
+            "distant cell should be unaffected, got {}", distant_cell);
+
+        // Total excreted should match what the nutrient grid received
+        assert!((nutrient_grid.total() - target_cell_nutrient).abs() < 1e-6,
+            "all excreted nutrient should be in target's cell");
     }
 
     // --- Distance-dependent trophic efficiency in drains ---
@@ -2684,9 +2779,9 @@ mod tests {
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (0.0, 0.0));
             grid.insert(1, (1.0, 0.0));
-            let mut nutrient_pool = 0.0;
+            let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
             let _result = resolve_drains(
-                &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+                &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
             );
             agents[0].reserve // energy gained
         };
@@ -2740,9 +2835,9 @@ mod tests {
             }];
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, agents[0].position);
-            let mut nutrient_pool = 0.0;
+            let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
             let _result = resolve_drains(
-                &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+                &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
             );
             agents[0].reserve
         };
@@ -2786,9 +2881,9 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         let drained = pre_target_structure - agents[1].structure;
@@ -4620,9 +4715,9 @@ mod tests {
         let initial_reserve_a = agents[0].reserve;
         let initial_reserve_b = agents[1].reserve;
 
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         let gained_a = agents[0].reserve - initial_reserve_a;
@@ -4667,9 +4762,9 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
 
         let initial_reserve = agents[0].reserve;
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         let gained = agents[0].reserve - initial_reserve;
@@ -4734,9 +4829,9 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         grid.insert(2, (0.5, 0.0));
 
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         // Both have demand=1.0. With trophic-weighted split:
@@ -4802,9 +4897,9 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         grid.insert(2, (0.5, 0.0));
 
-        let mut nutrient_pool = 0.0;
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
         let total_drained = initial_structure - agents[2].structure;

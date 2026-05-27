@@ -77,6 +77,62 @@ impl SpatialGrid {
     }
 }
 
+/// Spatially heterogeneous nutrient pool. Wraps a `Vec<f32>` grid where each
+/// cell holds the available nutrient at that location. Co-located agents share
+/// their cell's pool proportionally.
+#[derive(Clone)]
+pub struct NutrientGrid {
+    extent: f32,
+    cell_size: f32,
+    cols: usize,
+    cells: Vec<f32>,
+}
+
+impl NutrientGrid {
+    /// Create a new nutrient grid with `initial_total` distributed uniformly.
+    pub fn new(extent: f32, cell_size: f32, initial_total: f32) -> Self {
+        let cols = (extent / cell_size).ceil() as usize;
+        let n = cols * cols;
+        let per_cell = if n > 0 { initial_total / n as f32 } else { 0.0 };
+        Self {
+            extent,
+            cell_size,
+            cols,
+            cells: vec![per_cell; n],
+        }
+    }
+
+    /// Mutable reference to the nutrient value at a world position.
+    pub fn at_position(&mut self, pos: (f32, f32)) -> &mut f32 {
+        let idx = self.cell_index(pos);
+        &mut self.cells[idx]
+    }
+
+    /// Total nutrient across all cells.
+    pub fn total(&self) -> f32 {
+        self.cells.iter().sum()
+    }
+
+    /// Returns the cell index for a given position (public for phase functions).
+    pub fn cell_index_for(&self, pos: (f32, f32)) -> usize {
+        self.cell_index(pos)
+    }
+
+    /// Mutable reference to a cell by index (public for phase functions).
+    pub fn cell_mut(&mut self, idx: usize) -> &mut f32 {
+        &mut self.cells[idx]
+    }
+
+    fn cell_index(&self, pos: (f32, f32)) -> usize {
+        let half = self.extent / 2.0;
+        let x = pos.0 + half;
+        let y = pos.1 + half;
+        let col = ((x / self.cell_size) as usize).min(self.cols - 1);
+        let row = ((y / self.cell_size) as usize).min(self.cols - 1);
+        row * self.cols + col
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +290,35 @@ mod tests {
         assert!(results.contains(&1));
         assert!(results.contains(&2));
         assert!(!results.contains(&3));
+    }
+
+    // --- NutrientGrid tests ---
+
+    #[test]
+    fn nutrient_grid_total_equals_initial() {
+        let grid = NutrientGrid::new(100.0, 10.0, 500.0);
+        assert!((grid.total() - 500.0).abs() < 1e-3,
+            "total should equal initial, got {}", grid.total());
+    }
+
+    #[test]
+    fn nutrient_grid_different_cells_are_independent() {
+        // Two positions in different cells should access independent pools
+        let mut grid = NutrientGrid::new(100.0, 10.0, 500.0);
+        let far_left = (-40.0, 0.0);  // cell near left edge
+        let far_right = (40.0, 0.0);  // cell near right edge
+
+        // Drain from one cell
+        *grid.at_position(far_left) -= 3.0;
+
+        // Other cell unaffected
+        let initial_per_cell = 500.0 / 100.0; // 100 cells (10x10)
+        let right_val = *grid.at_position(far_right);
+        assert!((right_val - initial_per_cell).abs() < 1e-6,
+            "distant cell should be unaffected, got {}", right_val);
+
+        // Total reflects the drain
+        assert!((grid.total() - 497.0).abs() < 1e-3,
+            "total should reflect drain, got {}", grid.total());
     }
 }
