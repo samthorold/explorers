@@ -189,6 +189,10 @@ pub struct WorldParameters {
     /// diverge beyond this fixed threshold.
     #[serde(default = "default_reproductive_compatibility_distance")]
     pub reproductive_compatibility_distance: f32,
+    /// Per-tick energy cost of maintaining mobility machinery, paid whether or not
+    /// the agent moves. Distinct from movement_cost_coefficient (per-distance cost).
+    #[serde(default)]
+    pub mobility_maintenance_cost: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -932,6 +936,7 @@ mod tests {
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
             reproductive_compatibility_distance: 2.0,
+            mobility_maintenance_cost: 0.0,
         }
     }
 
@@ -1395,6 +1400,7 @@ mod tests {
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
             reproductive_compatibility_distance: 2.0,
+            mobility_maintenance_cost: 0.0,
         }
     }
 
