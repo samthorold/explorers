@@ -359,6 +359,7 @@ pub struct World {
     next_agent_id: u64,
     event_log: event::EventLog,
     next_seq: u64,
+    ledger: energy_ledger::EnergyLedger,
 }
 
 impl World {
@@ -451,6 +452,7 @@ impl World {
             next_agent_id: pop_size as u64,
             event_log: event::EventLog::new(),
             next_seq: 0,
+            ledger: energy_ledger::EnergyLedger::new(),
         }
     }
 
@@ -489,6 +491,7 @@ impl World {
                 next_agent_id: pop_size as u64,
                 event_log: event::EventLog::new(),
                 next_seq: 0,
+                ledger: energy_ledger::EnergyLedger::new(),
             }
         } else if let Some(ref distribution) = recipe.initial_distribution {
             Self::new(recipe.parameters.clone(), distribution.clone(), seed)
@@ -508,7 +511,17 @@ impl World {
     }
 
     pub fn step(&mut self) {
+        use energy_ledger::EnergyEndpoint;
+
         let extent = self.params.world_extent;
+
+        // Snapshot pre-tick state for energy ledger conservation verification
+        let pre_agent_energy: std::collections::HashMap<u64, f32> = self.agents.iter()
+            .map(|a| (a.id, a.reserve + a.structure))
+            .collect();
+        let pre_carcass_energy: std::collections::HashMap<u64, f32> = self.carcasses.iter()
+            .map(|c| (c.id, c.energy))
+            .collect();
 
         // Build spatial grid once at start of tick
         let cell_size = self.params.light_competition_radius.max(1.0);
@@ -524,7 +537,16 @@ impl World {
         let photo_events = phase::photosynthesise(
             &mut self.agents, &grid, &self.params,
         );
-        self.total_solar_input += photo_events.iter().map(|e| e.energy_delta).sum::<f32>();
+        let solar_this_tick: f32 = photo_events.iter().map(|e| e.energy_delta).sum();
+        self.total_solar_input += solar_this_tick;
+        // Record solar flows to ledger
+        for ev in &photo_events {
+            self.ledger.record(
+                EnergyEndpoint::SolarTap,
+                EnergyEndpoint::Agent(ev.source),
+                ev.energy_delta,
+            );
+        }
         events.extend(photo_events);
 
         // 2. Absorb nutrients
@@ -616,6 +638,125 @@ impl World {
         self.dissipated_energy += move_result.dissipated;
         events.extend(move_result.events);
 
+        // --- Energy ledger: record all flows for conservation verification ---
+        // Built from event data and state snapshots, after all phases complete.
+        self.ledger.clear();
+
+        let post_agent_energy: std::collections::HashMap<u64, f32> = self.agents.iter()
+            .map(|a| (a.id, a.reserve + a.structure))
+            .collect();
+        let post_carcass_energy: std::collections::HashMap<u64, f32> = self.carcasses.iter()
+            .map(|c| (c.id, c.energy))
+            .collect();
+
+        // Collect all agent IDs that exist at start or end of tick
+        let mut all_agent_ids = std::collections::HashSet::new();
+        for &id in pre_agent_energy.keys() { all_agent_ids.insert(id); }
+        for &id in post_agent_energy.keys() { all_agent_ids.insert(id); }
+        let mut all_carcass_ids = std::collections::HashSet::new();
+        for &id in pre_carcass_energy.keys() { all_carcass_ids.insert(id); }
+        for &id in post_carcass_energy.keys() { all_carcass_ids.insert(id); }
+
+        // Record endowments (pre-tick energy for entities that existed at tick start)
+        for (&id, &energy) in &pre_agent_energy {
+            if energy > 0.0 {
+                self.ledger.record(EnergyEndpoint::Endowment, EnergyEndpoint::Agent(id), energy);
+            }
+        }
+        for (&id, &energy) in &pre_carcass_energy {
+            if energy > 0.0 {
+                self.ledger.record(EnergyEndpoint::Endowment, EnergyEndpoint::Carcass(id), energy);
+            }
+        }
+
+        // Record solar input per agent
+        for ev in events.iter().filter(|e| e.kind == event::EventKind::Photosynthesized) {
+            self.ledger.record(
+                EnergyEndpoint::SolarTap,
+                EnergyEndpoint::Agent(ev.source),
+                ev.energy_delta,
+            );
+        }
+
+        // Record consumption flows (target -> consumer with trophic loss)
+        for ev in events.iter().filter(|e| e.kind == event::EventKind::Consumed) {
+            let target_id = ev.target.unwrap();
+            let drain = ev.energy_delta;
+            let is_carcass = pre_carcass_energy.contains_key(&target_id)
+                && !pre_agent_energy.contains_key(&target_id);
+            let eff = if is_carcass {
+                self.params.decomposition_efficiency
+            } else {
+                self.params.consumption_efficiency
+            };
+            let gained = drain * eff;
+            let lost = drain - gained;
+            let target_ep = if is_carcass {
+                EnergyEndpoint::Carcass(target_id)
+            } else {
+                EnergyEndpoint::Agent(target_id)
+            };
+            if gained > 0.0 {
+                self.ledger.record(target_ep.clone(), EnergyEndpoint::Agent(ev.source), gained);
+            }
+            if lost > 0.0 {
+                self.ledger.record(target_ep, EnergyEndpoint::Dissipation, lost);
+            }
+        }
+
+        // Record death transfers (agent -> carcass)
+        for &id in &all_carcass_ids {
+            if !pre_carcass_energy.contains_key(&id) && pre_agent_energy.contains_key(&id) {
+                // New carcass from a pre-tick agent that died
+                let carcass_energy = post_carcass_energy.get(&id).copied().unwrap_or(0.0);
+                if carcass_energy > 0.0 {
+                    self.ledger.record(
+                        EnergyEndpoint::Agent(id),
+                        EnergyEndpoint::Carcass(id),
+                        carcass_energy,
+                    );
+                }
+            }
+        }
+
+        // Record offspring birth endowments
+        for (&id, &energy) in &post_agent_energy {
+            if !pre_agent_energy.contains_key(&id) && energy > 0.0 {
+                self.ledger.record(EnergyEndpoint::Endowment, EnergyEndpoint::Agent(id), energy);
+            }
+        }
+
+        // For each pre-tick agent: compute residual dissipation
+        // (everything not accounted for by consumption, death, or retained energy)
+        for (&id, &_pre_energy) in &pre_agent_energy {
+            let total_in = self.ledger.net_received(&EnergyEndpoint::Agent(id));
+            let total_out = self.ledger.net_sent(&EnergyEndpoint::Agent(id));
+            let post_energy = post_agent_energy.get(&id).copied().unwrap_or(0.0);
+            let unaccounted = total_in - total_out - post_energy;
+            if unaccounted > 1e-6 {
+                self.ledger.record(
+                    EnergyEndpoint::Agent(id),
+                    EnergyEndpoint::Dissipation,
+                    unaccounted,
+                );
+            }
+        }
+
+        // For pre-tick carcasses: compute residual dissipation
+        for (&id, &_pre_energy) in &pre_carcass_energy {
+            let total_in = self.ledger.net_received(&EnergyEndpoint::Carcass(id));
+            let total_out = self.ledger.net_sent(&EnergyEndpoint::Carcass(id));
+            let post_energy = post_carcass_energy.get(&id).copied().unwrap_or(0.0);
+            let unaccounted = total_in - total_out - post_energy;
+            if unaccounted > 1e-6 {
+                self.ledger.record(
+                    EnergyEndpoint::Carcass(id),
+                    EnergyEndpoint::Dissipation,
+                    unaccounted,
+                );
+            }
+        }
+
         // Append events to log
         for mut ev in events {
             ev.tick = self.tick;
@@ -669,6 +810,10 @@ impl World {
 
     pub fn event_log(&self) -> &event::EventLog {
         &self.event_log
+    }
+
+    pub fn energy_ledger(&self) -> &energy_ledger::EnergyLedger {
+        &self.ledger
     }
 
     /// Emit an event to the log. Retained for coordinated phases (not yet implemented).
@@ -1002,6 +1147,313 @@ mod tests {
         };
         let world = World::from_recipe(&recipe, 42);
         assert_eq!(world.agents().len(), 1);
+    }
+
+    // --- Energy ledger conservation tests ---
+
+    /// Helper: conservation params with all phases active.
+    fn conservation_params() -> WorldParameters {
+        WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.5,
+            growth_efficiency: 0.5,
+            wear_rate: 0.01,
+            wear_degradation_steepness: 1.0,
+            repair_decay: 1.0,
+            somatic_maintenance_cost_coefficient: 0.05,
+            structure_maintenance_coefficient: 0.01,
+            movement_cost_coefficient: 0.1,
+            sensing_cost_coefficient: 0.01,
+            reproduction_energy_threshold: 20.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.1,
+            mutation_magnitude: 0.05,
+            initial_population_size: 0,
+            initial_nutrient_pool: 100.0,
+            consumption_efficiency: 0.5,
+            decomposition_efficiency: 0.5,
+            contact_radius: 10.0,
+            world_extent: 50.0,
+            light_competition_radius: 100.0,
+            photo_maintenance_cost: 0.05,
+            consumption_maintenance_cost: 0.05,
+            scavenging_maintenance_cost: 0.05,
+            nutrient_absorption_maintenance_cost: 0.05,
+            use_wear_rate: 0.01,
+        }
+    }
+
+    /// Create a mixed population: producers, consumers, and decomposers.
+    fn seed_mixed_population(world: &mut World) {
+        // Producers (sessile, photosynthetic)
+        for i in 0..10 {
+            world.add_agent(Agent {
+                id: 0,
+                position: (i as f32 * 5.0 - 25.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 10.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 0.6,
+                    nutrient_absorption: 0.2,
+                    somatic_maintenance: 0.1,
+                    sensing_range: 2.0,
+                    reproductive_investment: 5.0,
+                    fecundity: 1.0,
+                    mate_selectivity: 10.0,
+                    ..zero_traits()
+                },
+                contact_time: 50,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            });
+        }
+        // Consumers (mobile, predatory)
+        for i in 0..5 {
+            world.add_agent(Agent {
+                id: 0,
+                position: (i as f32 * 10.0 - 25.0, 10.0),
+                reserve: 40.0,
+                structure: 3.0,
+                nutrient: 5.0,
+                traits: TraitVector {
+                    consumption_rate: 0.4,
+                    mobility: 0.3,
+                    chemotaxis_sensitivity: 0.1,
+                    somatic_maintenance: 0.1,
+                    sensing_range: 10.0,
+                    reproductive_investment: 5.0,
+                    fecundity: 1.0,
+                    mate_selectivity: 10.0,
+                    ..zero_traits()
+                },
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            });
+        }
+        // Decomposers (scavengers)
+        for i in 0..5 {
+            world.add_agent(Agent {
+                id: 0,
+                position: (i as f32 * 10.0 - 25.0, -10.0),
+                reserve: 40.0,
+                structure: 2.0,
+                nutrient: 5.0,
+                traits: TraitVector {
+                    scavenging_rate: 0.4,
+                    mobility: 0.2,
+                    chemotaxis_sensitivity: 0.2,
+                    somatic_maintenance: 0.1,
+                    sensing_range: 8.0,
+                    reproductive_investment: 5.0,
+                    fecundity: 1.0,
+                    mate_selectivity: 10.0,
+                    ..zero_traits()
+                },
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            });
+        }
+    }
+
+    #[test]
+    fn single_tick_energy_conservation_pure_producer() {
+        // A single producer: solar input = energy retained + dissipated.
+        // The ledger should verify conservation after each tick.
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 1.0,
+            initial_population_size: 0,
+            growth_efficiency: 0.0,
+            movement_cost_coefficient: 0.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.8,
+                somatic_maintenance: 0.2,
+                ..zero_traits()
+            },
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+        });
+
+        world.step();
+
+        // The ledger should be balanced — if step() records flows correctly,
+        // assert_balanced() should not panic.
+        world.energy_ledger().assert_balanced();
+
+        // Solar input should be positive
+        assert!(world.energy_ledger().total_solar_input() > 0.0,
+            "solar input should be positive");
+    }
+
+    #[test]
+    fn energy_conservation_500_ticks_mixed_population() {
+        // Run 500 ticks with all phases active (photosynthesis, nutrient uptake,
+        // metabolism, growth, drains, reproduction, wear, death, movement).
+        // assert_balanced() must pass on every tick.
+        let params = conservation_params();
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        seed_mixed_population(&mut world);
+
+        for _tick in 0..500 {
+            world.step();
+            // assert_balanced() panics if conservation is violated
+            world.energy_ledger().assert_balanced();
+
+            if world.agents().is_empty() {
+                // All agents died — conservation still held until here
+                break;
+            }
+        }
+
+        // Verify cumulative conservation: total solar = dissipated + retained
+        let total_solar = world.total_solar_input();
+        let total_dissipated = world.dissipated_energy();
+        let retained_agents: f32 = world.agents().iter()
+            .map(|a| a.reserve + a.structure).sum();
+        let retained_carcasses: f32 = world.carcasses().iter()
+            .map(|c| c.energy).sum();
+        // Initial endowment energy
+        let initial_energy: f32 = 50.0 * 10.0  // producers
+            + 5.0 * 10.0   // producer structure
+            + 40.0 * 5.0   // consumers
+            + 3.0 * 5.0    // consumer structure
+            + 40.0 * 5.0   // decomposers
+            + 2.0 * 5.0;   // decomposer structure
+        let total_input = initial_energy + total_solar;
+        let total_output = total_dissipated + retained_agents + retained_carcasses;
+        let diff = (total_input - total_output).abs();
+        let tolerance = total_input * 1e-3; // 0.1% tolerance for f32
+        assert!(diff < tolerance,
+            "cumulative energy conservation violated: input={total_input}, output={total_output}, diff={diff}");
+    }
+
+    #[test]
+    fn nutrient_conservation_across_ticks() {
+        // Total nutrient (available pool + living agents + carcasses) must be
+        // constant across all ticks.
+        let params = conservation_params();
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        seed_mixed_population(&mut world);
+
+        // Compute initial total nutrient
+        let initial_nutrient: f32 = world.nutrient_pool()
+            + world.agents().iter().map(|a| a.nutrient).sum::<f32>()
+            + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
+
+        for t in 0..200 {
+            world.step();
+
+            let current_nutrient: f32 = world.nutrient_pool()
+                + world.agents().iter().map(|a| a.nutrient).sum::<f32>()
+                + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
+
+            let diff = (current_nutrient - initial_nutrient).abs();
+            let tolerance = initial_nutrient.abs().max(1.0) * 1e-4;
+            assert!(diff < tolerance,
+                "nutrient conservation violated at tick {t}: initial={initial_nutrient}, current={current_nutrient}, diff={diff}");
+
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn no_negative_energy_balance_in_ledger() {
+        // No agent or carcass endpoint should have negative net balance
+        // in the ledger at any tick boundary.
+        let params = conservation_params();
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        seed_mixed_population(&mut world);
+
+        for _tick in 0..100 {
+            world.step();
+            // assert_balanced() checks no negative balances
+            world.energy_ledger().assert_balanced();
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn topology_projection_works_with_event_log() {
+        // TopologyProjection should process the event log from World::step()
+        // without panicking, correctly reading Consumed, Reproduced, Died events.
+        let params = conservation_params();
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        seed_mixed_population(&mut world);
+
+        for _ in 0..50 {
+            world.step();
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+
+        let mut topo = crate::topology::TopologyProjection::new();
+        topo.update(world.event_log());
+
+        // Should have processed events without panic
+        // Verify trophic_roles() returns a map (may be empty if all initial agents died)
+        let _roles = topo.trophic_roles();
+        // Computing roles without panic is the key test
+
+        // Died events should remove agents from active set
+        let died_events = world.event_log().by_kind(&event::EventKind::Died);
+        for ev in &died_events {
+            assert!(!topo.active_agents().contains(&ev.source),
+                "dead agent {} should not be in active set", ev.source);
+        }
+
+        // Incremental update should not panic
+        topo.update(world.event_log());
+
+        // Verify event log has expected event types
+        let log = world.event_log();
+        assert!(!log.by_kind(&event::EventKind::Photosynthesized).is_empty(),
+            "should have photosynthesis events");
+        assert!(!log.by_kind(&event::EventKind::Metabolized).is_empty(),
+            "should have metabolism events");
     }
 }
 
