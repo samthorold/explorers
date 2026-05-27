@@ -12,7 +12,6 @@ pub enum TrophicRole {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum EdgeKind {
     Consumed,
-    Decomposed,
 }
 
 pub struct TopologyProjection {
@@ -41,16 +40,17 @@ impl TopologyProjection {
     pub fn update(&mut self, log: &EventLog) {
         for event in log.since(self.cursor) {
             match event.kind {
-                EventKind::MateSelected => {
+                EventKind::Reproduced => {
                     if let Some(target) = event.target {
+                        // Reproduced with a target means parent pair info
                         self.pending_parents = Some((event.source, target));
-                    }
-                }
-                EventKind::Born => {
-                    self.active_agents.insert(event.source);
-                    self.birth_tick.insert(event.source, event.tick);
-                    if let Some(parents) = self.pending_parents.take() {
-                        self.lineage.insert(event.source, parents);
+                    } else {
+                        // Reproduced without target means offspring born
+                        self.active_agents.insert(event.source);
+                        self.birth_tick.insert(event.source, event.tick);
+                        if let Some(parents) = self.pending_parents.take() {
+                            self.lineage.insert(event.source, parents);
+                        }
                     }
                 }
                 EventKind::Died => {
@@ -68,14 +68,6 @@ impl TopologyProjection {
                             .or_insert(0.0) += event.energy_delta;
                     }
                 }
-                EventKind::Decomposed => {
-                    if let Some(target) = event.target {
-                        *self
-                            .edges
-                            .entry((event.source, target, EdgeKind::Decomposed))
-                            .or_insert(0.0) += event.energy_delta;
-                    }
-                }
                 _ => {}
             }
             self.cursor += 1;
@@ -87,17 +79,10 @@ impl TopologyProjection {
     }
 
     pub fn edge_weight(&self, source: u64, target: u64) -> f32 {
-        let consumed = self
-            .edges
+        self.edges
             .get(&(source, target, EdgeKind::Consumed))
             .copied()
-            .unwrap_or(0.0);
-        let decomposed = self
-            .edges
-            .get(&(source, target, EdgeKind::Decomposed))
-            .copied()
-            .unwrap_or(0.0);
-        consumed + decomposed
+            .unwrap_or(0.0)
     }
 
     pub fn trophic_roles(&self) -> HashMap<u64, TrophicRole> {
@@ -109,17 +94,9 @@ impl TopologyProjection {
                 .filter(|&(&(s, _, k), _)| s == agent && k == EdgeKind::Consumed)
                 .map(|(_, &w)| w)
                 .sum();
-            let decomposed_energy: f32 = self
-                .edges
-                .iter()
-                .filter(|&(&(s, _, k), _)| s == agent && k == EdgeKind::Decomposed)
-                .map(|(_, &w)| w)
-                .sum();
 
             let role = if consumed_energy > 0.0 {
                 TrophicRole::Consumer
-            } else if decomposed_energy > 0.0 {
-                TrophicRole::Decomposer
             } else {
                 TrophicRole::Producer
             };
@@ -232,11 +209,11 @@ mod tests {
     }
 
     #[test]
-    fn born_event_adds_agent_to_active_set() {
+    fn reproduced_event_without_target_adds_agent_to_active_set() {
         let log = make_log(vec![Event {
             tick: 1,
             seq: 0,
-            kind: EventKind::Born,
+            kind: EventKind::Reproduced,
             source: 42,
             target: None,
             energy_delta: 10.0, position: None,
@@ -299,7 +276,7 @@ mod tests {
             Event {
                 tick: 1,
                 seq: 0,
-                kind: EventKind::Born,
+                kind: EventKind::Reproduced,
                 source: 10,
                 target: None,
                 energy_delta: 10.0, position: None,
@@ -307,7 +284,7 @@ mod tests {
             Event {
                 tick: 1,
                 seq: 1,
-                kind: EventKind::Born,
+                kind: EventKind::Reproduced,
                 source: 20,
                 target: None,
                 energy_delta: 10.0, position: None,
@@ -341,48 +318,33 @@ mod tests {
     fn trophic_roles_classify_by_energy_flow() {
         let log = make_log(vec![
             Event {
-                tick: 1,
-                seq: 0,
-                kind: EventKind::Born,
-                source: 1,
-                target: None,
+                tick: 1, seq: 0, kind: EventKind::Reproduced,
+                source: 1, target: None,
                 energy_delta: 10.0, position: None,
             },
             Event {
-                tick: 1,
-                seq: 1,
-                kind: EventKind::Born,
-                source: 2,
-                target: None,
+                tick: 1, seq: 1, kind: EventKind::Reproduced,
+                source: 2, target: None,
                 energy_delta: 10.0, position: None,
             },
             Event {
-                tick: 1,
-                seq: 2,
-                kind: EventKind::Born,
-                source: 3,
-                target: None,
+                tick: 1, seq: 2, kind: EventKind::Reproduced,
+                source: 3, target: None,
                 energy_delta: 10.0, position: None,
             },
-            // Agent 2 consumes agent 1 → consumer
+            // Agent 2 consumes agent 1 -> consumer
             Event {
-                tick: 2,
-                seq: 3,
-                kind: EventKind::Consumed,
-                source: 2,
-                target: Some(1),
+                tick: 2, seq: 3, kind: EventKind::Consumed,
+                source: 2, target: Some(1),
                 energy_delta: 5.0, position: None,
             },
-            // Agent 3 decomposes carcass 99 → decomposer
+            // Agent 3 consumes carcass 99 (decomposition is now Consumed)
             Event {
-                tick: 2,
-                seq: 4,
-                kind: EventKind::Decomposed,
-                source: 3,
-                target: Some(99),
+                tick: 2, seq: 4, kind: EventKind::Consumed,
+                source: 3, target: Some(99),
                 energy_delta: 3.0, position: None,
             },
-            // Agent 1 has no outgoing edges → producer
+            // Agent 1 has no outgoing edges -> producer
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -391,14 +353,15 @@ mod tests {
         let roles = proj.trophic_roles();
         assert_eq!(roles[&1], TrophicRole::Producer);
         assert_eq!(roles[&2], TrophicRole::Consumer);
-        assert_eq!(roles[&3], TrophicRole::Decomposer);
+        assert_eq!(roles[&3], TrophicRole::Consumer);
     }
 
     #[test]
-    fn lineage_tracks_parent_offspring_from_mate_selected_and_born() {
+    fn lineage_tracks_parent_offspring_from_reproduced_events() {
+        // Reproduced with target = parent pair, Reproduced without target = offspring
         let log = make_log(vec![
-            Event { tick: 1, seq: 0, kind: EventKind::MateSelected, source: 10, target: Some(20), energy_delta: 0.0, position: None },
-            Event { tick: 1, seq: 1, kind: EventKind::Born, source: 30, target: None, energy_delta: 8.0, position: None },
+            Event { tick: 1, seq: 0, kind: EventKind::Reproduced, source: 10, target: Some(20), energy_delta: 0.0, position: None },
+            Event { tick: 1, seq: 1, kind: EventKind::Reproduced, source: 30, target: None, energy_delta: 8.0, position: None },
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -411,10 +374,10 @@ mod tests {
     #[test]
     fn active_agents_at_tick_reflects_births_and_deaths() {
         let log = make_log(vec![
-            Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0, position: None },
-            Event { tick: 2, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 1, seq: 0, kind: EventKind::Reproduced, source: 1, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 2, seq: 1, kind: EventKind::Reproduced, source: 2, target: None, energy_delta: 10.0, position: None },
             Event { tick: 3, seq: 2, kind: EventKind::Died, source: 1, target: None, energy_delta: 0.0, position: None },
-            Event { tick: 4, seq: 3, kind: EventKind::Born, source: 3, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 4, seq: 3, kind: EventKind::Reproduced, source: 3, target: None, energy_delta: 10.0, position: None },
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -430,9 +393,9 @@ mod tests {
     #[test]
     fn energy_flow_between_trophic_groups() {
         let log = make_log(vec![
-            Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0, position: None },
-            Event { tick: 1, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0, position: None },
-            Event { tick: 1, seq: 2, kind: EventKind::Born, source: 3, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 1, seq: 0, kind: EventKind::Reproduced, source: 1, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 1, seq: 1, kind: EventKind::Reproduced, source: 2, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 1, seq: 2, kind: EventKind::Reproduced, source: 3, target: None, energy_delta: 10.0, position: None },
             // Consumer 2 eats producer 1 twice
             Event { tick: 2, seq: 3, kind: EventKind::Consumed, source: 2, target: Some(1), energy_delta: 5.0, position: None },
             Event { tick: 3, seq: 4, kind: EventKind::Consumed, source: 2, target: Some(1), energy_delta: 3.0, position: None },
@@ -457,13 +420,13 @@ mod tests {
     fn lineage_clusters_groups_descendants_with_ancestors() {
         let log = make_log(vec![
             // Two initial agents (roots) born independently
-            Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0, position: None },
-            Event { tick: 1, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0, position: None },
-            // Agent 1 and 2 mate → child 3
-            Event { tick: 2, seq: 2, kind: EventKind::MateSelected, source: 1, target: Some(2), energy_delta: 0.0, position: None },
-            Event { tick: 2, seq: 3, kind: EventKind::Born, source: 3, target: None, energy_delta: 8.0, position: None },
+            Event { tick: 1, seq: 0, kind: EventKind::Reproduced, source: 1, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 1, seq: 1, kind: EventKind::Reproduced, source: 2, target: None, energy_delta: 10.0, position: None },
+            // Agent 1 and 2 mate -> child 3
+            Event { tick: 2, seq: 2, kind: EventKind::Reproduced, source: 1, target: Some(2), energy_delta: 0.0, position: None },
+            Event { tick: 2, seq: 3, kind: EventKind::Reproduced, source: 3, target: None, energy_delta: 8.0, position: None },
             // Agent 4 born independently (separate lineage)
-            Event { tick: 3, seq: 4, kind: EventKind::Born, source: 4, target: None, energy_delta: 10.0, position: None },
+            Event { tick: 3, seq: 4, kind: EventKind::Reproduced, source: 4, target: None, energy_delta: 10.0, position: None },
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -480,13 +443,13 @@ mod tests {
     #[test]
     fn incremental_update_processes_only_new_events() {
         let mut log = EventLog::new();
-        log.append(Event { tick: 1, seq: 0, kind: EventKind::Born, source: 1, target: None, energy_delta: 10.0, position: None }).unwrap();
+        log.append(Event { tick: 1, seq: 0, kind: EventKind::Reproduced, source: 1, target: None, energy_delta: 10.0, position: None }).unwrap();
 
         let mut proj = TopologyProjection::new();
         proj.update(&log);
         assert_eq!(proj.active_agents().len(), 1);
 
-        log.append(Event { tick: 2, seq: 1, kind: EventKind::Born, source: 2, target: None, energy_delta: 10.0, position: None }).unwrap();
+        log.append(Event { tick: 2, seq: 1, kind: EventKind::Reproduced, source: 2, target: None, energy_delta: 10.0, position: None }).unwrap();
         proj.update(&log);
         assert_eq!(proj.active_agents().len(), 2);
         assert!(proj.active_agents().contains(&1));

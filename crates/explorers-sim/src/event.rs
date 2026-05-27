@@ -1,13 +1,13 @@
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EventKind {
-    Born,
-    Died,
+    Photosynthesized,
+    NutrientAbsorbed,
+    Metabolized,
+    Grew,
     Consumed,
-    Decomposed,
-    MateSelected,
-    CarcassCreated,
-    CarcassDepleted,
-    MatingReadiness,
+    Reproduced,
+    Wore,
+    Died,
     Moved,
 }
 
@@ -20,48 +20,6 @@ pub struct Event {
     pub target: Option<u64>,
     pub energy_delta: f32,
     pub position: Option<(f32, f32)>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Ack {
-    Ack,
-    Nack,
-}
-
-#[derive(Clone, Debug)]
-pub struct Response {
-    pub ack: Ack,
-    pub events: Vec<Event>,
-}
-
-pub struct EventQueue {
-    high: std::collections::VecDeque<Event>,
-    normal: std::collections::VecDeque<Event>,
-}
-
-impl EventQueue {
-    pub fn new() -> Self {
-        Self {
-            high: std::collections::VecDeque::new(),
-            normal: std::collections::VecDeque::new(),
-        }
-    }
-
-    pub fn push_high(&mut self, event: Event) {
-        self.high.push_back(event);
-    }
-
-    pub fn push_normal(&mut self, event: Event) {
-        self.normal.push_back(event);
-    }
-
-    pub fn pop(&mut self) -> Option<Event> {
-        self.high.pop_front().or_else(|| self.normal.pop_front())
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.high.is_empty() && self.normal.is_empty()
-    }
 }
 
 pub struct EventLog {
@@ -135,42 +93,6 @@ mod tests {
     }
 
     #[test]
-    fn queue_drains_high_priority_before_normal() {
-        let mut q = EventQueue::new();
-        let normal = make_event(0, 1, EventKind::Consumed);
-        let high = make_event(0, 2, EventKind::Died);
-        q.push_normal(normal.clone());
-        q.push_high(high.clone());
-        // High priority should come out first despite being pushed second
-        let first = q.pop().unwrap();
-        assert_eq!(first.kind, EventKind::Died);
-        let second = q.pop().unwrap();
-        assert_eq!(second.kind, EventKind::Consumed);
-        assert!(q.pop().is_none());
-    }
-
-    #[test]
-    fn queue_is_empty_after_draining_all_events() {
-        let mut q = EventQueue::new();
-        q.push_high(make_event(0, 1, EventKind::Died));
-        q.push_normal(make_event(0, 2, EventKind::Consumed));
-        q.pop();
-        q.pop();
-        assert!(q.is_empty());
-    }
-
-    #[test]
-    fn queue_preserves_fifo_within_same_priority() {
-        let mut q = EventQueue::new();
-        q.push_high(make_event(0, 1, EventKind::Died));
-        q.push_high(make_event(0, 2, EventKind::CarcassCreated));
-        let first = q.pop().unwrap();
-        assert_eq!(first.seq, 1);
-        let second = q.pop().unwrap();
-        assert_eq!(second.seq, 2);
-    }
-
-    #[test]
     fn event_fits_within_128_bytes() {
         assert!(
             mem::size_of::<Event>() <= 128,
@@ -180,28 +102,9 @@ mod tests {
     }
 
     #[test]
-    fn response_fits_within_128_bytes() {
-        assert!(
-            mem::size_of::<Response>() <= 128,
-            "Response is {} bytes, must be ≤128",
-            mem::size_of::<Response>()
-        );
-    }
-
-    #[test]
-    fn nack_with_events_is_representable() {
-        let response = Response {
-            ack: Ack::Nack,
-            events: vec![make_event(1, 0, EventKind::Consumed)],
-        };
-        assert_eq!(response.ack, Ack::Nack);
-        assert_eq!(response.events.len(), 1);
-    }
-
-    #[test]
     fn append_rejects_non_monotonic_sequence() {
         let mut log = EventLog::new();
-        log.append(make_event(1, 5, EventKind::Born)).unwrap();
+        log.append(make_event(1, 5, EventKind::Reproduced)).unwrap();
         assert!(log.append(make_event(1, 5, EventKind::Died)).is_err());
         assert!(log.append(make_event(1, 3, EventKind::Died)).is_err());
         assert!(log.append(make_event(1, 6, EventKind::Died)).is_ok());
@@ -210,7 +113,7 @@ mod tests {
     #[test]
     fn appended_event_is_returned_by_tick_range() {
         let mut log = EventLog::new();
-        let e = make_event(5, 0, EventKind::Born);
+        let e = make_event(5, 0, EventKind::Reproduced);
         log.append(e.clone()).unwrap();
         let results = log.by_tick_range(5, 6);
         assert_eq!(results, &[e]);
@@ -219,10 +122,10 @@ mod tests {
     #[test]
     fn tick_range_returns_only_matching_ticks_in_sequence_order() {
         let mut log = EventLog::new();
-        log.append(make_event(1, 0, EventKind::Born)).unwrap();
+        log.append(make_event(1, 0, EventKind::Reproduced)).unwrap();
         log.append(make_event(2, 1, EventKind::Died)).unwrap();
         log.append(make_event(2, 2, EventKind::Consumed)).unwrap();
-        log.append(make_event(3, 3, EventKind::Born)).unwrap();
+        log.append(make_event(3, 3, EventKind::Reproduced)).unwrap();
         log.append(make_event(5, 4, EventKind::Died)).unwrap();
 
         let results = log.by_tick_range(2, 4);
@@ -249,11 +152,11 @@ mod tests {
             source: 10, target: Some(20), energy_delta: 5.0, position: None,
         }).unwrap();
         log.append(Event {
-            tick: 1, seq: 1, kind: EventKind::Born,
+            tick: 1, seq: 1, kind: EventKind::Reproduced,
             source: 30, target: None, energy_delta: 8.0, position: None,
         }).unwrap();
         log.append(Event {
-            tick: 2, seq: 2, kind: EventKind::Decomposed,
+            tick: 2, seq: 2, kind: EventKind::Consumed,
             source: 40, target: Some(10), energy_delta: 3.0, position: None,
         }).unwrap();
 
@@ -271,30 +174,48 @@ mod tests {
     #[test]
     fn by_kind_returns_matching_events() {
         let mut log = EventLog::new();
-        log.append(make_event(1, 0, EventKind::Born)).unwrap();
+        log.append(make_event(1, 0, EventKind::Reproduced)).unwrap();
         log.append(make_event(1, 1, EventKind::Died)).unwrap();
-        log.append(make_event(2, 2, EventKind::Born)).unwrap();
+        log.append(make_event(2, 2, EventKind::Reproduced)).unwrap();
         log.append(make_event(3, 3, EventKind::Consumed)).unwrap();
 
-        let born: Vec<_> = log.by_kind(&EventKind::Born);
-        assert_eq!(born.len(), 2);
-        assert_eq!(born[0].seq, 0);
-        assert_eq!(born[1].seq, 2);
+        let reproduced: Vec<_> = log.by_kind(&EventKind::Reproduced);
+        assert_eq!(reproduced.len(), 2);
+        assert_eq!(reproduced[0].seq, 0);
+        assert_eq!(reproduced[1].seq, 2);
 
-        assert!(log.by_kind(&EventKind::CarcassCreated).is_empty());
+        assert!(log.by_kind(&EventKind::Photosynthesized).is_empty());
     }
 
     #[test]
     fn append_after_query_is_valid() {
         let mut log = EventLog::new();
-        log.append(make_event(1, 0, EventKind::Born)).unwrap();
+        log.append(make_event(1, 0, EventKind::Reproduced)).unwrap();
 
         let _ = log.by_tick_range(0, 10);
         let _ = log.by_agent(1);
-        let _ = log.by_kind(&EventKind::Born);
+        let _ = log.by_kind(&EventKind::Reproduced);
 
         log.append(make_event(2, 1, EventKind::Died)).unwrap();
         assert_eq!(log.len(), 2);
         assert_eq!(log.by_tick_range(2, 3).len(), 1);
+    }
+
+    #[test]
+    fn event_kind_has_exactly_nine_variants() {
+        // Verify the design language: Photosynthesized, NutrientAbsorbed,
+        // Metabolized, Grew, Consumed, Reproduced, Wore, Died, Moved
+        let variants = [
+            EventKind::Photosynthesized,
+            EventKind::NutrientAbsorbed,
+            EventKind::Metabolized,
+            EventKind::Grew,
+            EventKind::Consumed,
+            EventKind::Reproduced,
+            EventKind::Wore,
+            EventKind::Died,
+            EventKind::Moved,
+        ];
+        assert_eq!(variants.len(), 9);
     }
 }
