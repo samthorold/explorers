@@ -9,6 +9,8 @@ use crate::spatial::SpatialGrid;
 use crate::{
     Agent, Carcass, WorldParameters, FUNCTIONAL_TRAIT_COUNT, FUNCTIONAL_TRAIT_INDICES,
 };
+use rand_chacha::ChaCha8Rng;
+use rand::Rng;
 
 /// Photosynthesise: agents with nonzero effective photosynthetic absorption
 /// absorb energy from local solar flux into reserve. Light competition splits
@@ -550,6 +552,169 @@ pub fn check_death_thresholds(
     (events, carcasses)
 }
 
+/// Result of the movement phase.
+pub struct MoveResult {
+    pub events: Vec<Event>,
+    pub dissipated: f32,
+    /// Per-agent sensing throughput: number of agents + carcasses detected.
+    /// Indexed by position in the agents slice.
+    pub sensing_throughput: Vec<f32>,
+}
+
+/// Move agents: the final phase of the tick loop. Agents reposition based on
+/// spatial context (nearby agents and carcasses), traits (chemotaxis, consumption,
+/// scavenging, mobility), and a random walk component. Movement costs energy
+/// proportional to distance. Contact time resets on movement, increments when
+/// stationary.
+pub fn move_agents(
+    agents: &mut [Agent],
+    carcasses: &[Carcass],
+    grid: &SpatialGrid,
+    params: &WorldParameters,
+    rng: &mut ChaCha8Rng,
+) -> MoveResult {
+    let mut events = Vec::new();
+    let mut total_dissipated = 0.0_f32;
+    let mut sensing_throughput = vec![0.0_f32; agents.len()];
+    let k = params.wear_degradation_steepness;
+    let extent = params.world_extent;
+
+    for i in 0..agents.len() {
+        let eff_mobility = agents[i].effective_trait_with_steepness(4, k);
+        let eff_chemotaxis = agents[i].effective_trait_with_steepness(5, k);
+        let eff_sensing = agents[i].effective_trait_with_steepness(6, k);
+        let eff_consumption = agents[i].effective_trait_with_steepness(1, k);
+        let eff_scavenging = agents[i].effective_trait_with_steepness(2, k);
+
+        if eff_mobility <= 0.0 {
+            // Stationary: increment contact time
+            agents[i].contact_time += 1;
+            continue;
+        }
+
+        // Query spatial grid for nearby agents within sensing range
+        let mut dir_x = 0.0_f32;
+        let mut dir_y = 0.0_f32;
+        let mut detected_count = 0.0_f32;
+
+        if eff_sensing > 0.0 {
+            // Detect nearby living agents
+            let nearby = grid.query_radius(agents[i].position, eff_sensing);
+            let mut seen = std::collections::HashSet::new();
+            seen.insert(i as u64);
+            for neighbor_id in nearby {
+                if !seen.insert(neighbor_id) {
+                    continue;
+                }
+                let j = neighbor_id as usize;
+                if j >= agents.len() {
+                    continue;
+                }
+                let dist = crate::toroidal_distance(
+                    agents[i].position,
+                    agents[j].position,
+                    extent,
+                );
+                if dist < 1e-6 {
+                    detected_count += 1.0;
+                    continue;
+                }
+                let (dx, dy) = crate::toroidal_displacement(
+                    agents[i].position,
+                    agents[j].position,
+                    extent,
+                );
+                // Attraction weighted by chemotaxis * consumption (toward living agents)
+                let weight = eff_chemotaxis * eff_consumption / dist;
+                dir_x += dx * weight;
+                dir_y += dy * weight;
+                detected_count += 1.0;
+            }
+
+            // Detect nearby carcasses
+            for carcass in carcasses.iter() {
+                let dist = crate::toroidal_distance(
+                    agents[i].position,
+                    carcass.position,
+                    extent,
+                );
+                if dist > eff_sensing {
+                    continue;
+                }
+                detected_count += 1.0;
+                if dist < 1e-6 {
+                    continue;
+                }
+                let (dx, dy) = crate::toroidal_displacement(
+                    agents[i].position,
+                    carcass.position,
+                    extent,
+                );
+                // Attraction weighted by chemotaxis * scavenging (toward carcasses)
+                let weight = eff_chemotaxis * eff_scavenging / dist;
+                dir_x += dx * weight;
+                dir_y += dy * weight;
+            }
+        }
+
+        sensing_throughput[i] = detected_count;
+
+        // Random walk component
+        let angle: f32 = rng.random::<f32>() * std::f32::consts::TAU;
+        let random_magnitude: f32 = rng.random::<f32>();
+        dir_x += angle.cos() * random_magnitude;
+        dir_y += angle.sin() * random_magnitude;
+
+        // Normalize direction and scale by effective mobility
+        let dir_mag = (dir_x * dir_x + dir_y * dir_y).sqrt();
+        if dir_mag < 1e-6 {
+            agents[i].contact_time += 1;
+            continue;
+        }
+
+        let distance = eff_mobility;
+        let move_x = (dir_x / dir_mag) * distance;
+        let move_y = (dir_y / dir_mag) * distance;
+
+        // Deduct energy cost
+        let cost = distance * params.movement_cost_coefficient;
+        agents[i].reserve -= cost;
+        total_dissipated += cost;
+
+        // Update position with toroidal wrapping
+        let new_pos = crate::wrap_position(
+            (agents[i].position.0 + move_x, agents[i].position.1 + move_y),
+            extent,
+        );
+
+        let moved = (new_pos.0 - agents[i].position.0).abs() > 1e-6
+            || (new_pos.1 - agents[i].position.1).abs() > 1e-6;
+
+        if moved {
+            agents[i].position = new_pos;
+            agents[i].contact_time = 0;
+        } else {
+            agents[i].contact_time += 1;
+        }
+
+        events.push(Event {
+            tick: 0,
+            seq: 0,
+            kind: EventKind::Moved,
+            source: agents[i].id,
+            target: None,
+            energy_delta: cost,
+            position: Some(new_pos),
+        });
+    }
+
+    MoveResult {
+        events,
+        dissipated: total_dissipated,
+        sensing_throughput,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,7 +755,6 @@ mod tests {
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
-            spatial_decay_rate: 0.5,
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
@@ -1235,6 +1399,241 @@ mod tests {
         // Events should include both living and carcass consumption
         assert!(result.events.len() >= 2,
             "should have events for both consumption types");
+    }
+
+    // --- Move agents ---
+
+    #[test]
+    fn move_direction_attracted_to_nearby_living_agent_by_consumption() {
+        // Agent with consumption trait and chemotaxis should move toward a nearby living agent.
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 0.0; // isolate direction test
+        let mover_traits = TraitVector {
+            consumption_rate: 0.5,
+            mobility: 0.5,
+            chemotaxis_sensitivity: 1.0,
+            sensing_range: 50.0,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        // Mover at origin, target at (20, 0)
+        let mut agents = vec![
+            make_agent(0, (0.0, 0.0), 100.0, mover_traits),
+            make_agent(1, (20.0, 0.0), 100.0, target_traits),
+        ];
+        agents[1].structure = 10.0;
+        let carcasses = vec![];
+        let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (20.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+
+        // Agent should have moved in the +x direction (toward target)
+        assert!(agents[0].position.0 > 0.0,
+            "agent should move toward target in +x, got x={}", agents[0].position.0);
+        assert!(!result.events.is_empty());
+        assert_eq!(result.events[0].kind, EventKind::Moved);
+    }
+
+    #[test]
+    fn move_direction_attracted_to_carcass_by_scavenging() {
+        // Agent with scavenging trait and chemotaxis should move toward a nearby carcass.
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 0.0;
+        let mover_traits = TraitVector {
+            scavenging_rate: 0.5,
+            mobility: 0.5,
+            chemotaxis_sensitivity: 1.0,
+            sensing_range: 50.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(0, (0.0, 0.0), 100.0, mover_traits),
+        ];
+        let carcasses = vec![Carcass {
+            id: 99,
+            position: (0.0, 20.0),
+            energy: 10.0,
+            nutrient: 0.0,
+        }];
+        let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+
+        // Agent should have moved in the +y direction (toward carcass)
+        assert!(agents[0].position.1 > 0.0,
+            "agent should move toward carcass in +y, got y={}", agents[0].position.1);
+    }
+
+    #[test]
+    fn move_energy_cost_proportional_to_distance() {
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 2.0;
+        let traits = TraitVector {
+            mobility: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
+        let carcasses = vec![];
+        let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+
+        // eff_mobility = 0.5 (no wear, k=0 so exp(0)=1)
+        // cost = distance * coefficient = 0.5 * 2.0 = 1.0
+        let expected_cost = 0.5 * 2.0;
+        assert!((agents[0].reserve - (100.0 - expected_cost)).abs() < 1e-3,
+            "reserve should be {}, got {}", 100.0 - expected_cost, agents[0].reserve);
+        assert!((result.dissipated - expected_cost).abs() < 1e-3);
+    }
+
+    #[test]
+    fn move_contact_time_resets_on_movement() {
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 0.0;
+        let traits = TraitVector {
+            mobility: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
+        agents[0].contact_time = 10; // had been stationary
+        let carcasses = vec![];
+        let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+
+        assert_eq!(agents[0].contact_time, 0,
+            "contact_time should reset to 0 after moving, got {}", agents[0].contact_time);
+    }
+
+    #[test]
+    fn move_contact_time_increments_when_stationary() {
+        use rand::SeedableRng;
+        let params = test_params();
+        // Zero mobility -> stationary
+        let traits = TraitVector {
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
+        agents[0].contact_time = 5;
+        let carcasses = vec![];
+        let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+
+        assert_eq!(agents[0].contact_time, 6,
+            "contact_time should increment when stationary, got {}", agents[0].contact_time);
+    }
+
+    #[test]
+    fn move_toroidal_wrapping_applied() {
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 0.0;
+        // Agent near the edge with mobility — should wrap around
+        let traits = TraitVector {
+            mobility: 5.0,
+            ..zero_traits()
+        };
+        // Place at edge of world (extent=100, so range is -50..50)
+        // With enough mobility, the position wraps
+        let mut agents = vec![make_agent(0, (48.0, 0.0), 100.0, traits)];
+        let carcasses = vec![];
+        let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+
+        // Position should be within bounds after wrapping
+        let extent = params.world_extent;
+        let half = extent / 2.0;
+        assert!(agents[0].position.0 >= -half && agents[0].position.0 <= half,
+            "x position should be within bounds, got {}", agents[0].position.0);
+        assert!(agents[0].position.1 >= -half && agents[0].position.1 <= half,
+            "y position should be within bounds, got {}", agents[0].position.1);
+    }
+
+    #[test]
+    fn move_deterministic_with_seeded_rng() {
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 0.0;
+        let traits = TraitVector {
+            mobility: 0.5,
+            ..zero_traits()
+        };
+
+        // Run twice with same seed
+        let mut agents1 = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
+        let mut agents2 = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
+        let carcasses = vec![];
+        let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+
+        let mut rng1 = ChaCha8Rng::seed_from_u64(123);
+        let mut rng2 = ChaCha8Rng::seed_from_u64(123);
+
+        let _r1 = move_agents(&mut agents1, &carcasses, &grid, &params, &mut rng1);
+        let _r2 = move_agents(&mut agents2, &carcasses, &grid, &params, &mut rng2);
+
+        assert!((agents1[0].position.0 - agents2[0].position.0).abs() < 1e-6,
+            "positions should be identical with same seed");
+        assert!((agents1[0].position.1 - agents2[0].position.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn move_sensing_throughput_counts_detected_entities() {
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 0.0;
+        let traits = TraitVector {
+            mobility: 0.5,
+            sensing_range: 50.0,
+            chemotaxis_sensitivity: 0.1,
+            consumption_rate: 0.1,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(0, (0.0, 0.0), 100.0, traits),
+            make_agent(1, (10.0, 0.0), 100.0, target_traits),
+            make_agent(2, (5.0, 5.0), 100.0, target_traits),
+        ];
+        agents[1].structure = 5.0;
+        agents[2].structure = 5.0;
+        let carcasses = vec![Carcass {
+            id: 99,
+            position: (3.0, 0.0),
+            energy: 5.0,
+            nutrient: 0.0,
+        }];
+        let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (10.0, 0.0));
+        grid.insert(2, (5.0, 5.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+
+        // Agent 0 should detect 2 living agents + 1 carcass = 3
+        assert!((result.sensing_throughput[0] - 3.0).abs() < 1e-6,
+            "sensing throughput should be 3.0, got {}", result.sensing_throughput[0]);
     }
 
     #[test]

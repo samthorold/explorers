@@ -577,7 +577,7 @@ mod tests {
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
-            spatial_decay_rate: 0.5,
+
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
@@ -795,7 +795,7 @@ mod tests {
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
-            spatial_decay_rate: 0.5,
+
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
