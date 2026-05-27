@@ -102,8 +102,8 @@ impl SearchResult {
 pub fn default_ranges() -> Vec<ParameterRange> {
     vec![
         ParameterRange { name: "solar_flux_magnitude".into(), min: 1.0, max: 20.0 },
-        ParameterRange { name: "consumption_efficiency".into(), min: 0.1, max: 0.9 },
-        ParameterRange { name: "decomposition_efficiency".into(), min: 0.1, max: 0.9 },
+        ParameterRange { name: "base_trophic_efficiency".into(), min: 0.1, max: 0.9 },
+        ParameterRange { name: "trophic_distance_decay".into(), min: 0.1, max: 5.0 },
         ParameterRange { name: "reproduction_efficiency".into(), min: 0.1, max: 0.9 },
         ParameterRange { name: "base_metabolic_rate".into(), min: 0.01, max: 0.5 },
         ParameterRange { name: "movement_cost_coefficient".into(), min: 0.001, max: 0.1 },
@@ -140,8 +140,8 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
 
     let params = WorldParameters {
         solar_flux_magnitude: v(0) as f32,
-        consumption_efficiency: v(1) as f32,
-        decomposition_efficiency: v(2) as f32,
+        base_trophic_efficiency: v(1) as f32,
+        trophic_distance_decay: v(2) as f32,
         reproduction_efficiency: v(3) as f32,
         base_metabolic_rate: v(4) as f32,
         movement_cost_coefficient: v(5) as f32,

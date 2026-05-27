@@ -371,7 +371,11 @@ pub fn resolve_drains(
                 (demand / total_demand) * available
             };
 
-            let efficiency = params.consumption_efficiency;
+            let efficiency = crate::trophic_transfer_efficiency(
+                &agents[consumer_idx].traits,
+                &agents[drain.target_idx].traits,
+                params,
+            );
             let energy_gained = actual_drain * efficiency;
             let energy_lost = actual_drain - energy_gained;
 
@@ -428,6 +432,7 @@ pub fn resolve_drains(
                 position: agent.position,
                 energy: agent.structure.max(0.0),
                 nutrient: agent.nutrient,
+                traits: agent.traits,
             });
         }
     }
@@ -482,7 +487,11 @@ pub fn resolve_drains(
                 (demand / total_demand) * available
             };
 
-            let efficiency = params.decomposition_efficiency;
+            let efficiency = crate::trophic_transfer_efficiency(
+                &agents[consumer_idx].traits,
+                &carcasses[carcass_idx].traits,
+                params,
+            );
             let energy_gained = actual_drain * efficiency;
             let energy_lost = actual_drain - energy_gained;
 
@@ -560,6 +569,7 @@ pub fn check_death_thresholds(
                 position: agent.position,
                 energy: carcass_energy,
                 nutrient: agent.nutrient,
+                traits: agent.traits,
             });
             // Mark for removal by setting reserve to 0
             agent.reserve = 0.0;
@@ -992,8 +1002,8 @@ mod tests {
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.1,
             sensing_cost_coefficient: 0.0,
-            consumption_efficiency: 0.5,
-            decomposition_efficiency: 0.5,
+            base_trophic_efficiency: 0.5,
+            trophic_distance_decay: 0.0,
             reproduction_efficiency: 0.7,
             movement_cost_coefficient: 0.0,
             reproduction_energy_threshold: 50.0,
@@ -1756,6 +1766,7 @@ mod tests {
             position: (2.0, 0.0), // within contact_radius=5.0
             energy: 10.0,
             nutrient: 0.0,
+            traits: zero_traits(),
         }];
 
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -1844,6 +1855,7 @@ mod tests {
             position: (0.0, 20.0),
             energy: 10.0,
             nutrient: 0.0,
+            traits: zero_traits(),
         }];
         let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
@@ -2068,6 +2080,7 @@ mod tests {
             position: (3.0, 0.0),
             energy: 5.0,
             nutrient: 0.0,
+            traits: zero_traits(),
         }];
         let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
@@ -2130,6 +2143,165 @@ mod tests {
             "nutrient pool should receive 1.5 excess, got {}", nutrient_pool);
         assert!((agents[1].nutrient - 16.0).abs() < 1e-3,
             "target nutrient should be 16.0 (20 - 4), got {}", agents[1].nutrient);
+    }
+
+    // --- Distance-dependent trophic efficiency in drains ---
+
+    #[test]
+    fn drain_similar_consumer_gains_more_than_distant_consumer() {
+        // Two consumers drain the same target. The one with traits closer to
+        // the target gets more energy per unit drained.
+        let params = WorldParameters {
+            base_trophic_efficiency: 0.8,
+            trophic_distance_decay: 2.0,
+            ..test_params()
+        };
+        // Target is a producer
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        // Consumer A: similar to target (also photosynthetic + heterotroph)
+        let similar_consumer = TraitVector {
+            photosynthetic_absorption: 0.4,
+            heterotrophy: 1.0,
+            ..zero_traits()
+        };
+        // Consumer B: very different from target (high mobility, no photo)
+        let distant_consumer = TraitVector {
+            heterotrophy: 1.0,
+            mobility: 2.0,
+            chemotaxis_sensitivity: 1.0,
+            ..zero_traits()
+        };
+
+        // Run two separate drain resolutions to compare energy gained
+        let run_drain = |consumer_traits: TraitVector| -> f32 {
+            let mut agents = vec![
+                make_agent(1, (0.0, 0.0), 0.0, consumer_traits),
+                make_agent(2, (1.0, 0.0), 10.0, target_traits),
+            ];
+            agents[1].structure = 100.0; // plenty of structure
+            let mut carcasses: Vec<Carcass> = Vec::new();
+            let mut grid = SpatialGrid::new(100.0, 10.0);
+            grid.insert(0, (0.0, 0.0));
+            grid.insert(1, (1.0, 0.0));
+            let mut nutrient_pool = 0.0;
+            let _result = resolve_drains(
+                &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            );
+            agents[0].reserve // energy gained
+        };
+
+        let gained_similar = run_drain(similar_consumer);
+        let gained_distant = run_drain(distant_consumer);
+
+        assert!(gained_similar > gained_distant,
+            "similar consumer should gain more: similar={}, distant={}",
+            gained_similar, gained_distant);
+        assert!(gained_similar > 0.0, "similar consumer should gain energy");
+        assert!(gained_distant > 0.0, "distant consumer should still gain some energy");
+    }
+
+    #[test]
+    fn drain_carcass_uses_original_trait_vector_for_distance() {
+        // A carcass retains the dead agent's trait vector. Efficiency depends
+        // on trait distance between consumer and the carcass's original traits.
+        let params = WorldParameters {
+            base_trophic_efficiency: 0.8,
+            trophic_distance_decay: 2.0,
+            ..test_params()
+        };
+        let consumer_traits = TraitVector {
+            heterotrophy: 0.5,
+            photosynthetic_absorption: 0.3,
+            ..zero_traits()
+        };
+        // Carcass from a similar organism
+        let similar_carcass_traits = TraitVector {
+            photosynthetic_absorption: 0.4,
+            ..zero_traits()
+        };
+        // Carcass from a very different organism
+        let distant_carcass_traits = TraitVector {
+            mobility: 3.0,
+            chemotaxis_sensitivity: 2.0,
+            ..zero_traits()
+        };
+
+        let run_carcass_drain = |carcass_traits: TraitVector| -> f32 {
+            // Agent id must match grid key (slice index) for id_to_idx lookup
+            let mut agents = vec![
+                make_agent(0, (0.0, 0.0), 0.0, consumer_traits),
+            ];
+            let mut carcasses = vec![Carcass {
+                id: 99,
+                position: (0.0, 0.0), // co-located with consumer
+                energy: 100.0,
+                nutrient: 0.0,
+                traits: carcass_traits,
+            }];
+            let mut grid = SpatialGrid::new(100.0, 10.0);
+            grid.insert(0, agents[0].position);
+            let mut nutrient_pool = 0.0;
+            let _result = resolve_drains(
+                &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+            );
+            agents[0].reserve
+        };
+
+        let gained_similar = run_carcass_drain(similar_carcass_traits);
+        let gained_distant = run_carcass_drain(distant_carcass_traits);
+
+        assert!(gained_similar > gained_distant,
+            "decomposing similar carcass should yield more: similar={}, distant={}",
+            gained_similar, gained_distant);
+    }
+
+    #[test]
+    fn drain_energy_conservation_with_distance_dependent_efficiency() {
+        // Energy drained from target = energy gained by consumer + dissipated.
+        // This must hold regardless of distance-dependent efficiency.
+        let params = WorldParameters {
+            base_trophic_efficiency: 0.7,
+            trophic_distance_decay: 1.5,
+            ..test_params()
+        };
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            mobility: 1.0,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 0.8,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 0.0, consumer_traits),
+            make_agent(2, (1.0, 0.0), 10.0, target_traits),
+        ];
+        agents[1].structure = 50.0;
+
+        let pre_target_structure = agents[1].structure;
+        let pre_consumer_reserve = agents[0].reserve;
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut nutrient_pool = 0.0;
+        let result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+        );
+
+        let drained = pre_target_structure - agents[1].structure;
+        let gained = agents[0].reserve - pre_consumer_reserve;
+        let dissipated = result.dissipated;
+
+        assert!(drained > 0.0, "something should have been drained");
+        assert!((drained - gained - dissipated).abs() < 1e-4,
+            "energy conservation: drained={}, gained={}, dissipated={}, diff={}",
+            drained, gained, dissipated, drained - gained - dissipated);
     }
 
     // --- Resolve reproduction ---

@@ -1,8 +1,6 @@
 {
   "parameters": {
     "solar_flux_magnitude": 5.0,
-    "consumption_efficiency": 0.8,
-    "decomposition_efficiency": 0.8,
     "reproduction_efficiency": 0.7,
     "base_metabolic_rate": 0.3,
     "movement_cost_coefficient": 0.05,
@@ -18,7 +16,9 @@
     "initial_nutrient_pool": 50000.0,
     "growth_efficiency": 0.3,
     "somatic_maintenance_cost_coefficient": 0.1,
-    "heterotrophy_maintenance_cost": 0.01
+    "heterotrophy_maintenance_cost": 0.01,
+    "base_trophic_efficiency": 0.8,
+    "trophic_distance_decay": 1.0
   },
   "agents": [
     {
