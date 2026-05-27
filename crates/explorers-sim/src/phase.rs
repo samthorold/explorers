@@ -329,7 +329,7 @@ pub fn resolve_drains(
     // Collect per-target drain info before mutating
     struct TargetDrain {
         target_idx: usize,
-        consumers: Vec<(usize, f32)>, // (consumer_idx, demand)
+        consumers: Vec<(usize, f32, f32)>, // (consumer_idx, demand, trophic_eff)
     }
 
     let mut living_drains: Vec<TargetDrain> = Vec::new();
@@ -374,7 +374,12 @@ pub fn resolve_drains(
                 } else {
                     eff_heterotrophy
                 };
-                consumers.push((consumer_idx, demand));
+                let trophic_eff = crate::trophic_transfer_efficiency(
+                    &agents[consumer_idx].traits,
+                    &agents[target_idx].traits,
+                    params,
+                );
+                consumers.push((consumer_idx, demand, trophic_eff));
             }
         }
 
@@ -389,21 +394,22 @@ pub fn resolve_drains(
     // Apply living target drains
     for drain in &living_drains {
         let available = agents[drain.target_idx].structure;
-        let total_demand: f32 = drain.consumers.iter().map(|(_, d)| *d).sum();
+        let total_demand: f32 = drain.consumers.iter().map(|(_, d, _)| *d).sum();
 
-        for &(consumer_idx, demand) in &drain.consumers {
+        // Weighted split: weight = demand * trophic_eff
+        let total_weight: f32 = drain.consumers.iter()
+            .map(|(_, d, eff)| *d * *eff)
+            .sum();
+
+        for &(consumer_idx, demand, trophic_eff) in &drain.consumers {
             let actual_drain = if total_demand <= available {
                 demand
             } else {
-                (demand / total_demand) * available
+                let weight = demand * trophic_eff;
+                (weight / total_weight) * available
             };
 
-            let efficiency = crate::trophic_transfer_efficiency(
-                &agents[consumer_idx].traits,
-                &agents[drain.target_idx].traits,
-                params,
-            );
-            let energy_gained = actual_drain * efficiency;
+            let energy_gained = actual_drain * trophic_eff;
             let energy_lost = actual_drain - energy_gained;
 
             agents[drain.target_idx].structure -= actual_drain;
@@ -471,7 +477,7 @@ pub fn resolve_drains(
         }
         let carcass_pos = carcasses[carcass_idx].position;
         let nearby = grid.query_radius(carcass_pos, contact_radius);
-        let mut consumers: Vec<(usize, f32)> = Vec::new();
+        let mut consumers: Vec<(usize, f32, f32)> = Vec::new(); // (idx, demand, trophic_eff)
         let mut seen = std::collections::HashSet::new();
 
         for neighbor_id in nearby {
@@ -504,7 +510,12 @@ pub fn resolve_drains(
                 } else {
                     eff_heterotrophy
                 };
-                consumers.push((consumer_idx, demand));
+                let trophic_eff = crate::trophic_transfer_efficiency(
+                    &agents[consumer_idx].traits,
+                    &carcasses[carcass_idx].traits,
+                    params,
+                );
+                consumers.push((consumer_idx, demand, trophic_eff));
             }
         }
 
@@ -513,21 +524,22 @@ pub fn resolve_drains(
         }
 
         let available = carcasses[carcass_idx].energy;
-        let total_demand: f32 = consumers.iter().map(|(_, d)| *d).sum();
+        let total_demand: f32 = consumers.iter().map(|(_, d, _)| *d).sum();
 
-        for &(consumer_idx, demand) in &consumers {
+        // Weighted split: weight = demand * trophic_eff
+        let total_weight: f32 = consumers.iter()
+            .map(|(_, d, eff)| *d * *eff)
+            .sum();
+
+        for &(consumer_idx, demand, trophic_eff) in &consumers {
             let actual_drain = if total_demand <= available {
                 demand
             } else {
-                (demand / total_demand) * available
+                let weight = demand * trophic_eff;
+                (weight / total_weight) * available
             };
 
-            let efficiency = crate::trophic_transfer_efficiency(
-                &agents[consumer_idx].traits,
-                &carcasses[carcass_idx].traits,
-                params,
-            );
-            let energy_gained = actual_drain * efficiency;
+            let energy_gained = actual_drain * trophic_eff;
             let energy_lost = actual_drain - energy_gained;
 
             carcasses[carcass_idx].energy -= actual_drain;
@@ -4670,5 +4682,138 @@ mod tests {
         // Should be very close to eff_heterotrophy (0.8) but not exceed it
         assert!(gained < 0.8, "demand must not exceed eff_heterotrophy");
         assert!(gained > 0.799, "demand should be within 0.1% of eff_heterotrophy at ct=10000");
+    }
+
+    #[test]
+    fn drain_trophic_efficiency_weights_proportional_split() {
+        // Two consumers with equal raw demand (heterotrophy=1.0) but different
+        // trait distances to the target. With trophic_distance_decay > 0, the
+        // closer consumer has higher trophic efficiency and should receive a
+        // larger share of the available supply (weighted by demand*eff).
+        let mut params = test_params();
+        params.base_trophic_efficiency = 1.0;
+        params.trophic_distance_decay = 1.0; // nonzero so distance matters
+
+        // Target is a pure producer
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        // Consumer A: close to target in trait space (also has some autotrophy)
+        let consumer_a_traits = TraitVector {
+            heterotrophy: 1.0,
+            photosynthetic_absorption: 0.8, // close to target
+            ..zero_traits()
+        };
+        // Consumer B: far from target in trait space (no autotrophy, high mobility)
+        let consumer_b_traits = TraitVector {
+            heterotrophy: 1.0,
+            mobility: 2.0, // far from target
+            ..zero_traits()
+        };
+
+        // Compute expected trophic efficiencies
+        let eff_a = crate::trophic_transfer_efficiency(
+            &consumer_a_traits, &target_traits, &params,
+        );
+        let eff_b = crate::trophic_transfer_efficiency(
+            &consumer_b_traits, &target_traits, &params,
+        );
+        assert!(eff_a > eff_b, "sanity: A should be more efficient than B");
+
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 0.0, consumer_a_traits),  // close consumer
+            make_agent(2, (1.0, 0.0), 0.0, consumer_b_traits),  // far consumer
+            make_agent(3, (0.5, 0.0), 0.0, target_traits),      // target
+        ];
+        agents[2].structure = 1.0; // limited supply to force proportional split
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        grid.insert(2, (0.5, 0.0));
+
+        let mut nutrient_pool = 0.0;
+        let _result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+        );
+
+        // Both have demand=1.0. With trophic-weighted split:
+        //   weight_a = 1.0 * eff_a, weight_b = 1.0 * eff_b
+        //   drain_a = weight_a / (weight_a + weight_b) * 1.0
+        //   drain_b = weight_b / (weight_a + weight_b) * 1.0
+        // So drain_a > drain_b, and energy_a = drain_a * eff_a, energy_b = drain_b * eff_b
+        //
+        // Without weighting, drain_a = drain_b = 0.5, so:
+        //   energy_a_unweighted = 0.5 * eff_a
+        //   energy_b_unweighted = 0.5 * eff_b
+        //   ratio_unweighted = eff_a / eff_b
+        //
+        // With weighting, drain_a/drain_b = eff_a/eff_b, so:
+        //   energy_a / energy_b = (eff_a/eff_b) * (eff_a/eff_b) = (eff_a/eff_b)^2
+        //
+        // The ratio of energy gained should be (eff_a/eff_b)^2, not eff_a/eff_b.
+        let a_gained = agents[0].reserve;
+        let b_gained = agents[1].reserve;
+        let actual_ratio = a_gained / b_gained;
+        let eff_ratio = eff_a / eff_b;
+        let expected_ratio = eff_ratio * eff_ratio; // (eff_a/eff_b)^2
+
+        assert!((actual_ratio - expected_ratio).abs() < 0.01,
+            "energy ratio should be (eff_a/eff_b)^2 = {expected_ratio:.4}, \
+             got {actual_ratio:.4} (unweighted would give {eff_ratio:.4})");
+    }
+
+    #[test]
+    fn drain_trophic_weighted_split_conserves_energy() {
+        // With trophic-weighted split, total energy drained from target must
+        // equal energy gained by consumers plus dissipated energy.
+        let mut params = test_params();
+        params.base_trophic_efficiency = 0.8;
+        params.trophic_distance_decay = 2.0;
+
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        let consumer_a_traits = TraitVector {
+            heterotrophy: 2.0,
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let consumer_b_traits = TraitVector {
+            heterotrophy: 1.5,
+            mobility: 1.0,
+            ..zero_traits()
+        };
+
+        let initial_structure = 2.0;
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 0.0, consumer_a_traits),
+            make_agent(2, (1.0, 0.0), 0.0, consumer_b_traits),
+            make_agent(3, (0.5, 0.0), 0.0, target_traits),
+        ];
+        agents[2].structure = initial_structure;
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        grid.insert(2, (0.5, 0.0));
+
+        let mut nutrient_pool = 0.0;
+        let result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+        );
+
+        let total_drained = initial_structure - agents[2].structure;
+        let total_gained = agents[0].reserve + agents[1].reserve;
+        let total_out = total_gained + result.dissipated;
+
+        assert!(total_drained > 0.0, "something should have been drained");
+        assert!((total_drained - total_out).abs() < 1e-5,
+            "energy conservation: drained {total_drained} != gained {total_gained} + dissipated {}",
+            result.dissipated);
     }
 }
