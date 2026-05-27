@@ -15,8 +15,6 @@
     "initial_population_size": 0,
     "light_competition_radius": 8.0,
     "photo_maintenance_cost": 0.01,
-    "consumption_maintenance_cost": 0.01,
-    "scavenging_maintenance_cost": 0.01,
     "nutrient_absorption_maintenance_cost": 0.01,
     "initial_nutrient_pool": 50000.0,
     "growth_efficiency": 0.3,
@@ -25,7 +23,8 @@
     "wear_degradation_steepness": 1.0,
     "use_wear_rate": 0.01,
     "structure_maintenance_coefficient": 0.01,
-    "repair_decay": 1.0
+    "repair_decay": 1.0,
+    "heterotrophy_maintenance_cost": 0.01
   },
   "agents": [
     {
@@ -36,8 +35,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.7051,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.2564,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -45,7 +42,8 @@
         "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.08,
-        "somatic_maintenance": 0.0385
+        "somatic_maintenance": 0.0385,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -56,8 +54,6 @@
       "reserve": 15.0,
       "traits": {
         "photosynthetic_absorption": 0.3659,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.5487,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -65,7 +61,8 @@
         "sensing_range": 3.0,
         "reproductive_investment": 8.0,
         "fecundity": 0.15,
-        "somatic_maintenance": 0.0854
+        "somatic_maintenance": 0.0854,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -76,8 +73,6 @@
       "reserve": 25.0,
       "traits": {
         "photosynthetic_absorption": 0.7792,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.1948,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -85,7 +80,8 @@
         "sensing_range": 4.0,
         "reproductive_investment": 12.0,
         "fecundity": 0.05,
-        "somatic_maintenance": 0.026
+        "somatic_maintenance": 0.026,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -96,8 +92,6 @@
       "reserve": 18.0,
       "traits": {
         "photosynthetic_absorption": 0.443,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.5064,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -105,7 +99,8 @@
         "sensing_range": 6.0,
         "reproductive_investment": 8.0,
         "fecundity": 0.12,
-        "somatic_maintenance": 0.0506
+        "somatic_maintenance": 0.0506,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -116,8 +111,6 @@
       "reserve": 22.0,
       "traits": {
         "photosynthetic_absorption": 0.7042,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.2817,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -125,7 +118,8 @@
         "sensing_range": 5.0,
         "reproductive_investment": 15.0,
         "fecundity": 0.2,
-        "somatic_maintenance": 0.0141
+        "somatic_maintenance": 0.0141,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -136,8 +130,6 @@
       "reserve": 12.0,
       "traits": {
         "photosynthetic_absorption": 0.3012,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.6024,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -145,7 +137,8 @@
         "sensing_range": 4.0,
         "reproductive_investment": 6.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.0964
+        "somatic_maintenance": 0.0964,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -156,8 +149,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.5625,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.375,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -165,7 +156,8 @@
         "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.0625
+        "somatic_maintenance": 0.0625,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -176,8 +168,6 @@
       "reserve": 30.0,
       "traits": {
         "photosynthetic_absorption": 0.8552,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.1316,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -185,7 +175,8 @@
         "sensing_range": 3.0,
         "reproductive_investment": 12.0,
         "fecundity": 0.06,
-        "somatic_maintenance": 0.0132
+        "somatic_maintenance": 0.0132,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -196,8 +187,6 @@
       "reserve": 16.0,
       "traits": {
         "photosynthetic_absorption": 0.4606,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.4605,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -205,7 +194,8 @@
         "sensing_range": 7.0,
         "reproductive_investment": 9.0,
         "fecundity": 0.18,
-        "somatic_maintenance": 0.0789
+        "somatic_maintenance": 0.0789,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -216,8 +206,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.5405,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.4054,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -225,7 +213,8 @@
         "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.08,
-        "somatic_maintenance": 0.0541
+        "somatic_maintenance": 0.0541,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -236,8 +225,6 @@
       "reserve": 24.0,
       "traits": {
         "photosynthetic_absorption": 0.6627,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.3012,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -245,7 +232,8 @@
         "sensing_range": 4.0,
         "reproductive_investment": 11.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.0361
+        "somatic_maintenance": 0.0361,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -256,8 +244,6 @@
       "reserve": 14.0,
       "traits": {
         "photosynthetic_absorption": 0.3571,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.5358,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -265,7 +251,8 @@
         "sensing_range": 3.0,
         "reproductive_investment": 7.0,
         "fecundity": 0.12,
-        "somatic_maintenance": 0.1071
+        "somatic_maintenance": 0.1071,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -276,8 +263,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.625,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.3125,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -285,7 +270,8 @@
         "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.15,
-        "somatic_maintenance": 0.0625
+        "somatic_maintenance": 0.0625,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -296,8 +282,6 @@
       "reserve": 18.0,
       "traits": {
         "photosynthetic_absorption": 0.5128,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.4487,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -305,7 +289,8 @@
         "sensing_range": 6.0,
         "reproductive_investment": 9.0,
         "fecundity": 0.08,
-        "somatic_maintenance": 0.0385
+        "somatic_maintenance": 0.0385,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -316,8 +301,6 @@
       "reserve": 26.0,
       "traits": {
         "photosynthetic_absorption": 0.7792,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.1948,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -325,7 +308,8 @@
         "sensing_range": 4.0,
         "reproductive_investment": 14.0,
         "fecundity": 0.06,
-        "somatic_maintenance": 0.026
+        "somatic_maintenance": 0.026,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -336,8 +320,6 @@
       "reserve": 19.0,
       "traits": {
         "photosynthetic_absorption": 0.525,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.4125,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -345,7 +327,8 @@
         "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.0625
+        "somatic_maintenance": 0.0625,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -356,8 +339,6 @@
       "reserve": 22.0,
       "traits": {
         "photosynthetic_absorption": 0.6,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.35,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -365,7 +346,8 @@
         "sensing_range": 5.0,
         "reproductive_investment": 11.0,
         "fecundity": 0.12,
-        "somatic_maintenance": 0.05
+        "somatic_maintenance": 0.05,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -376,8 +358,6 @@
       "reserve": 15.0,
       "traits": {
         "photosynthetic_absorption": 0.3951,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.5185,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -385,7 +365,8 @@
         "sensing_range": 4.0,
         "reproductive_investment": 8.0,
         "fecundity": 0.14,
-        "somatic_maintenance": 0.0864
+        "somatic_maintenance": 0.0864,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -396,8 +377,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.5625,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.375,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -405,7 +384,8 @@
         "sensing_range": 5.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.0625
+        "somatic_maintenance": 0.0625,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -416,8 +396,6 @@
       "reserve": 28.0,
       "traits": {
         "photosynthetic_absorption": 0.7436,
-        "consumption_rate": 0.0,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.2308,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
@@ -425,7 +403,8 @@
         "sensing_range": 3.0,
         "reproductive_investment": 13.0,
         "fecundity": 0.07,
-        "somatic_maintenance": 0.0256
+        "somatic_maintenance": 0.0256,
+        "heterotrophy": 0.0
       }
     },
     {
@@ -436,8 +415,6 @@
       "reserve": 50.0,
       "traits": {
         "photosynthetic_absorption": 0.0,
-        "consumption_rate": 0.3279,
-        "scavenging_rate": 0.0,
         "nutrient_absorption": 0.0,
         "mobility": 0.2459,
         "chemotaxis_sensitivity": 0.4098,
@@ -445,7 +422,8 @@
         "sensing_range": 10.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.0164
+        "somatic_maintenance": 0.0164,
+        "heterotrophy": 0.3279
       }
     },
     {
@@ -456,8 +434,6 @@
       "reserve": 50.0,
       "traits": {
         "photosynthetic_absorption": 0.0,
-        "consumption_rate": 0.2869,
-        "scavenging_rate": 0.041,
         "nutrient_absorption": 0.0,
         "mobility": 0.2869,
         "chemotaxis_sensitivity": 0.3688,
@@ -465,7 +441,8 @@
         "sensing_range": 8.0,
         "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.0164
+        "somatic_maintenance": 0.0164,
+        "heterotrophy": 0.32789999999999997
       }
     }
   ],

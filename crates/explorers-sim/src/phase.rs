@@ -92,7 +92,7 @@ pub fn absorb_nutrients(
         .iter()
         .map(|a| {
             let ct = a.contact_time as f32;
-            let eff_absorption = a.effective_trait_with_steepness(3, k);
+            let eff_absorption = a.effective_trait_with_steepness(2, k);
             eff_absorption * ct / (ct + k_half)
         })
         .collect();
@@ -140,8 +140,7 @@ pub fn metabolise(
         let cost = params.base_metabolic_rate
             + agent.traits.sensing_range * params.sensing_cost_coefficient
             + agent.traits.photosynthetic_absorption * params.photo_maintenance_cost
-            + agent.traits.consumption_rate * params.consumption_maintenance_cost
-            + agent.traits.scavenging_rate * params.scavenging_maintenance_cost
+            + agent.traits.heterotrophy * params.heterotrophy_maintenance_cost
             + agent.traits.nutrient_absorption * params.nutrient_absorption_maintenance_cost
             + agent.traits.somatic_maintenance * params.somatic_maintenance_cost_coefficient
             + agent.structure * params.structure_maintenance_coefficient;
@@ -182,8 +181,7 @@ pub fn grow(
         let metabolic_cost = params.base_metabolic_rate
             + agent.traits.sensing_range * params.sensing_cost_coefficient
             + agent.traits.photosynthetic_absorption * params.photo_maintenance_cost
-            + agent.traits.consumption_rate * params.consumption_maintenance_cost
-            + agent.traits.scavenging_rate * params.scavenging_maintenance_cost
+            + agent.traits.heterotrophy * params.heterotrophy_maintenance_cost
             + agent.traits.nutrient_absorption * params.nutrient_absorption_maintenance_cost
             + agent.traits.somatic_maintenance * params.somatic_maintenance_cost_coefficient
             + agent.structure * params.structure_maintenance_coefficient;
@@ -326,9 +324,9 @@ pub fn resolve_drains(
                 if consumer_idx == target_idx {
                     continue; // can't consume yourself
                 }
-                let eff_consumption = agents[consumer_idx]
-                    .effective_trait_with_steepness(1, k); // index 1 = consumption_rate
-                if eff_consumption <= 0.0 {
+                let eff_heterotrophy = agents[consumer_idx]
+                    .effective_trait_with_steepness(1, k); // index 1 = heterotrophy
+                if eff_heterotrophy <= 0.0 {
                     continue;
                 }
                 // Verify within contact radius (grid may return slightly outside)
@@ -340,7 +338,7 @@ pub fn resolve_drains(
                 {
                     continue;
                 }
-                consumers.push((consumer_idx, eff_consumption));
+                consumers.push((consumer_idx, eff_heterotrophy));
             }
         }
 
@@ -440,9 +438,9 @@ pub fn resolve_drains(
                 if dead_agents.contains(&agents[consumer_idx].id) {
                     continue;
                 }
-                let eff_scavenging = agents[consumer_idx]
-                    .effective_trait_with_steepness(2, k); // index 2 = scavenging_rate
-                if eff_scavenging <= 0.0 {
+                let eff_heterotrophy = agents[consumer_idx]
+                    .effective_trait_with_steepness(1, k); // index 1 = heterotrophy
+                if eff_heterotrophy <= 0.0 {
                     continue;
                 }
                 if crate::toroidal_distance(
@@ -453,7 +451,7 @@ pub fn resolve_drains(
                 {
                     continue;
                 }
-                consumers.push((consumer_idx, eff_scavenging));
+                consumers.push((consumer_idx, eff_heterotrophy));
             }
         }
 
@@ -581,11 +579,10 @@ pub fn move_agents(
     let extent = params.world_extent;
 
     for i in 0..agents.len() {
-        let eff_mobility = agents[i].effective_trait_with_steepness(4, k);
-        let eff_chemotaxis = agents[i].effective_trait_with_steepness(5, k);
-        let eff_sensing = agents[i].effective_trait_with_steepness(6, k);
-        let eff_consumption = agents[i].effective_trait_with_steepness(1, k);
-        let eff_scavenging = agents[i].effective_trait_with_steepness(2, k);
+        let eff_mobility = agents[i].effective_trait_with_steepness(3, k);
+        let eff_chemotaxis = agents[i].effective_trait_with_steepness(4, k);
+        let eff_sensing = agents[i].effective_trait_with_steepness(5, k);
+        let eff_heterotrophy = agents[i].effective_trait_with_steepness(1, k);
 
         if eff_mobility <= 0.0 {
             // Stationary: increment contact time
@@ -625,8 +622,8 @@ pub fn move_agents(
                     agents[j].position,
                     extent,
                 );
-                // Attraction weighted by chemotaxis * consumption (toward living agents)
-                let weight = eff_chemotaxis * eff_consumption / dist;
+                // Attraction weighted by chemotaxis * heterotrophy (toward living agents)
+                let weight = eff_chemotaxis * eff_heterotrophy / dist;
                 dir_x += dx * weight;
                 dir_y += dy * weight;
                 detected_count += 1.0;
@@ -651,8 +648,8 @@ pub fn move_agents(
                     carcass.position,
                     extent,
                 );
-                // Attraction weighted by chemotaxis * scavenging (toward carcasses)
-                let weight = eff_chemotaxis * eff_scavenging / dist;
+                // Attraction weighted by chemotaxis * heterotrophy (toward carcasses)
+                let weight = eff_chemotaxis * eff_heterotrophy / dist;
                 dir_x += dx * weight;
                 dir_y += dy * weight;
             }
@@ -881,8 +878,7 @@ pub fn resolve_reproduction(
             // Trait crossover: each dimension from one parent
             let mut child_traits = TraitVector {
                 photosynthetic_absorption: 0.0,
-                consumption_rate: 0.0,
-                scavenging_rate: 0.0,
+                heterotrophy: 0.0,
                 nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
@@ -909,7 +905,6 @@ pub fn resolve_reproduction(
                 };
                 child_traits.set(dim, val);
             }
-            child_traits.normalize_budget();
 
             // Dispersal position
             let (dx, dy) = if dispersal_radius > 0.0 {
@@ -963,8 +958,7 @@ mod tests {
     fn zero_traits() -> TraitVector {
         TraitVector {
             photosynthetic_absorption: 0.0,
-            consumption_rate: 0.0,
-            scavenging_rate: 0.0,
+            heterotrophy: 0.0,
             nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
@@ -993,8 +987,7 @@ mod tests {
             initial_population_size: 0,
             light_competition_radius: 1000.0,
             photo_maintenance_cost: 0.0,
-            consumption_maintenance_cost: 0.0,
-            scavenging_maintenance_cost: 0.0,
+            heterotrophy_maintenance_cost: 0.0,
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
@@ -1339,8 +1332,7 @@ mod tests {
         // Generalist traits spread across many dimensions -> high threshold
         let traits = TraitVector {
             photosynthetic_absorption: 0.1,
-            consumption_rate: 0.1,
-            scavenging_rate: 0.1,
+            heterotrophy: 0.1,
             nutrient_absorption: 0.1,
             mobility: 0.1,
             chemotaxis_sensitivity: 0.1,
@@ -1398,7 +1390,7 @@ mod tests {
         // Consumer drains target's structure; consumer gains energy (with trophic loss).
         let params = test_params(); // consumption_efficiency = 0.5, contact_radius = 5.0
         let consumer_traits = TraitVector {
-            consumption_rate: 0.4,
+            heterotrophy: 0.4,
             ..zero_traits()
         };
         let target_traits = TraitVector {
@@ -1444,11 +1436,11 @@ mod tests {
         // They receive 1.5 and 0.5 respectively (proportional to demand).
         let params = test_params(); // consumption_efficiency = 0.5, contact_radius = 5.0
         let consumer_a_traits = TraitVector {
-            consumption_rate: 3.0,
+            heterotrophy: 3.0,
             ..zero_traits()
         };
         let consumer_b_traits = TraitVector {
-            consumption_rate: 1.0,
+            heterotrophy: 1.0,
             ..zero_traits()
         };
         let target_traits = TraitVector {
@@ -1498,8 +1490,7 @@ mod tests {
         // Target is a generalist with high death threshold
         let generalist_traits = TraitVector {
             photosynthetic_absorption: 0.1,
-            consumption_rate: 0.1,
-            scavenging_rate: 0.1,
+            heterotrophy: 0.1,
             nutrient_absorption: 0.1,
             mobility: 0.1,
             chemotaxis_sensitivity: 0.1,
@@ -1513,7 +1504,7 @@ mod tests {
         assert!(threshold > 0.0, "generalist should have nonzero threshold");
 
         let consumer_traits = TraitVector {
-            consumption_rate: 5.0, // high demand to drain target
+            heterotrophy: 5.0, // high demand to drain target
             ..zero_traits()
         };
         let mut agents = vec![
@@ -1550,8 +1541,7 @@ mod tests {
         // available for decomposition in the same tick.
         let params = test_params();
         let consumer_traits = TraitVector {
-            consumption_rate: 100.0,
-            scavenging_rate: 10.0, // also a scavenger
+            heterotrophy: 100.0, // high heterotrophy drains both living and carcass
             ..zero_traits()
         };
         let target_traits = TraitVector {
@@ -1589,13 +1579,13 @@ mod tests {
     }
 
     #[test]
-    fn drain_dual_consumption_and_scavenging_same_tick() {
-        // An agent with both consumption and scavenging traits can drain a
-        // living target AND scavenge a carcass in the same tick.
+    fn drain_heterotrophy_drains_both_living_and_carcass_same_tick() {
+        // An agent with heterotrophy can drain a living target AND a carcass
+        // in the same tick — the same trait drives both, target state determines
+        // which efficiency applies.
         let params = test_params(); // consumption_efficiency=0.5, decomposition_efficiency=0.5
-        let dual_traits = TraitVector {
-            consumption_rate: 1.0,
-            scavenging_rate: 2.0,
+        let heterotroph_traits = TraitVector {
+            heterotrophy: 2.0,
             ..zero_traits()
         };
         let target_traits = TraitVector {
@@ -1603,7 +1593,7 @@ mod tests {
             ..zero_traits()
         };
         let mut agents = vec![
-            make_agent(1, (0.0, 0.0), 10.0, dual_traits),
+            make_agent(1, (0.0, 0.0), 10.0, heterotroph_traits),
             make_agent(2, (1.0, 0.0), 10.0, target_traits),
         ];
         agents[1].structure = 20.0;
@@ -1625,14 +1615,14 @@ mod tests {
             &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
         );
 
-        // From living target: drain 1.0, gain 1.0 * 0.5 = 0.5
-        // From carcass: drain 2.0, gain 2.0 * 0.5 = 1.0
-        // Consumer reserve: 10.0 + 0.5 + 1.0 = 11.5
-        assert!((agents[0].reserve - 11.5).abs() < 1e-3,
+        // From living target: drain 2.0, gain 2.0 * 0.5 = 1.0 (consumption_efficiency)
+        // From carcass: drain 2.0, gain 2.0 * 0.5 = 1.0 (decomposition_efficiency)
+        // Consumer reserve: 10.0 + 1.0 + 1.0 = 12.0
+        assert!((agents[0].reserve - 12.0).abs() < 1e-3,
             "consumer should gain from both living and carcass, got {}", agents[0].reserve);
-        // Living target structure: 20.0 - 1.0 = 19.0
-        assert!((agents[1].structure - 19.0).abs() < 1e-3,
-            "target structure should be 19.0, got {}", agents[1].structure);
+        // Living target structure: 20.0 - 2.0 = 18.0
+        assert!((agents[1].structure - 18.0).abs() < 1e-3,
+            "target structure should be 18.0, got {}", agents[1].structure);
         // Carcass energy: 10.0 - 2.0 = 8.0
         assert!((carcasses[0].energy - 8.0).abs() < 1e-3,
             "carcass energy should be 8.0, got {}", carcasses[0].energy);
@@ -1644,13 +1634,13 @@ mod tests {
     // --- Move agents ---
 
     #[test]
-    fn move_direction_attracted_to_nearby_living_agent_by_consumption() {
-        // Agent with consumption trait and chemotaxis should move toward a nearby living agent.
+    fn move_direction_attracted_to_nearby_living_agent_by_heterotrophy() {
+        // Agent with heterotrophy and chemotaxis should move toward a nearby living agent.
         use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0; // isolate direction test
         let mover_traits = TraitVector {
-            consumption_rate: 0.5,
+            heterotrophy: 0.5,
             mobility: 0.5,
             chemotaxis_sensitivity: 1.0,
             sensing_range: 50.0,
@@ -1682,13 +1672,13 @@ mod tests {
     }
 
     #[test]
-    fn move_direction_attracted_to_carcass_by_scavenging() {
-        // Agent with scavenging trait and chemotaxis should move toward a nearby carcass.
+    fn move_direction_attracted_to_carcass_by_heterotrophy() {
+        // Agent with heterotrophy and chemotaxis should move toward a nearby carcass.
         use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         let mover_traits = TraitVector {
-            scavenging_rate: 0.5,
+            heterotrophy: 0.5,
             mobility: 0.5,
             chemotaxis_sensitivity: 1.0,
             sensing_range: 50.0,
@@ -1843,7 +1833,7 @@ mod tests {
             mobility: 0.5,
             sensing_range: 50.0,
             chemotaxis_sensitivity: 0.1,
-            consumption_rate: 0.1,
+            heterotrophy: 0.1,
             ..zero_traits()
         };
         let target_traits = TraitVector {
@@ -1882,7 +1872,7 @@ mod tests {
         // stoichiometric demand; excess goes to available pool.
         let params = test_params();
         let consumer_traits = TraitVector {
-            consumption_rate: 2.0,
+            heterotrophy: 2.0,
             // Consumer has 1 nonzero trait -> stoichiometric_demand = 1.0
             ..zero_traits()
         };
@@ -2155,7 +2145,7 @@ mod tests {
         };
         let traits_c = TraitVector {
             photosynthetic_absorption: 0.1,
-            consumption_rate: 0.4,
+            heterotrophy: 0.4,
             reproductive_investment: 0.3,
             fecundity: 1.0,
             sensing_range: 50.0,
@@ -2206,7 +2196,7 @@ mod tests {
         };
         let traits_a = TraitVector {
             photosynthetic_absorption: 0.8,
-            consumption_rate: 0.0,
+            heterotrophy: 0.0,
             reproductive_investment: 0.3,
             fecundity: 1.0,
             sensing_range: 10.0,
@@ -2214,7 +2204,7 @@ mod tests {
         };
         let traits_b = TraitVector {
             photosynthetic_absorption: 0.0,
-            consumption_rate: 0.8,
+            heterotrophy: 0.8,
             reproductive_investment: 0.3,
             fecundity: 1.0,
             sensing_range: 10.0,
@@ -2242,17 +2232,7 @@ mod tests {
         // With no mutation, each trait dimension comes from one parent.
         // For photosynthetic_absorption: either 0.8 (from A) or 0.0 (from B)
         // For consumption_rate: either 0.0 (from A) or 0.8 (from B)
-        // After budget normalization, relative proportions are preserved.
-        // Check that offspring traits are non-negative and budget sums to 1.0
-        let budget_sum: f32 = TraitVector::BUDGET_INDICES
-            .iter()
-            .map(|&i| child.traits.get(i))
-            .sum();
-        // Budget sums to 1.0 if any budget trait is nonzero
-        if budget_sum > 1e-6 {
-            assert!((budget_sum - 1.0).abs() < 1e-3,
-                "budget traits should sum to 1.0, got {}", budget_sum);
-        }
+        // No budget normalization — traits retain raw crossover values.
         // Each dimension should come from exactly one parent (no averaging)
         for dim in 0..TraitVector::NUM_DIMS {
             let val = child.traits.get(dim);

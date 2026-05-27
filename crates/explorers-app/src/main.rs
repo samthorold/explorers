@@ -100,8 +100,7 @@ fn main() {
                 initial_population_size: 3,
                 light_competition_radius: 20.0,
                 photo_maintenance_cost: 0.01,
-                consumption_maintenance_cost: 0.01,
-                scavenging_maintenance_cost: 0.01,
+                heterotrophy_maintenance_cost: 0.01,
 
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
@@ -116,8 +115,7 @@ fn main() {
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
                     photosynthetic_absorption: 0.5,
-                    consumption_rate: 0.3,
-                    scavenging_rate: 0.2,
+                    heterotrophy: 0.3,
                 nutrient_absorption: 0.0,
                     mobility: 0.4,
                     chemotaxis_sensitivity: 0.3,
@@ -199,8 +197,7 @@ mod tests {
     fn pure_producer_maps_to_green() {
         let traits = TraitVector {
             photosynthetic_absorption: 1.0,
-            consumption_rate: 0.0,
-            scavenging_rate: 0.0,
+            heterotrophy: 0.0,
                 nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
@@ -220,8 +217,7 @@ mod tests {
     fn pure_consumer_maps_to_red() {
         let traits = TraitVector {
             photosynthetic_absorption: 0.0,
-            consumption_rate: 1.0,
-            scavenging_rate: 0.0,
+            heterotrophy: 1.0,
                 nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
@@ -238,12 +234,12 @@ mod tests {
     }
 
     #[test]
-    fn pure_decomposer_maps_to_blue() {
+    fn pure_heterotroph_maps_to_red() {
+        // With unified heterotrophy, a pure heterotroph gets red (same as old consumer)
         let traits = TraitVector {
             photosynthetic_absorption: 0.0,
-            consumption_rate: 0.0,
-            scavenging_rate: 1.0,
-                nutrient_absorption: 0.0,
+            heterotrophy: 1.0,
+            nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
             mate_selectivity: 0.0,
@@ -253,8 +249,7 @@ mod tests {
         };
         let color = trophic_color(&traits, 100.0);
         let rgba = color.to_srgba();
-        assert!(rgba.blue > 0.9, "blue channel should be high, got {}", rgba.blue);
-        assert!(rgba.red < 0.2, "red channel should be low, got {}", rgba.red);
+        assert!(rgba.red > 0.9, "red channel should be high, got {}", rgba.red);
         assert!(rgba.green < 0.2, "green channel should be low, got {}", rgba.green);
     }
 
@@ -262,8 +257,7 @@ mod tests {
     fn low_reserve_dims_color() {
         let traits = TraitVector {
             photosynthetic_absorption: 1.0,
-            consumption_rate: 0.0,
-            scavenging_rate: 0.0,
+            heterotrophy: 0.0,
                 nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
@@ -282,8 +276,7 @@ mod tests {
     fn brightness_maps_to_reserve_not_total_energy() {
         let traits = TraitVector {
             photosynthetic_absorption: 1.0,
-            consumption_rate: 0.0,
-            scavenging_rate: 0.0,
+            heterotrophy: 0.0,
             nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
@@ -307,29 +300,21 @@ mod tests {
     #[test]
     fn dominant_role_classification() {
         let producer = TraitVector {
-            photosynthetic_absorption: 0.8, consumption_rate: 0.1, scavenging_rate: 0.1,
-                nutrient_absorption: 0.0,
+            photosynthetic_absorption: 0.8, heterotrophy: 0.1,
+            nutrient_absorption: 0.0,
             mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
             sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
             somatic_maintenance: 0.0,
         };
         let consumer = TraitVector {
-            photosynthetic_absorption: 0.1, consumption_rate: 0.8, scavenging_rate: 0.1,
-                nutrient_absorption: 0.0,
-            mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
-            sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
-            somatic_maintenance: 0.0,
-        };
-        let decomposer = TraitVector {
-            photosynthetic_absorption: 0.1, consumption_rate: 0.1, scavenging_rate: 0.8,
-                nutrient_absorption: 0.0,
+            photosynthetic_absorption: 0.1, heterotrophy: 0.8,
+            nutrient_absorption: 0.0,
             mobility: 0.0, chemotaxis_sensitivity: 0.0, mate_selectivity: 0.0,
             sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
             somatic_maintenance: 0.0,
         };
         assert_eq!(dominant_role(&producer), "producers");
         assert_eq!(dominant_role(&consumer), "consumers");
-        assert_eq!(dominant_role(&decomposer), "decomposers");
     }
 
     fn press_key(app: &mut App, key: KeyCode) {
@@ -447,8 +432,7 @@ mod tests {
                 initial_population_size: 0,
                 light_competition_radius: 1000.0,
                 photo_maintenance_cost: 0.0,
-                consumption_maintenance_cost: 0.0,
-                scavenging_maintenance_cost: 0.0,
+                heterotrophy_maintenance_cost: 0.0,
 
                 nutrient_absorption_maintenance_cost: 0.0,
                 initial_nutrient_pool: 0.0,
@@ -463,8 +447,7 @@ mod tests {
             InitialDistribution {
                 mean_traits: TraitVector {
                     photosynthetic_absorption: 0.5,
-                    consumption_rate: 0.3,
-                    scavenging_rate: 0.2,
+                    heterotrophy: 0.3,
                 nutrient_absorption: 0.0,
                     mobility: 0.4,
                     chemotaxis_sensitivity: 0.3,
@@ -536,8 +519,8 @@ mod tests {
  structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
-                photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                photosynthetic_absorption: 1.0, heterotrophy: 0.0,
+                nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                 somatic_maintenance: 0.0,
             },
@@ -549,8 +532,8 @@ mod tests {
  structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
-                photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                photosynthetic_absorption: 1.0, heterotrophy: 0.0,
+                nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                 somatic_maintenance: 0.0,
             },
@@ -585,8 +568,8 @@ mod tests {
  structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
-                    photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                    scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    photosynthetic_absorption: 1.0, heterotrophy: 0.0,
+                    nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                     somatic_maintenance: 0.0,
                 },
@@ -598,8 +581,8 @@ mod tests {
  structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
-                    photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                    scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    photosynthetic_absorption: 1.0, heterotrophy: 0.0,
+                    nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                     somatic_maintenance: 0.0,
                 },
@@ -626,8 +609,8 @@ mod tests {
  structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
-                    photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                    scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    photosynthetic_absorption: 1.0, heterotrophy: 0.0,
+                    nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                     somatic_maintenance: 0.0,
                 },
@@ -639,8 +622,8 @@ mod tests {
  structure: 0.0,
             nutrient: 0.0,
                 traits: TraitVector {
-                    photosynthetic_absorption: 1.0, consumption_rate: 0.0,
-                    scavenging_rate: 0.0, nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                    photosynthetic_absorption: 1.0, heterotrophy: 0.0,
+                    nutrient_absorption: 0.0, mobility: 0.0, chemotaxis_sensitivity: 0.0,
                     mate_selectivity: 0.0, sensing_range: 0.0, reproductive_investment: 0.0, fecundity: 0.0,
                     somatic_maintenance: 0.0,
                 },
@@ -748,16 +731,16 @@ fn reconcile_entities(
 
 fn trophic_color(traits: &TraitVector, reserve: f32) -> Color {
     let brightness = (reserve.max(0.0) / 100.0).clamp(0.5, 1.0);
-    let total = traits.photosynthetic_absorption + traits.consumption_rate + traits.scavenging_rate;
+    let total = traits.photosynthetic_absorption + traits.heterotrophy;
     if total <= 0.0 {
         return Color::srgb(0.8 * brightness, 0.8 * brightness, 0.8 * brightness);
     }
-    // Base color from dominant trophic trait, with a minimum per-channel floor
-    let r = (traits.consumption_rate / total) * brightness;
+    // Base color: green for autotrophy, red for heterotrophy
+    let r = (traits.heterotrophy / total) * brightness;
     let g = (traits.photosynthetic_absorption / total) * brightness;
-    let b = (traits.scavenging_rate / total) * brightness;
-    // Ensure minimum visibility: add a small baseline so agents are never invisible
-    Color::srgb(r.max(0.15), g.max(0.15), b.max(0.15))
+    let b = 0.15; // baseline blue for visibility
+    // Ensure minimum visibility
+    Color::srgb(r.max(0.15), g.max(0.15), b)
 }
 
 const AGENT_RADIUS: f32 = 3.0;
@@ -799,15 +782,10 @@ fn find_nearest_agent(agents: &[explorers_sim::Agent], click_pos: (f32, f32), wo
 }
 
 fn dominant_role(traits: &TraitVector) -> &'static str {
-    let p = traits.photosynthetic_absorption;
-    let c = traits.consumption_rate;
-    let s = traits.scavenging_rate;
-    if p >= c && p >= s {
+    if traits.photosynthetic_absorption >= traits.heterotrophy {
         "producers"
-    } else if c >= s {
-        "consumers"
     } else {
-        "decomposers"
+        "consumers"
     }
 }
 
@@ -997,8 +975,7 @@ fn debug_panel_ui(
                     ui.add(bevy_egui::egui::Slider::new(&mut params.solar_flux_magnitude, 0.0..=200.0).text("Solar flux"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.base_metabolic_rate, 0.0..=2.0).text("Base metabolic rate"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.photo_maintenance_cost, 0.0..=0.5).text("Photo maintenance"));
-                    ui.add(bevy_egui::egui::Slider::new(&mut params.consumption_maintenance_cost, 0.0..=0.5).text("Consumption maintenance"));
-                    ui.add(bevy_egui::egui::Slider::new(&mut params.scavenging_maintenance_cost, 0.0..=0.5).text("Scavenging maintenance"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.heterotrophy_maintenance_cost, 0.0..=0.5).text("Heterotrophy maintenance"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.mutation_rate, 0.0..=1.0).text("Mutation rate"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.mutation_magnitude, 0.0..=0.5).text("Mutation magnitude"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.contact_radius, 1.0..=50.0).text("Contact radius"));
@@ -1037,8 +1014,7 @@ fn debug_panel_ui(
                                 ui.separator();
                                 ui.label("Trait vector:");
                                 ui.label(format!("  photosynthetic_absorption: {:.3}", agent.traits.photosynthetic_absorption));
-                                ui.label(format!("  consumption_rate: {:.3}", agent.traits.consumption_rate));
-                                ui.label(format!("  scavenging_rate: {:.3}", agent.traits.scavenging_rate));
+                                ui.label(format!("  heterotrophy: {:.3}", agent.traits.heterotrophy));
                                 ui.label(format!("  nutrient_absorption: {:.3}", agent.traits.nutrient_absorption));
                                 ui.label(format!("  mobility: {:.3}", agent.traits.mobility));
                                 ui.label(format!("  chemotaxis_sensitivity: {:.3}", agent.traits.chemotaxis_sensitivity));

@@ -268,15 +268,17 @@ pub fn is_monoculture(trait_vectors: &[explorers_sim::TraitVector], threshold: f
     clustering_strength(trait_vectors) < threshold
 }
 
-pub fn trophic_coordinates(traits: &explorers_sim::TraitVector) -> (f32, f32, f32) {
-    let sum = traits.photosynthetic_absorption + traits.consumption_rate + traits.scavenging_rate;
+/// Trophic coordinates: (autotrophy_fraction, heterotrophy_fraction).
+/// With unified heterotrophy, the trophic position is a 2D coordinate
+/// rather than a 3D barycentric coordinate.
+pub fn trophic_coordinates(traits: &explorers_sim::TraitVector) -> (f32, f32) {
+    let sum = traits.photosynthetic_absorption + traits.heterotrophy;
     if sum <= 0.0 {
-        return (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0);
+        return (0.5, 0.5);
     }
     (
         traits.photosynthetic_absorption / sum,
-        traits.consumption_rate / sum,
-        traits.scavenging_rate / sum,
+        traits.heterotrophy / sum,
     )
 }
 
@@ -309,22 +311,19 @@ pub fn is_generalist_dominant(
             continue;
         }
         let mut avg_photo = 0.0_f32;
-        let mut avg_cons = 0.0_f32;
-        let mut avg_scav = 0.0_f32;
+        let mut avg_hetero = 0.0_f32;
         for &i in &members {
-            let (p, c, s) = trophic_coordinates(&trait_vectors[i]);
+            let (p, h) = trophic_coordinates(&trait_vectors[i]);
             avg_photo += p;
-            avg_cons += c;
-            avg_scav += s;
+            avg_hetero += h;
         }
         let n = members.len() as f32;
         avg_photo /= n;
-        avg_cons /= n;
-        avg_scav /= n;
+        avg_hetero /= n;
 
+        // A generalist has significant investment in both autotrophy and heterotrophy
         let is_generalist = avg_photo > generalist_threshold
-            && avg_cons > generalist_threshold
-            && avg_scav > generalist_threshold;
+            && avg_hetero > generalist_threshold;
 
         if is_generalist {
             for &i in &members {
@@ -415,18 +414,18 @@ pub fn has_trophic_pyramid(
         }
 
         let mut avg_photo = 0.0_f32;
-        let mut avg_cons = 0.0_f32;
+        let mut avg_hetero = 0.0_f32;
         for &i in &members {
-            let (p, c, _) = trophic_coordinates(&trait_vectors[i]);
+            let (p, h) = trophic_coordinates(&trait_vectors[i]);
             avg_photo += p;
-            avg_cons += c;
+            avg_hetero += h;
         }
         let n = members.len() as f32;
         avg_photo /= n;
-        avg_cons /= n;
+        avg_hetero /= n;
 
         let cluster_energy: f32 = members.iter().map(|&i| energies[i]).sum();
-        if avg_photo > avg_cons {
+        if avg_photo > avg_hetero {
             producer_energy += cluster_energy;
         } else {
             consumer_energy += cluster_energy;
@@ -461,18 +460,18 @@ pub fn trophic_balance_score(
         }
 
         let mut avg_photo = 0.0_f32;
-        let mut avg_cons = 0.0_f32;
+        let mut avg_hetero = 0.0_f32;
         for &i in &members {
-            let (p, c, _) = trophic_coordinates(&trait_vectors[i]);
+            let (p, h) = trophic_coordinates(&trait_vectors[i]);
             avg_photo += p;
-            avg_cons += c;
+            avg_hetero += h;
         }
         let n = members.len() as f32;
         avg_photo /= n;
-        avg_cons /= n;
+        avg_hetero /= n;
 
         let cluster_energy: f32 = members.iter().map(|&i| energies[i]).sum();
-        if avg_photo > avg_cons {
+        if avg_photo > avg_hetero {
             producer_energy += cluster_energy;
         } else {
             consumer_energy += cluster_energy;
@@ -575,8 +574,7 @@ mod tests {
             initial_population_size: 30,
             light_competition_radius: 1000.0,
             photo_maintenance_cost: 0.0,
-            consumption_maintenance_cost: 0.0,
-            scavenging_maintenance_cost: 0.0,
+            heterotrophy_maintenance_cost: 0.0,
 
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
@@ -594,16 +592,15 @@ mod tests {
         explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.8,
-                consumption_rate: 0.3,
-                scavenging_rate: 0.1,
+                heterotrophy: 0.3,
                 nutrient_absorption: 0.0,
                 mobility: 0.3,
                 chemotaxis_sensitivity: 0.2,
                 mate_selectivity: 100.0,
                 sensing_range: 5.0,
                 reproductive_investment: 0.3,
-            fecundity: 0.0,
-            somatic_maintenance: 0.0,
+                fecundity: 0.0,
+                somatic_maintenance: 0.0,
             },
             trait_covariance: 0.5,
             initial_cluster_count: 2,
@@ -793,8 +790,7 @@ mod tests {
             initial_population_size: 1,
             light_competition_radius: 1000.0,
             photo_maintenance_cost: 0.0,
-            consumption_maintenance_cost: 0.0,
-            scavenging_maintenance_cost: 0.0,
+            heterotrophy_maintenance_cost: 0.0,
 
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
@@ -809,16 +805,15 @@ mod tests {
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.0,
-                consumption_rate: 0.0,
-                scavenging_rate: 0.0,
+                heterotrophy: 0.0,
                 nutrient_absorption: 0.0,
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
                 sensing_range: 0.0,
                 reproductive_investment: 0.0,
-            fecundity: 0.0,
-            somatic_maintenance: 0.0,
+                fecundity: 0.0,
+                somatic_maintenance: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -859,17 +854,16 @@ mod tests {
         assert!(!is_population_explosion(50, 100));
     }
 
-    fn make_trait_vector(vals: [f32; 8]) -> explorers_sim::TraitVector {
+    fn make_trait_vector(vals: [f32; 7]) -> explorers_sim::TraitVector {
         explorers_sim::TraitVector {
             photosynthetic_absorption: vals[0],
-            consumption_rate: vals[1],
-            scavenging_rate: vals[2],
-                nutrient_absorption: 0.0,
-            mobility: vals[3],
-            chemotaxis_sensitivity: vals[4],
-            mate_selectivity: vals[5],
-            sensing_range: vals[6],
-            reproductive_investment: vals[7],
+            heterotrophy: vals[1],
+            nutrient_absorption: 0.0,
+            mobility: vals[2],
+            chemotaxis_sensitivity: vals[3],
+            mate_selectivity: vals[4],
+            sensing_range: vals[5],
+            reproductive_investment: vals[6],
             fecundity: 0.0,
             somatic_maintenance: 0.0,
         }
@@ -879,10 +873,10 @@ mod tests {
     fn clustering_strength_high_for_bimodal_traits() {
         let mut traits = Vec::new();
         for i in 0..50 {
-            traits.push(make_trait_vector([i as f32 * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([i as f32 * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
         }
         for i in 0..50 {
-            traits.push(make_trait_vector([5.0 + i as f32 * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([5.0 + i as f32 * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
         }
         let strength = clustering_strength(&traits);
         assert!(strength > 0.5, "bimodal traits should have high clustering strength: {strength}");
@@ -895,7 +889,7 @@ mod tests {
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
         let dist = Normal::new(0.5_f32, 0.2).unwrap();
         let traits: Vec<_> = (0..100)
-            .map(|_| make_trait_vector([dist.sample(&mut rng), dist.sample(&mut rng), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+            .map(|_| make_trait_vector([dist.sample(&mut rng), dist.sample(&mut rng), 0.0, 0.0, 0.0, 0.0, 0.0]))
             .collect();
         let strength = clustering_strength(&traits);
         assert!(strength < 0.5, "unimodal traits should have low clustering strength: {strength}");
@@ -908,7 +902,7 @@ mod tests {
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
         let dist = Normal::new(0.5_f32, 0.2).unwrap();
         let traits: Vec<_> = (0..100)
-            .map(|_| make_trait_vector([dist.sample(&mut rng), dist.sample(&mut rng), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+            .map(|_| make_trait_vector([dist.sample(&mut rng), dist.sample(&mut rng), 0.0, 0.0, 0.0, 0.0, 0.0]))
             .collect();
         assert!(is_monoculture(&traits, 0.5));
     }
@@ -917,10 +911,10 @@ mod tests {
     fn dbscan_finds_two_clusters() {
         let mut traits = Vec::new();
         for i in 0..10 {
-            traits.push(make_trait_vector([i as f32 * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([i as f32 * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
         }
         for i in 0..10 {
-            traits.push(make_trait_vector([5.0 + i as f32 * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([5.0 + i as f32 * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
         }
         let labels = dbscan(&traits, 0.5, 3);
         let cluster_ids: std::collections::HashSet<_> = labels.iter().filter_map(|l| *l).collect();
@@ -930,7 +924,7 @@ mod tests {
     #[test]
     fn dbscan_uniform_scatter_gives_no_clusters() {
         let traits: Vec<_> = (0..10)
-            .map(|i| make_trait_vector([i as f32 * 10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+            .map(|i| make_trait_vector([i as f32 * 10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
             .collect();
         let labels = dbscan(&traits, 0.5, 3);
         let cluster_count = labels.iter().filter_map(|l| *l).collect::<std::collections::HashSet<_>>().len();
@@ -941,10 +935,10 @@ mod tests {
     fn dbscan_noise_points_are_none() {
         let mut traits = Vec::new();
         for i in 0..10 {
-            traits.push(make_trait_vector([i as f32 * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([i as f32 * 0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
         }
         // Add an outlier far away
-        traits.push(make_trait_vector([100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+        traits.push(make_trait_vector([100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
         let labels = dbscan(&traits, 0.5, 3);
         assert_eq!(labels[10], None, "outlier should be noise");
     }
@@ -964,13 +958,13 @@ mod tests {
         let mut energies = Vec::new();
         // Producers (high photosynthesis, low consumption)
         for _ in 0..10 {
-            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(0));
             energies.push(100.0);
         }
         // Consumers (low photosynthesis, high consumption)
         for _ in 0..5 {
-            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(1));
             energies.push(50.0);
         }
@@ -984,13 +978,13 @@ mod tests {
         let mut energies = Vec::new();
         // Producers with little energy
         for _ in 0..5 {
-            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(0));
             energies.push(10.0);
         }
         // Consumers with lots of energy (inverted pyramid)
         for _ in 0..10 {
-            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(1));
             energies.push(100.0);
         }
@@ -1059,27 +1053,26 @@ mod tests {
 
     #[test]
     fn trophic_coordinates_pure_producer() {
-        let traits = make_trait_vector([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-        let (photo, cons, scav) = trophic_coordinates(&traits);
+        let traits = make_trait_vector([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        let (photo, hetero) = trophic_coordinates(&traits);
         assert!((photo - 1.0).abs() < 1e-5);
-        assert!(cons.abs() < 1e-5);
-        assert!(scav.abs() < 1e-5);
+        assert!(hetero.abs() < 1e-5);
     }
 
     #[test]
     fn trophic_coordinates_mixed() {
-        let traits = make_trait_vector([0.3, 0.3, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0]);
-        let (photo, cons, scav) = trophic_coordinates(&traits);
-        let sum = photo + cons + scav;
+        let traits = make_trait_vector([0.3, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        let (photo, hetero) = trophic_coordinates(&traits);
+        let sum = photo + hetero;
         assert!((sum - 1.0).abs() < 1e-5, "should sum to 1: {sum}");
-        assert!((photo - 1.0 / 3.0).abs() < 0.01);
+        assert!((photo - 0.5).abs() < 0.01);
     }
 
     #[test]
     fn trophic_coordinates_zero_energy_traits() {
-        let traits = make_trait_vector([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
-        let (photo, _cons, _scav) = trophic_coordinates(&traits);
-        assert!((photo - 1.0 / 3.0).abs() < 0.01, "should default to equal: {photo}");
+        let traits = make_trait_vector([0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+        let (photo, _hetero) = trophic_coordinates(&traits);
+        assert!((photo - 0.5).abs() < 0.01, "should default to equal: {photo}");
     }
 
     #[test]
@@ -1089,13 +1082,13 @@ mod tests {
         let mut labels = Vec::new();
         let mut energies = Vec::new();
         for _ in 0..10 {
-            traits.push(make_trait_vector([0.8, 0.8, 0.8, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.8, 0.8, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(0));
             energies.push(100.0);
         }
         // Cluster 1: specialists (only photo)
         for _ in 0..5 {
-            traits.push(make_trait_vector([0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(1));
             energies.push(50.0);
         }
@@ -1109,13 +1102,13 @@ mod tests {
         let mut energies = Vec::new();
         // Cluster 0: producers (specialist)
         for _ in 0..10 {
-            traits.push(make_trait_vector([0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(0));
             energies.push(100.0);
         }
         // Cluster 1: consumers (specialist)
         for _ in 0..5 {
-            traits.push(make_trait_vector([0.0, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.0, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(1));
             energies.push(50.0);
         }
@@ -1192,12 +1185,12 @@ mod tests {
         let mut labels = Vec::new();
         let mut energies = Vec::new();
         for _ in 0..10 {
-            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(0));
             energies.push(100.0);
         }
         for _ in 0..5 {
-            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(1));
             energies.push(50.0);
         }
@@ -1211,12 +1204,12 @@ mod tests {
         let mut labels = Vec::new();
         let mut energies = Vec::new();
         for _ in 0..5 {
-            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(0));
             energies.push(10.0);
         }
         for _ in 0..10 {
-            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]));
+            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0]));
             labels.push(Some(1));
             energies.push(100.0);
         }
@@ -1226,7 +1219,7 @@ mod tests {
 
     #[test]
     fn trophic_balance_zero_when_no_labelled_clusters() {
-        let traits = vec![make_trait_vector([0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])];
+        let traits = vec![make_trait_vector([0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0])];
         let labels = vec![None];
         let energies = vec![100.0];
         let score = trophic_balance_score(&traits, &labels, &energies);
