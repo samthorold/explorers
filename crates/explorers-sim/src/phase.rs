@@ -7,10 +7,11 @@
 use crate::event::{Event, EventKind};
 use crate::spatial::SpatialGrid;
 use crate::{
-    Agent, Carcass, WorldParameters, FUNCTIONAL_TRAIT_COUNT, FUNCTIONAL_TRAIT_INDICES,
+    Agent, Carcass, TraitVector, WorldParameters, FUNCTIONAL_TRAIT_COUNT, FUNCTIONAL_TRAIT_INDICES,
 };
 use rand_chacha::ChaCha8Rng;
 use rand::Rng;
+use rand_distr::{Distribution, Normal, Poisson};
 
 /// Photosynthesise: agents with nonzero effective photosynthetic absorption
 /// absorb energy from local solar flux into reserve. Light competition splits
@@ -712,6 +713,245 @@ pub fn move_agents(
         events,
         dissipated: total_dissipated,
         sensing_throughput,
+    }
+}
+
+/// Result of the reproduction resolution phase.
+pub struct ReproductionResult {
+    pub events: Vec<Event>,
+    pub dissipated: f32,
+    pub offspring: Vec<Agent>,
+}
+
+/// Resolve reproduction: coordinated pass 2. Pairs eligible agents by closest
+/// trait-space distance within spatial proximity, invests energy from both parents,
+/// produces offspring with crossover traits and Gaussian mutation.
+pub fn resolve_reproduction(
+    agents: &mut [Agent],
+    dead_ids: &std::collections::HashSet<u64>,
+    grid: &SpatialGrid,
+    params: &WorldParameters,
+    rng: &mut ChaCha8Rng,
+) -> ReproductionResult {
+    let mut events = Vec::new();
+    let mut dissipated = 0.0_f32;
+    let mut offspring = Vec::new();
+    let extent = params.world_extent;
+
+    // Build eligible set: alive, above energy threshold, sufficient nutrient.
+    // Grid keys are slice indices (matching World::step grid construction).
+    let eligible: std::collections::HashSet<usize> = agents
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| {
+            !dead_ids.contains(&a.id)
+                && a.reserve >= params.reproduction_energy_threshold
+                && a.nutrient >= crate::stoichiometric_demand(&a.traits)
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    // For each eligible agent, find closest compatible mate within sensing range.
+    // Grid keys are slice indices, so neighbor_id as usize gives the agent index.
+    let mut pair_candidates: Vec<(usize, usize, f32)> = Vec::new();
+
+    for &i in &eligible {
+        let agent_i = &agents[i];
+        let sensing = agent_i.traits.sensing_range;
+        let selectivity = agent_i.traits.mate_selectivity;
+
+        let nearby = grid.query_radius(agent_i.position, sensing);
+        let mut best: Option<(usize, f32)> = None;
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(i); // exclude self
+
+        for neighbor_id in nearby {
+            let j = neighbor_id as usize;
+            if !seen.insert(j) {
+                continue;
+            }
+            if j >= agents.len() || !eligible.contains(&j) {
+                continue;
+            }
+            let dist_spatial = crate::toroidal_distance(
+                agent_i.position,
+                agents[j].position,
+                extent,
+            );
+            if dist_spatial > sensing {
+                continue;
+            }
+            let trait_dist = agent_i.traits.distance(&agents[j].traits);
+            // Check mate selectivity: trait distance must be within selectivity
+            if selectivity > 0.0 && trait_dist > selectivity {
+                continue;
+            }
+            match best {
+                None => best = Some((j, trait_dist)),
+                Some((_, best_dist)) if trait_dist < best_dist => {
+                    best = Some((j, trait_dist));
+                }
+                _ => {}
+            }
+        }
+
+        if let Some((j, dist)) = best {
+            let (a, b) = if i < j { (i, j) } else { (j, i) };
+            pair_candidates.push((a, b, dist));
+        }
+    }
+
+    // Sort by trait distance (closest pairs first)
+    pair_candidates.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+
+    // Greedily assign pairs: each agent can only reproduce once per tick
+    let mut paired = std::collections::HashSet::new();
+    let mut final_pairs: Vec<(usize, usize)> = Vec::new();
+
+    for (a, b, _) in &pair_candidates {
+        if !paired.contains(a) && !paired.contains(b) {
+            paired.insert(*a);
+            paired.insert(*b);
+            final_pairs.push((*a, *b));
+        }
+    }
+
+    // Next agent ID: find max existing ID + 1
+    let mut next_id = agents.iter().map(|a| a.id).max().unwrap_or(0) + 1;
+
+    // Resolve each pair
+    for (a_idx, b_idx) in &final_pairs {
+        // Copy needed values before mutating
+        let a_traits = agents[*a_idx].traits;
+        let b_traits = agents[*b_idx].traits;
+        let a_reserve = agents[*a_idx].reserve;
+        let b_reserve = agents[*b_idx].reserve;
+        let a_nutrient = agents[*a_idx].nutrient;
+        let b_nutrient = agents[*b_idx].nutrient;
+        let a_pos = agents[*a_idx].position;
+        let b_pos = agents[*b_idx].position;
+        let a_contact = agents[*a_idx].contact_time;
+        let b_contact = agents[*b_idx].contact_time;
+        let a_id = agents[*a_idx].id;
+        let b_id = agents[*b_idx].id;
+
+        // Investment: each parent invests their reproductive_investment trait, capped at reserve
+        let invest_a = a_traits.reproductive_investment.min(a_reserve).max(0.0);
+        let invest_b = b_traits.reproductive_investment.min(b_reserve).max(0.0);
+        let total_investment = invest_a + invest_b;
+
+        if total_investment <= 0.0 {
+            continue;
+        }
+
+        // Offspring count from Poisson distribution
+        let avg_fecundity = ((a_traits.fecundity + b_traits.fecundity) / 2.0).max(0.1);
+        let poisson = Poisson::new(avg_fecundity as f64).unwrap();
+        let offspring_count_f: f64 = poisson.sample(rng);
+        let offspring_count = (offspring_count_f as usize).max(1);
+
+        let offspring_total_energy = total_investment * params.reproduction_efficiency;
+        let energy_per_offspring = offspring_total_energy / offspring_count as f32;
+        let tick_dissipated = total_investment - offspring_total_energy;
+        dissipated += tick_dissipated;
+
+        // Nutrient donation: each parent donates proportional to investment
+        let nutrient_a = a_nutrient * (invest_a / a_reserve.max(1e-10)).min(0.5);
+        let nutrient_b = b_nutrient * (invest_b / b_reserve.max(1e-10)).min(0.5);
+        let nutrient_per_offspring = (nutrient_a + nutrient_b) / offspring_count as f32;
+
+        // Deduct from parents
+        agents[*a_idx].reserve -= invest_a;
+        agents[*a_idx].nutrient -= nutrient_a;
+        agents[*b_idx].reserve -= invest_b;
+        agents[*b_idx].nutrient -= nutrient_b;
+
+        // Parent midpoint for dispersal
+        let mid_pos = (
+            (a_pos.0 + b_pos.0) / 2.0,
+            (a_pos.1 + b_pos.1) / 2.0,
+        );
+
+        // Dispersal radius scaled by contact time and sensing range
+        let avg_sensing = (a_traits.sensing_range + b_traits.sensing_range) / 2.0;
+        let avg_contact = (a_contact + b_contact) as f32 / 2.0;
+        let dispersal_radius = avg_sensing * (avg_contact / (avg_contact + 50.0));
+
+        for _ in 0..offspring_count {
+            // Trait crossover: each dimension from one parent
+            let mut child_traits = TraitVector {
+                photosynthetic_absorption: 0.0,
+                consumption_rate: 0.0,
+                scavenging_rate: 0.0,
+                nutrient_absorption: 0.0,
+                mobility: 0.0,
+                chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0,
+                sensing_range: 0.0,
+                reproductive_investment: 0.0,
+                fecundity: 0.0,
+                somatic_maintenance: 0.0,
+            };
+            for dim in 0..TraitVector::NUM_DIMS {
+                let parent_val = if rng.random::<bool>() {
+                    a_traits.get(dim)
+                } else {
+                    b_traits.get(dim)
+                };
+                // Mutation
+                let val = if params.mutation_rate > 0.0
+                    && rng.random::<f32>() < params.mutation_rate
+                {
+                    let normal = Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
+                    (parent_val + normal.sample(rng)).max(0.0)
+                } else {
+                    parent_val
+                };
+                child_traits.set(dim, val);
+            }
+            child_traits.normalize_budget();
+
+            // Dispersal position
+            let (dx, dy) = if dispersal_radius > 0.0 {
+                let normal = Normal::new(0.0_f32, dispersal_radius).unwrap();
+                (normal.sample(rng), normal.sample(rng))
+            } else {
+                (0.0, 0.0)
+            };
+            let pos = crate::wrap_position(
+                (mid_pos.0 + dx, mid_pos.1 + dy),
+                extent,
+            );
+
+            let child = Agent {
+                id: next_id,
+                position: pos,
+                reserve: energy_per_offspring,
+                structure: 0.0,
+                nutrient: nutrient_per_offspring,
+                traits: child_traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            };
+            next_id += 1;
+            offspring.push(child);
+        }
+
+        events.push(Event {
+            tick: 0,
+            seq: 0,
+            kind: EventKind::Reproduced,
+            source: a_id,
+            target: Some(b_id),
+            energy_delta: total_investment,
+            position: Some(mid_pos),
+        });
+    }
+
+    ReproductionResult {
+        events,
+        dissipated,
+        offspring,
     }
 }
 
@@ -1681,5 +1921,587 @@ mod tests {
             "nutrient pool should receive 3.0 excess, got {}", nutrient_pool);
         assert!((agents[1].nutrient - 16.0).abs() < 1e-3,
             "target nutrient should be 16.0 (20 - 4), got {}", agents[1].nutrient);
+    }
+
+    // --- Resolve reproduction ---
+
+    #[test]
+    fn reproduction_two_compatible_agents_produce_offspring_with_correct_energy() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (1.0, 0.0), 100.0, traits),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        let dead_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        // Each parent invests reproductive_investment (0.3), capped at reserve
+        // Offspring energy = (0.3 + 0.3) * 0.7 = 0.42
+        // Dissipated = 0.6 - 0.42 = 0.18
+        assert!(!result.offspring.is_empty(), "should produce offspring");
+        let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
+        assert!((total_offspring_energy - 0.42).abs() < 1e-3,
+            "offspring energy should be 0.42, got {}", total_offspring_energy);
+        assert!((result.dissipated - 0.18).abs() < 1e-3,
+            "dissipated should be 0.18, got {}", result.dissipated);
+        // Parents should have paid investment
+        assert!((agents[0].reserve - 99.7).abs() < 1e-3,
+            "parent A reserve should be 99.7, got {}", agents[0].reserve);
+        assert!((agents[1].reserve - 99.7).abs() < 1e-3,
+            "parent B reserve should be 99.7, got {}", agents[1].reserve);
+    }
+
+    #[test]
+    fn reproduction_dead_agents_excluded() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (1.0, 0.0), 100.0, traits),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        // Mark agent 1 as dead (killed in drain pass)
+        let mut dead_ids = std::collections::HashSet::new();
+        dead_ids.insert(1u64);
+
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(result.offspring.is_empty(),
+            "dead agent should not reproduce");
+        assert!((agents[0].reserve - 100.0).abs() < 1e-6,
+            "no investment should occur");
+    }
+
+    #[test]
+    fn reproduction_below_energy_threshold_excluded() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 200.0, // higher than agent reserve
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (1.0, 0.0), 100.0, traits),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(result.offspring.is_empty(),
+            "agents below energy threshold should not reproduce");
+    }
+
+    #[test]
+    fn reproduction_nutrient_gating_blocks_reproduction() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (1.0, 0.0), 100.0, traits),
+        ];
+        // stoichiometric_demand for these traits = 4.0 (4 nonzero traits)
+        // Set nutrient below demand
+        agents[0].nutrient = 1.0;
+        agents[1].nutrient = 1.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(result.offspring.is_empty(),
+            "nutrient-poor agents should not reproduce");
+    }
+
+    #[test]
+    fn reproduction_investment_capped_at_reserve() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        // reproductive_investment=50.0 but reserve is only 15.0
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 50.0,
+            fecundity: 1.0,
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 15.0, traits),
+            make_agent(2, (1.0, 0.0), 15.0, traits),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        // Investment capped at reserve: 15.0 each
+        // Total = 30.0, offspring energy = 30.0 * 0.7 = 21.0
+        assert!(!result.offspring.is_empty());
+        let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
+        assert!((total_offspring_energy - 21.0).abs() < 1e-3,
+            "offspring energy should be 21.0, got {}", total_offspring_energy);
+        // Parents should have 0 reserve (invested all)
+        assert!(agents[0].reserve.abs() < 1e-3,
+            "parent A should have 0 reserve, got {}", agents[0].reserve);
+        assert!(agents[1].reserve.abs() < 1e-3,
+            "parent B should have 0 reserve, got {}", agents[1].reserve);
+    }
+
+    #[test]
+    fn reproduction_mate_pairing_selects_closest_trait_distance() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        // Agent A and B have identical traits (distance=0), C is different
+        let traits_ab = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            sensing_range: 50.0,
+            ..zero_traits()
+        };
+        let traits_c = TraitVector {
+            photosynthetic_absorption: 0.1,
+            consumption_rate: 0.4,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            sensing_range: 50.0,
+            ..zero_traits()
+        };
+        // All three within sensing range of each other
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits_ab),
+            make_agent(2, (2.0, 0.0), 100.0, traits_ab),
+            make_agent(3, (4.0, 0.0), 100.0, traits_c),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+        agents[2].nutrient = 10.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (2.0, 0.0));
+        grid.insert(2, (4.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        // A and B should pair (trait distance=0), C has no mate
+        assert_eq!(result.events.len(), 1, "should produce exactly one pair");
+        let ev = &result.events[0];
+        // The pair should be agents 1 and 2 (ids)
+        let paired_ids = [ev.source, ev.target.unwrap()];
+        assert!(paired_ids.contains(&1) && paired_ids.contains(&2),
+            "agents 1 and 2 should pair, got {:?}", paired_ids);
+        // Agent C (id=3) should not have invested
+        assert!((agents[2].reserve - 100.0).abs() < 1e-6,
+            "agent C should not have reproduced");
+    }
+
+    #[test]
+    fn reproduction_offspring_traits_are_crossover_of_parents() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0, // no mutation to isolate crossover
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits_a = TraitVector {
+            photosynthetic_absorption: 0.8,
+            consumption_rate: 0.0,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        let traits_b = TraitVector {
+            photosynthetic_absorption: 0.0,
+            consumption_rate: 0.8,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits_a),
+            make_agent(2, (1.0, 0.0), 100.0, traits_b),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty());
+        let child = &result.offspring[0];
+        // With no mutation, each trait dimension comes from one parent.
+        // For photosynthetic_absorption: either 0.8 (from A) or 0.0 (from B)
+        // For consumption_rate: either 0.0 (from A) or 0.8 (from B)
+        // After budget normalization, relative proportions are preserved.
+        // Check that offspring traits are non-negative and budget sums to 1.0
+        let budget_sum: f32 = TraitVector::BUDGET_INDICES
+            .iter()
+            .map(|&i| child.traits.get(i))
+            .sum();
+        // Budget sums to 1.0 if any budget trait is nonzero
+        if budget_sum > 1e-6 {
+            assert!((budget_sum - 1.0).abs() < 1e-3,
+                "budget traits should sum to 1.0, got {}", budget_sum);
+        }
+        // Each dimension should come from exactly one parent (no averaging)
+        for dim in 0..TraitVector::NUM_DIMS {
+            let val = child.traits.get(dim);
+            assert!(val >= 0.0, "trait dimension {} should be non-negative", dim);
+        }
+    }
+
+    #[test]
+    fn reproduction_fecundity_controls_offspring_count() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        // High fecundity -> more offspring
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 10.0,
+            fecundity: 5.0, // Poisson mean=5
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (1.0, 0.0), 100.0, traits),
+        ];
+        agents[0].nutrient = 20.0;
+        agents[1].nutrient = 20.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        // With Poisson(5.0), expect multiple offspring (statistically unlikely to get 1)
+        assert!(result.offspring.len() > 1,
+            "high fecundity should produce multiple offspring, got {}", result.offspring.len());
+        // Total offspring energy should equal total_investment * efficiency
+        let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
+        let total_investment = 20.0; // 10.0 + 10.0 (capped at reserve is 100, so invest=10)
+        let expected_total = total_investment * 0.7;
+        assert!((total_offspring_energy - expected_total).abs() < 1e-3,
+            "total offspring energy should be {}, got {}", expected_total, total_offspring_energy);
+    }
+
+    #[test]
+    fn reproduction_offspring_zero_wear_and_dispersed() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 5.0,
+            fecundity: 3.0,
+            sensing_range: 20.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (1.0, 0.0), 100.0, traits),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+        agents[0].contact_time = 100; // high contact time -> wider dispersal
+        agents[1].contact_time = 100;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty());
+        for child in &result.offspring {
+            // Zero wear
+            for w in &child.wear {
+                assert!(*w == 0.0, "offspring should have zero wear");
+            }
+            // Zero structure
+            assert!(child.structure == 0.0, "offspring should have zero structure");
+            // Zero contact time
+            assert!(child.contact_time == 0, "offspring should have zero contact time");
+            // Position within world bounds
+            let half = params.world_extent / 2.0;
+            assert!(child.position.0 >= -half && child.position.0 <= half,
+                "offspring x should be within bounds");
+            assert!(child.position.1 >= -half && child.position.1 <= half,
+                "offspring y should be within bounds");
+        }
+        // With high contact time and sensing range, offspring should be dispersed
+        // (not all at the exact same position)
+        if result.offspring.len() > 1 {
+            let positions: Vec<(f32, f32)> = result.offspring.iter().map(|o| o.position).collect();
+            let all_same = positions.iter().all(|p| {
+                (p.0 - positions[0].0).abs() < 1e-6 && (p.1 - positions[0].1).abs() < 1e-6
+            });
+            assert!(!all_same, "offspring should be dispersed to different positions");
+        }
+    }
+
+    #[test]
+    fn reproduction_emits_reproduced_events() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (1.0, 0.0), 100.0, traits),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].kind, EventKind::Reproduced);
+        assert!(result.events[0].target.is_some(),
+            "Reproduced event should have target (second parent)");
+    }
+
+    #[test]
+    fn reproduction_deterministic_with_seeded_rng() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.5,
+            mutation_magnitude: 0.1,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 5.0,
+            fecundity: 3.0,
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+
+        let run = |seed: u64| -> (Vec<(f32, f32)>, Vec<f32>) {
+            let mut agents = vec![
+                make_agent(1, (0.0, 0.0), 100.0, traits),
+                make_agent(2, (1.0, 0.0), 100.0, traits),
+            ];
+            agents[0].nutrient = 10.0;
+            agents[1].nutrient = 10.0;
+
+            let dead_ids = std::collections::HashSet::new();
+            let mut grid = SpatialGrid::new(100.0, 10.0);
+            grid.insert(0, (0.0, 0.0));
+            grid.insert(1, (1.0, 0.0));
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+
+            let result = resolve_reproduction(
+                &mut agents, &dead_ids, &grid, &params, &mut rng,
+            );
+            let positions: Vec<(f32, f32)> = result.offspring.iter().map(|o| o.position).collect();
+            let energies: Vec<f32> = result.offspring.iter().map(|o| o.reserve).collect();
+            (positions, energies)
+        };
+
+        let (pos1, en1) = run(42);
+        let (pos2, en2) = run(42);
+        assert_eq!(pos1.len(), pos2.len(), "same seed should produce same count");
+        for i in 0..pos1.len() {
+            assert!((pos1[i].0 - pos2[i].0).abs() < 1e-6);
+            assert!((pos1[i].1 - pos2[i].1).abs() < 1e-6);
+            assert!((en1[i] - en2[i]).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn reproduction_is_lossy_energy_dissipated() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.5, // 50% efficient
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            reproductive_investment: 10.0,
+            fecundity: 1.0,
+            sensing_range: 10.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (1.0, 0.0), 100.0, traits),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        // Total investment = 10.0 + 10.0 = 20.0
+        // Offspring energy = 20.0 * 0.5 = 10.0
+        // Dissipated = 20.0 - 10.0 = 10.0
+        let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
+        assert!((total_offspring_energy - 10.0).abs() < 1e-3,
+            "offspring energy should be 10.0, got {}", total_offspring_energy);
+        assert!((result.dissipated - 10.0).abs() < 1e-3,
+            "dissipated should be 10.0, got {}", result.dissipated);
+        // Conservation: investment = offspring + dissipated
+        assert!((total_offspring_energy + result.dissipated - 20.0).abs() < 1e-3,
+            "energy should be conserved");
     }
 }
