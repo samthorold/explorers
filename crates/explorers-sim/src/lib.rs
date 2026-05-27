@@ -645,14 +645,7 @@ impl World {
             self.agents.push(child);
         }
 
-        // 7. Move (before wear so distance traveled feeds use-dependent wear)
-        let move_result = phase::move_agents(
-            &mut self.agents, &self.carcasses, &grid, &self.params, &mut self.rng,
-        );
-        self.dissipated_energy += move_result.dissipated;
-        events.extend(move_result.events);
-
-        // 8. Wear: collect per-agent usage from earlier phases
+        // 7. Wear: collect per-agent usage from earlier phases
         let mut usage_data: std::collections::HashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]> = std::collections::HashMap::new();
         // Autotrophy usage: energy captured via photosynthesis
         for ev in events.iter().filter(|e| e.kind == event::EventKind::Photosynthesized) {
@@ -664,24 +657,11 @@ impl World {
             let entry = usage_data.entry(ev.source).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
             entry[1] += ev.energy_delta;
         }
-        // Mobility usage: distance moved = effective mobility for agents that moved
-        {
-            let id_to_idx: std::collections::HashMap<u64, usize> = self.agents.iter()
-                .enumerate()
-                .map(|(i, a)| (a.id, i))
-                .collect();
-            let k = self.params.wear_degradation_steepness;
-            for ev in events.iter().filter(|e| e.kind == event::EventKind::Moved) {
-                let entry = usage_data.entry(ev.source).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
-                if let Some(&idx) = id_to_idx.get(&ev.source) {
-                    entry[2] += self.agents[idx].effective_trait_with_steepness(2, k);
-                }
-            }
-        }
+        // Mobility wear is baseline-only within a tick (movement hasn't happened yet)
         let wear_events = phase::apply_wear(&mut self.agents, &self.params, &usage_data);
         events.extend(wear_events);
 
-        // 9. Check death thresholds
+        // 8. Check death thresholds
         let (death_events, new_carcasses, death_dissipated) = phase::check_death_thresholds(
             &mut self.agents, &self.params,
         );
@@ -693,6 +673,14 @@ impl World {
 
         // Remove dead agents (those with reserve <= 0 or structure below threshold)
         self.agents.retain(|a| a.reserve > 0.0);
+
+        // 9. Move agents (runs last: all phases resolve at stable positions,
+        // movement energy is bounded by what remains after all other costs)
+        let move_result = phase::move_agents(
+            &mut self.agents, &self.carcasses, &grid, &self.params, &mut self.rng,
+        );
+        self.dissipated_energy += move_result.dissipated;
+        events.extend(move_result.events);
 
         // --- Energy ledger: record all flows for conservation verification ---
         // Built from event data and state snapshots, after all phases complete.
@@ -1786,6 +1774,83 @@ mod tests {
         assert!(diff < tolerance,
             "cumulative energy conservation violated with distance-dependent efficiency: \
              input={total_input}, output={total_output}, diff={diff}");
+    }
+
+    #[test]
+    fn wear_applied_before_move_agent_dies_without_moving() {
+        // An agent with high mobility and pre-existing wear near the death
+        // threshold should die from wear accumulation + death check BEFORE
+        // movement runs. No Moved event should appear for this agent.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,  // no photosynthesis income
+            base_metabolic_rate: 0.0,   // no metabolism drain
+            growth_efficiency: 0.0,
+            wear_rate: 10.0,            // very high baseline wear
+            use_wear_rate: 0.0,
+            wear_degradation_steepness: 1.0,
+            repair_decay: 0.0,          // no repair
+            contact_radius: 5.0,
+            movement_cost_coefficient: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+
+        // Agent with mobility (would move) and structure just above death threshold.
+        // High wear_rate will degrade traits, pushing structure below threshold → death.
+        // We give it a generalist trait spread so its death_threshold is meaningful,
+        // and structure just barely above that threshold.
+        let traits = TraitVector {
+            mobility: 0.5,
+            photosynthetic_absorption: 0.3,
+            heterotrophy: 0.3,
+            kappa: 0.3,
+            fecundity: 0.3,
+            asexual_propensity: 0.3,
+            dispersal: 0.3,
+            ..zero_traits()
+        };
+        // Death threshold for this generalist is significant.
+        // We set reserve to a small positive value so the agent doesn't die
+        // from starvation before wear runs, but the structure is very low.
+        let threshold = death_threshold(&traits);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 0.01,  // barely alive (won't die from starvation with base_metabolic_rate=0)
+            structure: threshold * 0.5,  // below threshold → should die at death check
+            nutrient: 0.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        });
+
+        let agent_id = world.agents().last().unwrap().id;
+
+        world.step();
+
+        // The agent should have died (death check runs before move)
+        let died_events: Vec<_> = world.event_log().by_kind(&event::EventKind::Died)
+            .into_iter()
+            .filter(|e| e.source == agent_id)
+            .collect();
+        assert!(!died_events.is_empty(),
+            "agent should have died from structure below death threshold");
+
+        // No Moved event should exist for this agent — it died before movement
+        let moved_events: Vec<_> = world.event_log().by_kind(&event::EventKind::Moved)
+            .into_iter()
+            .filter(|e| e.source == agent_id)
+            .collect();
+        assert!(moved_events.is_empty(),
+            "dead agent should not have a Moved event — wear and death check must run before move");
     }
 }
 
