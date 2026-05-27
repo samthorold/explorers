@@ -90,7 +90,7 @@ impl TraitVector {
         }
     }
 
-    fn set(&mut self, index: usize, value: f32) {
+    pub fn set(&mut self, index: usize, value: f32) {
         match index {
             0 => self.photosynthetic_absorption = value,
             1 => self.consumption_rate = value,
@@ -574,7 +574,24 @@ impl World {
         // Remove drain-killed agents before further phases
         self.agents.retain(|a| !drain_dead_ids.contains(&a.id));
 
-        // (coordinated pass 2 -- reproduction not yet implemented)
+        // 6. Resolve reproduction (coordinated pass 2)
+        // Rebuild grid after removing dead agents (indices changed)
+        let mut repro_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
+        for (i, a) in self.agents.iter().enumerate() {
+            repro_grid.insert(i as u64, a.position);
+        }
+        let repro_result = phase::resolve_reproduction(
+            &mut self.agents, &drain_dead_ids, &repro_grid, &self.params, &mut self.rng,
+        );
+        self.dissipated_energy += repro_result.dissipated;
+        self.last_tick_births = repro_result.offspring.len();
+        events.extend(repro_result.events);
+        // Add offspring to world with unique IDs
+        for mut child in repro_result.offspring {
+            child.id = self.next_agent_id;
+            self.next_agent_id += 1;
+            self.agents.push(child);
+        }
 
         // 7. Wear
         let wear_events = phase::apply_wear(&mut self.agents, &self.params);
