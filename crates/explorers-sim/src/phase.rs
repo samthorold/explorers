@@ -149,7 +149,6 @@ pub fn metabolise(
 
     for agent in agents.iter_mut() {
         let cost = params.base_metabolic_rate
-            + agent.traits.sensing_range * params.sensing_cost_coefficient
             + agent.traits.photosynthetic_absorption * params.photo_maintenance_cost
             + agent.traits.heterotrophy * params.heterotrophy_maintenance_cost
             + agent.traits.somatic_maintenance * params.somatic_maintenance_cost_coefficient
@@ -189,9 +188,9 @@ pub fn grow(
         }
         // Retain enough reserve for next tick's metabolism
         let metabolic_cost = params.base_metabolic_rate
-            + agent.traits.sensing_range * params.sensing_cost_coefficient
             + agent.traits.photosynthetic_absorption * params.photo_maintenance_cost
             + agent.traits.heterotrophy * params.heterotrophy_maintenance_cost
+            + agent.traits.mobility * params.movement_cost_coefficient
             + agent.traits.somatic_maintenance * params.somatic_maintenance_cost_coefficient
             + agent.structure * params.structure_maintenance_coefficient;
         let retention = metabolic_cost * 2.0;
@@ -607,8 +606,10 @@ pub fn move_agents(
 
     for i in 0..agents.len() {
         let eff_mobility = agents[i].effective_trait_with_steepness(2, k);
-        let eff_chemotaxis = agents[i].effective_trait_with_steepness(3, k);
-        let eff_sensing = agents[i].effective_trait_with_steepness(4, k);
+        // Sensing range derived from mobility: mobile agents perceive farther
+        let eff_sensing = eff_mobility * params.sensing_range_coefficient;
+        // Chemotaxis strength derived from mobility (no separate trait)
+        let eff_chemotaxis = eff_mobility;
         let eff_heterotrophy = agents[i].effective_trait_with_steepness(1, k);
 
         if eff_mobility <= 0.0 {
@@ -781,10 +782,13 @@ pub fn resolve_reproduction(
     // Grid keys are slice indices, so neighbor_id as usize gives the agent index.
     let mut pair_candidates: Vec<(usize, usize, f32)> = Vec::new();
 
+    let compatibility_distance = params.reproductive_compatibility_distance;
+    // Sensing range for mate search derived from mobility
+    let sensing_coeff = params.sensing_range_coefficient;
+
     for &i in &eligible {
         let agent_i = &agents[i];
-        let sensing = agent_i.traits.sensing_range;
-        let selectivity = agent_i.traits.mate_selectivity;
+        let sensing = agent_i.traits.mobility * sensing_coeff;
 
         let nearby = grid.query_radius(agent_i.position, sensing);
         let mut best: Option<(usize, f32)> = None;
@@ -808,8 +812,8 @@ pub fn resolve_reproduction(
                 continue;
             }
             let trait_dist = agent_i.traits.distance(&agents[j].traits);
-            // Check mate selectivity: trait distance must be within selectivity
-            if selectivity > 0.0 && trait_dist > selectivity {
+            // Check reproductive compatibility: trait distance must be within world param threshold
+            if compatibility_distance > 0.0 && trait_dist > compatibility_distance {
                 continue;
             }
             match best {
@@ -898,8 +902,9 @@ pub fn resolve_reproduction(
             (a_pos.1 + b_pos.1) / 2.0,
         );
 
-        // Dispersal radius scaled by contact time and sensing range
-        let avg_sensing = (a_traits.sensing_range + b_traits.sensing_range) / 2.0;
+        // Dispersal radius derived from mobility × sensing coefficient, scaled by contact time
+        let avg_mobility = (a_traits.mobility + b_traits.mobility) / 2.0;
+        let avg_sensing = avg_mobility * sensing_coeff;
         let avg_contact = (a_contact + b_contact) as f32 / 2.0;
         let dispersal_radius = avg_sensing * (avg_contact / (avg_contact + 50.0));
 
@@ -909,9 +914,6 @@ pub fn resolve_reproduction(
                 photosynthetic_absorption: 0.0,
                 heterotrophy: 0.0,
                 mobility: 0.0,
-                chemotaxis_sensitivity: 0.0,
-                mate_selectivity: 0.0,
-                sensing_range: 0.0,
                 reproductive_investment: 0.0,
                 fecundity: 0.0,
                 somatic_maintenance: 0.0,
@@ -988,9 +990,6 @@ mod tests {
             photosynthetic_absorption: 0.0,
             heterotrophy: 0.0,
             mobility: 0.0,
-            chemotaxis_sensitivity: 0.0,
-            mate_selectivity: 0.0,
-            sensing_range: 0.0,
             reproductive_investment: 0.0,
             fecundity: 0.0,
             somatic_maintenance: 0.0,
@@ -1001,7 +1000,7 @@ mod tests {
         WorldParameters {
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.1,
-            sensing_cost_coefficient: 0.0,
+            sensing_range_coefficient: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
             reproduction_efficiency: 0.7,
@@ -1025,6 +1024,7 @@ mod tests {
             repair_decay: 0.0,
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
+            reproductive_compatibility_distance: 2.0,
         }
     }
 
@@ -1498,9 +1498,6 @@ mod tests {
             photosynthetic_absorption: 0.1,
             heterotrophy: 0.1,
             mobility: 0.1,
-            chemotaxis_sensitivity: 0.1,
-            mate_selectivity: 0.1,
-            sensing_range: 0.1,
             reproductive_investment: 0.1,
             fecundity: 0.1,
             somatic_maintenance: 0.1,
@@ -1655,9 +1652,6 @@ mod tests {
             photosynthetic_absorption: 0.1,
             heterotrophy: 0.1,
             mobility: 0.1,
-            chemotaxis_sensitivity: 0.1,
-            mate_selectivity: 0.1,
-            sensing_range: 0.1,
             reproductive_investment: 0.1,
             fecundity: 0.1,
             somatic_maintenance: 0.1,
@@ -1804,9 +1798,7 @@ mod tests {
         params.movement_cost_coefficient = 0.0; // isolate direction test
         let mover_traits = TraitVector {
             heterotrophy: 0.5,
-            mobility: 0.5,
-            chemotaxis_sensitivity: 1.0,
-            sensing_range: 50.0,
+            mobility: 5.0, // sensing range = 5.0 * 10.0 = 50.0
             ..zero_traits()
         };
         let target_traits = TraitVector {
@@ -1842,9 +1834,7 @@ mod tests {
         params.movement_cost_coefficient = 0.0;
         let mover_traits = TraitVector {
             heterotrophy: 0.5,
-            mobility: 0.5,
-            chemotaxis_sensitivity: 1.0,
-            sensing_range: 50.0,
+            mobility: 5.0, // sensing range = 5.0 * 10.0 = 50.0
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2058,9 +2048,7 @@ mod tests {
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         let traits = TraitVector {
-            mobility: 0.5,
-            sensing_range: 50.0,
-            chemotaxis_sensitivity: 0.1,
+            mobility: 5.0, // sensing range = 5.0 * 10.0 = 50.0
             heterotrophy: 0.1,
             ..zero_traits()
         };
@@ -2171,7 +2159,6 @@ mod tests {
         let distant_consumer = TraitVector {
             heterotrophy: 1.0,
             mobility: 2.0,
-            chemotaxis_sensitivity: 1.0,
             ..zero_traits()
         };
 
@@ -2225,7 +2212,6 @@ mod tests {
         // Carcass from a very different organism
         let distant_carcass_traits = TraitVector {
             mobility: 3.0,
-            chemotaxis_sensitivity: 2.0,
             ..zero_traits()
         };
 
@@ -2318,9 +2304,9 @@ mod tests {
         };
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0, // sensing range = 1.0 * 10.0 = 10.0
             reproductive_investment: 0.3,
             fecundity: 1.0,
-            sensing_range: 10.0,
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2365,9 +2351,9 @@ mod tests {
         };
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0,
             reproductive_investment: 0.3,
             fecundity: 1.0,
-            sensing_range: 10.0,
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2405,9 +2391,9 @@ mod tests {
         };
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0,
             reproductive_investment: 0.3,
             fecundity: 1.0,
-            sensing_range: 10.0,
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2440,9 +2426,9 @@ mod tests {
         };
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0,
             reproductive_investment: 0.3,
             fecundity: 1.0,
-            sensing_range: 10.0,
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2484,9 +2470,9 @@ mod tests {
         // reproductive_investment=50.0 but reserve is only 15.0
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0,
             reproductive_investment: 50.0,
             fecundity: 1.0,
-            sensing_range: 10.0,
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2532,17 +2518,17 @@ mod tests {
         // Agent A and B have identical traits (distance=0), C is different
         let traits_ab = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0,
             reproductive_investment: 0.3,
             fecundity: 1.0,
-            sensing_range: 50.0,
             ..zero_traits()
         };
         let traits_c = TraitVector {
             photosynthetic_absorption: 0.1,
             heterotrophy: 0.4,
+            mobility: 1.0,
             reproductive_investment: 0.3,
             fecundity: 1.0,
-            sensing_range: 50.0,
             ..zero_traits()
         };
         // All three within sensing range of each other
@@ -2591,17 +2577,17 @@ mod tests {
         let traits_a = TraitVector {
             photosynthetic_absorption: 0.8,
             heterotrophy: 0.0,
+            mobility: 1.0,
             reproductive_investment: 0.3,
             fecundity: 1.0,
-            sensing_range: 10.0,
             ..zero_traits()
         };
         let traits_b = TraitVector {
             photosynthetic_absorption: 0.0,
             heterotrophy: 0.8,
+            mobility: 1.0,
             reproductive_investment: 0.3,
             fecundity: 1.0,
-            sensing_range: 10.0,
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2647,9 +2633,9 @@ mod tests {
         // High fecundity -> more offspring
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0,
             reproductive_investment: 10.0,
             fecundity: 5.0, // Poisson mean=5
-            sensing_range: 10.0,
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2692,9 +2678,9 @@ mod tests {
         };
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0,
             reproductive_investment: 5.0,
             fecundity: 3.0,
-            sensing_range: 20.0,
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2754,9 +2740,9 @@ mod tests {
         };
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0,
             reproductive_investment: 0.3,
             fecundity: 1.0,
-            sensing_range: 10.0,
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2794,9 +2780,9 @@ mod tests {
         };
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0,
             reproductive_investment: 5.0,
             fecundity: 3.0,
-            sensing_range: 10.0,
             ..zero_traits()
         };
 
@@ -2844,9 +2830,9 @@ mod tests {
         };
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
+            mobility: 1.0,
             reproductive_investment: 10.0,
             fecundity: 1.0,
-            sensing_range: 10.0,
             ..zero_traits()
         };
         let mut agents = vec![
@@ -2877,5 +2863,241 @@ mod tests {
         // Conservation: investment = offspring + dissipated
         assert!((total_offspring_energy + result.dissipated - 20.0).abs() < 1e-3,
             "energy should be conserved");
+    }
+
+    // --- Derived sensing range ---
+
+    #[test]
+    fn move_sensing_range_derived_from_mobility() {
+        // Sensing range = mobility * sensing_range_coefficient.
+        // Agent with high mobility detects agents further away.
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 0.0;
+        params.sensing_range_coefficient = 10.0;
+        // Low mobility -> sensing range = 0.2 * 10 = 2.0
+        let low_mobility = TraitVector {
+            mobility: 0.2,
+            heterotrophy: 0.1,
+            ..zero_traits()
+        };
+        // High mobility -> sensing range = 2.0 * 10 = 20.0
+        let high_mobility = TraitVector {
+            mobility: 2.0,
+            heterotrophy: 0.1,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+
+        // Target at distance 5.0 — within high-mobility sensing but outside low-mobility
+        let run = |mover_traits: TraitVector| -> f32 {
+            let mut agents = vec![
+                make_agent(0, (0.0, 0.0), 100.0, mover_traits),
+                make_agent(1, (5.0, 0.0), 100.0, target_traits),
+            ];
+            agents[1].structure = 5.0;
+            let carcasses = vec![];
+            let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+            grid.insert(0, (0.0, 0.0));
+            grid.insert(1, (5.0, 0.0));
+            let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+            let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+            result.sensing_throughput[0]
+        };
+
+        let low_detected = run(low_mobility);
+        let high_detected = run(high_mobility);
+        assert_eq!(low_detected, 0.0,
+            "low-mobility agent should not detect target at distance 5 with sensing range 2");
+        assert!(high_detected >= 1.0,
+            "high-mobility agent should detect target at distance 5 with sensing range 20");
+    }
+
+    #[test]
+    fn move_zero_mobility_gets_zero_sensing() {
+        // An agent with zero mobility has zero sensing range and detects nothing.
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 0.0;
+        let traits = TraitVector {
+            heterotrophy: 0.5,
+            ..zero_traits() // mobility = 0
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(0, (0.0, 0.0), 100.0, traits),
+            make_agent(1, (1.0, 0.0), 100.0, target_traits),
+        ];
+        agents[1].structure = 5.0;
+        let carcasses = vec![];
+        let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+
+        // Zero mobility -> stationary, no sensing
+        assert_eq!(result.sensing_throughput[0], 0.0,
+            "zero-mobility agent should detect nothing");
+    }
+
+    // --- Reproductive compatibility distance ---
+
+    #[test]
+    fn reproduction_uses_world_param_compatibility_distance() {
+        // Agents whose trait-space distance exceeds reproductive_compatibility_distance
+        // cannot mate, regardless of spatial proximity.
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            reproductive_compatibility_distance: 0.5, // tight threshold
+            ..test_params()
+        };
+        // Two agents with trait distance > 0.5
+        let traits_a = TraitVector {
+            photosynthetic_absorption: 1.0,
+            mobility: 1.0,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            ..zero_traits()
+        };
+        let traits_b = TraitVector {
+            photosynthetic_absorption: 0.0,
+            heterotrophy: 1.0,
+            mobility: 1.0,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            ..zero_traits()
+        };
+        let dist = traits_a.distance(&traits_b);
+        assert!(dist > 0.5, "trait distance should exceed compatibility threshold: {}", dist);
+
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits_a),
+            make_agent(2, (1.0, 0.0), 100.0, traits_b),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(result.offspring.is_empty(),
+            "agents beyond compatibility distance should not reproduce");
+    }
+
+    #[test]
+    fn reproduction_compatible_within_world_param_distance() {
+        // Agents whose trait-space distance is within reproductive_compatibility_distance
+        // can mate.
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            reproductive_compatibility_distance: 5.0, // generous threshold
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 1.0,
+            reproductive_investment: 0.3,
+            fecundity: 1.0,
+            ..zero_traits()
+        };
+        // Identical traits -> distance = 0, well within threshold
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (1.0, 0.0), 100.0, traits),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty(),
+            "agents within compatibility distance should reproduce");
+    }
+
+    // --- Chemotaxis derived from mobility ---
+
+    #[test]
+    fn move_chemotaxis_proportional_to_mobility() {
+        // Chemotaxis strength is derived from mobility. Higher mobility agents
+        // have stronger directional bias toward detected signals.
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 0.0;
+        params.sensing_range_coefficient = 100.0; // ensure both can sense
+
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+
+        let run = |mob: f32| -> f32 {
+            let mover = TraitVector {
+                heterotrophy: 0.5,
+                mobility: mob,
+                ..zero_traits()
+            };
+            let mut agents = vec![
+                make_agent(0, (0.0, 0.0), 100.0, mover),
+                make_agent(1, (5.0, 0.0), 100.0, target_traits),
+            ];
+            agents[1].structure = 5.0;
+            let carcasses = vec![];
+            let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+            grid.insert(0, (0.0, 0.0));
+            grid.insert(1, (5.0, 0.0));
+            let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+            let _ = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+            agents[0].position.0 // x position after move
+        };
+
+        let low_mob_x = run(0.1);
+        let high_mob_x = run(1.0);
+        // Higher mobility -> larger movement distance AND stronger chemotaxis bias
+        assert!(high_mob_x > low_mob_x,
+            "higher mobility should move further toward target: low={}, high={}", low_mob_x, high_mob_x);
+    }
+
+    // --- Trait vector dimensions ---
+
+    #[test]
+    fn trait_vector_has_six_dimensions() {
+        assert_eq!(TraitVector::NUM_DIMS, 6);
+    }
+
+    #[test]
+    fn functional_trait_count_is_three() {
+        assert_eq!(crate::FUNCTIONAL_TRAIT_COUNT, 3);
+        assert_eq!(crate::FUNCTIONAL_TRAIT_INDICES, [0, 1, 2]);
     }
 }
