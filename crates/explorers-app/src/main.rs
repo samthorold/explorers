@@ -114,6 +114,7 @@ fn main() {
                 reproductive_compatibility_distance: 2.0,
                 mobility_maintenance_cost: 0.0,
                 maintenance_cost_exponent: 1.0,
+                consumption_contact_half_saturation: 0.001,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -421,6 +422,7 @@ mod tests {
                 reproductive_compatibility_distance: 2.0,
                 mobility_maintenance_cost: 0.0,
                 maintenance_cost_exponent: 1.0,
+                consumption_contact_half_saturation: 0.001,
             },
             InitialDistribution {
                 mean_traits: TraitVector {

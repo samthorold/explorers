@@ -366,7 +366,15 @@ pub fn resolve_drains(
                 {
                     continue;
                 }
-                consumers.push((consumer_idx, eff_heterotrophy));
+                // Sustained contact scaling: demand = eff * ct / (ct + K)
+                let half_sat = params.consumption_contact_half_saturation;
+                let demand = if half_sat > 0.0 {
+                    let ct = agents[consumer_idx].contact_time as f32;
+                    eff_heterotrophy * ct / (ct + half_sat)
+                } else {
+                    eff_heterotrophy
+                };
+                consumers.push((consumer_idx, demand));
             }
         }
 
@@ -488,7 +496,15 @@ pub fn resolve_drains(
                 {
                     continue;
                 }
-                consumers.push((consumer_idx, eff_heterotrophy));
+                // Sustained contact scaling: demand = eff * ct / (ct + K)
+                let half_sat = params.consumption_contact_half_saturation;
+                let demand = if half_sat > 0.0 {
+                    let ct = agents[consumer_idx].contact_time as f32;
+                    eff_heterotrophy * ct / (ct + half_sat)
+                } else {
+                    eff_heterotrophy
+                };
+                consumers.push((consumer_idx, demand));
             }
         }
 
@@ -1182,6 +1198,7 @@ mod tests {
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
+            consumption_contact_half_saturation: 0.0,
         }
     }
 
@@ -4551,5 +4568,107 @@ mod tests {
         // Verify exact values
         assert!((cost_generalist - 0.5).abs() < 1e-6);
         assert!((cost_specialist - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sustained_contact_higher_ct_drains_more() {
+        // Two consumers with identical heterotrophy but different contact_times
+        // targeting the same agent. The one with higher contact_time should
+        // drain more because demand = eff_heterotrophy * ct / (ct + K).
+        let params = WorldParameters {
+            consumption_contact_half_saturation: 10.0, // large K so contact_time matters
+            base_trophic_efficiency: 1.0, // no trophic loss for clarity
+            trophic_distance_decay: 0.0,
+            ..test_params()
+        };
+        let consumer_traits = TraitVector {
+            heterotrophy: 1.0,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        // Consumer A: contact_time = 5, Consumer B: contact_time = 50
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
+            make_agent(2, (1.0, 0.0), 10.0, consumer_traits),
+            make_agent(3, (0.5, 0.0), 10.0, target_traits),
+        ];
+        agents[0].contact_time = 5;   // low contact
+        agents[1].contact_time = 50;  // high contact
+        agents[2].structure = 100.0;  // plenty of structure so no proportional split
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        grid.insert(2, (0.5, 0.0));
+
+        let initial_reserve_a = agents[0].reserve;
+        let initial_reserve_b = agents[1].reserve;
+
+        let mut nutrient_pool = 0.0;
+        let _result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+        );
+
+        let gained_a = agents[0].reserve - initial_reserve_a;
+        let gained_b = agents[1].reserve - initial_reserve_b;
+
+        assert!(gained_b > gained_a,
+            "consumer with higher contact_time should drain more: \
+             low_ct gained {gained_a}, high_ct gained {gained_b}");
+        // Verify both gained something (both are consuming)
+        assert!(gained_a > 0.0, "low-ct consumer should still drain something");
+    }
+
+    #[test]
+    fn sustained_contact_asymptote_at_high_ct() {
+        // At very high contact_time, demand should approach eff_heterotrophy.
+        // ct/(ct+K) -> 1 as ct -> infinity.
+        let half_sat = 10.0;
+        let params = WorldParameters {
+            consumption_contact_half_saturation: half_sat,
+            base_trophic_efficiency: 1.0,
+            trophic_distance_decay: 0.0,
+            ..test_params()
+        };
+        let consumer_traits = TraitVector {
+            heterotrophy: 0.8,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
+            make_agent(2, (1.0, 0.0), 10.0, target_traits),
+        ];
+        agents[0].contact_time = 10_000; // very high ct
+        agents[1].structure = 100.0;
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+
+        let initial_reserve = agents[0].reserve;
+        let mut nutrient_pool = 0.0;
+        let _result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_pool,
+        );
+
+        let gained = agents[0].reserve - initial_reserve;
+        // Expected demand: 0.8 * 10000 / (10000 + 10) = 0.8 * 0.999... ≈ 0.7992
+        // With trophic_efficiency=1.0, gained should equal demand
+        let expected = 0.8 * 10_000.0 / (10_000.0 + half_sat);
+        assert!((gained - expected).abs() < 1e-3,
+            "at very high ct, demand should approach eff_heterotrophy: \
+             gained {gained}, expected ~{expected}");
+        // Should be very close to eff_heterotrophy (0.8) but not exceed it
+        assert!(gained < 0.8, "demand must not exceed eff_heterotrophy");
+        assert!(gained > 0.799, "demand should be within 0.1% of eff_heterotrophy at ct=10000");
     }
 }

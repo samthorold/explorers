@@ -131,6 +131,7 @@ fn default_specification_nutrient_coefficient() -> f32 { 0.2 }
 fn default_sensing_range_coefficient() -> f32 { 10.0 }
 fn default_reproductive_compatibility_distance() -> f32 { 2.0 }
 fn default_maintenance_cost_exponent() -> f32 { 1.0 }
+fn default_consumption_contact_half_saturation() -> f32 { 0.001 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldParameters {
@@ -199,6 +200,11 @@ pub struct WorldParameters {
     /// enforcing the specialist-generalist trade-off.
     #[serde(default = "default_maintenance_cost_exponent")]
     pub maintenance_cost_exponent: f32,
+    /// Michaelis-Menten half-saturation constant for contact-duration scaling
+    /// of consumption demand. demand = eff_heterotrophy * ct / (ct + K).
+    /// Near-zero default makes this effectively a no-op for backward compat.
+    #[serde(default = "default_consumption_contact_half_saturation")]
+    pub consumption_contact_half_saturation: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -944,6 +950,7 @@ mod tests {
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
+            consumption_contact_half_saturation: 0.0,
         }
     }
 
@@ -1409,6 +1416,7 @@ mod tests {
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
+            consumption_contact_half_saturation: 0.0,
         }
     }
 

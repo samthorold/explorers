@@ -588,6 +588,7 @@ mod tests {
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
+            consumption_contact_half_saturation: 0.001,
         }
     }
 
@@ -804,6 +805,7 @@ mod tests {
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
+            consumption_contact_half_saturation: 0.001,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
