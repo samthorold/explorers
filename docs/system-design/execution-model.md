@@ -90,15 +90,17 @@ The ordering follows energy flow direction: acquire before spend, spend before c
 
 ### Coordinated events
 
-A coordinated event changes multiple agents' states. Because agents do not share state, a single **interaction coordinator** — a distinguished agent analogous to the clock agent — resolves multi-agent interactions. The coordinator maintains both spatial and network projections and emits facts that involved agents independently react to, each updating only their own private state.
+A coordinated event changes multiple agents' states. Because agents do not share state, a single **interaction coordinator** — a distinguished agent analogous to the clock agent — resolves multi-agent interactions. The coordinator is stateless between ticks and operates as a pure function: `(intents, projections) → events`. See [interaction coordinator](interaction-coordinator.md) for resolution mechanics.
+
+Agents emit **intents** — thin declarations of what they want to do. The coordinator receives all intents for the tick along with read-only projections (spatial, stock, liveness, contact time, traits), applies world physics to compute magnitudes, resolves inter-agent conflicts via proportional split, and emits the resulting events.
 
 The coordinator responds to the clock tick after all autonomous events at that timestamp have settled. Priority ordering within a timestamp ensures autonomous events process before coordinated events.
 
 Three coordinated events:
 
-1. **Consumed(consumer, target, energy_amount, nutrient_amount, t)** — the coordinator resolves a consumption interaction between two agents (living or carcass — a carcass is an inert agent). The consumer credits its own reserve, the target debits its own structure. The target may emit `Died` in response if a threshold is crossed.
+1. **Consumed(consumer, target, energy_amount, nutrient_amount, t)** — the coordinator resolves a consumption interaction. The consumer credits its own reserve, the target debits its own structure. The target may emit `Died` in response if a threshold is crossed.
 2. **Redistributed(sender, receiver, energy_amount, nutrient_amount, t)** — the coordinator resolves a resource transfer through a network connection. Both agents update their own state.
-3. **Reproduced(parent_a, parent_b, offspring_traits, position, t)** — the coordinator resolves a sexual reproduction event. Both parents debit their own reserve and nutrient. The coordinator includes the new offspring agent in its response — the DES registers the new agent.
+3. **Reproduced(parent_a, parent_b, offspring_traits, position, t)** — the coordinator resolves a reproduction event. Both parents debit their own reserve and nutrient. The coordinator includes the new offspring agent in its response — the DES registers the new agent.
 
 ### Agent responses
 
