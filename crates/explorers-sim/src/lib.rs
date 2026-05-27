@@ -42,8 +42,10 @@ pub fn wrap_position(pos: (f32, f32), extent: f32) -> (f32, f32) {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TraitVector {
     pub photosynthetic_absorption: f32,
-    pub consumption_rate: f32,
-    pub scavenging_rate: f32,
+    /// Investment in consumption machinery — covers both predation (living targets)
+    /// and decomposition (carcasses). Target state determines which, not separate traits.
+    #[serde(alias = "consumption_rate")]
+    pub heterotrophy: f32,
     #[serde(default)]
     pub nutrient_absorption: f32,
     pub mobility: f32,
@@ -60,32 +62,30 @@ pub struct TraitVector {
 impl TraitVector {
     pub fn distance(&self, other: &TraitVector) -> f32 {
         let d0 = self.photosynthetic_absorption - other.photosynthetic_absorption;
-        let d1 = self.consumption_rate - other.consumption_rate;
-        let d2 = self.scavenging_rate - other.scavenging_rate;
-        let d3 = self.nutrient_absorption - other.nutrient_absorption;
-        let d4 = self.mobility - other.mobility;
-        let d5 = self.chemotaxis_sensitivity - other.chemotaxis_sensitivity;
-        let d6 = self.mate_selectivity - other.mate_selectivity;
-        let d7 = self.sensing_range - other.sensing_range;
-        let d8 = self.reproductive_investment - other.reproductive_investment;
-        let d9 = self.fecundity - other.fecundity;
-        let d10 = self.somatic_maintenance - other.somatic_maintenance;
-        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5 + d6 * d6 + d7 * d7 + d8 * d8 + d9 * d9 + d10 * d10).sqrt()
+        let d1 = self.heterotrophy - other.heterotrophy;
+        let d2 = self.nutrient_absorption - other.nutrient_absorption;
+        let d3 = self.mobility - other.mobility;
+        let d4 = self.chemotaxis_sensitivity - other.chemotaxis_sensitivity;
+        let d5 = self.mate_selectivity - other.mate_selectivity;
+        let d6 = self.sensing_range - other.sensing_range;
+        let d7 = self.reproductive_investment - other.reproductive_investment;
+        let d8 = self.fecundity - other.fecundity;
+        let d9 = self.somatic_maintenance - other.somatic_maintenance;
+        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5 + d6 * d6 + d7 * d7 + d8 * d8 + d9 * d9).sqrt()
     }
 
     pub fn get(&self, index: usize) -> f32 {
         match index {
             0 => self.photosynthetic_absorption,
-            1 => self.consumption_rate,
-            2 => self.scavenging_rate,
-            3 => self.nutrient_absorption,
-            4 => self.mobility,
-            5 => self.chemotaxis_sensitivity,
-            6 => self.mate_selectivity,
-            7 => self.sensing_range,
-            8 => self.reproductive_investment,
-            9 => self.fecundity,
-            10 => self.somatic_maintenance,
+            1 => self.heterotrophy,
+            2 => self.nutrient_absorption,
+            3 => self.mobility,
+            4 => self.chemotaxis_sensitivity,
+            5 => self.mate_selectivity,
+            6 => self.sensing_range,
+            7 => self.reproductive_investment,
+            8 => self.fecundity,
+            9 => self.somatic_maintenance,
             _ => unreachable!(),
         }
     }
@@ -93,39 +93,21 @@ impl TraitVector {
     pub fn set(&mut self, index: usize, value: f32) {
         match index {
             0 => self.photosynthetic_absorption = value,
-            1 => self.consumption_rate = value,
-            2 => self.scavenging_rate = value,
-            3 => self.nutrient_absorption = value,
-            4 => self.mobility = value,
-            5 => self.chemotaxis_sensitivity = value,
-            6 => self.mate_selectivity = value,
-            7 => self.sensing_range = value,
-            8 => self.reproductive_investment = value,
-            9 => self.fecundity = value,
-            10 => self.somatic_maintenance = value,
+            1 => self.heterotrophy = value,
+            2 => self.nutrient_absorption = value,
+            3 => self.mobility = value,
+            4 => self.chemotaxis_sensitivity = value,
+            5 => self.mate_selectivity = value,
+            6 => self.sensing_range = value,
+            7 => self.reproductive_investment = value,
+            8 => self.fecundity = value,
+            9 => self.somatic_maintenance = value,
             _ => unreachable!(),
         }
     }
 
     /// Number of trait dimensions.
-    pub const NUM_DIMS: usize = 11;
-
-    /// Budget trait indices: these compete under the L1 constraint (sum to 1.0).
-    pub const BUDGET_INDICES: [usize; 7] = [0, 1, 2, 3, 4, 5, 10];
-
-    /// Clamp budget traits to non-negative and rescale so they sum to 1.0.
-    pub fn normalize_budget(&mut self) {
-        for &i in &Self::BUDGET_INDICES {
-            let v = self.get(i).max(0.0);
-            self.set(i, v);
-        }
-        let sum: f32 = Self::BUDGET_INDICES.iter().map(|&i| self.get(i)).sum();
-        if sum > 0.0 {
-            for &i in &Self::BUDGET_INDICES {
-                self.set(i, self.get(i) / sum);
-            }
-        }
-    }
+    pub const NUM_DIMS: usize = 10;
 }
 
 fn default_wear_rate() -> f32 { 0.1 }
@@ -152,8 +134,7 @@ pub struct WorldParameters {
     pub initial_population_size: u32,
     pub light_competition_radius: f32,
     pub photo_maintenance_cost: f32,
-    pub consumption_maintenance_cost: f32,
-    pub scavenging_maintenance_cost: f32,
+    pub heterotrophy_maintenance_cost: f32,
     #[serde(default)]
     pub nutrient_absorption_maintenance_cost: f32,
     #[serde(default)]
@@ -228,9 +209,9 @@ pub struct WorldRecipe {
 }
 
 /// Number of functional traits that accumulate somatic wear.
-/// Indices: 0=photosynthetic_absorption, 1=consumption_rate, 2=scavenging_rate,
-/// 3=nutrient_absorption, 4=mobility, 5=chemotaxis_sensitivity, 6=sensing_range.
-pub const FUNCTIONAL_TRAIT_COUNT: usize = 7;
+/// Indices: 0=photosynthetic_absorption, 1=heterotrophy,
+/// 2=nutrient_absorption, 3=mobility, 4=chemotaxis_sensitivity, 5=sensing_range.
+pub const FUNCTIONAL_TRAIT_COUNT: usize = 6;
 
 pub struct Agent {
     pub id: u64,
@@ -244,10 +225,10 @@ pub struct Agent {
     pub wear: [f32; FUNCTIONAL_TRAIT_COUNT],
 }
 
-/// Maps a functional trait index (0–6) to its position in the TraitVector.
-/// 0=photosynthetic_absorption, 1=consumption_rate, 2=scavenging_rate,
-/// 3=nutrient_absorption, 4=mobility, 5=chemotaxis_sensitivity, 6=sensing_range.
-pub const FUNCTIONAL_TRAIT_INDICES: [usize; FUNCTIONAL_TRAIT_COUNT] = [0, 1, 2, 3, 4, 5, 7];
+/// Maps a functional trait index (0–5) to its position in the TraitVector.
+/// 0=photosynthetic_absorption, 1=heterotrophy,
+/// 2=nutrient_absorption, 3=mobility, 4=chemotaxis_sensitivity, 5=sensing_range.
+pub const FUNCTIONAL_TRAIT_INDICES: [usize; FUNCTIONAL_TRAIT_COUNT] = [0, 1, 2, 3, 4, 6];
 
 impl Agent {
     /// Total energy held by this agent (reserve + structure).
@@ -255,7 +236,7 @@ impl Agent {
         self.reserve + self.structure
     }
 
-    /// Returns the nominal trait value for a given functional trait index (0–6).
+    /// Returns the nominal trait value for a given functional trait index (0–5).
     pub fn nominal_functional_trait(&self, ft_index: usize) -> f32 {
         self.traits.get(FUNCTIONAL_TRAIT_INDICES[ft_index])
     }
@@ -373,23 +354,21 @@ impl World {
         let trait_dist = Normal::new(0.0_f32, distribution.trait_covariance).unwrap();
 
         let mean = &distribution.mean_traits;
-        let trophic_total = mean.photosynthetic_absorption + mean.consumption_rate + mean.scavenging_rate;
+        let trophic_total = mean.photosynthetic_absorption + mean.heterotrophy;
 
         let cluster_centroids: Vec<TraitVector> = (0..n_clusters)
             .map(|c| {
-                let (photo, cons, scav) = if n_clusters == 1 || trophic_total <= 0.0 {
-                    (mean.photosynthetic_absorption, mean.consumption_rate, mean.scavenging_rate)
+                let (photo, hetero) = if n_clusters == 1 || trophic_total <= 0.0 {
+                    (mean.photosynthetic_absorption, mean.heterotrophy)
                 } else {
-                    match c % 3 {
-                        0 => (trophic_total, 0.0, 0.0),
-                        1 => (0.0, trophic_total, 0.0),
-                        _ => (0.0, 0.0, trophic_total),
+                    match c % 2 {
+                        0 => (trophic_total, 0.0),
+                        _ => (0.0, trophic_total),
                     }
                 };
                 TraitVector {
                     photosynthetic_absorption: photo,
-                    consumption_rate: cons,
-                    scavenging_rate: scav,
+                    heterotrophy: hetero,
                     nutrient_absorption: mean.nutrient_absorption,
                     mobility: mean.mobility,
                     chemotaxis_sensitivity: mean.chemotaxis_sensitivity,
@@ -416,8 +395,7 @@ impl World {
                     traits: TraitVector {
                         photosynthetic_absorption: centroid.photosynthetic_absorption
                             + trait_dist.sample(&mut rng),
-                        consumption_rate: centroid.consumption_rate + trait_dist.sample(&mut rng),
-                        scavenging_rate: centroid.scavenging_rate + trait_dist.sample(&mut rng),
+                        heterotrophy: centroid.heterotrophy + trait_dist.sample(&mut rng),
                         nutrient_absorption: centroid.nutrient_absorption
                             + trait_dist.sample(&mut rng),
                         mobility: centroid.mobility + trait_dist.sample(&mut rng),
@@ -840,8 +818,7 @@ mod tests {
     fn zero_traits() -> TraitVector {
         TraitVector {
             photosynthetic_absorption: 0.0,
-            consumption_rate: 0.0,
-            scavenging_rate: 0.0,
+            heterotrophy: 0.0,
             nutrient_absorption: 0.0,
             mobility: 0.0,
             chemotaxis_sensitivity: 0.0,
@@ -870,8 +847,7 @@ mod tests {
             initial_population_size: 10,
             light_competition_radius: 1000.0,
             photo_maintenance_cost: 0.0,
-            consumption_maintenance_cost: 0.0,
-            scavenging_maintenance_cost: 0.0,
+            heterotrophy_maintenance_cost: 0.0,
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
@@ -888,8 +864,7 @@ mod tests {
         InitialDistribution {
             mean_traits: TraitVector {
                 photosynthetic_absorption: 0.5,
-                consumption_rate: 0.3,
-                scavenging_rate: 0.2,
+                heterotrophy: 0.3,
                 nutrient_absorption: 0.0,
                 mobility: 0.4,
                 chemotaxis_sensitivity: 0.3,
@@ -909,8 +884,7 @@ mod tests {
     fn trait_vector_has_named_accessors() {
         let traits = TraitVector {
             photosynthetic_absorption: 0.1,
-            consumption_rate: 0.2,
-            scavenging_rate: 0.3,
+            heterotrophy: 0.2,
             nutrient_absorption: 0.35,
             mobility: 0.4,
             chemotaxis_sensitivity: 0.5,
@@ -921,15 +895,14 @@ mod tests {
             somatic_maintenance: 0.0,
         };
         assert_eq!(traits.photosynthetic_absorption, 0.1);
-        assert_eq!(traits.consumption_rate, 0.2);
-        assert_eq!(traits.scavenging_rate, 0.3);
+        assert_eq!(traits.heterotrophy, 0.2);
         assert_eq!(traits.nutrient_absorption, 0.35);
         assert_eq!(traits.mobility, 0.4);
         assert_eq!(traits.chemotaxis_sensitivity, 0.5);
         assert_eq!(traits.mate_selectivity, 0.6);
         assert_eq!(traits.sensing_range, 0.7);
         assert_eq!(traits.reproductive_investment, 0.8);
-        assert_eq!(traits.get(3), 0.35);
+        assert_eq!(traits.get(2), 0.35);
     }
 
     #[test]
@@ -939,7 +912,7 @@ mod tests {
             ..zero_traits()
         };
         assert_eq!(traits.fecundity, 3.5);
-        assert_eq!(traits.get(9), 3.5);
+        assert_eq!(traits.get(8), 3.5);
     }
 
     #[test]
@@ -949,8 +922,8 @@ mod tests {
             ..zero_traits()
         };
         assert_eq!(traits.somatic_maintenance, 0.15);
-        assert_eq!(traits.get(10), 0.15);
-        assert_eq!(TraitVector::NUM_DIMS, 11);
+        assert_eq!(traits.get(9), 0.15);
+        assert_eq!(TraitVector::NUM_DIMS, 10);
     }
 
     #[test]
@@ -995,8 +968,7 @@ mod tests {
         };
         let generalist = TraitVector {
             photosynthetic_absorption: 0.1,
-            consumption_rate: 0.1,
-            scavenging_rate: 0.1,
+            heterotrophy: 0.1,
             nutrient_absorption: 0.1,
             mobility: 0.1,
             chemotaxis_sensitivity: 0.1,
@@ -1074,23 +1046,20 @@ mod tests {
     }
 
     #[test]
-    fn normalize_budget_rescales_to_one() {
-        let mut traits = TraitVector {
+    fn no_budget_normalization_exists() {
+        // Budget normalization was removed per system design:
+        // superlinear maintenance costs are the limiter, not algebraic normalization.
+        // This test confirms the method no longer exists on TraitVector.
+        let traits = TraitVector {
             photosynthetic_absorption: 2.0,
-            consumption_rate: 3.0,
-            scavenging_rate: 0.0,
-            nutrient_absorption: 0.0,
-            mobility: 0.0,
-            chemotaxis_sensitivity: 0.0,
+            heterotrophy: 3.0,
             somatic_maintenance: 5.0,
-            mate_selectivity: 0.0,
-            sensing_range: 0.0,
-            reproductive_investment: 0.0,
-            fecundity: 0.0,
+            ..zero_traits()
         };
-        traits.normalize_budget();
-        let sum: f32 = TraitVector::BUDGET_INDICES.iter().map(|&i| traits.get(i)).sum();
-        assert!((sum - 1.0).abs() < 1e-6, "budget traits should sum to 1.0, got {}", sum);
+        // Traits retain their raw values — no normalization
+        assert_eq!(traits.photosynthetic_absorption, 2.0);
+        assert_eq!(traits.heterotrophy, 3.0);
+        assert_eq!(traits.somatic_maintenance, 5.0);
     }
 
     #[test]
@@ -1117,7 +1086,7 @@ mod tests {
     fn stoichiometric_demand_counts_nonzero_traits() {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
-            consumption_rate: 0.3,
+            heterotrophy: 0.3,
             ..zero_traits()
         };
         assert_eq!(stoichiometric_demand(&traits), 2.0);
@@ -1176,14 +1145,13 @@ mod tests {
             world_extent: 50.0,
             light_competition_radius: 100.0,
             photo_maintenance_cost: 0.05,
-            consumption_maintenance_cost: 0.05,
-            scavenging_maintenance_cost: 0.05,
+            heterotrophy_maintenance_cost: 0.05,
             nutrient_absorption_maintenance_cost: 0.05,
             use_wear_rate: 0.01,
         }
     }
 
-    /// Create a mixed population: producers, consumers, and decomposers.
+    /// Create a mixed population: producers and heterotrophs.
     fn seed_mixed_population(world: &mut World) {
         // Producers (sessile, photosynthetic)
         for i in 0..10 {
@@ -1207,8 +1175,8 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             });
         }
-        // Consumers (mobile, predatory)
-        for i in 0..5 {
+        // Heterotrophs (mobile, consume living and dead)
+        for i in 0..10 {
             world.add_agent(Agent {
                 id: 0,
                 position: (i as f32 * 10.0 - 25.0, 10.0),
@@ -1216,34 +1184,11 @@ mod tests {
                 structure: 3.0,
                 nutrient: 5.0,
                 traits: TraitVector {
-                    consumption_rate: 0.4,
+                    heterotrophy: 0.4,
                     mobility: 0.3,
                     chemotaxis_sensitivity: 0.1,
                     somatic_maintenance: 0.1,
                     sensing_range: 10.0,
-                    reproductive_investment: 5.0,
-                    fecundity: 1.0,
-                    mate_selectivity: 10.0,
-                    ..zero_traits()
-                },
-                contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-            });
-        }
-        // Decomposers (scavengers)
-        for i in 0..5 {
-            world.add_agent(Agent {
-                id: 0,
-                position: (i as f32 * 10.0 - 25.0, -10.0),
-                reserve: 40.0,
-                structure: 2.0,
-                nutrient: 5.0,
-                traits: TraitVector {
-                    scavenging_rate: 0.4,
-                    mobility: 0.2,
-                    chemotaxis_sensitivity: 0.2,
-                    somatic_maintenance: 0.1,
-                    sensing_range: 8.0,
                     reproductive_investment: 5.0,
                     fecundity: 1.0,
                     mate_selectivity: 10.0,
@@ -1336,10 +1281,8 @@ mod tests {
         // Initial endowment energy
         let initial_energy: f32 = 50.0 * 10.0  // producers
             + 5.0 * 10.0   // producer structure
-            + 40.0 * 5.0   // consumers
-            + 3.0 * 5.0    // consumer structure
-            + 40.0 * 5.0   // decomposers
-            + 2.0 * 5.0;   // decomposer structure
+            + 40.0 * 10.0  // heterotrophs
+            + 3.0 * 10.0;  // heterotroph structure
         let total_input = initial_energy + total_solar;
         let total_output = total_dissipated + retained_agents + retained_carcasses;
         let diff = (total_input - total_output).abs();

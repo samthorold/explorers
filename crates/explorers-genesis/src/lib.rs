@@ -113,8 +113,7 @@ mod tests {
             initial_population_size: 10,
             light_competition_radius: 1000.0,
             photo_maintenance_cost: 0.0,
-            consumption_maintenance_cost: 0.0,
-            scavenging_maintenance_cost: 0.0,
+            heterotrophy_maintenance_cost: 0.0,
 
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
@@ -132,8 +131,7 @@ mod tests {
         InitialDistribution {
             mean_traits: TraitVector {
                 photosynthetic_absorption: 0.8,
-                consumption_rate: 0.1,
-                scavenging_rate: 0.1,
+                heterotrophy: 0.1,
                 nutrient_absorption: 0.0,
                 mobility: 0.3,
                 chemotaxis_sensitivity: 0.2,
@@ -186,7 +184,7 @@ mod tests {
             },
         };
         let result_a = run_single(&params, &dist, &config, 1);
-        let result_b = run_single(&params, &dist, &config, 100);
+        let result_b = run_single(&params, &dist, &config, 999);
         let a = &result_a.breakdown;
         let b = &result_b.breakdown;
         assert!(
