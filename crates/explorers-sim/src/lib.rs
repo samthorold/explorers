@@ -130,6 +130,7 @@ fn default_base_nutrient_ratio() -> f32 { 0.1 }
 fn default_specification_nutrient_coefficient() -> f32 { 0.2 }
 fn default_sensing_range_coefficient() -> f32 { 10.0 }
 fn default_reproductive_compatibility_distance() -> f32 { 2.0 }
+fn default_maintenance_cost_exponent() -> f32 { 1.0 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldParameters {
@@ -193,6 +194,11 @@ pub struct WorldParameters {
     /// the agent moves. Distinct from movement_cost_coefficient (per-distance cost).
     #[serde(default)]
     pub mobility_maintenance_cost: f32,
+    /// Exponent applied to each specification trait before multiplying by its
+    /// maintenance cost coefficient.  Values > 1 make costs superlinear,
+    /// enforcing the specialist-generalist trade-off.
+    #[serde(default = "default_maintenance_cost_exponent")]
+    pub maintenance_cost_exponent: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -937,6 +943,7 @@ mod tests {
             specification_nutrient_coefficient: 0.2,
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
+            maintenance_cost_exponent: 1.0,
         }
     }
 
@@ -1401,6 +1408,7 @@ mod tests {
             specification_nutrient_coefficient: 0.2,
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
+            maintenance_cost_exponent: 1.0,
         }
     }
 
