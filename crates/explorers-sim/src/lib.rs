@@ -53,6 +53,10 @@ pub struct TraitVector {
     pub kappa: f32,
     #[serde(default)]
     pub fecundity: f32,
+    /// Probability of reproducing asexually (0.0–1.0). High values enable
+    /// reproduction without a mate; low values require sexual pairing.
+    #[serde(default)]
+    pub asexual_propensity: f32,
 }
 
 impl TraitVector {
@@ -62,7 +66,8 @@ impl TraitVector {
         let d2 = self.mobility - other.mobility;
         let d3 = self.kappa - other.kappa;
         let d4 = self.fecundity - other.fecundity;
-        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4).sqrt()
+        let d5 = self.asexual_propensity - other.asexual_propensity;
+        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5).sqrt()
     }
 
     pub fn get(&self, index: usize) -> f32 {
@@ -72,6 +77,7 @@ impl TraitVector {
             2 => self.mobility,
             3 => self.kappa,
             4 => self.fecundity,
+            5 => self.asexual_propensity,
             _ => unreachable!(),
         }
     }
@@ -83,12 +89,13 @@ impl TraitVector {
             2 => self.mobility = value,
             3 => self.kappa = value,
             4 => self.fecundity = value,
+            5 => self.asexual_propensity = value,
             _ => unreachable!(),
         }
     }
 
     /// Number of trait dimensions.
-    pub const NUM_DIMS: usize = 5;
+    pub const NUM_DIMS: usize = 6;
 }
 
 fn default_kappa() -> f32 { 0.5 }
@@ -107,6 +114,7 @@ fn zero_traits() -> TraitVector {
         mobility: 0.0,
         kappa: 0.0,
         fecundity: 0.0,
+        asexual_propensity: 0.0,
     }
 }
 fn default_base_nutrient_ratio() -> f32 { 0.1 }
@@ -274,7 +282,7 @@ impl Agent {
     }
 
     /// Returns a TraitVector with functional traits degraded by wear.
-    /// Behavioural traits (kappa, fecundity) are passed through unchanged.
+    /// Behavioural traits (kappa, fecundity, asexual_propensity) are passed through unchanged.
     pub fn effective_traits(&self, k: f32) -> TraitVector {
         let mut t = self.traits;
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
@@ -411,6 +419,7 @@ impl World {
                     mobility: mean.mobility,
                     kappa: mean.kappa,
                     fecundity: mean.fecundity,
+                    asexual_propensity: mean.asexual_propensity,
                 }
             })
             .collect();
@@ -433,6 +442,7 @@ impl World {
                         mobility: centroid.mobility + trait_dist.sample(&mut rng),
                         kappa: (centroid.kappa + trait_dist.sample(&mut rng)).clamp(0.0, 1.0),
                         fecundity: centroid.fecundity + trait_dist.sample(&mut rng),
+                        asexual_propensity: (centroid.asexual_propensity + trait_dist.sample(&mut rng)).clamp(0.0, 1.0),
                     },
                     contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
@@ -872,6 +882,7 @@ mod tests {
             mobility: 0.0,
             kappa: 0.0,
             fecundity: 0.0,
+            asexual_propensity: 0.0,
         }
     }
 
@@ -915,6 +926,7 @@ mod tests {
                 mobility: 0.4,
                 kappa: 0.5,
                 fecundity: 0.0,
+                asexual_propensity: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -930,6 +942,7 @@ mod tests {
             mobility: 0.4,
             kappa: 0.8,
             fecundity: 0.0,
+            asexual_propensity: 0.0,
         };
         assert_eq!(traits.photosynthetic_absorption, 0.1);
         assert_eq!(traits.heterotrophy, 0.2);
@@ -956,7 +969,7 @@ mod tests {
         };
         assert_eq!(traits.kappa, 0.7);
         assert_eq!(traits.get(3), 0.7);
-        assert_eq!(TraitVector::NUM_DIMS, 5);
+        assert_eq!(TraitVector::NUM_DIMS, 6);
     }
 
     #[test]
@@ -1005,6 +1018,7 @@ mod tests {
             mobility: 0.1,
             kappa: 0.1,
             fecundity: 0.1,
+            asexual_propensity: 0.1,
         };
         let spec_threshold = death_threshold(&specialist);
         let gen_threshold = death_threshold(&generalist);

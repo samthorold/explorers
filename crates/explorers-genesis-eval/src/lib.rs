@@ -597,6 +597,7 @@ mod tests {
                 mobility: 0.3,
                 kappa: 0.7,
                 fecundity: 0.0,
+                asexual_propensity: 0.0,
             },
             trait_covariance: 0.5,
             initial_cluster_count: 2,
@@ -806,6 +807,7 @@ mod tests {
                 mobility: 0.0,
                 kappa: 0.0,
                 fecundity: 0.0,
+                asexual_propensity: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -853,6 +855,7 @@ mod tests {
             mobility: vals[2],
             kappa: vals[3],
             fecundity: 0.0,
+            asexual_propensity: 0.0,
         }
     }
 
