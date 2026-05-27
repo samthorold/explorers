@@ -17,7 +17,6 @@
     "photo_maintenance_cost": 0.01,
     "consumption_maintenance_cost": 0.01,
     "scavenging_maintenance_cost": 0.01,
-    "spatial_decay_rate": 0.5,
     "nutrient_absorption_maintenance_cost": 0.01,
     "initial_nutrient_pool": 50000.0,
     "growth_efficiency": 0.3,

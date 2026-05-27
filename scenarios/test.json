@@ -17,7 +17,6 @@
     "photo_maintenance_cost": 0.01,
     "consumption_maintenance_cost": 0.01,
     "scavenging_maintenance_cost": 0.01,
-    "spatial_decay_rate": 0.5,
     "somatic_maintenance_cost_coefficient": 0.1
   },
   "agents": [

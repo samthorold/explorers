@@ -14,7 +14,7 @@ pub fn toroidal_distance(a: (f32, f32), b: (f32, f32), extent: f32) -> f32 {
     (dx * dx + dy * dy).sqrt()
 }
 
-fn toroidal_displacement(from: (f32, f32), to: (f32, f32), extent: f32) -> (f32, f32) {
+pub fn toroidal_displacement(from: (f32, f32), to: (f32, f32), extent: f32) -> (f32, f32) {
     let mut dx = to.0 - from.0;
     let mut dy = to.1 - from.1;
     if dx > extent / 2.0 {
@@ -32,9 +32,7 @@ fn toroidal_displacement(from: (f32, f32), to: (f32, f32), extent: f32) -> (f32,
 
 
 /// Wrap a position into the toroidal world.
-/// Retained for the movement phase (not yet implemented).
-#[allow(dead_code)]
-fn wrap_position(pos: (f32, f32), extent: f32) -> (f32, f32) {
+pub fn wrap_position(pos: (f32, f32), extent: f32) -> (f32, f32) {
     let half = extent / 2.0;
     let x = (pos.0 + half).rem_euclid(extent) - half;
     let y = (pos.1 + half).rem_euclid(extent) - half;
@@ -156,7 +154,6 @@ pub struct WorldParameters {
     pub photo_maintenance_cost: f32,
     pub consumption_maintenance_cost: f32,
     pub scavenging_maintenance_cost: f32,
-    pub spatial_decay_rate: f32,
     #[serde(default)]
     pub nutrient_absorption_maintenance_cost: f32,
     #[serde(default)]
@@ -595,17 +592,19 @@ impl World {
         // Remove dead agents (those with reserve <= 0 or structure below threshold)
         self.agents.retain(|a| a.reserve > 0.0);
 
+        // 9. Move (final phase — repositions agents for next tick)
+        let move_result = phase::move_agents(
+            &mut self.agents, &self.carcasses, &grid, &self.params, &mut self.rng,
+        );
+        self.dissipated_energy += move_result.dissipated;
+        events.extend(move_result.events);
+
         // Append events to log
         for mut ev in events {
             ev.tick = self.tick;
             ev.seq = self.next_seq;
             self.next_seq += 1;
             let _ = self.event_log.append(ev);
-        }
-
-        // Increment contact time for stationary agents
-        for agent in self.agents.iter_mut() {
-            agent.contact_time += 1;
         }
 
         self.tick += 1;
@@ -711,7 +710,6 @@ mod tests {
             photo_maintenance_cost: 0.0,
             consumption_maintenance_cost: 0.0,
             scavenging_maintenance_cost: 0.0,
-            spatial_decay_rate: 0.5,
             nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
