@@ -831,7 +831,6 @@ pub fn resolve_reproduction(
         let parent_nutrient = agents[i].nutrient;
         let parent_reserve = agents[i].reserve;
         let parent_pos = agents[i].position;
-        let parent_contact = agents[i].contact_time;
         let parent_id = agents[i].id;
 
         let investment = parent_repro.max(0.0);
@@ -858,9 +857,8 @@ pub fn resolve_reproduction(
         agents[i].repro_reserve -= investment;
         agents[i].nutrient -= nutrient_donated;
 
-        // Dispersal
-        let dispersal_radius = parent_traits.mobility * sensing_coeff
-            * (parent_contact as f32 / (parent_contact as f32 + 50.0));
+        // Dispersal: sigma proportional to parent's dispersal trait
+        let dispersal_radius = parent_traits.dispersal;
 
         for _ in 0..offspring_count {
             // Asexual offspring: parent traits + mutation only (no crossover)
@@ -1005,8 +1003,6 @@ pub fn resolve_reproduction(
         let b_reserve = agents[*b_idx].reserve;
         let a_pos = agents[*a_idx].position;
         let b_pos = agents[*b_idx].position;
-        let a_contact = agents[*a_idx].contact_time;
-        let b_contact = agents[*b_idx].contact_time;
         let a_id = agents[*a_idx].id;
         let b_id = agents[*b_idx].id;
 
@@ -1047,11 +1043,8 @@ pub fn resolve_reproduction(
             (a_pos.1 + b_pos.1) / 2.0,
         );
 
-        // Dispersal radius derived from mobility × sensing coefficient, scaled by contact time
-        let avg_mobility = (a_traits.mobility + b_traits.mobility) / 2.0;
-        let avg_sensing = avg_mobility * sensing_coeff;
-        let avg_contact = (a_contact + b_contact) as f32 / 2.0;
-        let dispersal_radius = avg_sensing * (avg_contact / (avg_contact + 50.0));
+        // Dispersal: sigma = average of parents' dispersal traits
+        let dispersal_radius = (a_traits.dispersal + b_traits.dispersal) / 2.0;
 
         for _ in 0..offspring_count {
             // Trait crossover: each dimension from one parent (uniform crossover)
@@ -1062,6 +1055,7 @@ pub fn resolve_reproduction(
                 kappa: 0.0,
                 fecundity: 0.0,
                 asexual_propensity: 0.0,
+                dispersal: 0.0,
             };
             for dim in 0..TraitVector::NUM_DIMS {
                 let parent_val = if rng.random::<bool>() {
@@ -1144,6 +1138,7 @@ mod tests {
             kappa: 0.0,
             fecundity: 0.0,
             asexual_propensity: 0.0,
+            dispersal: 0.0,
         }
     }
 
@@ -1801,6 +1796,7 @@ mod tests {
             kappa: 0.1,
             fecundity: 0.1,
             asexual_propensity: 0.1,
+            dispersal: 0.1,
         };
         let threshold = crate::death_threshold(&traits);
         assert!(threshold > 0.0, "generalist should have nonzero threshold");
@@ -1955,6 +1951,7 @@ mod tests {
             kappa: 0.1,
             fecundity: 0.1,
             asexual_propensity: 0.1,
+            dispersal: 0.1,
         };
         let threshold = crate::death_threshold(&generalist_traits);
         assert!(threshold > 0.0, "generalist should have nonzero threshold");
@@ -3005,6 +3002,7 @@ mod tests {
             mobility: 1.0,
             kappa: 0.5,
             fecundity: 3.0,
+            dispersal: 5.0, // high dispersal -> wider offspring placement
             ..zero_traits()
         };
         let mut agents = vec![
@@ -3015,8 +3013,6 @@ mod tests {
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
         agents[1].repro_reserve = 15.0;
-        agents[0].contact_time = 100; // high contact time -> wider dispersal
-        agents[1].contact_time = 100;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3045,7 +3041,7 @@ mod tests {
             assert!(child.position.1 >= -half && child.position.1 <= half,
                 "offspring y should be within bounds");
         }
-        // With high contact time and sensing range, offspring should be dispersed
+        // With high dispersal trait, offspring should be placed at different positions
         // (not all at the exact same position)
         if result.offspring.len() > 1 {
             let positions: Vec<(f32, f32)> = result.offspring.iter().map(|o| o.position).collect();
@@ -3428,7 +3424,7 @@ mod tests {
 
     #[test]
     fn trait_vector_has_six_dimensions() {
-        assert_eq!(TraitVector::NUM_DIMS, 6);
+        assert_eq!(TraitVector::NUM_DIMS, 7);
     }
 
     #[test]
@@ -3510,6 +3506,7 @@ mod tests {
             kappa: 0.6,
             fecundity: 1.0,
             asexual_propensity: 1.0,
+            dispersal: 0.0,
         };
         let mut agents = vec![
             Agent {
@@ -3767,6 +3764,7 @@ mod tests {
             kappa: 0.5,
             fecundity: 1.0,
             asexual_propensity: 0.0,
+            dispersal: 0.0,
         };
         let traits_b = TraitVector {
             photosynthetic_absorption: 0.0,
@@ -3775,6 +3773,7 @@ mod tests {
             kappa: 0.5,
             fecundity: 1.0,
             asexual_propensity: 0.0,
+            dispersal: 0.0,
         };
         let mut agents = vec![
             Agent {
@@ -3863,5 +3862,294 @@ mod tests {
         let parent_loss = initial_nutrient - agents[0].nutrient;
         assert!((parent_loss - offspring_nutrient).abs() < 1e-3,
             "nutrient should be conserved: parent_loss={}, offspring_gain={}", parent_loss, offspring_nutrient);
+    }
+
+    // --- Dispersal trait tests ---
+
+    #[test]
+    fn dispersal_trait_controls_offspring_spread() {
+        // Higher dispersal trait produces wider offspring placement.
+        // Compare mean distance from parent position for low vs high dispersal.
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+
+        let run = |dispersal_val: f32| -> f32 {
+            let traits = TraitVector {
+                photosynthetic_absorption: 0.5,
+                kappa: 0.5,
+                fecundity: 10.0, // many offspring for statistical signal
+                asexual_propensity: 1.0,
+                dispersal: dispersal_val,
+                ..zero_traits()
+            };
+            let mut agents = vec![
+                Agent {
+                    id: 1,
+                    position: (0.0, 0.0),
+                    reserve: 50.0,
+                    structure: 5.0,
+                    nutrient: 100.0,
+                    traits,
+                    contact_time: 0,
+                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                    repro_reserve: 50.0,
+                },
+            ];
+            let dead_ids = std::collections::HashSet::new();
+            let grid = SpatialGrid::new(100.0, 10.0);
+            let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+            let result = resolve_reproduction(
+                &mut agents, &dead_ids, &grid, &params, &mut rng,
+            );
+            // Mean distance from parent position (0,0)
+            let total_dist: f32 = result.offspring.iter()
+                .map(|o| (o.position.0 * o.position.0 + o.position.1 * o.position.1).sqrt())
+                .sum();
+            total_dist / result.offspring.len() as f32
+        };
+
+        let low_spread = run(0.5);
+        let high_spread = run(5.0);
+        assert!(high_spread > low_spread,
+            "higher dispersal should produce wider spread: low={}, high={}", low_spread, high_spread);
+    }
+
+    #[test]
+    fn zero_dispersal_places_offspring_at_parent_position() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 1.0,
+            dispersal: 0.0, // zero dispersal
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            Agent {
+                id: 1,
+                position: (10.0, 10.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty());
+        for child in &result.offspring {
+            assert!((child.position.0 - 10.0).abs() < 1e-6,
+                "zero dispersal: offspring should be at parent x, got {}", child.position.0);
+            assert!((child.position.1 - 10.0).abs() < 1e-6,
+                "zero dispersal: offspring should be at parent y, got {}", child.position.1);
+        }
+    }
+
+    #[test]
+    fn sexual_reproduction_averages_parents_dispersal() {
+        // Two parents with different dispersal values: offspring placement
+        // should use the average dispersal as kernel width.
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            contact_radius: 100.0,
+            reproductive_compatibility_distance: 10.0,
+            ..test_params()
+        };
+
+        let run = |disp_a: f32, disp_b: f32| -> f32 {
+            let traits_a = TraitVector {
+                photosynthetic_absorption: 0.5,
+                mobility: 0.3,
+                kappa: 0.5,
+                fecundity: 10.0,
+                asexual_propensity: 0.0,
+                dispersal: disp_a,
+                ..zero_traits()
+            };
+            let traits_b = TraitVector {
+                photosynthetic_absorption: 0.5,
+                mobility: 0.3,
+                kappa: 0.5,
+                fecundity: 10.0,
+                asexual_propensity: 0.0,
+                dispersal: disp_b,
+                ..zero_traits()
+            };
+            let mut agents = vec![
+                Agent {
+                    id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
+                    nutrient: 100.0, traits: traits_a, contact_time: 0,
+                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                },
+                Agent {
+                    id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
+                    nutrient: 100.0, traits: traits_b, contact_time: 0,
+                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                },
+            ];
+            let dead_ids = std::collections::HashSet::new();
+            let mut grid = SpatialGrid::new(100.0, 10.0);
+            grid.insert(0, agents[0].position);
+            grid.insert(1, agents[1].position);
+            let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+            let result = resolve_reproduction(
+                &mut agents, &dead_ids, &grid, &params, &mut rng,
+            );
+            let mid = (0.5, 0.0); // midpoint of parents
+            let total_dist: f32 = result.offspring.iter()
+                .map(|o| {
+                    let dx = o.position.0 - mid.0;
+                    let dy = o.position.1 - mid.1;
+                    (dx * dx + dy * dy).sqrt()
+                })
+                .sum();
+            total_dist / result.offspring.len().max(1) as f32
+        };
+
+        // Both parents have equal dispersal (2.0): avg = 2.0
+        let equal_spread = run(2.0, 2.0);
+        // One parent 0.0, other 4.0: avg = 2.0 — should be similar to equal case
+        let _mixed_spread = run(0.0, 4.0);
+        // Both parents have high dispersal (4.0): avg = 4.0
+        let high_spread = run(4.0, 4.0);
+
+        // High should be wider than equal (4.0 > 2.0)
+        assert!(high_spread > equal_spread,
+            "higher avg dispersal should produce wider spread: equal={}, high={}", equal_spread, high_spread);
+    }
+
+    #[test]
+    fn dispersal_is_independent_of_mobility() {
+        // A sessile agent (zero mobility) with high dispersal should still
+        // disperse offspring widely. This tests independence.
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 10.0,
+            asexual_propensity: 1.0,
+            mobility: 0.0, // sessile
+            dispersal: 5.0, // high dispersal (like a dandelion)
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            Agent {
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 50.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty());
+        // Offspring should be dispersed despite zero mobility
+        let total_dist: f32 = result.offspring.iter()
+            .map(|o| (o.position.0 * o.position.0 + o.position.1 * o.position.1).sqrt())
+            .sum();
+        let mean_dist = total_dist / result.offspring.len() as f32;
+        assert!(mean_dist > 0.5,
+            "sessile agent with high dispersal should still disperse offspring: mean_dist={}", mean_dist);
+    }
+
+    #[test]
+    fn dispersal_is_heritable_asexual() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 1.0,
+            dispersal: 3.7,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            Agent {
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty());
+        for child in &result.offspring {
+            assert_eq!(child.traits.dispersal, 3.7,
+                "offspring should inherit parent's dispersal trait");
+        }
+    }
+
+    #[test]
+    fn trait_vector_has_seven_dimensions() {
+        assert_eq!(TraitVector::NUM_DIMS, 7);
+        // dispersal is at index 6
+        let traits = TraitVector {
+            dispersal: 2.5,
+            ..zero_traits()
+        };
+        assert_eq!(traits.get(6), 2.5);
     }
 }
