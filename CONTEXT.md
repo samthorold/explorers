@@ -7,12 +7,28 @@ An ecology-driven game where a foreign entity navigates an alien world of interc
 ### Core
 
 **Agent**:
-The fundamental unit of the simulation. Everything in the world is an agent: organisms, carcasses. There is no inert backdrop and no fixed types — an agent's role (producer, consumer, decomposer) is derived from its position in trait space. The derivation has mechanical consequences: trait values determine which capabilities an agent can exercise, but the labels are always a reading of the trait vector, never an assigned type. The trait budget constraint (L1, sum to 1.0 across budget traits) ensures that investing in one capability reduces others, driving role differentiation.
+The fundamental unit of the simulation. Everything in the world is an agent: organisms, carcasses. There is no inert backdrop and no fixed types — an agent's role (producer, consumer, decomposer) is derived from its position in trait space. The derivation has mechanical consequences: trait values determine which capabilities an agent can exercise, but the labels are always a reading of the trait vector, never an assigned type. Superlinear maintenance costs ensure that investing heavily across many traits is prohibitively expensive, driving role differentiation.
 _Avoid_: entity, creature, organism (when referring to the simulation abstraction)
 
 **Trait vector**:
-A multi-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. The vector has two tiers. **Budget traits** (7 dimensions) sum to 1.0 (L1 budget constraint) — investing more in one capability necessarily reduces others. This shared budget is the primary mechanism that prevents generalist dominance and drives specialisation. Budget traits: photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption, mobility, chemotaxis sensitivity, somatic maintenance. **Unconstrained traits** (4 dimensions) govern reproduction strategy and perception, not resource acquisition: mate selectivity, sensing range, reproductive investment, fecundity. These are not under the L1 budget — reproduction strategy is a separate axis from feeding strategy. Deferred dimensions: social weight (herding — emergent flavour, not structurally necessary for genesis criteria), chemical signature (species recognition, not needed for genesis fitness).
+A six-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Organised in three layers. **Allocation** (1 dimension): kappa — the fraction of mobilised energy routed to soma vs reproduction. **Specification** (3 dimensions): autotrophy, heterotrophy, mobility — these determine how an agent acquires energy and moves through the world. Autotrophy and heterotrophy are independent dimensions, not a spectrum — an agent can invest in both, though superlinear maintenance costs make broad investment expensive. **Reproduction** (2 dimensions): fecundity, asexual propensity. All six traits are independently evolvable with individual superlinear maintenance costs — there is no shared budget or constraint that forces them to sum to a fixed value. The anti-generalist mechanism is economic, not algebraic: each trait's maintenance cost grows superlinearly with its value, so spreading investment across many traits is progressively more expensive than concentrating it. Some capabilities are subordinate to trait dimensions rather than independent traits: sensing is subordinate to mobility (mobile agents sense; sessile agents do not need to), nutrient uptake is implicit in autotrophy. Some quantities are derived from the trait vector rather than stored in it: mate selectivity emerges from trait-space divergence evaluated against a physics-defined **reproductive compatibility distance**, not from an explicit trait. Structure (body size) factors into light competition — bigger producers shade smaller ones. Deferred dimensions: social weight (herding — emergent flavour, not structurally necessary for genesis criteria), chemical signature (species recognition, not needed for genesis fitness).
 _Avoid_: stats, attributes, genome (genome implies a genotype/phenotype distinction that doesn't exist here)
+
+**Kappa**:
+The DEB-derived allocation parameter (Kooijman 2010) governing the fraction of mobilised energy routed to soma versus reproduction. High kappa directs more energy to somatic maintenance and growth — producing long-lived, slow-reproducing agents. Low kappa directs more energy to reproduction — producing short-lived, prolific agents. Kappa is an evolvable trait, not a fixed parameter. Kappa governs how much energy is available for all somatic functions (maintenance, growth, activity costs) versus reproduction.
+_Avoid_: allocation ratio (too generic), maintenance trait (kappa governs more than maintenance)
+
+**Autotrophy**:
+Investment in photosynthetic machinery — the specification trait governing an agent's capacity to convert solar flux into energy. Implicitly requires nutrient uptake from the substrate: the biological machinery for photosynthesis and nutrient extraction are coupled (analogous to leaves requiring roots). An agent with high autotrophy and low mobility is a producer. Autotrophy and heterotrophy are independent dimensions, not a spectrum — an agent can invest in both, though superlinear maintenance costs make this expensive.
+_Avoid_: photosynthetic absorption (old term), plant-ness
+
+**Heterotrophy**:
+Investment in consumption machinery — the specification trait governing an agent's capacity to drain structure and nutrient from other agents, both living and dead. A single trait covers both predation and decomposition. Whether an agent functions as a consumer or decomposer depends on what it eats (living agents or carcasses), not on separate traits. Trophic transfer efficiency between consumer and target is governed by trait-space distance, not by distinct consumption and scavenging machinery.
+_Avoid_: consumption rate, scavenging rate (old terms that implied separate machinery)
+
+**Asexual propensity**:
+An evolvable reproduction trait controlling an agent's capacity to reproduce without a mate. Not a universal fallback — agents with low asexual propensity cannot reproduce alone even when no compatible mate is available. High asexual propensity enables colonisation of empty niches and reproduction in sparse populations. The trait is subject to selection pressure: lineages in dense, well-mixed populations may evolve low asexual propensity because sexual reproduction provides recombination benefits, while isolated or pioneer lineages may evolve high asexual propensity.
+_Avoid_: cloning ability, parthenogenesis (too specific to real-world mechanisms)
 
 **Substrate**:
 The physical medium of the world — what agents live on and in. Holds nutrients in spatially heterogeneous distributions. Has material properties beyond nutrient content (terrain characteristics that affect agent interactions — specific properties are an open design question). Generated procedurally before agents are seeded. In ecological literature, substrate consistently refers to the physical medium or material, not the nutrients themselves.
@@ -27,7 +43,7 @@ An agent's metabolic fuel — the operating account through which all energy flo
 _Avoid_: energy (when specifically meaning the metabolic balance), stamina
 
 **Structure**:
-An agent's embodied biomass energy — the physical body built up over its lifetime. Structure accumulates when an agent allocates reserve surplus to growth (a lossy conversion). Consumption by another agent drains the target's structure (eating the body). Death transfers structure to the carcass — this is what makes carcasses energy-rich and decomposers energetically viable. Death also occurs when structure drops below a complexity-dependent threshold: agents with trait budget spread across many dimensions (high complexity) are more fragile to structural damage than specialists concentrated in few traits. Grounded in DEB theory's (Kooijman 2010) distinction between reserve and structure.
+An agent's embodied biomass energy — the physical body built up over its lifetime. Structure accumulates when an agent allocates reserve surplus to growth (a lossy conversion). Consumption by another agent drains the target's structure (eating the body). Death transfers structure to the carcass — this is what makes carcasses energy-rich and decomposers energetically viable. Death also occurs when structure drops below a complexity-dependent threshold: agents with investment spread across many specification traits (high complexity) are more fragile to structural damage than specialists concentrated in few traits. Grounded in DEB theory's (Kooijman 2010) distinction between reserve and structure.
 _Avoid_: biomass (too overloaded in ecology), body size, HP
 
 **Nutrient**:
@@ -44,11 +60,11 @@ The discrete time step of the simulation. Each tick, all agents sense their neig
 ### Energy flow
 
 **Solar flux**:
-The sole external energy input to the world. Agents compete locally for flux — each producer shares available light with other producers within a **light competition radius**, weighted by photosynthetic absorption. An isolated producer receives full flux; a producer in a crowded area receives a fraction. The producer/consumer divide is not enforced by a gate on photosynthesis — it emerges from two structural constraints: the trait budget (investing in photosynthetic absorption leaves less for mobility and consumption) and contact-time nutrient uptake (mobile agents cannot extract nutrients from the substrate, so photosynthesis without nutrient access is a dead end for reproduction).
+The sole external energy input to the world. Agents compete locally for flux — each producer shares available light with other producers within a **light competition radius**, weighted by autotrophy. Structure (body size) factors into light competition — bigger producers shade smaller ones. An isolated producer receives full flux; a producer in a crowded area receives a fraction. The producer/consumer divide is not enforced by a gate on photosynthesis — it emerges from two structural constraints: superlinear maintenance costs (investing heavily in both autotrophy and mobility is prohibitively expensive) and contact-time nutrient uptake (mobile agents cannot extract nutrients from the substrate, so photosynthesis without nutrient access is a dead end for reproduction).
 _Avoid_: sunlight, light level, radiation
 
 **Consumption**:
-An agent draining structure and nutrient from a living agent over time through sustained contact — the consumer is eating the target's body. The consumer's consumption rate trait determines drain speed. The drained structure enters the consumer's reserve (with trophic transfer loss). The consumer retains only the nutrient it needs (per its stoichiometric demand) and excretes excess immediately to the available pool. The target survives unless its structure drops below its complexity-dependent death threshold or its reserve reaches zero — grazing is non-lethal by default.
+An agent draining structure and nutrient from a living agent over time through sustained contact — the consumer is eating the target's body. The consumer's heterotrophy trait determines drain speed. The drained structure enters the consumer's reserve (with trophic transfer loss). The consumer retains only the nutrient it needs (per its stoichiometric demand) and excretes excess immediately to the available pool. The target survives unless its structure drops below its complexity-dependent death threshold or its reserve reaches zero — grazing is non-lethal by default.
 _Avoid_: eating, attacking, harvesting
 
 **Carcass**:
@@ -56,11 +72,11 @@ An inert agent. A living agent becomes a carcass on death — it retains its str
 _Avoid_: corpse, remains, resource node
 
 **Decomposition**:
-**Consumption** where the target is a **carcass**. Not a separate mechanism — the same physics apply (trait-space distance governs trophic transfer efficiency, stoichiometric mismatch causes nutrient excretion). The term is useful because it names the ecological role: decomposers are agents whose trait-space position makes them efficient consumers of carcasses. Decomposition closes the nutrient cycle by returning carcass nutrient to the available pool.
+**Consumption** where the target is a **carcass**. Not a separate mechanism — the same heterotrophy trait and physics apply (trait-space distance governs trophic transfer efficiency, stoichiometric mismatch causes nutrient excretion). The term is useful because it names the ecological role: decomposers are agents whose trait-space position makes them efficient consumers of carcasses. Decomposition closes the nutrient cycle by returning carcass nutrient to the available pool.
 _Avoid_: recycling, decay (decay implies passive process)
 
 **Nutrient uptake**:
-An agent extracting nutrient from the **available pool** at its location. The only way nutrient enters the living system. Rate follows Michaelis-Menten saturation: `nutrient_absorption × contact_time / (contact_time + k)`, where k is a half-saturation constant (50 ticks). Uptake increases with contact time but plateaus — diminishing returns on long residence. Moving resets contact time. This creates a physical basis for the producer/consumer divide: sessile agents accumulate contact time and extract nutrients efficiently; mobile agents cannot.
+An agent extracting nutrient from the **available pool** at its location. The only way nutrient enters the living system. Rate follows Michaelis-Menten saturation: `autotrophy × contact_time / (contact_time + k)`, where k is a half-saturation constant (50 ticks). Uptake increases with contact time but plateaus — diminishing returns on long residence. Moving resets contact time. This creates a physical basis for the producer/consumer divide: sessile agents accumulate contact time and extract nutrients efficiently; mobile agents cannot. Nutrient uptake is implicit in autotrophy — investing in photosynthetic machinery implies the root-like structures needed to extract nutrients from the substrate.
 _Avoid_: feeding (feeding is consumption of other agents), mining (implies deliberate extraction from rock)
 
 **Contact time**:
@@ -76,7 +92,7 @@ The total photosynthetic income across all producers per tick — the sum of all
 _Avoid_: GPP (abbreviation obscures meaning in a glossary)
 
 **Autotrophic respiration**:
-The total metabolic cost of all producers per tick. Producers pay to exist — base metabolism, trait maintenance, somatic maintenance, sensing — before any energy is available to consumers or decomposers. A producer population that barely covers its own costs leaves nothing for the rest of the food web regardless of how much solar flux enters the system.
+The total metabolic cost of all producers per tick. Producers pay to exist — base metabolism, trait maintenance (superlinear in each specification trait), somatic maintenance (governed by kappa) — before any energy is available to consumers or decomposers. A producer population that barely covers its own costs leaves nothing for the rest of the food web regardless of how much solar flux enters the system.
 _Avoid_: producer overhead, self-consumption
 
 **Net primary production**:
@@ -84,21 +100,21 @@ Gross primary production minus autotrophic respiration. The energy actually avai
 _Avoid_: NPP (abbreviation), surplus (implies waste — NPP is the functional output of the producer base)
 
 **Metabolic cost**:
-The energy an agent expends per **tick**. Comprises a base rate, plus costs for movement, sensing, trait maintenance, and **somatic maintenance**. Each energy-acquisition trait (photosynthetic absorption, consumption rate, scavenging rate, nutrient absorption) costs energy to maintain whether used or not. Agents that carry traits they never exercise pay for the biological machinery, creating selection pressure toward specialisation. Somatic maintenance — repairing accumulated **wear** — is an additional cost that competes directly with reproduction. Metabolism costs energy only — nutrients are not released as metabolic waste. Nutrients leave living agents only through death.
+The energy an agent expends per **tick**. Comprises a base rate, plus costs for movement, sensing, trait maintenance, and somatic maintenance (governed by **kappa**). Each specification trait (autotrophy, heterotrophy, mobility) costs energy to maintain whether used or not — and each trait's maintenance cost grows superlinearly with its value, so agents that invest broadly pay disproportionately more than specialists. Agents that carry traits they never exercise pay for the biological machinery, creating selection pressure toward specialisation. Somatic maintenance — repairing accumulated **wear** — is funded from the soma fraction of mobilised energy as determined by kappa, competing directly with reproduction. Metabolism costs energy only — nutrients are not released as metabolic waste. Nutrients leave living agents only through death.
 _Avoid_: upkeep, energy drain, maintenance
 
 **Somatic wear**:
-The cumulative degradation of an agent's functional traits over its lifetime. Each functional trait accumulates wear independently through use and through the baseline cost of maintaining complex machinery. Wear reduces a trait's effective output — small wear barely affects performance, but wear compounds and later increments are increasingly costly. An aging producer captures less light. An aging consumer catches prey less efficiently. The rate of wear accumulation and the shape of degradation emerge from the agent's trait-space position and activity, not from flat rate parameters. Behavioural traits (mate selectivity, reproductive investment, fecundity) do not wear — they are allocation parameters, not physical machinery. Offspring are born with zero wear. Grounded in the disposable soma theory (Kirkwood 1977).
+The cumulative degradation of an agent's functional traits over its lifetime. Each specification trait (autotrophy, heterotrophy, mobility) accumulates wear independently through use and through the baseline cost of maintaining complex machinery. Wear reduces a trait's effective output — small wear barely affects performance, but wear compounds and later increments are increasingly costly. An aging producer captures less light. An aging consumer drains prey less efficiently. The rate of wear accumulation and the shape of degradation emerge from the agent's trait-space position and activity, not from flat rate parameters. Allocation and reproduction traits (kappa, fecundity, asexual propensity) do not wear — they are allocation parameters, not physical machinery. Offspring are born with zero wear. Grounded in the disposable soma theory (Kirkwood 1977).
 _Avoid_: aging (too vague — wear is per-trait, not a single scalar), damage (implies a discrete event, not continuous accumulation)
 
 **Somatic maintenance**:
-A budget trait controlling how much energy an agent invests in repairing accumulated **wear**. Higher investment slows degradation across all functional traits — somatic maintenance is a whole-organism investment, not selective repair. The energy cost of somatic maintenance competes directly with reproduction — this is the core survive-vs-reproduce trade-off. High somatic maintenance produces long-lived agents that reproduce infrequently. Low somatic maintenance produces short-lived agents that reproduce early and often. The balance between wear accumulation and repair determines an agent's lifespan — this balance must permit a stable equilibrium where agents are degraded but functional, not a guaranteed death spiral or effective immortality.
+The energy an agent invests in repairing accumulated **wear**. Governed by **kappa** — the fraction of mobilised energy routed to soma determines how much energy is available for maintenance and growth. Higher kappa means more energy for somatic maintenance, slowing degradation across all specification traits — somatic maintenance is a whole-organism investment, not selective repair. The energy routed to soma competes directly with reproduction — this is the core survive-vs-reproduce trade-off. High kappa produces long-lived agents that reproduce infrequently. Low kappa produces short-lived agents that reproduce early and often. The balance between wear accumulation and repair determines an agent's lifespan — this balance must permit a stable equilibrium where agents are degraded but functional, not a guaranteed death spiral or effective immortality.
 _Avoid_: healing, regeneration (these imply discrete repair events, not continuous investment)
 
 ### Movement and sensing
 
 **Chemotaxis**:
-Movement biased toward a detected signal gradient. An agent's chemotaxis sensitivity trait determines how strongly it steers toward the signal source. Targets depend on what the agent can consume: producers emit signals attractive to consumers, carcasses emit signals attractive to scavengers.
+Movement biased toward a detected signal gradient. An agent's mobility trait governs how strongly it can steer toward a signal source — chemotaxis is subordinate to mobility, not an independent trait dimension. Targets depend on what the agent can consume: producers emit signals attractive to consumers, carcasses emit signals attractive to decomposers.
 _Avoid_: pathfinding, tracking, homing
 
 **Social foraging**:
@@ -106,7 +122,7 @@ Attraction toward nearby feeding agents. An agent's social weight trait determin
 _Avoid_: flocking, herding (as a mechanic — herding is emergent, not prescribed)
 
 **Sensing range**:
-The radius within which an agent detects other agents. An evolvable trait with metabolic cost — wider sensing costs more energy per tick. Signals are distance-weighted: closer agents produce stronger signals. For sessile agents, sensing range also determines **spore dispersal** radius — the distance over which they can reproduce without physical contact.
+The radius within which an agent detects other agents. Subordinate to mobility — not an independent trait dimension. An agent's effective sensing range derives from its mobility investment. Signals are distance-weighted: closer agents produce stronger signals. For sessile agents, sensing range also determines **spore dispersal** radius — the distance over which they can reproduce without physical contact.
 _Avoid_: vision, awareness radius
 
 **Distance-weighted detection**:
@@ -115,23 +131,23 @@ The sensing model. Agents detect others within their sensing range, but signal s
 ### Reproduction and evolution
 
 **Sexual reproduction**:
-Two agents whose trait vectors are within a compatibility distance produce an offspring via budding. Both parents survive. Each parent invests energy according to their own reproductive investment trait. Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Uniform crossover is deliberately chosen over arithmetic mean (Dieckmann & Doebeli 1999) because recombination works against speciation — clusters that persist despite recombination are ecologically reinforced, not just reproductively isolated. Sexual reproduction requires physical contact on the surface — both agents must be within physical interaction range as determined by their traits.
+Two agents whose trait vectors are within the **reproductive compatibility distance** produce an offspring via budding. Both parents survive. Each parent invests energy from the reproduction fraction of mobilised energy (1 − kappa). Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Uniform crossover is deliberately chosen over arithmetic mean (Dieckmann & Doebeli 1999) because recombination works against speciation — clusters that persist despite recombination are ecologically reinforced, not just reproductively isolated. Sexual reproduction requires physical contact on the surface — both agents must be within physical interaction range as determined by their traits.
 _Avoid_: mating, breeding (too specific to animal analogues)
 
 **Mate selectivity**:
-A trait dimension controlling the maximum trait distance at which an agent will reproduce with another. High selectivity = narrow compatibility = stronger speciation pressure.
-_Avoid_: choosiness, pickiness
+Not an explicit trait dimension. Reproductive isolation emerges from trait-space divergence evaluated against the **reproductive compatibility distance** — a world parameter, not a per-agent trait. Agents whose trait vectors are within the compatibility distance can mate; those further apart cannot. Speciation pressure comes from the physics of the compatibility threshold interacting with trait-space clustering, not from individual choosiness.
+_Avoid_: choosiness, pickiness, compatibility trait
 
 **Reproductive investment**:
-A trait dimension controlling how much energy a parent transfers to offspring at birth. High investment = fewer, fitter offspring (K-strategy). Low investment = many, fragile offspring (r-strategy).
+The energy a parent transfers to offspring at birth, drawn from the reproduction fraction of mobilised energy (1 − kappa). Not an independent trait dimension — the amount available for reproduction is governed by kappa, and fecundity determines how that amount is divided among offspring. High kappa (more to soma) means less available for reproduction; low kappa means more.
 _Avoid_: brood size, litter size
 
 **Fecundity**:
-An unconstrained trait controlling the number of offspring per reproductive event. A fixed total energy budget is invested per event; fecundity determines how many offspring share that budget. High fecundity produces many poorly-provisioned offspring (r-strategy). Low fecundity (or zero) produces few well-provisioned offspring (K-strategy). The actual offspring count is stochastic — drawn from a Poisson distribution with mean equal to the fecundity trait. For sexual reproduction, the effective fecundity is the average of both parents'. Because fecundity is part of the trait vector, it contributes to trait-space distance and therefore to mate compatibility — agents with very different reproductive strategies are less likely to mate.
+A reproduction trait controlling the number of offspring per reproductive event. The reproduction fraction of mobilised energy (1 − kappa) is the total energy budget invested per event; fecundity determines how many offspring share that budget. High fecundity produces many poorly-provisioned offspring (r-strategy). Low fecundity produces few well-provisioned offspring (K-strategy). The actual offspring count is stochastic — drawn from a Poisson distribution with mean equal to the fecundity trait. For sexual reproduction, the effective fecundity is the average of both parents'. Because fecundity is part of the trait vector, it contributes to trait-space distance and therefore to reproductive compatibility — agents with very different reproductive strategies are less likely to be within the **reproductive compatibility distance**.
 _Avoid_: clutch size, litter size (too specific to animal analogues)
 
 **Asexual reproduction**:
-A universal fallback when an agent has sufficient energy to reproduce but no compatible mate is available. Offspring traits are the parent's traits plus mutation — no crossover, because there is no second parent. The costs are inherent: lower offspring variation (no recombination) and a single parent's energy contribution. In dense populations where mates are available, sexual reproduction is advantageous because it generates more combinatorial diversity. In sparse populations or for isolated colonizers, asexual reproduction is the only option. Whether a lineage relies primarily on sexual or asexual reproduction is emergent, not prescribed.
+Reproduction without a mate, governed by an agent's **asexual propensity** trait. Not a universal fallback — an agent must have evolved sufficient asexual propensity to reproduce alone. Offspring traits are the parent's traits plus mutation — no crossover, because there is no second parent. The costs are inherent: lower offspring variation (no recombination) and a single parent's energy contribution. In dense populations where compatible mates are available, sexual reproduction is advantageous because it generates more combinatorial diversity. Whether a lineage relies primarily on sexual or asexual reproduction is emergent, driven by the evolved asexual propensity of its members.
 _Avoid_: cloning (implies exact replication — mutation still applies)
 
 **Spore dispersal**:
@@ -139,7 +155,7 @@ A reproduction mechanism that bypasses the requirement for physical contact — 
 _Avoid_: pollination (implies a specific biological mechanism)
 
 **Speciation**:
-The divergence of agent populations into distinct clusters in trait space that no longer interbreed due to trait distance exceeding mate selectivity thresholds. Not designed — emerges from selection and reproductive dynamics.
+The divergence of agent populations into distinct clusters in trait space that no longer interbreed due to trait distance exceeding the **reproductive compatibility distance**. Not designed — emerges from selection and reproductive dynamics.
 _Avoid_: species (as a designed concept — there are no species definitions, only emergent clusters)
 
 ### World parameters
@@ -148,22 +164,26 @@ _Avoid_: species (as a designed concept — there are no species definitions, on
 The constants that define the physics of the simulation. Searched by genesis across ensemble runs. Not visible to agents, not evolvable. Distinct from the trait vector, which evolves within a run.
 
 **Solar flux magnitude**:
-Total energy available per tick within a **light competition radius**. Divided among local producers proportional to their photosynthetic absorption. The sole tap — controls how much energy enters the system.
+Total energy available per tick within a **light competition radius**. Divided among local producers proportional to their autotrophy and structure (body size). The sole tap — controls how much energy enters the system.
 
 **Light competition radius**:
 The radius within which producers compete for solar flux. Producers outside this radius do not affect each other's energy intake. A world parameter searched by genesis. Interacts with world extent and population density to determine how crowded the light environment is.
+
+**Reproductive compatibility distance**:
+The trait-space distance threshold within which two agents can sexually reproduce. A world parameter, not a trait — individual agents do not evolve their own selectivity. Mate selectivity is derived: it emerges from the interaction between trait-space clustering and this physics-defined threshold. If two agents' trait vectors are within the compatibility distance, they can mate; otherwise they cannot. This is the mechanism through which speciation occurs — clusters that diverge beyond the compatibility distance become reproductively isolated. Searched by genesis.
+_Avoid_: mate selectivity threshold (selectivity implies a per-agent choice — this is a world constant)
 
 **Base metabolic rate**:
 Fixed energy cost per tick, independent of traits or activity. The floor of metabolic cost — trait maintenance, movement, and sensing costs are added on top.
 
 **Trait maintenance cost**:
-Energy cost per tick per unit of each energy-acquisition trait. Three coefficients (one each for photosynthetic absorption, consumption rate, scavenging rate) are world parameters searched by genesis. An agent with high consumption rate pays for maintaining the machinery to consume whether or not it finds prey. Drives evolutionary specialisation — generalists pay more overhead than specialists.
+Energy cost per tick per unit of each specification trait, growing superlinearly with the trait's value. Coefficients (one each for autotrophy, heterotrophy, mobility) are world parameters searched by genesis. An agent with high heterotrophy pays for maintaining the machinery to consume whether or not it finds prey. The superlinear shape is the primary anti-generalist mechanism — an agent investing moderately in two traits pays more total maintenance than one investing heavily in a single trait.
 
 **Movement cost coefficient**:
 Energy cost per unit distance moved per tick. Makes mobility expensive — creates the core trade-off between sessile photosynthesis and mobile consumption.
 
 **Sensing cost coefficient**:
-Energy cost per tick per unit sensing range. Makes wide awareness expensive.
+Energy cost per tick for sensing, derived from mobility investment. Makes wide awareness expensive — but since sensing is subordinate to mobility, this cost is part of the mobility maintenance cost, not a separate parameter.
 
 **Reproduction efficiency**:
 Fraction of energy invested by the parent that the offspring actually receives. The remainder is dissipated. Reproduction is lossy like all energy transfers.
@@ -192,7 +212,7 @@ The starting configuration of agents in trait space. Searched by genesis alongsi
 Centre of the initial population in trait space.
 
 **Trait covariance**:
-Whether initial trait dimensions are independent or correlated (e.g., high mobility correlated with high consumption). Controls whether the founding population starts as a single cloud or an elongated structure in trait space.
+Whether initial trait dimensions are independent or correlated (e.g., high mobility correlated with high heterotrophy). Controls whether the founding population starts as a single cloud or an elongated structure in trait space.
 
 **Initial cluster count**:
 Whether genesis seeds one uniform population or multiple pre-differentiated groups. Seeding multiple clusters tests whether the world parameters sustain diversity; seeding one tests whether differentiation emerges spontaneously.
@@ -222,7 +242,7 @@ _Avoid_: action, command, request (intent emphasises that the outcome is not gua
 The process of generating a playable world. A parameterisation is evaluated as an ensemble of replicate runs (same parameters, different random seeds). Each run simulates a random initial population forward (off-screen). Degenerate runs are detected and terminated early. A parameterisation is accepted only when most runs in the ensemble produce sensible worlds. The player drops into a world with history.
 
 **Degenerate configuration**:
-A simulation outcome that fails to produce a functioning ecology. Six canonical failure modes: extinction (all agents die), monoculture (trait space collapses to a single cluster), energy death (free energy trends irreversibly toward zero), population explosion (unbounded growth), frozen dynamics (no turnover despite agents surviving), generalist dominance (one or more clusters with high values across multiple energy-acquisition traits outcompete specialists — indicates missing trade-off pressure in the model).
+A simulation outcome that fails to produce a functioning ecology. Six canonical failure modes: extinction (all agents die), monoculture (trait space collapses to a single cluster), energy death (free energy trends irreversibly toward zero), population explosion (unbounded growth), frozen dynamics (no turnover despite agents surviving), generalist dominance (one or more clusters with high values across multiple specification traits outcompete specialists — indicates superlinear maintenance costs are too weak to enforce trade-offs).
 _Avoid_: bad run, failed world (too vague)
 
 **Sensible world**:
@@ -238,9 +258,9 @@ When an agent's reserve reaches zero (starvation, predation) or its structure dr
 
 ## Example dialogue
 
-> **Dev:** An agent with high photosynthetic absorption and low mobility — is that a plant?
+> **Dev:** An agent with high autotrophy and low mobility — is that a plant?
 >
-> **Domain:** It's a producer — its trait budget is concentrated in photosynthetic absorption and nutrient absorption, leaving little for mobility or consumption. We derive that label from its traits, not assign it. Because it stays put, it accumulates contact time and extracts nutrients efficiently from the substrate. If it also has moderate scavenging rate, it's a producer that supplements with decomposition — but the trait budget means that scavenging investment comes at the cost of its other capabilities.
+> **Domain:** It's a producer — its specification traits are concentrated in autotrophy, leaving little investment in heterotrophy or mobility. We derive that label from its traits, not assign it. Because it stays put, it accumulates contact time and extracts nutrients efficiently from the substrate (nutrient uptake is implicit in autotrophy). If it also has moderate heterotrophy, it's a producer that supplements with consumption — but superlinear maintenance costs mean that spreading investment across both autotrophy and heterotrophy is progressively more expensive than specialising.
 >
 > **Dev:** What happens when a herbivore eats a producer?
 >
@@ -252,7 +272,7 @@ When an agent's reserve reaches zero (starvation, predation) or its structure dr
 >
 > **Dev:** How do species form?
 >
-> **Domain:** They don't — not by design. Agents reproduce sexually with a trait-distance compatibility check. Over time, clusters form in trait space that stop interbreeding because their trait distance exceeds their mate selectivity threshold. We call that speciation, but there's no species registry. It's emergent.
+> **Domain:** They don't — not by design. Agents reproduce sexually when their trait-space distance is within the reproductive compatibility distance — a world parameter, not a per-agent trait. Over time, clusters form in trait space that stop interbreeding because their trait distance exceeds that threshold. We call that speciation, but there's no species registry. It's emergent.
 
 ## Design decisions
 
