@@ -125,6 +125,7 @@ mod tests {
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
             reproductive_compatibility_distance: 2.0,
+            mobility_maintenance_cost: 0.0,
         }
     }
 

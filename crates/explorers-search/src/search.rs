@@ -166,6 +166,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         repair_decay: 0.0,
         base_nutrient_ratio: v(24) as f32,
         specification_nutrient_coefficient: v(25) as f32,
+        mobility_maintenance_cost: 0.0,
     };
 
     let dist = InitialDistribution {

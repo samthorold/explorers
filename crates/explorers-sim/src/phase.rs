@@ -137,9 +137,10 @@ pub fn absorb_nutrients(
     events
 }
 
-/// Metabolise: fixed costs only. Base rate + trait maintenance + structure
-/// maintenance. No movement cost (that's in the movement phase).
-/// Somatic maintenance is now governed by kappa allocation in the grow phase.
+/// Metabolise: fixed costs only. Base rate + trait maintenance (including
+/// mobility maintenance) + structure maintenance. Per-distance movement cost
+/// is in the movement phase. Somatic maintenance is governed by kappa
+/// allocation in the grow phase.
 pub fn metabolise(
     agents: &mut [Agent],
     params: &WorldParameters,
@@ -151,6 +152,7 @@ pub fn metabolise(
         let cost = params.base_metabolic_rate
             + agent.traits.photosynthetic_absorption * params.photo_maintenance_cost
             + agent.traits.heterotrophy * params.heterotrophy_maintenance_cost
+            + agent.traits.mobility * params.mobility_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
 
         agent.reserve -= cost;
@@ -186,7 +188,7 @@ pub fn grow(
         let metabolic_cost = params.base_metabolic_rate
             + agent.traits.photosynthetic_absorption * params.photo_maintenance_cost
             + agent.traits.heterotrophy * params.heterotrophy_maintenance_cost
-            + agent.traits.mobility * params.movement_cost_coefficient
+            + agent.traits.mobility * params.mobility_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
         let retention = metabolic_cost * 2.0;
         let surplus = (agent.reserve - retention).max(0.0);
@@ -1179,6 +1181,7 @@ mod tests {
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
             reproductive_compatibility_distance: 2.0,
+            mobility_maintenance_cost: 0.0,
         }
     }
 
@@ -1507,6 +1510,57 @@ mod tests {
         assert!((events[0].energy_delta - 2.0).abs() < 1e-6);
         assert!((agents[0].reserve - 8.0).abs() < 1e-6);
         assert!((dissipated - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn metabolise_charges_mobility_maintenance_even_when_stationary() {
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            mobility_maintenance_cost: 2.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            mobility: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+
+        let (events, dissipated) = metabolise(&mut agents, &params);
+
+        // cost = 0.5 * 2.0 = 1.0
+        assert!((events[0].energy_delta - 1.0).abs() < 1e-6);
+        assert!((agents[0].reserve - 9.0).abs() < 1e-6);
+        assert!((dissipated - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn grow_retention_reflects_mobility_maintenance_not_movement_cost() {
+        // An agent with mobility should retain reserve based on mobility_maintenance_cost
+        // (trait maintenance), not movement_cost_coefficient (per-distance cost).
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            mobility_maintenance_cost: 1.0,
+            movement_cost_coefficient: 100.0, // high, but should NOT affect retention
+            growth_efficiency: 1.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            mobility: 1.0,
+            kappa: 1.0,
+            ..zero_traits()
+        };
+        // retention = metabolic_cost * 2 = (0 + 0 + 0 + 1.0*1.0 + 0) * 2 = 2.0
+        // surplus = reserve - retention = 10.0 - 2.0 = 8.0
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+
+        let (_events, _dissipated) = grow(&mut agents, &params);
+
+        // If retention used movement_cost_coefficient (100.0), retention would be 200.0
+        // and surplus would be 0, so no growth would occur and reserve stays at 10.0.
+        // With mobility_maintenance_cost (1.0), retention is 2.0, surplus is 8.0,
+        // and with kappa=1.0 and growth_efficiency=1.0, all goes to structure.
+        assert!((agents[0].reserve - 2.0).abs() < 1e-6, "reserve should equal retention");
+        assert!((agents[0].structure - 8.0).abs() < 1e-6, "surplus should become structure");
     }
 
     // --- Grow ---
