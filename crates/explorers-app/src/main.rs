@@ -86,8 +86,8 @@ fn main() {
         None => WorldRecipe {
             parameters: WorldParameters {
                 solar_flux_magnitude: 1.0,
-                consumption_efficiency: 0.5,
-                decomposition_efficiency: 0.5,
+                base_trophic_efficiency: 0.5,
+                trophic_distance_decay: 1.0,
                 reproduction_efficiency: 0.7,
                 base_metabolic_rate: 0.1,
                 movement_cost_coefficient: 0.05,
@@ -420,8 +420,8 @@ mod tests {
         World::new(
             WorldParameters {
                 solar_flux_magnitude: 1.0,
-                consumption_efficiency: 0.5,
-                decomposition_efficiency: 0.5,
+                base_trophic_efficiency: 0.5,
+                trophic_distance_decay: 1.0,
                 reproduction_efficiency: 0.7,
                 base_metabolic_rate: 0.1,
                 movement_cost_coefficient: 0.05,
@@ -547,6 +547,13 @@ mod tests {
         world.add_carcass(explorers_sim::Carcass {
             id: 99, position: (5.0, 5.0), energy: 15.0,
             nutrient: 0.0,
+            traits: explorers_sim::TraitVector {
+                photosynthetic_absorption: 0.0, heterotrophy: 0.0,
+                mobility: 0.0, chemotaxis_sensitivity: 0.0,
+                mate_selectivity: 0.0, sensing_range: 0.0,
+                reproductive_investment: 0.0, fecundity: 0.0,
+                somatic_maintenance: 0.0,
+            },
         });
 
         let budget = compute_energy_budget(&world);

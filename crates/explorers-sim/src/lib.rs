@@ -111,14 +111,36 @@ fn default_somatic_maintenance_cost_coefficient() -> f32 { 0.1 }
 fn default_use_wear_rate() -> f32 { 0.01 }
 fn default_structure_maintenance_coefficient() -> f32 { 0.01 }
 fn default_repair_decay() -> f32 { 1.0 }
+fn default_trophic_distance_decay() -> f32 { 1.0 }
+
+fn zero_traits() -> TraitVector {
+    TraitVector {
+        photosynthetic_absorption: 0.0,
+        heterotrophy: 0.0,
+        mobility: 0.0,
+        chemotaxis_sensitivity: 0.0,
+        mate_selectivity: 0.0,
+        sensing_range: 0.0,
+        reproductive_investment: 0.0,
+        fecundity: 0.0,
+        somatic_maintenance: 0.0,
+    }
+}
 fn default_base_nutrient_ratio() -> f32 { 0.1 }
 fn default_specification_nutrient_coefficient() -> f32 { 0.2 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldParameters {
     pub solar_flux_magnitude: f32,
-    pub consumption_efficiency: f32,
-    pub decomposition_efficiency: f32,
+    /// Peak trophic transfer efficiency when consumer and target are identical
+    /// in trait space (distance = 0). Replaces the old flat consumption/decomposition
+    /// efficiency parameters.
+    #[serde(alias = "consumption_efficiency")]
+    pub base_trophic_efficiency: f32,
+    /// Exponential decay rate for trophic efficiency as trait-space distance increases.
+    /// Higher values penalise biochemical dissimilarity more steeply.
+    #[serde(default = "default_trophic_distance_decay")]
+    pub trophic_distance_decay: f32,
     pub reproduction_efficiency: f32,
     pub base_metabolic_rate: f32,
     pub movement_cost_coefficient: f32,
@@ -273,6 +295,8 @@ pub struct Carcass {
     pub position: (f32, f32),
     pub energy: f32,
     pub nutrient: f32,
+    /// Original agent's trait vector, used for distance-dependent trophic efficiency.
+    pub traits: TraitVector,
 }
 
 
@@ -327,6 +351,21 @@ pub fn stoichiometric_demand(traits: &TraitVector, structure: f32, params: &Worl
     let ratio = params.base_nutrient_ratio
         + params.specification_nutrient_coefficient * specification_sum;
     structure * ratio
+}
+
+/// Distance-dependent trophic transfer efficiency.
+///
+/// `efficiency = base_trophic_efficiency × exp(−trophic_distance_decay × trait_distance)`
+///
+/// Biochemically similar agents (close in trait space) convert more efficiently.
+/// At distance 0 the efficiency equals `base_trophic_efficiency`.
+pub fn trophic_transfer_efficiency(
+    consumer: &TraitVector,
+    target: &TraitVector,
+    params: &WorldParameters,
+) -> f32 {
+    let distance = consumer.distance(target);
+    params.base_trophic_efficiency * (-params.trophic_distance_decay * distance).exp()
 }
 
 #[allow(dead_code)]
@@ -503,6 +542,14 @@ impl World {
             .map(|c| (c.id, c.energy))
             .collect();
 
+        // Snapshot trait vectors for ledger efficiency calculations
+        let pre_agent_traits: std::collections::HashMap<u64, TraitVector> = self.agents.iter()
+            .map(|a| (a.id, a.traits))
+            .collect();
+        let pre_carcass_traits: std::collections::HashMap<u64, TraitVector> = self.carcasses.iter()
+            .map(|c| (c.id, c.traits))
+            .collect();
+
         // Build spatial grid once at start of tick
         let cell_size = self.params.light_competition_radius.max(1.0);
         let mut grid = crate::spatial::SpatialGrid::new(extent, cell_size);
@@ -664,11 +711,21 @@ impl World {
             let drain = ev.energy_delta;
             let is_carcass = pre_carcass_energy.contains_key(&target_id)
                 && !pre_agent_energy.contains_key(&target_id);
-            let eff = if is_carcass {
-                self.params.decomposition_efficiency
+            // Compute distance-dependent trophic efficiency from trait vectors
+            let consumer_traits = pre_agent_traits.get(&ev.source)
+                .copied()
+                .unwrap_or_else(|| {
+                    // Offspring born this tick — look up from current agents
+                    self.agents.iter().find(|a| a.id == ev.source)
+                        .map(|a| a.traits)
+                        .unwrap_or_else(zero_traits)
+                });
+            let target_traits = if is_carcass {
+                pre_carcass_traits.get(&target_id).copied().unwrap_or_else(zero_traits)
             } else {
-                self.params.consumption_efficiency
+                pre_agent_traits.get(&target_id).copied().unwrap_or_else(zero_traits)
             };
+            let eff = trophic_transfer_efficiency(&consumer_traits, &target_traits, &self.params);
             let gained = drain * eff;
             let lost = drain - gained;
             let target_ep = if is_carcass {
@@ -834,8 +891,8 @@ mod tests {
     fn test_params() -> WorldParameters {
         WorldParameters {
             solar_flux_magnitude: 10.0,
-            consumption_efficiency: 0.5,
-            decomposition_efficiency: 0.5,
+            base_trophic_efficiency: 0.5,
+            trophic_distance_decay: 0.0,
             reproduction_efficiency: 0.7,
             base_metabolic_rate: 0.1,
             movement_cost_coefficient: 0.05,
@@ -939,7 +996,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
         };
         assert_eq!(agent.nutrient, 5.0);
-        let carcass = Carcass { id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 3.0 };
+        let carcass = Carcass { id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 3.0, traits: zero_traits() };
         assert_eq!(carcass.nutrient, 3.0);
     }
 
@@ -1194,8 +1251,8 @@ mod tests {
             mutation_magnitude: 0.05,
             initial_population_size: 0,
             initial_nutrient_pool: 100.0,
-            consumption_efficiency: 0.5,
-            decomposition_efficiency: 0.5,
+            base_trophic_efficiency: 0.5,
+            trophic_distance_decay: 0.0,
             contact_radius: 10.0,
             world_extent: 50.0,
             light_competition_radius: 100.0,
@@ -1452,6 +1509,139 @@ mod tests {
             "should have photosynthesis events");
         assert!(!log.by_kind(&event::EventKind::Metabolized).is_empty(),
             "should have metabolism events");
+    }
+
+    // --- Trophic transfer efficiency tests ---
+
+    #[test]
+    fn trophic_efficiency_equals_base_when_traits_identical() {
+        let params = WorldParameters {
+            base_trophic_efficiency: 0.7,
+            trophic_distance_decay: 2.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            heterotrophy: 0.5,
+            ..zero_traits()
+        };
+        let eff = trophic_transfer_efficiency(&traits, &traits, &params);
+        assert!((eff - 0.7).abs() < 1e-6,
+            "identical traits should yield base efficiency, got {}", eff);
+    }
+
+    #[test]
+    fn trophic_efficiency_decreases_with_trait_distance() {
+        let params = WorldParameters {
+            base_trophic_efficiency: 0.8,
+            trophic_distance_decay: 1.0,
+            ..test_params()
+        };
+        let consumer = TraitVector {
+            heterotrophy: 0.5,
+            ..zero_traits()
+        };
+        let near_target = TraitVector {
+            heterotrophy: 0.6,
+            ..zero_traits()
+        };
+        let far_target = TraitVector {
+            heterotrophy: 0.5,
+            photosynthetic_absorption: 1.0,
+            mobility: 1.0,
+            ..zero_traits()
+        };
+        let eff_near = trophic_transfer_efficiency(&consumer, &near_target, &params);
+        let eff_far = trophic_transfer_efficiency(&consumer, &far_target, &params);
+        assert!(eff_near > eff_far,
+            "near target should have higher efficiency: near={}, far={}", eff_near, eff_far);
+        assert!(eff_near < 0.8,
+            "non-identical traits should be below base: {}", eff_near);
+        assert!(eff_far > 0.0,
+            "efficiency should be positive: {}", eff_far);
+    }
+
+    #[test]
+    fn trophic_efficiency_zero_decay_gives_flat_efficiency() {
+        // With decay=0, efficiency is always base regardless of distance
+        let params = WorldParameters {
+            base_trophic_efficiency: 0.6,
+            trophic_distance_decay: 0.0,
+            ..test_params()
+        };
+        let consumer = zero_traits();
+        let far_target = TraitVector {
+            photosynthetic_absorption: 10.0,
+            heterotrophy: 10.0,
+            mobility: 10.0,
+            ..zero_traits()
+        };
+        let eff = trophic_transfer_efficiency(&consumer, &far_target, &params);
+        assert!((eff - 0.6).abs() < 1e-6,
+            "zero decay should yield flat base efficiency, got {}", eff);
+    }
+
+    #[test]
+    fn trophic_efficiency_higher_decay_penalises_distance_more() {
+        let consumer = TraitVector { heterotrophy: 0.5, ..zero_traits() };
+        let target = TraitVector { photosynthetic_absorption: 1.0, ..zero_traits() };
+        let low_decay = WorldParameters {
+            base_trophic_efficiency: 0.8,
+            trophic_distance_decay: 0.5,
+            ..test_params()
+        };
+        let high_decay = WorldParameters {
+            base_trophic_efficiency: 0.8,
+            trophic_distance_decay: 3.0,
+            ..test_params()
+        };
+        let eff_low = trophic_transfer_efficiency(&consumer, &target, &low_decay);
+        let eff_high = trophic_transfer_efficiency(&consumer, &target, &high_decay);
+        assert!(eff_low > eff_high,
+            "higher decay should reduce efficiency more: low_decay={}, high_decay={}", eff_low, eff_high);
+    }
+
+    #[test]
+    fn energy_conservation_with_distance_dependent_efficiency() {
+        // Full tick loop with nonzero trophic_distance_decay. Energy ledger
+        // must balance on every tick despite variable per-event efficiency.
+        let params = WorldParameters {
+            base_trophic_efficiency: 0.7,
+            trophic_distance_decay: 1.5,
+            ..conservation_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        seed_mixed_population(&mut world);
+
+        for _tick in 0..200 {
+            world.step();
+            world.energy_ledger().assert_balanced();
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+
+        // Cumulative conservation
+        let total_solar = world.total_solar_input();
+        let total_dissipated = world.dissipated_energy();
+        let retained_agents: f32 = world.agents().iter()
+            .map(|a| a.reserve + a.structure).sum();
+        let retained_carcasses: f32 = world.carcasses().iter()
+            .map(|c| c.energy).sum();
+        let initial_energy: f32 = 50.0 * 10.0 + 5.0 * 10.0
+            + 40.0 * 10.0 + 3.0 * 10.0;
+        let total_input = initial_energy + total_solar;
+        let total_output = total_dissipated + retained_agents + retained_carcasses;
+        let diff = (total_input - total_output).abs();
+        let tolerance = total_input * 1e-3;
+        assert!(diff < tolerance,
+            "cumulative energy conservation violated with distance-dependent efficiency: \
+             input={total_input}, output={total_output}, diff={diff}");
     }
 }
 

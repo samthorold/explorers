@@ -99,8 +99,8 @@ mod tests {
     fn test_params() -> WorldParameters {
         WorldParameters {
             solar_flux_magnitude: 5.0,
-            consumption_efficiency: 0.5,
-            decomposition_efficiency: 0.5,
+            base_trophic_efficiency: 0.5,
+            trophic_distance_decay: 0.0,
             reproduction_efficiency: 0.5,
             base_metabolic_rate: 0.1,
             movement_cost_coefficient: 0.01,
