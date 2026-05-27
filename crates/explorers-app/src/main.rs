@@ -111,6 +111,8 @@ fn main() {
             use_wear_rate: 0.01,
             structure_maintenance_coefficient: 0.01,
             repair_decay: 1.0,
+            base_nutrient_ratio: 0.1,
+            specification_nutrient_coefficient: 0.2,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -443,6 +445,8 @@ mod tests {
             use_wear_rate: 0.0,
             structure_maintenance_coefficient: 0.0,
             repair_decay: 0.0,
+            base_nutrient_ratio: 0.1,
+            specification_nutrient_coefficient: 0.2,
             },
             InitialDistribution {
                 mean_traits: TraitVector {
@@ -1006,7 +1010,7 @@ fn debug_panel_ui(
                                 ui.label(format!("Structure: {:.1}", agent.structure));
                                 ui.label(format!("Nutrient: {:.1}", agent.nutrient));
                                 let repro_threshold = sim.0.params().reproduction_energy_threshold;
-                                let demand = explorers_sim::stoichiometric_demand(&agent.traits);
+                                let demand = explorers_sim::stoichiometric_demand(&agent.traits, agent.structure, sim.0.params());
                                 ui.label(format!("Repro: energy ≥ {:.0}, nutrient ≥ {:.1}",
                                     repro_threshold, demand));
                                 ui.label(format!("Contact time: {}", agent.contact_time));
