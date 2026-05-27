@@ -115,7 +115,6 @@ mod tests {
             photo_maintenance_cost: 0.0,
             heterotrophy_maintenance_cost: 0.0,
 
-            nutrient_absorption_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
             wear_rate: 0.0,
@@ -134,7 +133,6 @@ mod tests {
             mean_traits: TraitVector {
                 photosynthetic_absorption: 0.8,
                 heterotrophy: 0.1,
-                nutrient_absorption: 0.0,
                 mobility: 0.3,
                 chemotaxis_sensitivity: 0.2,
                 mate_selectivity: 0.5,

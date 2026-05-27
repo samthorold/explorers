@@ -15,7 +15,6 @@
     "initial_population_size": 0,
     "light_competition_radius": 8.0,
     "photo_maintenance_cost": 0.01,
-    "nutrient_absorption_maintenance_cost": 0.01,
     "initial_nutrient_pool": 50000.0,
     "growth_efficiency": 0.3,
     "somatic_maintenance_cost_coefficient": 0.1,
@@ -32,7 +31,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.5,
-        "nutrient_absorption": 0.3,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -52,7 +50,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
-        "nutrient_absorption": 0.4,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -72,7 +69,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.45,
-        "nutrient_absorption": 0.25,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -92,7 +88,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.4,
-        "nutrient_absorption": 0.35,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -112,7 +107,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.5,
-        "nutrient_absorption": 0.2,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -132,7 +126,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.3,
-        "nutrient_absorption": 0.4,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -152,7 +145,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.45,
-        "nutrient_absorption": 0.3,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -172,7 +164,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
-        "nutrient_absorption": 0.35,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -192,7 +183,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.5,
-        "nutrient_absorption": 0.25,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -212,7 +202,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.4,
-        "nutrient_absorption": 0.3,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -232,7 +221,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.5,
-        "nutrient_absorption": 0.3,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -252,7 +240,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
-        "nutrient_absorption": 0.4,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -272,7 +259,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.45,
-        "nutrient_absorption": 0.25,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -292,7 +278,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.4,
-        "nutrient_absorption": 0.35,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -312,7 +297,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.5,
-        "nutrient_absorption": 0.2,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -332,7 +316,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.3,
-        "nutrient_absorption": 0.4,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -352,7 +335,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.45,
-        "nutrient_absorption": 0.3,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -372,7 +354,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
-        "nutrient_absorption": 0.35,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -392,7 +373,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.5,
-        "nutrient_absorption": 0.25,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -412,7 +392,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.4,
-        "nutrient_absorption": 0.3,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -432,7 +411,6 @@
       "reserve": 80.0,
       "traits": {
         "photosynthetic_absorption": 0.0,
-        "nutrient_absorption": 0.0,
         "mobility": 0.3,
         "chemotaxis_sensitivity": 0.5,
         "mate_selectivity": 3.0,
@@ -452,7 +430,6 @@
       "reserve": 80.0,
       "traits": {
         "photosynthetic_absorption": 0.0,
-        "nutrient_absorption": 0.0,
         "mobility": 0.3,
         "chemotaxis_sensitivity": 0.5,
         "mate_selectivity": 3.0,

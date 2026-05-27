@@ -155,7 +155,6 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         light_competition_radius: v(13) as f32,
         photo_maintenance_cost: v(14) as f32,
         heterotrophy_maintenance_cost: v(15) as f32,
-        nutrient_absorption_maintenance_cost: 0.0,
         initial_nutrient_pool: 0.0,
         growth_efficiency: 0.0,
         wear_rate: 0.0,
@@ -172,7 +171,6 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         mean_traits: TraitVector {
             photosynthetic_absorption: v(16) as f32,
             heterotrophy: v(17) as f32,
-            nutrient_absorption: 0.0,
             mobility: v(18) as f32,
             chemotaxis_sensitivity: v(19) as f32,
             mate_selectivity: v(20) as f32,

@@ -576,7 +576,7 @@ mod tests {
             photo_maintenance_cost: 0.0,
             heterotrophy_maintenance_cost: 0.0,
 
-            nutrient_absorption_maintenance_cost: 0.0,
+
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
             wear_rate: 0.0,
@@ -595,7 +595,7 @@ mod tests {
             mean_traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.8,
                 heterotrophy: 0.3,
-                nutrient_absorption: 0.0,
+
                 mobility: 0.3,
                 chemotaxis_sensitivity: 0.2,
                 mate_selectivity: 100.0,
@@ -794,7 +794,7 @@ mod tests {
             photo_maintenance_cost: 0.0,
             heterotrophy_maintenance_cost: 0.0,
 
-            nutrient_absorption_maintenance_cost: 0.0,
+
             initial_nutrient_pool: 0.0,
             growth_efficiency: 0.0,
             wear_rate: 0.0,
@@ -810,7 +810,7 @@ mod tests {
             mean_traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.0,
                 heterotrophy: 0.0,
-                nutrient_absorption: 0.0,
+
                 mobility: 0.0,
                 chemotaxis_sensitivity: 0.0,
                 mate_selectivity: 0.0,
@@ -862,7 +862,6 @@ mod tests {
         explorers_sim::TraitVector {
             photosynthetic_absorption: vals[0],
             heterotrophy: vals[1],
-            nutrient_absorption: 0.0,
             mobility: vals[2],
             chemotaxis_sensitivity: vals[3],
             mate_selectivity: vals[4],
