@@ -766,9 +766,15 @@ pub struct ReproductionResult {
     pub offspring: Vec<Agent>,
 }
 
-/// Resolve reproduction: coordinated pass 2. Pairs eligible agents by closest
-/// trait-space distance within spatial proximity, invests energy from both parents,
-/// produces offspring with crossover traits and Gaussian mutation.
+/// Resolve reproduction: coordinated pass 2.
+///
+/// Each eligible agent first rolls against its `asexual_propensity`. On success
+/// the agent reproduces alone — offspring are clones with mutation applied (no
+/// crossover). On failure the agent falls through to sexual mate-finding: pairs
+/// by closest trait-space distance within spatial proximity, invests energy from
+/// both parents, produces offspring with uniform crossover + Gaussian mutation.
+///
+/// Events distinguish asexual (target=None) from sexual (target=Some(mate_id)).
 pub fn resolve_reproduction(
     agents: &mut [Agent],
     dead_ids: &std::collections::HashSet<u64>,
@@ -794,15 +800,139 @@ pub fn resolve_reproduction(
         .map(|(i, _)| i)
         .collect();
 
-    // For each eligible agent, find closest compatible mate within sensing range.
-    // Grid keys are slice indices, so neighbor_id as usize gives the agent index.
-    let mut pair_candidates: Vec<(usize, usize, f32)> = Vec::new();
+    // Track which agents have already reproduced this tick (at most once each).
+    let mut reproduced = std::collections::HashSet::new();
 
-    let compatibility_distance = params.reproductive_compatibility_distance;
-    // Sensing range for mate search derived from mobility
+    // Next agent ID: find max existing ID + 1
+    let mut next_id = agents.iter().map(|a| a.id).max().unwrap_or(0) + 1;
+
     let sensing_coeff = params.sensing_range_coefficient;
 
-    for &i in &eligible {
+    // ---------- Phase A: Asexual reproduction attempts ----------
+    // Each eligible agent rolls against its asexual_propensity. On success it
+    // reproduces alone; on failure it will attempt sexual reproduction below.
+    let eligible_sorted: Vec<usize> = {
+        let mut v: Vec<usize> = eligible.iter().copied().collect();
+        v.sort(); // deterministic ordering for reproducibility
+        v
+    };
+
+    for &i in &eligible_sorted {
+        let propensity = agents[i].traits.asexual_propensity.clamp(0.0, 1.0);
+        if propensity <= 0.0 || rng.random::<f32>() >= propensity {
+            continue; // asexual attempt failed — will try sexual below
+        }
+
+        // Asexual reproduction succeeds.
+        reproduced.insert(i);
+
+        let parent_traits = agents[i].traits;
+        let parent_repro = agents[i].repro_reserve;
+        let parent_nutrient = agents[i].nutrient;
+        let parent_reserve = agents[i].reserve;
+        let parent_pos = agents[i].position;
+        let parent_contact = agents[i].contact_time;
+        let parent_id = agents[i].id;
+
+        let investment = parent_repro.max(0.0);
+        if investment <= 0.0 {
+            continue;
+        }
+
+        // Offspring count from Poisson distribution (single parent's fecundity)
+        let fecundity = parent_traits.fecundity.max(0.1);
+        let poisson = Poisson::new(fecundity as f64).unwrap();
+        let offspring_count = (poisson.sample(rng) as usize).max(1);
+
+        let offspring_total_energy = investment * params.reproduction_efficiency;
+        let energy_per_offspring = offspring_total_energy / offspring_count as f32;
+        let tick_dissipated = investment - offspring_total_energy;
+        dissipated += tick_dissipated;
+
+        // Nutrient donation from single parent
+        let nutrient_donated = parent_nutrient
+            * (investment / (parent_reserve + parent_repro).max(1e-10)).min(0.5);
+        let nutrient_per_offspring = nutrient_donated / offspring_count as f32;
+
+        // Deduct from parent
+        agents[i].repro_reserve -= investment;
+        agents[i].nutrient -= nutrient_donated;
+
+        // Dispersal
+        let dispersal_radius = parent_traits.mobility * sensing_coeff
+            * (parent_contact as f32 / (parent_contact as f32 + 50.0));
+
+        for _ in 0..offspring_count {
+            // Asexual offspring: parent traits + mutation only (no crossover)
+            let mut child_traits = parent_traits;
+            for dim in 0..TraitVector::NUM_DIMS {
+                if params.mutation_rate > 0.0
+                    && rng.random::<f32>() < params.mutation_rate
+                {
+                    let normal = Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
+                    let mutated = (child_traits.get(dim) + normal.sample(rng)).max(0.0);
+                    // Clamp kappa and asexual_propensity to [0, 1]
+                    let val = if dim == 3 || dim == 5 {
+                        mutated.clamp(0.0, 1.0)
+                    } else {
+                        mutated
+                    };
+                    child_traits.set(dim, val);
+                }
+            }
+
+            // Dispersal position
+            let (dx, dy) = if dispersal_radius > 0.0 {
+                let normal = Normal::new(0.0_f32, dispersal_radius).unwrap();
+                (normal.sample(rng), normal.sample(rng))
+            } else {
+                (0.0, 0.0)
+            };
+            let pos = crate::wrap_position(
+                (parent_pos.0 + dx, parent_pos.1 + dy),
+                extent,
+            );
+
+            let child = Agent {
+                id: next_id,
+                position: pos,
+                reserve: energy_per_offspring,
+                structure: 0.0,
+                nutrient: nutrient_per_offspring,
+                traits: child_traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 0.0,
+            };
+            next_id += 1;
+            offspring.push(child);
+        }
+
+        // Asexual event: target is None (no mate)
+        events.push(Event {
+            tick: 0,
+            seq: 0,
+            kind: EventKind::Reproduced,
+            source: parent_id,
+            target: None,
+            energy_delta: investment,
+            position: Some(parent_pos),
+        });
+    }
+
+    // ---------- Phase B: Sexual reproduction (fallback for non-asexual) ----------
+    // Only eligible agents that have not already reproduced asexually participate.
+    let sexual_eligible: std::collections::HashSet<usize> = eligible
+        .iter()
+        .copied()
+        .filter(|i| !reproduced.contains(i))
+        .collect();
+
+    let compatibility_distance = params.reproductive_compatibility_distance;
+
+    let mut pair_candidates: Vec<(usize, usize, f32)> = Vec::new();
+
+    for &i in &sexual_eligible {
         let agent_i = &agents[i];
         let sensing = agent_i.traits.mobility * sensing_coeff;
 
@@ -816,7 +946,7 @@ pub fn resolve_reproduction(
             if !seen.insert(j) {
                 continue;
             }
-            if j >= agents.len() || !eligible.contains(&j) {
+            if j >= agents.len() || !sexual_eligible.contains(&j) {
                 continue;
             }
             let dist_spatial = crate::toroidal_distance(
@@ -862,10 +992,7 @@ pub fn resolve_reproduction(
         }
     }
 
-    // Next agent ID: find max existing ID + 1
-    let mut next_id = agents.iter().map(|a| a.id).max().unwrap_or(0) + 1;
-
-    // Resolve each pair
+    // Resolve each sexual pair
     for (a_idx, b_idx) in &final_pairs {
         // Copy needed values before mutating
         let a_traits = agents[*a_idx].traits;
@@ -927,13 +1054,14 @@ pub fn resolve_reproduction(
         let dispersal_radius = avg_sensing * (avg_contact / (avg_contact + 50.0));
 
         for _ in 0..offspring_count {
-            // Trait crossover: each dimension from one parent
+            // Trait crossover: each dimension from one parent (uniform crossover)
             let mut child_traits = TraitVector {
                 photosynthetic_absorption: 0.0,
                 heterotrophy: 0.0,
                 mobility: 0.0,
                 kappa: 0.0,
                 fecundity: 0.0,
+                asexual_propensity: 0.0,
             };
             for dim in 0..TraitVector::NUM_DIMS {
                 let parent_val = if rng.random::<bool>() {
@@ -950,8 +1078,8 @@ pub fn resolve_reproduction(
                 } else {
                     parent_val
                 };
-                // Clamp kappa to [0, 1]
-                if dim == 3 {
+                // Clamp kappa and asexual_propensity to [0, 1]
+                if dim == 3 || dim == 5 {
                     val = val.clamp(0.0, 1.0);
                 }
                 child_traits.set(dim, val);
@@ -984,6 +1112,7 @@ pub fn resolve_reproduction(
             offspring.push(child);
         }
 
+        // Sexual event: target is Some(mate_id)
         events.push(Event {
             tick: 0,
             seq: 0,
@@ -1014,6 +1143,7 @@ mod tests {
             mobility: 0.0,
             kappa: 0.0,
             fecundity: 0.0,
+            asexual_propensity: 0.0,
         }
     }
 
@@ -1670,6 +1800,7 @@ mod tests {
             mobility: 0.1,
             kappa: 0.1,
             fecundity: 0.1,
+            asexual_propensity: 0.1,
         };
         let threshold = crate::death_threshold(&traits);
         assert!(threshold > 0.0, "generalist should have nonzero threshold");
@@ -1823,6 +1954,7 @@ mod tests {
             mobility: 0.1,
             kappa: 0.1,
             fecundity: 0.1,
+            asexual_propensity: 0.1,
         };
         let threshold = crate::death_threshold(&generalist_traits);
         assert!(threshold > 0.0, "generalist should have nonzero threshold");
@@ -3295,13 +3427,441 @@ mod tests {
     // --- Trait vector dimensions ---
 
     #[test]
-    fn trait_vector_has_five_dimensions() {
-        assert_eq!(TraitVector::NUM_DIMS, 5);
+    fn trait_vector_has_six_dimensions() {
+        assert_eq!(TraitVector::NUM_DIMS, 6);
     }
 
     #[test]
     fn functional_trait_count_is_three() {
         assert_eq!(crate::FUNCTIONAL_TRAIT_COUNT, 3);
         assert_eq!(crate::FUNCTIONAL_TRAIT_INDICES, [0, 1, 2]);
+    }
+
+    // --- Asexual reproduction tests ---
+
+    #[test]
+    fn asexual_reproduction_succeeds_with_high_propensity() {
+        use rand::SeedableRng;
+        // An agent with asexual_propensity=1.0 should always reproduce asexually.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 1.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            Agent {
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        // Should have reproduced
+        assert!(!result.events.is_empty(), "should produce reproduction event");
+        assert_eq!(result.events[0].kind, EventKind::Reproduced);
+        // Asexual: target is None
+        assert_eq!(result.events[0].target, None,
+            "asexual reproduction should have target=None");
+        assert_eq!(result.events[0].source, 1);
+        // Should have offspring
+        assert!(!result.offspring.is_empty(), "should produce offspring");
+        // Parent's repro_reserve should be depleted
+        assert!(agents[0].repro_reserve < 1e-6,
+            "parent repro_reserve should be depleted, got {}", agents[0].repro_reserve);
+    }
+
+    #[test]
+    fn asexual_offspring_have_parent_traits_no_crossover() {
+        use rand::SeedableRng;
+        // With mutation_rate=0, asexual offspring should have exact parent traits.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.7,
+            heterotrophy: 0.2,
+            mobility: 0.1,
+            kappa: 0.6,
+            fecundity: 1.0,
+            asexual_propensity: 1.0,
+        };
+        let mut agents = vec![
+            Agent {
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty());
+        for child in &result.offspring {
+            assert_eq!(child.traits.photosynthetic_absorption, traits.photosynthetic_absorption);
+            assert_eq!(child.traits.heterotrophy, traits.heterotrophy);
+            assert_eq!(child.traits.mobility, traits.mobility);
+            assert_eq!(child.traits.kappa, traits.kappa);
+            assert_eq!(child.traits.asexual_propensity, traits.asexual_propensity);
+        }
+    }
+
+    #[test]
+    fn asexual_failure_falls_through_to_sexual() {
+        use rand::SeedableRng;
+        // Two eligible agents with asexual_propensity=0.0 should use sexual reproduction.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            contact_radius: 100.0,
+            reproductive_compatibility_distance: 10.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 0.3,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 0.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            Agent {
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
+            },
+            Agent {
+                id: 2,
+                position: (1.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, agents[0].position);
+        grid.insert(1, agents[1].position);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        // Should have sexual reproduction event with target=Some(mate_id)
+        assert!(!result.events.is_empty(), "should produce reproduction event");
+        assert!(result.events[0].target.is_some(),
+            "sexual reproduction should have target=Some(mate_id)");
+        assert!(!result.offspring.is_empty(), "should produce offspring");
+    }
+
+    #[test]
+    fn asexual_reproduction_energy_from_single_parent() {
+        use rand::SeedableRng;
+        // Verify that asexual reproduction draws from single parent's repro_reserve only.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.5,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 1.0,
+            ..zero_traits()
+        };
+        let initial_repro = 30.0;
+        let mut agents = vec![
+            Agent {
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: initial_repro,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        // Parent's repro_reserve should be 0
+        assert!(agents[0].repro_reserve.abs() < 1e-6,
+            "parent repro_reserve should be depleted");
+        // Total offspring energy + dissipated = initial investment
+        let offspring_energy: f32 = result.offspring.iter().map(|c| c.reserve).sum();
+        let total = offspring_energy + result.dissipated;
+        assert!((total - initial_repro).abs() < 1e-3,
+            "offspring energy ({}) + dissipated ({}) should equal investment ({})",
+            offspring_energy, result.dissipated, initial_repro);
+        // Event energy_delta should equal the investment
+        assert!((result.events[0].energy_delta - initial_repro).abs() < 1e-3);
+    }
+
+    #[test]
+    fn zero_asexual_propensity_never_reproduces_alone() {
+        use rand::SeedableRng;
+        // An agent with asexual_propensity=0.0 and no mate should not reproduce.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 0.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            Agent {
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(result.events.is_empty(), "should not reproduce without mate or asexual propensity");
+        assert!(result.offspring.is_empty());
+        assert!((agents[0].repro_reserve - 20.0).abs() < 1e-6,
+            "repro_reserve should be unchanged");
+    }
+
+    #[test]
+    fn asexual_propensity_is_heritable() {
+        use rand::SeedableRng;
+        // Offspring of asexual reproduction should inherit asexual_propensity.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 0.8,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            Agent {
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty());
+        for child in &result.offspring {
+            assert_eq!(child.traits.asexual_propensity, 0.8,
+                "offspring should inherit parent's asexual_propensity");
+        }
+    }
+
+    #[test]
+    fn sexual_offspring_use_crossover_not_clone() {
+        use rand::SeedableRng;
+        // Two parents with different traits: sexual offspring should have mixed traits
+        // (from crossover), not a clone of either parent.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            contact_radius: 100.0,
+            reproductive_compatibility_distance: 10.0,
+            ..test_params()
+        };
+        let traits_a = TraitVector {
+            photosynthetic_absorption: 1.0,
+            heterotrophy: 0.0,
+            mobility: 0.3,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 0.0,
+        };
+        let traits_b = TraitVector {
+            photosynthetic_absorption: 0.0,
+            heterotrophy: 1.0,
+            mobility: 0.3,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 0.0,
+        };
+        let mut agents = vec![
+            Agent {
+                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
+                nutrient: 100.0, traits: traits_a, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
+            },
+            Agent {
+                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
+                nutrient: 100.0, traits: traits_b, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, agents[0].position);
+        grid.insert(1, agents[1].position);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty());
+        // Sexual event should have target
+        assert!(result.events[0].target.is_some());
+        // At least one offspring should have traits from both parents
+        // (with crossover each dim is independently chosen from one parent)
+        for child in &result.offspring {
+            let photo = child.traits.photosynthetic_absorption;
+            let hetero = child.traits.heterotrophy;
+            // Each should be either 0.0 or 1.0 (from one parent, no mutation)
+            assert!(photo == 0.0 || photo == 1.0,
+                "photo should be from one parent: {}", photo);
+            assert!(hetero == 0.0 || hetero == 1.0,
+                "hetero should be from one parent: {}", hetero);
+        }
+    }
+
+    #[test]
+    fn asexual_nutrient_from_single_parent() {
+        use rand::SeedableRng;
+        // Verify nutrient donation comes from single parent in asexual reproduction.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 1.0,
+            ..zero_traits()
+        };
+        let initial_nutrient = 50.0;
+        let mut agents = vec![
+            Agent {
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                nutrient: initial_nutrient,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        // Parent should have less nutrient after donating to offspring
+        assert!(agents[0].nutrient < initial_nutrient,
+            "parent nutrient should decrease from {}, got {}", initial_nutrient, agents[0].nutrient);
+        // Offspring should have non-zero nutrient
+        let offspring_nutrient: f32 = result.offspring.iter().map(|c| c.nutrient).sum();
+        assert!(offspring_nutrient > 0.0, "offspring should receive nutrient");
+        // Conservation: parent loss = offspring gain
+        let parent_loss = initial_nutrient - agents[0].nutrient;
+        assert!((parent_loss - offspring_nutrient).abs() < 1e-3,
+            "nutrient should be conserved: parent_loss={}, offspring_gain={}", parent_loss, offspring_nutrient);
     }
 }

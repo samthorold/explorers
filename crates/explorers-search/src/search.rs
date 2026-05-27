@@ -127,6 +127,7 @@ pub fn default_ranges() -> Vec<ParameterRange> {
         ParameterRange { name: "initial_energy_per_agent".into(), min: 1.0, max: 50.0 },       // 23
         ParameterRange { name: "base_nutrient_ratio".into(), min: 0.01, max: 0.5 },            // 24
         ParameterRange { name: "specification_nutrient_coefficient".into(), min: 0.01, max: 0.5 }, // 25
+        ParameterRange { name: "mean_asexual_propensity".into(), min: 0.0, max: 1.0 },        // 26
     ]
 }
 
@@ -173,6 +174,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
             mobility: v(19) as f32,
             kappa: v(20) as f32,
             fecundity: 0.0,
+            asexual_propensity: v(26) as f32,
         },
         trait_covariance: v(21) as f32,
         initial_cluster_count: v(22).round() as u32,

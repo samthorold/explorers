@@ -119,7 +119,7 @@ fn main() {
                     heterotrophy: 0.3,
 
                     mobility: 0.4,
-                    kappa: 0.5, fecundity: 0.0,
+                    kappa: 0.5, fecundity: 0.0, asexual_propensity: 0.0,
                 },
                 trait_covariance: 0.1,
                 initial_cluster_count: 1,
@@ -197,7 +197,7 @@ mod tests {
             heterotrophy: 0.0,
 
             mobility: 0.0,
-            kappa: 0.0, fecundity: 0.0,
+            kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
         };
         let color = trophic_color(&traits, 100.0);
         let rgba = color.to_srgba();
@@ -213,7 +213,7 @@ mod tests {
             heterotrophy: 1.0,
 
             mobility: 0.0,
-            kappa: 0.0, fecundity: 0.0,
+            kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
         };
         let color = trophic_color(&traits, 100.0);
         let rgba = color.to_srgba();
@@ -230,7 +230,7 @@ mod tests {
             heterotrophy: 1.0,
 
             mobility: 0.0,
-            kappa: 0.0, fecundity: 0.0,
+            kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
         };
         let color = trophic_color(&traits, 100.0);
         let rgba = color.to_srgba();
@@ -245,7 +245,7 @@ mod tests {
             heterotrophy: 0.0,
 
             mobility: 0.0,
-            kappa: 0.0, fecundity: 0.0,
+            kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
         };
         let bright = trophic_color(&traits, 100.0).to_srgba();
         let dim = trophic_color(&traits, 10.0).to_srgba();
@@ -262,6 +262,7 @@ mod tests {
             mobility: 0.0,
             kappa: 0.0,
             fecundity: 0.0,
+            asexual_propensity: 0.0,
         };
         // Same total energy (100), but different reserve values
         let high_reserve = trophic_color(&traits, 80.0).to_srgba(); // reserve=80
@@ -278,11 +279,11 @@ mod tests {
     fn dominant_role_classification() {
         let producer = TraitVector {
             photosynthetic_absorption: 0.8, heterotrophy: 0.1,
-            mobility: 0.0, kappa: 0.0, fecundity: 0.0,
+            mobility: 0.0, kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
         };
         let consumer = TraitVector {
             photosynthetic_absorption: 0.1, heterotrophy: 0.8,
-            mobility: 0.0, kappa: 0.0, fecundity: 0.0,
+            mobility: 0.0, kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
         };
         assert_eq!(dominant_role(&producer), "producers");
         assert_eq!(dominant_role(&consumer), "consumers");
@@ -422,7 +423,7 @@ mod tests {
                     heterotrophy: 0.3,
 
                     mobility: 0.4,
-                    kappa: 0.5, fecundity: 0.0,
+                    kappa: 0.5, fecundity: 0.0, asexual_propensity: 0.0,
                 },
                 trait_covariance: 0.1,
                 initial_cluster_count: 1,
@@ -488,7 +489,7 @@ mod tests {
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                    mobility: 0.0, kappa: 0.0, fecundity: 0.0,
+                    mobility: 0.0, kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
             },
             contact_time: 0,
             wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -500,7 +501,7 @@ mod tests {
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                    mobility: 0.0, kappa: 0.0, fecundity: 0.0,
+                    mobility: 0.0, kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
             },
             contact_time: 0,
             wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -511,7 +512,7 @@ mod tests {
             nutrient: 0.0,
             traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.0, heterotrophy: 0.0,
-                mobility: 0.0, kappa: 0.0, fecundity: 0.0,
+                mobility: 0.0, kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
             },
         });
 
@@ -539,7 +540,7 @@ mod tests {
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                    mobility: 0.0, kappa: 0.0, fecundity: 0.0,
+                    mobility: 0.0, kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
                 },
                 contact_time: 0,
                 wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -551,7 +552,7 @@ mod tests {
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                    mobility: 0.0, kappa: 0.0, fecundity: 0.0,
+                    mobility: 0.0, kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
                 },
                 contact_time: 0,
                 wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -578,7 +579,7 @@ mod tests {
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                    mobility: 0.0, kappa: 0.0, fecundity: 0.0,
+                    mobility: 0.0, kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
                 },
                 contact_time: 0,
                 wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -590,7 +591,7 @@ mod tests {
             nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 1.0, heterotrophy: 0.0,
-                    mobility: 0.0, kappa: 0.0, fecundity: 0.0,
+                    mobility: 0.0, kappa: 0.0, fecundity: 0.0, asexual_propensity: 0.0,
                 },
                 contact_time: 0,
                 wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
@@ -985,6 +986,7 @@ fn debug_panel_ui(
                                 ui.label(format!("  mobility: {:.3}", agent.traits.mobility));
                                 ui.label(format!("  kappa: {:.3}", agent.traits.kappa));
                                 ui.label(format!("  fecundity: {:.3}", agent.traits.fecundity));
+                                ui.label(format!("  asexual_propensity: {:.3}", agent.traits.asexual_propensity));
                                 ui.label(format!("  repro_reserve: {:.1}", agent.repro_reserve));
                             } else {
                                 ui.label(format!("Agent {} no longer alive", agent_id));

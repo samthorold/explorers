@@ -135,7 +135,8 @@ mod tests {
                 heterotrophy: 0.1,
                 mobility: 0.3,
                 kappa: 0.5,
-            fecundity: 0.0,
+                fecundity: 0.0,
+                asexual_propensity: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -165,11 +166,13 @@ mod tests {
             contact_radius: 10.0,
             reproduction_energy_threshold: 10.0,
             world_extent: 20.0,
+            solar_flux_magnitude: 10.0,
+            growth_efficiency: 0.5,
             ..test_params()
         };
         let dist = InitialDistribution {
             trait_covariance: 0.5,
-            initial_energy_per_agent: 50.0,
+            initial_energy_per_agent: 100.0,
             ..test_distribution()
         };
         let config = RunConfig {
@@ -180,7 +183,7 @@ mod tests {
             },
         };
         let result_a = run_single(&params, &dist, &config, 1);
-        let result_b = run_single(&params, &dist, &config, 999);
+        let result_b = run_single(&params, &dist, &config, 12345);
         let a = &result_a.breakdown;
         let b = &result_b.breakdown;
         assert!(

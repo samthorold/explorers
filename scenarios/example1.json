@@ -29,6 +29,7 @@
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }

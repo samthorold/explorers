@@ -30,6 +30,7 @@
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -44,6 +45,7 @@
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -58,6 +60,7 @@
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
         "fecundity": 0.15,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -72,6 +75,7 @@
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
         "fecundity": 0.08,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -86,6 +90,7 @@
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
         "fecundity": 0.2,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -100,6 +105,7 @@
         "photosynthetic_absorption": 0.3,
         "mobility": 0.0,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -114,6 +120,7 @@
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
         "fecundity": 0.12,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -128,6 +135,7 @@
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -142,6 +150,7 @@
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
         "fecundity": 0.15,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -156,6 +165,7 @@
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
         "fecundity": 0.08,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -170,6 +180,7 @@
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
         "fecundity": 0.12,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -184,6 +195,7 @@
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -198,6 +210,7 @@
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
         "fecundity": 0.18,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -212,6 +225,7 @@
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
         "fecundity": 0.08,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -226,6 +240,7 @@
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
         "fecundity": 0.15,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -240,6 +255,7 @@
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -254,6 +270,7 @@
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
         "fecundity": 0.12,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -268,6 +285,7 @@
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -282,6 +300,7 @@
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
         "fecundity": 0.15,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -296,6 +315,7 @@
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.5,
         "heterotrophy": 0.0
       }
@@ -310,6 +330,7 @@
         "photosynthetic_absorption": 0.0,
         "mobility": 0.3,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.2,
         "heterotrophy": 0.4
       }
@@ -324,6 +345,7 @@
         "photosynthetic_absorption": 0.0,
         "mobility": 0.35,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.2,
         "heterotrophy": 0.35
       }
@@ -338,6 +360,7 @@
         "photosynthetic_absorption": 0.0,
         "mobility": 0.3,
         "fecundity": 0.1,
+        "asexual_propensity": 0.0,
         "kappa": 0.3,
         "heterotrophy": 0.4
       }
