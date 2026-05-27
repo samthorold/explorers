@@ -121,7 +121,7 @@ pub fn default_ranges() -> Vec<ParameterRange> {
         ParameterRange { name: "mean_photosynthetic_absorption".into(), min: 0.0, max: 1.0 },  // 17
         ParameterRange { name: "mean_heterotrophy".into(), min: 0.0, max: 1.0 },               // 18
         ParameterRange { name: "mean_mobility".into(), min: 0.0, max: 1.0 },                   // 19
-        ParameterRange { name: "mean_reproductive_investment".into(), min: 0.0, max: 1.0 },     // 20
+        ParameterRange { name: "mean_kappa".into(), min: 0.0, max: 1.0 },                        // 20
         ParameterRange { name: "trait_covariance".into(), min: 0.1, max: 1.0 },                // 21
         ParameterRange { name: "initial_cluster_count".into(), min: 1.0, max: 5.0 },           // 22
         ParameterRange { name: "initial_energy_per_agent".into(), min: 1.0, max: 50.0 },       // 23
@@ -171,9 +171,8 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
             photosynthetic_absorption: v(17) as f32,
             heterotrophy: v(18) as f32,
             mobility: v(19) as f32,
-            reproductive_investment: v(20) as f32,
+            kappa: v(20) as f32,
             fecundity: 0.0,
-            somatic_maintenance: 0.0,
         },
         trait_covariance: v(21) as f32,
         initial_cluster_count: v(22).round() as u32,

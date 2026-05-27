@@ -31,9 +31,8 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -47,9 +46,8 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -63,9 +61,8 @@
       "traits": {
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.15,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -79,9 +76,8 @@
       "traits": {
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.08,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -95,9 +91,8 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.2,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -111,9 +106,8 @@
       "traits": {
         "photosynthetic_absorption": 0.3,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -127,9 +121,8 @@
       "traits": {
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.12,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -143,9 +136,8 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -159,9 +151,8 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.15,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -175,9 +166,8 @@
       "traits": {
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.08,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -191,9 +181,8 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -207,9 +196,8 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -223,9 +211,8 @@
       "traits": {
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.15,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -239,9 +226,8 @@
       "traits": {
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.08,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -255,9 +241,8 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.2,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -271,9 +256,8 @@
       "traits": {
         "photosynthetic_absorption": 0.3,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -287,9 +271,8 @@
       "traits": {
         "photosynthetic_absorption": 0.45,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.12,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -303,9 +286,8 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -319,9 +301,8 @@
       "traits": {
         "photosynthetic_absorption": 0.5,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.15,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -335,9 +316,8 @@
       "traits": {
         "photosynthetic_absorption": 0.4,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.08,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       },
       "nutrient": 8.0
@@ -351,9 +331,8 @@
       "traits": {
         "photosynthetic_absorption": 0.0,
         "mobility": 0.3,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.02,
+        "kappa": 0.2,
         "heterotrophy": 0.4
       },
       "nutrient": 9.0
@@ -367,9 +346,8 @@
       "traits": {
         "photosynthetic_absorption": 0.0,
         "mobility": 0.3,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.02,
+        "kappa": 0.2,
         "heterotrophy": 0.4
       },
       "nutrient": 9.0

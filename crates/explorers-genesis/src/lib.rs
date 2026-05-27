@@ -134,9 +134,8 @@ mod tests {
                 photosynthetic_absorption: 0.8,
                 heterotrophy: 0.1,
                 mobility: 0.3,
-                reproductive_investment: 0.3,
+                kappa: 0.5,
             fecundity: 0.0,
-            somatic_maintenance: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -294,12 +293,15 @@ mod tests {
     #[test]
     fn single_run_completes_at_max_ticks_when_no_failure() {
         let params = WorldParameters {
-            reproduction_energy_threshold: 5.0,
+            reproduction_energy_threshold: 500.0, // prevent reproduction-related death
             contact_radius: 5.0,
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.01,
+            growth_efficiency: 0.5,
             ..test_params()
         };
         let distribution = InitialDistribution {
-            initial_energy_per_agent: 30.0,
+            initial_energy_per_agent: 50.0,
             trait_covariance: 0.5,
             ..test_distribution()
         };

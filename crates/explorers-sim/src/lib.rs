@@ -47,11 +47,12 @@ pub struct TraitVector {
     #[serde(alias = "consumption_rate")]
     pub heterotrophy: f32,
     pub mobility: f32,
-    pub reproductive_investment: f32,
+    /// DEB-theory allocation parameter: fraction of mobilised energy routed to soma
+    /// vs reproduction. High kappa = long-lived, slow-reproducing. Range 0.0–1.0.
+    #[serde(alias = "somatic_maintenance", alias = "reproductive_investment", default = "default_kappa")]
+    pub kappa: f32,
     #[serde(default)]
     pub fecundity: f32,
-    #[serde(default)]
-    pub somatic_maintenance: f32,
 }
 
 impl TraitVector {
@@ -59,10 +60,9 @@ impl TraitVector {
         let d0 = self.photosynthetic_absorption - other.photosynthetic_absorption;
         let d1 = self.heterotrophy - other.heterotrophy;
         let d2 = self.mobility - other.mobility;
-        let d3 = self.reproductive_investment - other.reproductive_investment;
+        let d3 = self.kappa - other.kappa;
         let d4 = self.fecundity - other.fecundity;
-        let d5 = self.somatic_maintenance - other.somatic_maintenance;
-        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5).sqrt()
+        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4).sqrt()
     }
 
     pub fn get(&self, index: usize) -> f32 {
@@ -70,9 +70,8 @@ impl TraitVector {
             0 => self.photosynthetic_absorption,
             1 => self.heterotrophy,
             2 => self.mobility,
-            3 => self.reproductive_investment,
+            3 => self.kappa,
             4 => self.fecundity,
-            5 => self.somatic_maintenance,
             _ => unreachable!(),
         }
     }
@@ -82,17 +81,17 @@ impl TraitVector {
             0 => self.photosynthetic_absorption = value,
             1 => self.heterotrophy = value,
             2 => self.mobility = value,
-            3 => self.reproductive_investment = value,
+            3 => self.kappa = value,
             4 => self.fecundity = value,
-            5 => self.somatic_maintenance = value,
             _ => unreachable!(),
         }
     }
 
     /// Number of trait dimensions.
-    pub const NUM_DIMS: usize = 6;
+    pub const NUM_DIMS: usize = 5;
 }
 
+fn default_kappa() -> f32 { 0.5 }
 fn default_wear_rate() -> f32 { 0.1 }
 fn default_wear_degradation_steepness() -> f32 { 1.0 }
 fn default_somatic_maintenance_cost_coefficient() -> f32 { 0.1 }
@@ -106,9 +105,8 @@ fn zero_traits() -> TraitVector {
         photosynthetic_absorption: 0.0,
         heterotrophy: 0.0,
         mobility: 0.0,
-        reproductive_investment: 0.0,
+        kappa: 0.0,
         fecundity: 0.0,
-        somatic_maintenance: 0.0,
     }
 }
 fn default_base_nutrient_ratio() -> f32 { 0.1 }
@@ -153,6 +151,8 @@ pub struct WorldParameters {
     pub wear_rate: f32,
     #[serde(default = "default_wear_degradation_steepness")]
     pub wear_degradation_steepness: f32,
+    /// Legacy field retained for backward-compatible JSON parsing.
+    /// Somatic maintenance is now derived from kappa allocation.
     #[serde(default = "default_somatic_maintenance_cost_coefficient")]
     pub somatic_maintenance_cost_coefficient: f32,
     #[serde(default = "default_use_wear_rate")]
@@ -240,6 +240,9 @@ pub struct Agent {
     pub contact_time: u64,
     /// Per-functional-trait somatic wear accumulation.
     pub wear: [f32; FUNCTIONAL_TRAIT_COUNT],
+    /// Reproduction reserve: accumulates (1-kappa) fraction of surplus each tick.
+    /// Reproduction draws from this, not from reserve.
+    pub repro_reserve: f32,
 }
 
 /// Maps a functional trait index (0–2) to its position in the TraitVector.
@@ -247,9 +250,9 @@ pub struct Agent {
 pub const FUNCTIONAL_TRAIT_INDICES: [usize; FUNCTIONAL_TRAIT_COUNT] = [0, 1, 2];
 
 impl Agent {
-    /// Total energy held by this agent (reserve + structure).
+    /// Total energy held by this agent (reserve + structure + repro_reserve).
     pub fn energy(&self) -> f32 {
-        self.reserve + self.structure
+        self.reserve + self.structure + self.repro_reserve
     }
 
     /// Returns the nominal trait value for a given functional trait index (0–5).
@@ -271,8 +274,7 @@ impl Agent {
     }
 
     /// Returns a TraitVector with functional traits degraded by wear.
-    /// Behavioural traits (reproductive_investment, fecundity, somatic_maintenance)
-    /// are passed through unchanged.
+    /// Behavioural traits (kappa, fecundity) are passed through unchanged.
     pub fn effective_traits(&self, k: f32) -> TraitVector {
         let mut t = self.traits;
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
@@ -407,9 +409,8 @@ impl World {
                     photosynthetic_absorption: photo,
                     heterotrophy: hetero,
                     mobility: mean.mobility,
-                    reproductive_investment: mean.reproductive_investment,
+                    kappa: mean.kappa,
                     fecundity: mean.fecundity,
-                    somatic_maintenance: mean.somatic_maintenance,
                 }
             })
             .collect();
@@ -430,13 +431,12 @@ impl World {
                             + trait_dist.sample(&mut rng),
                         heterotrophy: centroid.heterotrophy + trait_dist.sample(&mut rng),
                         mobility: centroid.mobility + trait_dist.sample(&mut rng),
-                        reproductive_investment: centroid.reproductive_investment
-                            + trait_dist.sample(&mut rng),
+                        kappa: (centroid.kappa + trait_dist.sample(&mut rng)).clamp(0.0, 1.0),
                         fecundity: centroid.fecundity + trait_dist.sample(&mut rng),
-                        somatic_maintenance: centroid.somatic_maintenance + trait_dist.sample(&mut rng),
                     },
                     contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                    repro_reserve: 0.0,
                 }
             })
             .collect();
@@ -478,6 +478,7 @@ impl World {
                     traits: spec.traits,
                     contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                    repro_reserve: 0.0,
                 })
                 .collect();
             let nutrient_pool = params.initial_nutrient_pool;
@@ -522,7 +523,7 @@ impl World {
 
         // Snapshot pre-tick state for energy ledger conservation verification
         let pre_agent_energy: std::collections::HashMap<u64, f32> = self.agents.iter()
-            .map(|a| (a.id, a.reserve + a.structure))
+            .map(|a| (a.id, a.reserve + a.structure + a.repro_reserve))
             .collect();
         let pre_carcass_energy: std::collections::HashMap<u64, f32> = self.carcasses.iter()
             .map(|c| (c.id, c.energy))
@@ -589,6 +590,8 @@ impl World {
         let drain_dead_ids: std::collections::HashSet<u64> = drain_result.dead_agents.iter().copied().collect();
         for agent in self.agents.iter_mut() {
             if drain_dead_ids.contains(&agent.id) {
+                // Dissipate remaining reserve and repro_reserve (not captured by carcass)
+                self.dissipated_energy += agent.reserve.max(0.0) + agent.repro_reserve.max(0.0);
                 events.push(event::Event {
                     tick: 0,
                     seq: 0,
@@ -599,6 +602,7 @@ impl World {
                     position: Some(agent.position),
                 });
                 agent.reserve = 0.0; // mark for removal
+                agent.repro_reserve = 0.0;
             }
         }
         // Add new carcasses from drain kills (not in this tick's spatial grid)
@@ -633,9 +637,10 @@ impl World {
         events.extend(wear_events);
 
         // 8. Check death thresholds
-        let (death_events, new_carcasses) = phase::check_death_thresholds(
+        let (death_events, new_carcasses, death_dissipated) = phase::check_death_thresholds(
             &mut self.agents, &self.params,
         );
+        self.dissipated_energy += death_dissipated;
         events.extend(death_events);
         for c in new_carcasses {
             self.carcasses.push(c);
@@ -656,7 +661,7 @@ impl World {
         self.ledger.clear();
 
         let post_agent_energy: std::collections::HashMap<u64, f32> = self.agents.iter()
-            .map(|a| (a.id, a.reserve + a.structure))
+            .map(|a| (a.id, a.reserve + a.structure + a.repro_reserve))
             .collect();
         let post_carcass_energy: std::collections::HashMap<u64, f32> = self.carcasses.iter()
             .map(|c| (c.id, c.energy))
@@ -865,9 +870,8 @@ mod tests {
             photosynthetic_absorption: 0.0,
             heterotrophy: 0.0,
             mobility: 0.0,
-            reproductive_investment: 0.0,
+            kappa: 0.0,
             fecundity: 0.0,
-            somatic_maintenance: 0.0,
         }
     }
 
@@ -909,9 +913,8 @@ mod tests {
                 photosynthetic_absorption: 0.5,
                 heterotrophy: 0.3,
                 mobility: 0.4,
-                reproductive_investment: 0.3,
+                kappa: 0.5,
                 fecundity: 0.0,
-                somatic_maintenance: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -925,14 +928,13 @@ mod tests {
             photosynthetic_absorption: 0.1,
             heterotrophy: 0.2,
             mobility: 0.4,
-            reproductive_investment: 0.8,
+            kappa: 0.8,
             fecundity: 0.0,
-            somatic_maintenance: 0.0,
         };
         assert_eq!(traits.photosynthetic_absorption, 0.1);
         assert_eq!(traits.heterotrophy, 0.2);
         assert_eq!(traits.mobility, 0.4);
-        assert_eq!(traits.reproductive_investment, 0.8);
+        assert_eq!(traits.kappa, 0.8);
         assert_eq!(traits.get(2), 0.4); // index 2 is mobility
     }
 
@@ -947,14 +949,14 @@ mod tests {
     }
 
     #[test]
-    fn trait_vector_has_somatic_maintenance_dimension() {
+    fn trait_vector_has_kappa_dimension() {
         let traits = TraitVector {
-            somatic_maintenance: 0.15,
+            kappa: 0.7,
             ..zero_traits()
         };
-        assert_eq!(traits.somatic_maintenance, 0.15);
-        assert_eq!(traits.get(5), 0.15);
-        assert_eq!(TraitVector::NUM_DIMS, 6);
+        assert_eq!(traits.kappa, 0.7);
+        assert_eq!(traits.get(3), 0.7);
+        assert_eq!(TraitVector::NUM_DIMS, 5);
     }
 
     #[test]
@@ -968,7 +970,7 @@ mod tests {
         let agent = Agent {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
             nutrient: 5.0, traits: zero_traits(), contact_time: 0,
-            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 0.0,
         };
         assert_eq!(agent.nutrient, 5.0);
         let carcass = Carcass { id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 3.0, traits: zero_traits() };
@@ -1001,9 +1003,8 @@ mod tests {
             photosynthetic_absorption: 0.1,
             heterotrophy: 0.1,
             mobility: 0.1,
-            reproductive_investment: 0.1,
+            kappa: 0.1,
             fecundity: 0.1,
-            somatic_maintenance: 0.1,
         };
         let spec_threshold = death_threshold(&specialist);
         let gen_threshold = death_threshold(&generalist);
@@ -1042,11 +1043,12 @@ mod tests {
                 nutrient: 0.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 0.8,
-                    somatic_maintenance: 0.1,
+                    kappa: 0.7,
                     ..zero_traits()
                 },
                 contact_time: 10,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 0.0,
             });
         }
 
@@ -1080,13 +1082,13 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 2.0,
             heterotrophy: 3.0,
-            somatic_maintenance: 5.0,
+            kappa: 0.8,
             ..zero_traits()
         };
         // Traits retain their raw values — no normalization
         assert_eq!(traits.photosynthetic_absorption, 2.0);
         assert_eq!(traits.heterotrophy, 3.0);
-        assert_eq!(traits.somatic_maintenance, 5.0);
+        assert_eq!(traits.kappa, 0.8);
     }
 
     #[test]
@@ -1099,6 +1101,7 @@ mod tests {
             },
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
         };
         let nominal = agent.effective_trait_with_steepness(0, 1.0);
         assert!((nominal - 1.0).abs() < 1e-6);
@@ -1248,13 +1251,13 @@ mod tests {
                 nutrient: 10.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 0.6,
-                    somatic_maintenance: 0.1,
-                    reproductive_investment: 5.0,
+                    kappa: 0.7,
                     fecundity: 1.0,
                     ..zero_traits()
                 },
                 contact_time: 50,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 5.0,
             });
         }
         // Heterotrophs (mobile, consume living and dead)
@@ -1268,13 +1271,13 @@ mod tests {
                 traits: TraitVector {
                     heterotrophy: 0.4,
                     mobility: 0.3,
-                    somatic_maintenance: 0.1,
-                    reproductive_investment: 5.0,
+                    kappa: 0.5,
                     fecundity: 1.0,
                     ..zero_traits()
                 },
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 5.0,
             });
         }
     }
@@ -1306,11 +1309,12 @@ mod tests {
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.8,
-                somatic_maintenance: 0.2,
+                kappa: 0.7,
                 ..zero_traits()
             },
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
         });
 
         world.step();
@@ -1354,14 +1358,16 @@ mod tests {
         let total_solar = world.total_solar_input();
         let total_dissipated = world.dissipated_energy();
         let retained_agents: f32 = world.agents().iter()
-            .map(|a| a.reserve + a.structure).sum();
+            .map(|a| a.reserve + a.structure + a.repro_reserve).sum();
         let retained_carcasses: f32 = world.carcasses().iter()
             .map(|c| c.energy).sum();
         // Initial endowment energy
-        let initial_energy: f32 = 50.0 * 10.0  // producers
+        let initial_energy: f32 = 50.0 * 10.0  // producers reserve
             + 5.0 * 10.0   // producer structure
-            + 40.0 * 10.0  // heterotrophs
-            + 3.0 * 10.0;  // heterotroph structure
+            + 5.0 * 10.0   // producer repro_reserve
+            + 40.0 * 10.0  // heterotrophs reserve
+            + 3.0 * 10.0   // heterotroph structure
+            + 5.0 * 10.0;  // heterotroph repro_reserve
         let total_input = initial_energy + total_solar;
         let total_output = total_dissipated + retained_agents + retained_carcasses;
         let diff = (total_input - total_output).abs();
@@ -1597,11 +1603,11 @@ mod tests {
         let total_solar = world.total_solar_input();
         let total_dissipated = world.dissipated_energy();
         let retained_agents: f32 = world.agents().iter()
-            .map(|a| a.reserve + a.structure).sum();
+            .map(|a| a.reserve + a.structure + a.repro_reserve).sum();
         let retained_carcasses: f32 = world.carcasses().iter()
             .map(|c| c.energy).sum();
-        let initial_energy: f32 = 50.0 * 10.0 + 5.0 * 10.0
-            + 40.0 * 10.0 + 3.0 * 10.0;
+        let initial_energy: f32 = 50.0 * 10.0 + 5.0 * 10.0 + 5.0 * 10.0
+            + 40.0 * 10.0 + 3.0 * 10.0 + 5.0 * 10.0;
         let total_input = initial_energy + total_solar;
         let total_output = total_dissipated + retained_agents + retained_carcasses;
         let diff = (total_input - total_output).abs();
