@@ -137,6 +137,7 @@ mod tests {
                 kappa: 0.5,
                 fecundity: 0.0,
                 asexual_propensity: 0.0,
+                dispersal: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,

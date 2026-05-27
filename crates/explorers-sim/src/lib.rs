@@ -57,6 +57,11 @@ pub struct TraitVector {
     /// reproduction without a mate; low values require sexual pairing.
     #[serde(default)]
     pub asexual_propensity: f32,
+    /// Investment in offspring dispersal mechanisms (spores, seeds, fruits).
+    /// Higher values widen the Gaussian kernel for offspring placement.
+    /// Independent of mobility and fecundity.
+    #[serde(default)]
+    pub dispersal: f32,
 }
 
 impl TraitVector {
@@ -67,7 +72,8 @@ impl TraitVector {
         let d3 = self.kappa - other.kappa;
         let d4 = self.fecundity - other.fecundity;
         let d5 = self.asexual_propensity - other.asexual_propensity;
-        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5).sqrt()
+        let d6 = self.dispersal - other.dispersal;
+        (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3 + d4 * d4 + d5 * d5 + d6 * d6).sqrt()
     }
 
     pub fn get(&self, index: usize) -> f32 {
@@ -78,6 +84,7 @@ impl TraitVector {
             3 => self.kappa,
             4 => self.fecundity,
             5 => self.asexual_propensity,
+            6 => self.dispersal,
             _ => unreachable!(),
         }
     }
@@ -90,12 +97,13 @@ impl TraitVector {
             3 => self.kappa = value,
             4 => self.fecundity = value,
             5 => self.asexual_propensity = value,
+            6 => self.dispersal = value,
             _ => unreachable!(),
         }
     }
 
     /// Number of trait dimensions.
-    pub const NUM_DIMS: usize = 6;
+    pub const NUM_DIMS: usize = 7;
 }
 
 fn default_kappa() -> f32 { 0.5 }
@@ -115,6 +123,7 @@ fn zero_traits() -> TraitVector {
         kappa: 0.0,
         fecundity: 0.0,
         asexual_propensity: 0.0,
+        dispersal: 0.0,
     }
 }
 fn default_base_nutrient_ratio() -> f32 { 0.1 }
@@ -282,7 +291,7 @@ impl Agent {
     }
 
     /// Returns a TraitVector with functional traits degraded by wear.
-    /// Behavioural traits (kappa, fecundity, asexual_propensity) are passed through unchanged.
+    /// Behavioural traits (kappa, fecundity, asexual_propensity, dispersal) are passed through unchanged.
     pub fn effective_traits(&self, k: f32) -> TraitVector {
         let mut t = self.traits;
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
@@ -420,6 +429,7 @@ impl World {
                     kappa: mean.kappa,
                     fecundity: mean.fecundity,
                     asexual_propensity: mean.asexual_propensity,
+                    dispersal: mean.dispersal,
                 }
             })
             .collect();
@@ -443,6 +453,7 @@ impl World {
                         kappa: (centroid.kappa + trait_dist.sample(&mut rng)).clamp(0.0, 1.0),
                         fecundity: centroid.fecundity + trait_dist.sample(&mut rng),
                         asexual_propensity: (centroid.asexual_propensity + trait_dist.sample(&mut rng)).clamp(0.0, 1.0),
+                        dispersal: (centroid.dispersal + trait_dist.sample(&mut rng)).max(0.0),
                     },
                     contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
@@ -883,6 +894,7 @@ mod tests {
             kappa: 0.0,
             fecundity: 0.0,
             asexual_propensity: 0.0,
+            dispersal: 0.0,
         }
     }
 
@@ -927,6 +939,7 @@ mod tests {
                 kappa: 0.5,
                 fecundity: 0.0,
                 asexual_propensity: 0.0,
+                dispersal: 0.0,
             },
             trait_covariance: 0.1,
             initial_cluster_count: 1,
@@ -943,6 +956,7 @@ mod tests {
             kappa: 0.8,
             fecundity: 0.0,
             asexual_propensity: 0.0,
+            dispersal: 0.0,
         };
         assert_eq!(traits.photosynthetic_absorption, 0.1);
         assert_eq!(traits.heterotrophy, 0.2);
@@ -969,7 +983,7 @@ mod tests {
         };
         assert_eq!(traits.kappa, 0.7);
         assert_eq!(traits.get(3), 0.7);
-        assert_eq!(TraitVector::NUM_DIMS, 6);
+        assert_eq!(TraitVector::NUM_DIMS, 7);
     }
 
     #[test]
@@ -1019,6 +1033,7 @@ mod tests {
             kappa: 0.1,
             fecundity: 0.1,
             asexual_propensity: 0.1,
+            dispersal: 0.1,
         };
         let spec_threshold = death_threshold(&specialist);
         let gen_threshold = death_threshold(&generalist);
