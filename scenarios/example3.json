@@ -15,7 +15,6 @@
     "initial_population_size": 0,
     "light_competition_radius": 8.0,
     "photo_maintenance_cost": 0.01,
-    "nutrient_absorption_maintenance_cost": 0.01,
     "initial_nutrient_pool": 5000.0,
     "somatic_maintenance_cost_coefficient": 0.1,
     "heterotrophy_maintenance_cost": 0.01
@@ -29,7 +28,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
-        "nutrient_absorption": 0.25,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -48,7 +46,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
-        "nutrient_absorption": 0.25,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
@@ -67,7 +64,6 @@
       "reserve": 20.0,
       "traits": {
         "photosynthetic_absorption": 0.35,
-        "nutrient_absorption": 0.25,
         "mobility": 0.0,
         "chemotaxis_sensitivity": 0.0,
         "mate_selectivity": 3.0,
