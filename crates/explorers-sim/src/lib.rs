@@ -1223,7 +1223,7 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             reserve: 50.0,
-            structure: 0.0,
+            structure: 5.0, // nonzero structure required for light capture
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.8,

@@ -33,11 +33,17 @@ pub fn photosynthesise(
             continue;
         }
 
-        // Compute light share: proportional to this agent's effective
-        // photosynthetic absorption relative to all co-located producers.
+        // Light share weighted by effective_autotrophy × structure (body size).
+        // Bigger producers shade smaller ones. Zero structure means zero light.
+        let my_weight = eff_photo * agents[i].structure;
+        if my_weight <= 0.0 {
+            continue;
+        }
+
+        // Compute total weight among co-located producers.
         // Use grid query but deduplicate results (grid can return duplicates
         // when query radius exceeds half the world extent).
-        let mut total_photo = eff_photo;
+        let mut total_weight = my_weight;
         let mut seen = std::collections::HashSet::new();
         seen.insert(i as u64);
         for j_id in grid.query_radius(agents[i].position, competition_radius) {
@@ -49,13 +55,17 @@ pub fn photosynthesise(
             if other_eff <= 0.0 {
                 continue;
             }
+            let other_weight = other_eff * agents[j].structure;
+            if other_weight <= 0.0 {
+                continue;
+            }
             if crate::toroidal_distance(agents[i].position, agents[j].position, extent)
                 < competition_radius
             {
-                total_photo += other_eff;
+                total_weight += other_weight;
             }
         }
-        let light_share = eff_photo / total_photo;
+        let light_share = my_weight / total_weight;
         let income = flux * light_share;
 
         agents[i].reserve += income;
@@ -1023,6 +1033,7 @@ mod tests {
             ..zero_traits()
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        agents[0].structure = 5.0; // nonzero structure required for light capture
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
 
@@ -1046,6 +1057,9 @@ mod tests {
             make_agent(1, (0.0, 0.0), 10.0, traits),
             make_agent(2, (1.0, 0.0), 10.0, traits),
         ];
+        // Equal structure: equal light share
+        agents[0].structure = 5.0;
+        agents[1].structure = 5.0;
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -1067,6 +1081,90 @@ mod tests {
         let events = photosynthesise(&mut agents, &grid, &params);
         assert!(events.is_empty());
         assert!((agents[0].reserve - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn photosynthesise_larger_producer_captures_more_light() {
+        let params = test_params();
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, traits),
+            make_agent(2, (1.0, 0.0), 10.0, traits),
+        ];
+        // Agent 1 is 3x bigger than agent 2
+        agents[0].structure = 9.0;
+        agents[1].structure = 3.0;
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+
+        let events = photosynthesise(&mut agents, &grid, &params);
+
+        assert_eq!(events.len(), 2);
+        // weight_0 = 0.5 * 9.0 = 4.5, weight_1 = 0.5 * 3.0 = 1.5, total = 6.0
+        // share_0 = 4.5 / 6.0 = 0.75, share_1 = 1.5 / 6.0 = 0.25
+        // income_0 = 10.0 * 0.75 = 7.5, income_1 = 10.0 * 0.25 = 2.5
+        assert!((events[0].energy_delta - 7.5).abs() < 1e-3,
+            "larger producer should get 7.5, got {}", events[0].energy_delta);
+        assert!((events[1].energy_delta - 2.5).abs() < 1e-3,
+            "smaller producer should get 2.5, got {}", events[1].energy_delta);
+        // Total flux conserved
+        let total: f32 = events.iter().map(|e| e.energy_delta).sum();
+        assert!((total - 10.0).abs() < 1e-3, "total flux should be conserved");
+    }
+
+    #[test]
+    fn photosynthesise_zero_structure_excluded_from_competition() {
+        // A newborn (zero structure) among established producers gets nothing;
+        // established producers split the full flux between themselves.
+        let params = test_params();
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, traits), // newborn, structure=0
+            make_agent(2, (1.0, 0.0), 10.0, traits), // established
+            make_agent(3, (2.0, 0.0), 10.0, traits), // established
+        ];
+        agents[1].structure = 4.0;
+        agents[2].structure = 4.0;
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        grid.insert(2, (2.0, 0.0));
+
+        let events = photosynthesise(&mut agents, &grid, &params);
+
+        // Only 2 events (the two established producers)
+        assert_eq!(events.len(), 2, "newborn should not photosynthesise");
+        // Each established producer gets half the flux
+        assert!((events[0].energy_delta - 5.0).abs() < 1e-3);
+        assert!((events[1].energy_delta - 5.0).abs() < 1e-3);
+        // Newborn reserve unchanged
+        assert!((agents[0].reserve - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn photosynthesise_zero_structure_gets_zero_light() {
+        let params = test_params();
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        // make_agent creates agents with structure=0.0
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+
+        let events = photosynthesise(&mut agents, &grid, &params);
+
+        // With zero structure, agent should get zero light
+        assert!(events.is_empty(), "agent with zero structure should produce no photosynthesis event");
+        assert!((agents[0].reserve - 10.0).abs() < 1e-6, "reserve should be unchanged");
     }
 
     // --- Absorb nutrients ---
