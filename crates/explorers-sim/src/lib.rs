@@ -574,14 +574,6 @@ impl World {
         );
         let solar_this_tick: f32 = photo_events.iter().map(|e| e.energy_delta).sum();
         self.total_solar_input += solar_this_tick;
-        // Record solar flows to ledger
-        for ev in &photo_events {
-            self.ledger.record(
-                EnergyEndpoint::SolarTap,
-                EnergyEndpoint::Agent(ev.source),
-                ev.energy_delta,
-            );
-        }
         events.extend(photo_events);
 
         // 2. Absorb nutrients
