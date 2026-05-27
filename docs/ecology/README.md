@@ -8,6 +8,7 @@ The cross-cutting topics describe system-level properties that emerge regardless
 
 ## Cross-cutting topics
 
+- [Trophic Roles](trophic-roles.md) — why producer, consumer, and decomposer exist as emergent positions in the energy/nutrient flow network; the two-currency physics that necessitates them
 - [Nutrient Cycling](nutrient-cycling.md) — carbon, nitrogen, phosphorus as a complete system; stoichiometric constraints; multi-currency dynamics
 - [Life History Theory](life-history-theory.md) — energy allocation trade-offs, r/K selection, reproductive strategies, senescence, bet-hedging, dispersal-fecundity trade-offs
 - [Spatial Ecology](spatial-ecology.md) — patch dynamics, dispersal, movement ecology, spatial pattern formation, spatial competition, spatial feedbacks

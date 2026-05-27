@@ -9,6 +9,7 @@ The ADRs describe how the system design gets implemented in code. They are close
 ## Documents
 
 - [World Rules](world-rules.md) — the immutable physics of the simulation: stocks (energy and nutrients), flows, topologies, channels, conservation laws, and the cost structure that creates trade-offs
+- [Trait Space](trait-space.md) — the six heritable dimensions that define an agent: allocation (kappa), specification (autotrophy, heterotrophy, mobility), and reproduction (fecundity, asexual propensity)
 - [Execution Model](execution-model.md) — how the world rules are realised through time: monolithic tick loop, phase ordering, interaction coordination, event recording
 - [Expected Properties](expected-properties.md) — the emergent properties we expect from those rules, the failure modes that indicate miscalibration, and the initial conditions that enable or prevent healthy ecology
 

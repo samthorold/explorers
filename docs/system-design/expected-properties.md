@@ -8,7 +8,7 @@ This document serves two purposes: it defines what a well-functioning world look
 
 ### Trophic structure
 
-Agents differentiate into producers, consumers, and decomposers — the three energy-acquisition strategies corresponding to the three input flows defined in the world rules (photosynthesis, consumption, decomposition). These are not types assigned to agents; they are roles that emerge because the cost structure makes specialisation more viable than generalism. The ecology literature consistently identifies these three roles as the fundamental energy-acquisition strategies in any ecosystem with a detrital pathway.
+Agents differentiate into producers, consumers, and decomposers — the three energy-acquisition strategies corresponding to the three input flows defined in the world rules (photosynthesis, consumption, decomposition). These are not types assigned to agents; they are roles that emerge because superlinear maintenance costs make specialisation more viable than generalism. Consumer and decomposer are both expressions of heterotrophy — the distinction is target state (living vs dead), not separate capability. The ecology literature consistently identifies these three roles as the fundamental energy-acquisition strategies in any ecosystem with a detrital pathway.
 
 The trophic structure should exhibit a pyramid shape: more energy (and typically more agents) at the producer level than at the consumer level, and more at the consumer level than at higher levels. This is a direct consequence of trophic transfer loss (flow 7) — energy dissipates at every transfer, so each successive level has less energy available.
 
@@ -20,7 +20,7 @@ A system that reaches a static equilibrium has either lost its positive feedback
 
 ### Trait-space clustering
 
-Agents cluster into distinct strategy groups in the trait space, with gaps between clusters. This is analogous to speciation — discrete strategies that are reproductively and functionally distinct from each other. Clustering arises from the interaction between reproductive inheritance (offspring resemble parents), mate selectivity (reproduction is more likely between similar agents), and the cost structure (the fitness landscape has peaks at specialist strategies and valleys at generalist positions).
+Agents cluster into distinct strategy groups in the trait space, with gaps between clusters. This is analogous to speciation — discrete strategies that are reproductively and functionally distinct from each other. Clustering arises from the interaction between reproductive inheritance (offspring resemble parents), reproductive isolation (agents whose trait-space divergence exceeds a physics-defined reproductive compatibility distance cannot mate), and the cost structure (the fitness landscape has peaks at specialist strategies and valleys at generalist positions). Speciation happens when populations diverge past this compatibility threshold — it is not driven by an explicit selectivity trait but by the accumulation of trait-space distance between lineages.
 
 ### Coexistence
 
@@ -32,11 +32,11 @@ Agents are born and die at non-trivial rates. The system is not frozen — new a
 
 ### Age structure and survivorship variation
 
-Populations exhibit age distributions, not uniformly young or uniformly old cohorts. Different strategies produce different survivorship patterns: high-fecundity strategies produce many short-lived offspring with high juvenile mortality (most die young, a few survive to reproduce). Low-fecundity strategies produce few long-lived offspring with low juvenile mortality but eventual senescent decline. These patterns emerge from the interaction between fecundity (how much energy each offspring receives), somatic maintenance investment (how fast the agent ages), and extrinsic mortality (predation and competition). The coexistence of different survivorship strategies within the same world is a sign of healthy niche differentiation — r-strategists and K-strategists exploiting different environmental contexts.
+Populations exhibit age distributions, not uniformly young or uniformly old cohorts. Different strategies produce different survivorship patterns: high-fecundity strategies produce many short-lived offspring with high juvenile mortality (most die young, a few survive to reproduce). Low-fecundity strategies produce few long-lived offspring with low juvenile mortality but eventual senescent decline. These patterns emerge from the interaction between fecundity (how much energy each offspring receives), kappa (the allocation parameter controlling how much mobilised energy goes to soma vs reproduction, which determines how fast the agent ages), and extrinsic mortality (predation and competition). The coexistence of different survivorship strategies within the same world is a sign of healthy niche differentiation — r-strategists and K-strategists exploiting different environmental contexts.
 
 ### Reproductive mode variation
 
-Both sexual and asexual reproduction occur, with the balance depending on population density and environmental context. In dense populations with coevolutionary pressure, sexual reproduction dominates because the variation it generates is competitively valuable. In sparse populations or for colonisers of empty habitat, asexual reproduction dominates because mate-finding is impossible or too costly. The system does not prescribe which mode wins — the balance shifts dynamically as population density, spatial structure, and selective pressure change.
+Both sexual and asexual reproduction occur, with the balance depending on population density, mate availability, and each lineage's evolved asexual propensity. Asexual propensity is an evolvable trait — lineages can evolve toward or away from asexual reproduction over generations. A lineage that has lost asexual capability (low asexual propensity) cannot reproduce without mates, making it vulnerable to extinction in sparse conditions. In dense populations with coevolutionary pressure, sexual reproduction dominates because the variation it generates is competitively valuable. In sparse populations or for colonisers of empty habitat, lineages with high asexual propensity have an advantage because mate-finding is impossible or too costly. The system does not prescribe which mode wins — the balance shifts dynamically as population density, spatial structure, selective pressure, and evolved reproductive strategy change.
 
 ### Energy throughput
 
@@ -72,7 +72,7 @@ Agents survive but nothing changes. Populations sit at fixed values, no new stra
 
 ### Generalist dominance
 
-Agents that invest in all acquisition strategies simultaneously outcompete specialists. Diversity collapses from above — not because one specialist wins, but because a jack-of-all-trades beats every specialist in their own niche. The trait budget constraint (L1, sum to 1.0) makes this structurally impossible at the trait level — an agent spreading its budget across all capabilities has lower peak performance in each than a specialist. If generalist dominance is observed despite the budget, the cause is in the cost structure (maintenance costs too low to penalize breadth) or the environment (insufficient niche differentiation in the substrate).
+Agents that invest in all acquisition strategies simultaneously outcompete specialists. Diversity collapses from above — not because one specialist wins, but because a jack-of-all-trades beats every specialist in their own niche. Superlinear maintenance costs penalise generalism by making it increasingly expensive to maintain multiple capabilities simultaneously — each trait's maintenance cost grows faster than linearly with its value, so spreading investment across many traits is progressively more expensive than concentrating it. If generalist dominance is observed, the cause is in the maintenance cost scaling (too shallow to penalise breadth) or the environment (insufficient niche differentiation in the substrate).
 
 ## Relationship between properties and failure modes
 
@@ -83,7 +83,7 @@ Agents that invest in all acquisition strategies simultaneously outcompete speci
 | Trait-space clustering | Generalist dominance or monoculture |
 | Coexistence | Monoculture |
 | Demographic turnover | Frozen dynamics or extinction |
-| Age structure and survivorship variation | Immortal agents (no wear) or uniform lifespan (no variation in somatic maintenance) |
+| Age structure and survivorship variation | Immortal agents (no wear) or uniform lifespan (no variation in kappa allocation) |
 | Reproductive mode variation | Obligate sexuality preventing colonisation, or obligate asexuality preventing adaptation |
 | Energy throughput | Energy death or frozen dynamics |
 | Energy conservation | Implementation bug (not a calibration issue) |
