@@ -94,18 +94,15 @@ pub fn absorb_nutrients(
         return events;
     }
 
-    let k_half = 50.0_f32;
     let k = params.wear_degradation_steepness;
 
     // Compute each agent's demand — uptake is coupled to autotrophy.
     // The same sessile infrastructure that captures light also extracts nutrients.
+    // Mobile autotroph unviability emerges from superlinear maintenance costs,
+    // not from a contact_time gate.
     let demands: Vec<f32> = agents
         .iter()
-        .map(|a| {
-            let ct = a.contact_time as f32;
-            let eff_autotrophy = a.effective_trait_with_steepness(0, k);
-            eff_autotrophy * ct / (ct + k_half)
-        })
+        .map(|a| a.effective_trait_with_steepness(0, k))
         .collect();
     let total_demand: f32 = demands.iter().sum();
     if total_demand <= 0.0 {
@@ -1349,23 +1346,23 @@ mod tests {
     // --- Absorb nutrients ---
 
     #[test]
-    fn absorb_nutrients_scales_with_contact_time() {
+    fn absorb_nutrients_demand_equals_effective_autotrophy() {
         let params = test_params();
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             ..zero_traits()
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
-        agents[0].contact_time = 10;
         let mut pool = 100.0;
 
         let events = absorb_nutrients(&mut agents, &mut pool, &params);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::NutrientAbsorbed);
-        // demand = eff_autotrophy * ct / (ct + k_half) = 0.5 * 10 / (10 + 50) ≈ 0.0833
-        let expected = 0.5 * 10.0 / 60.0;
-        assert!((agents[0].nutrient - expected).abs() < 1e-3);
+        // demand = eff_autotrophy = 0.5 (no wear degradation on fresh agent)
+        let expected = 0.5;
+        assert!((agents[0].nutrient - expected).abs() < 1e-3,
+            "uptake should equal effective autotrophy, got {}", agents[0].nutrient);
         assert!((pool - (100.0 - expected)).abs() < 1e-3);
     }
 
@@ -1380,8 +1377,6 @@ mod tests {
             make_agent(1, (0.0, 0.0), 10.0, traits),
             make_agent(2, (1.0, 0.0), 10.0, traits),
         ];
-        agents[0].contact_time = 50;
-        agents[1].contact_time = 50;
         let mut pool = 0.1; // very small pool
 
         let events = absorb_nutrients(&mut agents, &mut pool, &params);
@@ -1394,7 +1389,10 @@ mod tests {
     }
 
     #[test]
-    fn absorb_nutrients_zero_contact_time_yields_zero_uptake() {
+    fn absorb_nutrients_zero_contact_time_still_receives_nutrients() {
+        // Mobile agents with contact_time=0 should still absorb nutrients —
+        // unviability of mobile autotrophs emerges from superlinear maintenance
+        // costs, not from a contact_time gate.
         let params = test_params();
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
@@ -1405,8 +1403,8 @@ mod tests {
         let mut pool = 100.0;
 
         let events = absorb_nutrients(&mut agents, &mut pool, &params);
-        assert!(events.is_empty());
-        assert!((agents[0].nutrient).abs() < 1e-6);
+        assert_eq!(events.len(), 1, "agent with autotrophy should get nutrients regardless of contact_time");
+        assert!(agents[0].nutrient > 0.0, "nutrient uptake should be positive");
     }
 
     #[test]
@@ -1419,16 +1417,14 @@ mod tests {
             ..zero_traits()
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
-        agents[0].contact_time = 10;
         let mut pool = 100.0;
 
         let events = absorb_nutrients(&mut agents, &mut pool, &params);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::NutrientAbsorbed);
-        // demand = effective_autotrophy * ct / (ct + k_half)
-        // = 0.5 * 10 / (10 + 50) = 0.5 * 10/60 ≈ 0.0833
-        let expected = 0.5 * 10.0 / 60.0;
+        // demand = effective_autotrophy = 0.5
+        let expected = 0.5;
         assert!((agents[0].nutrient - expected).abs() < 1e-3,
             "autotrophy-derived uptake expected {expected}, got {}", agents[0].nutrient);
     }
@@ -1444,7 +1440,6 @@ mod tests {
             ..zero_traits()
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
-        agents[0].contact_time = 100; // long contact time, still zero uptake
         let mut pool = 100.0;
 
         let events = absorb_nutrients(&mut agents, &mut pool, &params);
