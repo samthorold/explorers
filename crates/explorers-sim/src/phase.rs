@@ -231,22 +231,32 @@ pub fn grow(
 
 /// Apply wear: baseline + use-dependent accumulation per functional trait.
 /// Somatic repair derived from kappa allocation: higher kappa = more repair.
+///
+/// `usage` maps agent id → per-functional-trait usage amounts:
+///   [0] = energy captured (autotrophy), [1] = energy drained (heterotrophy),
+///   [2] = distance moved (mobility).
 pub fn apply_wear(
     agents: &mut [Agent],
     params: &WorldParameters,
+    usage: &std::collections::HashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]>,
 ) -> Vec<Event> {
     let mut events = Vec::new();
     let baseline_rate = params.wear_rate;
-    let _use_rate = params.use_wear_rate;
+    let use_rate = params.use_wear_rate;
     let decay = params.repair_decay;
 
     for agent in agents.iter_mut() {
         let mut total_wear_delta = 0.0_f32;
 
-        // Accumulate wear
+        // Look up this agent's usage data (defaults to zero if absent)
+        let agent_usage = usage.get(&agent.id).copied().unwrap_or([0.0; FUNCTIONAL_TRAIT_COUNT]);
+
+        // Accumulate wear: baseline + use-dependent
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
             let nominal = agent.traits.get(FUNCTIONAL_TRAIT_INDICES[ft]);
-            let accumulation = baseline_rate * nominal.max(0.0);
+            let baseline = baseline_rate * nominal.max(0.0);
+            let use_dependent = use_rate * agent_usage[ft].max(0.0);
+            let accumulation = baseline + use_dependent;
             agent.wear[ft] += accumulation;
             total_wear_delta += accumulation;
         }
@@ -1715,7 +1725,8 @@ mod tests {
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
 
-        let events = apply_wear(&mut agents, &params);
+        let no_usage = std::collections::HashMap::new();
+        let events = apply_wear(&mut agents, &params, &no_usage);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::Wore);
@@ -1738,7 +1749,8 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
         agents[0].wear[0] = 1.0; // pre-existing wear
 
-        let _events = apply_wear(&mut agents, &params);
+        let no_usage = std::collections::HashMap::new();
+        let _events = apply_wear(&mut agents, &params, &no_usage);
 
         // Accumulation: 0.1 * 0.5 = 0.05, so wear goes to 1.05
         // Then repair: kappa(0.7) * exp(-1.0 * 1.05) = 0.7 * 0.3499 = 0.2449
@@ -1755,8 +1767,129 @@ mod tests {
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, zero_traits())];
 
-        let events = apply_wear(&mut agents, &params);
+        let no_usage = std::collections::HashMap::new();
+        let events = apply_wear(&mut agents, &params, &no_usage);
         assert!(events.is_empty());
+    }
+
+    // --- Use-dependent wear ---
+
+    #[test]
+    fn use_wear_autotrophy_increases_with_photosynthesis() {
+        // An agent that photosynthesises should accumulate extra autotrophy wear
+        // proportional to energy captured, on top of baseline wear.
+        let params = WorldParameters {
+            wear_rate: 0.1,
+            use_wear_rate: 0.05,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+
+        // No usage: only baseline wear
+        let no_usage = std::collections::HashMap::new();
+        let _events_baseline = apply_wear(&mut agents, &params, &no_usage);
+        let baseline_wear = agents[0].wear[0];
+        assert!(baseline_wear > 0.0, "baseline wear should accumulate");
+
+        // Reset and apply with photosynthesis usage
+        agents[0].wear = [0.0; FUNCTIONAL_TRAIT_COUNT];
+        let mut usage = std::collections::HashMap::new();
+        usage.insert(1_u64, [5.0_f32, 0.0, 0.0]); // 5.0 energy captured via photosynthesis
+        let _events_use = apply_wear(&mut agents, &params, &usage);
+        let use_wear = agents[0].wear[0];
+
+        // Use-dependent wear should exceed baseline alone
+        assert!(use_wear > baseline_wear,
+            "use-dependent wear ({use_wear}) should exceed baseline ({baseline_wear})");
+        // Extra wear = use_wear_rate * energy_captured = 0.05 * 5.0 = 0.25
+        let expected_extra = 0.05 * 5.0;
+        let actual_extra = use_wear - baseline_wear;
+        assert!((actual_extra - expected_extra).abs() < 1e-6,
+            "extra wear should be {expected_extra}, got {actual_extra}");
+    }
+
+    #[test]
+    fn use_wear_heterotrophy_increases_with_consumption() {
+        // An agent that consumes should accumulate extra heterotrophy wear
+        // proportional to energy drained.
+        let params = WorldParameters {
+            wear_rate: 0.1,
+            use_wear_rate: 0.05,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            heterotrophy: 0.8,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+
+        // With heterotrophy usage
+        let mut usage = std::collections::HashMap::new();
+        usage.insert(1_u64, [0.0_f32, 3.0, 0.0]); // 3.0 energy drained
+        let _events = apply_wear(&mut agents, &params, &usage);
+
+        // Baseline: 0.1 * 0.8 = 0.08
+        // Use-dependent: 0.05 * 3.0 = 0.15
+        // Total heterotrophy wear (index 1): 0.08 + 0.15 = 0.23
+        let expected = 0.08 + 0.15;
+        assert!((agents[0].wear[1] - expected).abs() < 1e-6,
+            "heterotrophy wear should be {expected}, got {}", agents[0].wear[1]);
+    }
+
+    #[test]
+    fn use_wear_mobility_increases_with_distance_moved() {
+        // An agent that moves should accumulate extra mobility wear
+        // proportional to distance traveled.
+        let params = WorldParameters {
+            wear_rate: 0.1,
+            use_wear_rate: 0.05,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            mobility: 0.6,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+
+        let mut usage = std::collections::HashMap::new();
+        usage.insert(1_u64, [0.0_f32, 0.0, 2.0]); // 2.0 distance moved
+        let _events = apply_wear(&mut agents, &params, &usage);
+
+        // Baseline: 0.1 * 0.6 = 0.06
+        // Use-dependent: 0.05 * 2.0 = 0.10
+        // Total mobility wear (index 2): 0.06 + 0.10 = 0.16
+        let expected = 0.06 + 0.10;
+        assert!((agents[0].wear[2] - expected).abs() < 1e-6,
+            "mobility wear should be {expected}, got {}", agents[0].wear[2]);
+    }
+
+    #[test]
+    fn use_wear_zero_usage_equals_baseline_only() {
+        // An agent with no usage should only have baseline wear.
+        let params = WorldParameters {
+            wear_rate: 0.1,
+            use_wear_rate: 0.05,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            heterotrophy: 0.3,
+            mobility: 0.4,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+
+        let no_usage = std::collections::HashMap::new();
+        let _events = apply_wear(&mut agents, &params, &no_usage);
+
+        // Only baseline wear: rate * nominal for each trait
+        assert!((agents[0].wear[0] - 0.05).abs() < 1e-6); // 0.1 * 0.5
+        assert!((agents[0].wear[1] - 0.03).abs() < 1e-6); // 0.1 * 0.3
+        assert!((agents[0].wear[2] - 0.04).abs() < 1e-6); // 0.1 * 0.4
     }
 
     // --- Check death thresholds ---

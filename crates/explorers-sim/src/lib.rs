@@ -653,11 +653,43 @@ impl World {
             self.agents.push(child);
         }
 
-        // 7. Wear
-        let wear_events = phase::apply_wear(&mut self.agents, &self.params);
+        // 7. Move (before wear so distance traveled feeds use-dependent wear)
+        let move_result = phase::move_agents(
+            &mut self.agents, &self.carcasses, &grid, &self.params, &mut self.rng,
+        );
+        self.dissipated_energy += move_result.dissipated;
+        events.extend(move_result.events);
+
+        // 8. Wear: collect per-agent usage from earlier phases
+        let mut usage_data: std::collections::HashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]> = std::collections::HashMap::new();
+        // Autotrophy usage: energy captured via photosynthesis
+        for ev in events.iter().filter(|e| e.kind == event::EventKind::Photosynthesized) {
+            let entry = usage_data.entry(ev.source).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
+            entry[0] += ev.energy_delta;
+        }
+        // Heterotrophy usage: energy drained via consumption
+        for ev in events.iter().filter(|e| e.kind == event::EventKind::Consumed) {
+            let entry = usage_data.entry(ev.source).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
+            entry[1] += ev.energy_delta;
+        }
+        // Mobility usage: distance moved = effective mobility for agents that moved
+        {
+            let id_to_idx: std::collections::HashMap<u64, usize> = self.agents.iter()
+                .enumerate()
+                .map(|(i, a)| (a.id, i))
+                .collect();
+            let k = self.params.wear_degradation_steepness;
+            for ev in events.iter().filter(|e| e.kind == event::EventKind::Moved) {
+                let entry = usage_data.entry(ev.source).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
+                if let Some(&idx) = id_to_idx.get(&ev.source) {
+                    entry[2] += self.agents[idx].effective_trait_with_steepness(2, k);
+                }
+            }
+        }
+        let wear_events = phase::apply_wear(&mut self.agents, &self.params, &usage_data);
         events.extend(wear_events);
 
-        // 8. Check death thresholds
+        // 9. Check death thresholds
         let (death_events, new_carcasses, death_dissipated) = phase::check_death_thresholds(
             &mut self.agents, &self.params,
         );
@@ -669,13 +701,6 @@ impl World {
 
         // Remove dead agents (those with reserve <= 0 or structure below threshold)
         self.agents.retain(|a| a.reserve > 0.0);
-
-        // 9. Move (final phase — repositions agents for next tick)
-        let move_result = phase::move_agents(
-            &mut self.agents, &self.carcasses, &grid, &self.params, &mut self.rng,
-        );
-        self.dissipated_energy += move_result.dissipated;
-        events.extend(move_result.events);
 
         // --- Energy ledger: record all flows for conservation verification ---
         // Built from event data and state snapshots, after all phases complete.
@@ -1101,6 +1126,131 @@ mod tests {
         // Verify metabolism events exist
         let metab_events = world.event_log().by_kind(&event::EventKind::Metabolized);
         assert!(!metab_events.is_empty(), "should have metabolism events");
+    }
+
+    #[test]
+    fn use_dependent_wear_accumulates_through_world_step() {
+        // A producer with nonzero use_wear_rate should accumulate more autotrophy
+        // wear when it photosynthesises than baseline alone.
+        let params = WorldParameters {
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.1,
+            growth_efficiency: 0.5,
+            wear_rate: 0.01,
+            use_wear_rate: 0.02,
+            wear_degradation_steepness: 1.0,
+            repair_decay: 0.0, // no repair, so wear only accumulates
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Add a single producer with structure (so it can photosynthesise)
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.8,
+                ..zero_traits()
+            },
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        });
+
+        world.step();
+
+        // After one tick, the producer should have photosynthesised and accumulated
+        // both baseline and use-dependent wear on autotrophy.
+        assert!(!world.agents().is_empty(), "agent should survive one tick");
+        let agent = &world.agents()[0];
+        // Baseline wear: 0.01 * 0.8 = 0.008
+        // Use-dependent wear: 0.02 * energy_captured (should be > 0 since it photosynthesised)
+        // Total should exceed baseline alone
+        let baseline_only = 0.01 * 0.8;
+        assert!(agent.wear[0] > baseline_only,
+            "autotrophy wear ({}) should exceed baseline-only ({baseline_only}) due to photosynthesis use-wear",
+            agent.wear[0]);
+        // Heterotrophy and mobility wear should be baseline only (no usage)
+        assert!((agent.wear[1]).abs() < 1e-6, "heterotrophy wear should be zero (no heterotrophy trait)");
+        assert!((agent.wear[2]).abs() < 1e-6, "mobility wear should be zero (no mobility trait)");
+    }
+
+    #[test]
+    fn use_dependent_wear_heterotrophy_through_world_step() {
+        // A consumer that drains a target should accumulate extra heterotrophy wear.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0, // no photosynthesis
+            base_metabolic_rate: 0.0, // no metabolism drain
+            growth_efficiency: 0.0,
+            wear_rate: 0.01,
+            use_wear_rate: 0.02,
+            wear_degradation_steepness: 1.0,
+            repair_decay: 0.0, // no repair
+            contact_radius: 10.0,
+            base_trophic_efficiency: 0.5,
+            trophic_distance_decay: 0.0,
+            initial_population_size: 0,
+            movement_cost_coefficient: 0.0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Consumer
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                heterotrophy: 0.6,
+                ..zero_traits()
+            },
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        });
+        // Target with structure to drain
+        world.add_agent(Agent {
+            id: 0,
+            position: (1.0, 0.0), // within contact_radius=10
+            reserve: 50.0,
+            structure: 20.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                ..zero_traits()
+            },
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        });
+
+        world.step();
+
+        // Find the consumer (agent with heterotrophy)
+        let consumer = world.agents().iter().find(|a| a.traits.heterotrophy > 0.3);
+        assert!(consumer.is_some(), "consumer should survive");
+        let consumer = consumer.unwrap();
+        // Heterotrophy wear should exceed baseline due to consumption
+        let baseline_only = 0.01 * 0.6;
+        assert!(consumer.wear[1] > baseline_only,
+            "heterotrophy wear ({}) should exceed baseline ({baseline_only}) due to consumption",
+            consumer.wear[1]);
     }
 
     #[test]
