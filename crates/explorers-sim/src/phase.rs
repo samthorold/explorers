@@ -684,8 +684,10 @@ pub fn move_agents(
         let move_x = (dir_x / dir_mag) * distance;
         let move_y = (dir_y / dir_mag) * distance;
 
-        // Deduct energy cost
-        let cost = distance * params.movement_cost_coefficient;
+        // Deduct energy cost (capped at available reserve — agent cannot
+        // spend energy it does not have)
+        let raw_cost = distance * params.movement_cost_coefficient * agents[i].structure;
+        let cost = raw_cost.min(agents[i].reserve.max(0.0));
         agents[i].reserve -= cost;
         total_dissipated += cost;
 
@@ -1803,7 +1805,8 @@ mod tests {
     }
 
     #[test]
-    fn move_energy_cost_proportional_to_distance() {
+    fn move_zero_structure_pays_zero_movement_cost() {
+        // Newborns (structure=0) should move for free regardless of coefficient.
         use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 2.0;
@@ -1812,6 +1815,69 @@ mod tests {
             ..zero_traits()
         };
         let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
+        // structure is 0.0 by default from make_agent
+        assert_eq!(agents[0].structure, 0.0);
+        let carcasses = vec![];
+        let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+
+        // Zero structure means zero movement cost
+        assert!((agents[0].reserve - 100.0).abs() < 1e-3,
+            "zero-structure agent should pay zero movement cost, reserve={}", agents[0].reserve);
+        assert!((result.dissipated).abs() < 1e-3,
+            "zero dissipation for zero-structure agent, got {}", result.dissipated);
+    }
+
+    #[test]
+    fn move_large_agent_pays_more_than_small_agent() {
+        // Two agents with same mobility but different structure: the larger one
+        // should pay proportionally more movement cost.
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 1.0;
+        let traits = TraitVector {
+            mobility: 0.5,
+            ..zero_traits()
+        };
+
+        // Small agent (structure=2)
+        let mut small = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
+        small[0].structure = 2.0;
+        let carcasses = vec![];
+        let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
+        let mut rng1 = ChaCha8Rng::seed_from_u64(42);
+        let result_small = move_agents(&mut small, &carcasses, &grid, &params, &mut rng1);
+
+        // Large agent (structure=10)
+        let mut large = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
+        large[0].structure = 10.0;
+        let mut rng2 = ChaCha8Rng::seed_from_u64(42);
+        let result_large = move_agents(&mut large, &carcasses, &grid, &params, &mut rng2);
+
+        // Large agent should pay 5x more (10/2)
+        let small_cost = 100.0 - small[0].reserve;
+        let large_cost = 100.0 - large[0].reserve;
+        assert!(large_cost > small_cost,
+            "large agent cost ({}) should exceed small agent cost ({})", large_cost, small_cost);
+        assert!((large_cost / small_cost - 5.0).abs() < 1e-3,
+            "cost ratio should be 5.0, got {}", large_cost / small_cost);
+        assert!((result_large.dissipated / result_small.dissipated - 5.0).abs() < 1e-3,
+            "dissipation ratio should be 5.0");
+    }
+
+    #[test]
+    fn move_energy_cost_proportional_to_distance_and_structure() {
+        use rand::SeedableRng;
+        let mut params = test_params();
+        params.movement_cost_coefficient = 2.0;
+        let traits = TraitVector {
+            mobility: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
+        agents[0].structure = 3.0;
         let carcasses = vec![];
         let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
@@ -1819,8 +1885,8 @@ mod tests {
         let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
 
         // eff_mobility = 0.5 (no wear, k=0 so exp(0)=1)
-        // cost = distance * coefficient = 0.5 * 2.0 = 1.0
-        let expected_cost = 0.5 * 2.0;
+        // cost = distance * coefficient * structure = 0.5 * 2.0 * 3.0 = 3.0
+        let expected_cost = 0.5 * 2.0 * 3.0;
         assert!((agents[0].reserve - (100.0 - expected_cost)).abs() < 1e-3,
             "reserve should be {}, got {}", 100.0 - expected_cost, agents[0].reserve);
         assert!((result.dissipated - expected_cost).abs() < 1e-3);
