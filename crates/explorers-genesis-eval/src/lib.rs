@@ -576,7 +576,7 @@ mod tests {
             photo_maintenance_cost: 0.0,
             heterotrophy_maintenance_cost: 0.0,
             initial_nutrient_pool: 0.0,
-            growth_efficiency: 0.0,
+            growth_efficiency: 0.5,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
@@ -594,11 +594,9 @@ mod tests {
             mean_traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.8,
                 heterotrophy: 0.3,
-
                 mobility: 0.3,
-                reproductive_investment: 0.3,
+                kappa: 0.7,
                 fecundity: 0.0,
-                somatic_maintenance: 0.0,
             },
             trait_covariance: 0.5,
             initial_cluster_count: 2,
@@ -805,11 +803,9 @@ mod tests {
             mean_traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.0,
                 heterotrophy: 0.0,
-
                 mobility: 0.0,
-                reproductive_investment: 0.0,
+                kappa: 0.0,
                 fecundity: 0.0,
-                somatic_maintenance: 0.0,
             },
             trait_covariance: 0.0,
             initial_cluster_count: 1,
@@ -855,9 +851,8 @@ mod tests {
             photosynthetic_absorption: vals[0],
             heterotrophy: vals[1],
             mobility: vals[2],
-            reproductive_investment: vals[3],
+            kappa: vals[3],
             fecundity: 0.0,
-            somatic_maintenance: 0.0,
         }
     }
 

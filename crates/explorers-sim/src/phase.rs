@@ -137,9 +137,9 @@ pub fn absorb_nutrients(
     events
 }
 
-/// Metabolise: fixed costs only. Base rate + trait maintenance + somatic
-/// maintenance + structure maintenance. No movement cost (that's in the
-/// movement phase).
+/// Metabolise: fixed costs only. Base rate + trait maintenance + structure
+/// maintenance. No movement cost (that's in the movement phase).
+/// Somatic maintenance is now governed by kappa allocation in the grow phase.
 pub fn metabolise(
     agents: &mut [Agent],
     params: &WorldParameters,
@@ -151,7 +151,6 @@ pub fn metabolise(
         let cost = params.base_metabolic_rate
             + agent.traits.photosynthetic_absorption * params.photo_maintenance_cost
             + agent.traits.heterotrophy * params.heterotrophy_maintenance_cost
-            + agent.traits.somatic_maintenance * params.somatic_maintenance_cost_coefficient
             + agent.structure * params.structure_maintenance_coefficient;
 
         agent.reserve -= cost;
@@ -169,18 +168,15 @@ pub fn metabolise(
     (events, total_dissipated)
 }
 
-/// Grow: convert reserve surplus above metabolic retention to structure
-/// at growth_efficiency rate. The conversion is lossy.
+/// Grow: surplus energy (reserve above metabolic retention) is split by kappa.
+/// - kappa fraction → soma: growth (reserve → structure, lossy) and wear repair
+/// - (1 - kappa) fraction → repro_reserve: accumulates across ticks
 pub fn grow(
     agents: &mut [Agent],
     params: &WorldParameters,
 ) -> (Vec<Event>, f32) {
     let mut events = Vec::new();
     let mut total_dissipated = 0.0_f32;
-    let efficiency = params.growth_efficiency;
-    if efficiency <= 0.0 {
-        return (events, total_dissipated);
-    }
 
     for agent in agents.iter_mut() {
         if agent.reserve <= 0.0 {
@@ -191,7 +187,6 @@ pub fn grow(
             + agent.traits.photosynthetic_absorption * params.photo_maintenance_cost
             + agent.traits.heterotrophy * params.heterotrophy_maintenance_cost
             + agent.traits.mobility * params.movement_cost_coefficient
-            + agent.traits.somatic_maintenance * params.somatic_maintenance_cost_coefficient
             + agent.structure * params.structure_maintenance_coefficient;
         let retention = metabolic_cost * 2.0;
         let surplus = (agent.reserve - retention).max(0.0);
@@ -199,27 +194,43 @@ pub fn grow(
             continue;
         }
 
-        let to_structure = surplus * efficiency;
-        let dissipated = surplus - to_structure;
-        agent.reserve -= surplus;
-        agent.structure += to_structure;
-        total_dissipated += dissipated;
+        let kappa = agent.traits.kappa.clamp(0.0, 1.0);
+        let soma_fraction = surplus * kappa;
+        let repro_fraction = surplus - soma_fraction; // (1-kappa) * surplus
 
-        events.push(Event {
-            tick: 0,
-            seq: 0,
-            kind: EventKind::Grew,
-            source: agent.id,
-            target: None,
-            energy_delta: to_structure,
-            position: Some(agent.position),
-        });
+        // Deduct entire surplus from reserve
+        agent.reserve -= surplus;
+
+        // Soma fraction → growth (if growth_efficiency > 0)
+        let efficiency = params.growth_efficiency;
+        if efficiency > 0.0 && soma_fraction > 0.0 {
+            let to_structure = soma_fraction * efficiency;
+            let dissipated = soma_fraction - to_structure;
+            agent.structure += to_structure;
+            total_dissipated += dissipated;
+
+            events.push(Event {
+                tick: 0,
+                seq: 0,
+                kind: EventKind::Grew,
+                source: agent.id,
+                target: None,
+                energy_delta: to_structure,
+                position: Some(agent.position),
+            });
+        } else {
+            // No growth: soma fraction is dissipated (maintenance cost)
+            total_dissipated += soma_fraction;
+        }
+
+        // Repro fraction → repro_reserve (accumulates across ticks)
+        agent.repro_reserve += repro_fraction;
     }
     (events, total_dissipated)
 }
 
 /// Apply wear: baseline + use-dependent accumulation per functional trait.
-/// Somatic repair reduces wear.
+/// Somatic repair derived from kappa allocation: higher kappa = more repair.
 pub fn apply_wear(
     agents: &mut [Agent],
     params: &WorldParameters,
@@ -236,14 +247,12 @@ pub fn apply_wear(
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
             let nominal = agent.traits.get(FUNCTIONAL_TRAIT_INDICES[ft]);
             let accumulation = baseline_rate * nominal.max(0.0);
-            // Use-dependent wear is deferred until coordinated phases exist
-            // (no throughput data available for autonomous-only tick)
             agent.wear[ft] += accumulation;
             total_wear_delta += accumulation;
         }
 
-        // Somatic repair
-        let base_repair = agent.traits.somatic_maintenance;
+        // Somatic repair: derived from kappa (higher kappa = more repair)
+        let base_repair = agent.traits.kappa.clamp(0.0, 1.0);
         if base_repair > 0.0 {
             for ft in 0..FUNCTIONAL_TRAIT_COUNT {
                 let effective_repair = base_repair * (-decay * agent.wear[ft]).exp();
@@ -540,12 +549,15 @@ pub fn resolve_drains(
 
 /// Check death thresholds: reserve depletion or structure below
 /// complexity-dependent threshold produces carcass.
+/// Returns (events, carcasses, dissipated) — dissipated includes reserve and
+/// repro_reserve energy that doesn't transfer to the carcass.
 pub fn check_death_thresholds(
     agents: &mut [Agent],
     _params: &WorldParameters,
-) -> (Vec<Event>, Vec<Carcass>) {
+) -> (Vec<Event>, Vec<Carcass>, f32) {
     let mut events = Vec::new();
     let mut carcasses = Vec::new();
+    let mut dissipated = 0.0_f32;
 
     for agent in agents.iter_mut() {
         let threshold = crate::death_threshold(&agent.traits);
@@ -554,6 +566,9 @@ pub fn check_death_thresholds(
 
         if dies {
             let carcass_energy = agent.structure.max(0.0);
+            // Energy in reserve and repro_reserve is dissipated at death
+            let lost = agent.reserve.max(0.0) + agent.repro_reserve.max(0.0);
+            dissipated += lost;
             events.push(Event {
                 tick: 0,
                 seq: 0,
@@ -572,9 +587,10 @@ pub fn check_death_thresholds(
             });
             // Mark for removal by setting reserve to 0
             agent.reserve = 0.0;
+            agent.repro_reserve = 0.0;
         }
     }
-    (events, carcasses)
+    (events, carcasses, dissipated)
 }
 
 /// Result of the movement phase.
@@ -765,14 +781,14 @@ pub fn resolve_reproduction(
     let mut offspring = Vec::new();
     let extent = params.world_extent;
 
-    // Build eligible set: alive, above energy threshold, sufficient nutrient.
-    // Grid keys are slice indices (matching World::step grid construction).
+    // Build eligible set: alive, repro_reserve above threshold, sufficient nutrient.
+    // Reproduction draws from repro_reserve, not reserve.
     let eligible: std::collections::HashSet<usize> = agents
         .iter()
         .enumerate()
         .filter(|(_, a)| {
             !dead_ids.contains(&a.id)
-                && a.reserve >= params.reproduction_energy_threshold
+                && a.repro_reserve >= params.reproduction_energy_threshold
                 && a.nutrient >= crate::stoichiometric_demand(&a.traits, a.structure, params)
         })
         .map(|(i, _)| i)
@@ -854,10 +870,12 @@ pub fn resolve_reproduction(
         // Copy needed values before mutating
         let a_traits = agents[*a_idx].traits;
         let b_traits = agents[*b_idx].traits;
-        let a_reserve = agents[*a_idx].reserve;
-        let b_reserve = agents[*b_idx].reserve;
+        let a_repro = agents[*a_idx].repro_reserve;
+        let b_repro = agents[*b_idx].repro_reserve;
         let a_nutrient = agents[*a_idx].nutrient;
         let b_nutrient = agents[*b_idx].nutrient;
+        let a_reserve = agents[*a_idx].reserve;
+        let b_reserve = agents[*b_idx].reserve;
         let a_pos = agents[*a_idx].position;
         let b_pos = agents[*b_idx].position;
         let a_contact = agents[*a_idx].contact_time;
@@ -865,9 +883,9 @@ pub fn resolve_reproduction(
         let a_id = agents[*a_idx].id;
         let b_id = agents[*b_idx].id;
 
-        // Investment: each parent invests their reproductive_investment trait, capped at reserve
-        let invest_a = a_traits.reproductive_investment.min(a_reserve).max(0.0);
-        let invest_b = b_traits.reproductive_investment.min(b_reserve).max(0.0);
+        // Investment: each parent invests their entire repro_reserve
+        let invest_a = a_repro.max(0.0);
+        let invest_b = b_repro.max(0.0);
         let total_investment = invest_a + invest_b;
 
         if total_investment <= 0.0 {
@@ -885,15 +903,15 @@ pub fn resolve_reproduction(
         let tick_dissipated = total_investment - offspring_total_energy;
         dissipated += tick_dissipated;
 
-        // Nutrient donation: each parent donates proportional to investment
-        let nutrient_a = a_nutrient * (invest_a / a_reserve.max(1e-10)).min(0.5);
-        let nutrient_b = b_nutrient * (invest_b / b_reserve.max(1e-10)).min(0.5);
+        // Nutrient donation: each parent donates proportional to investment fraction
+        let nutrient_a = a_nutrient * (invest_a / (a_reserve + a_repro).max(1e-10)).min(0.5);
+        let nutrient_b = b_nutrient * (invest_b / (b_reserve + b_repro).max(1e-10)).min(0.5);
         let nutrient_per_offspring = (nutrient_a + nutrient_b) / offspring_count as f32;
 
-        // Deduct from parents
-        agents[*a_idx].reserve -= invest_a;
+        // Deduct from parents' repro_reserve (not reserve)
+        agents[*a_idx].repro_reserve -= invest_a;
         agents[*a_idx].nutrient -= nutrient_a;
-        agents[*b_idx].reserve -= invest_b;
+        agents[*b_idx].repro_reserve -= invest_b;
         agents[*b_idx].nutrient -= nutrient_b;
 
         // Parent midpoint for dispersal
@@ -914,9 +932,8 @@ pub fn resolve_reproduction(
                 photosynthetic_absorption: 0.0,
                 heterotrophy: 0.0,
                 mobility: 0.0,
-                reproductive_investment: 0.0,
+                kappa: 0.0,
                 fecundity: 0.0,
-                somatic_maintenance: 0.0,
             };
             for dim in 0..TraitVector::NUM_DIMS {
                 let parent_val = if rng.random::<bool>() {
@@ -925,7 +942,7 @@ pub fn resolve_reproduction(
                     b_traits.get(dim)
                 };
                 // Mutation
-                let val = if params.mutation_rate > 0.0
+                let mut val = if params.mutation_rate > 0.0
                     && rng.random::<f32>() < params.mutation_rate
                 {
                     let normal = Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
@@ -933,6 +950,10 @@ pub fn resolve_reproduction(
                 } else {
                     parent_val
                 };
+                // Clamp kappa to [0, 1]
+                if dim == 3 {
+                    val = val.clamp(0.0, 1.0);
+                }
                 child_traits.set(dim, val);
             }
 
@@ -957,6 +978,7 @@ pub fn resolve_reproduction(
                 traits: child_traits,
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 0.0, // offspring born with zero repro_reserve
             };
             next_id += 1;
             offspring.push(child);
@@ -990,9 +1012,8 @@ mod tests {
             photosynthetic_absorption: 0.0,
             heterotrophy: 0.0,
             mobility: 0.0,
-            reproductive_investment: 0.0,
+            kappa: 0.0,
             fecundity: 0.0,
-            somatic_maintenance: 0.0,
         }
     }
 
@@ -1038,6 +1059,7 @@ mod tests {
             traits,
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
         }
     }
 
@@ -1363,7 +1385,8 @@ mod tests {
             growth_efficiency: 0.8,
             ..test_params()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, zero_traits())];
+        let traits = TraitVector { kappa: 1.0, ..zero_traits() }; // all surplus to soma
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
 
         let (events, dissipated) = grow(&mut agents, &params);
 
@@ -1371,11 +1394,13 @@ mod tests {
         assert_eq!(events[0].kind, EventKind::Grew);
         // retention = 1.0 * 2.0 = 2.0
         // surplus = 100.0 - 2.0 = 98.0
+        // kappa=1.0: soma_fraction = 98.0, repro_fraction = 0.0
         // to_structure = 98.0 * 0.8 = 78.4
         // dissipated = 98.0 - 78.4 = 19.6
         assert!((agents[0].structure - 78.4).abs() < 1e-3);
         assert!((agents[0].reserve - 2.0).abs() < 1e-3);
         assert!((dissipated - 19.6).abs() < 1e-3);
+        assert!((agents[0].repro_reserve).abs() < 1e-6, "kappa=1 should send nothing to repro");
     }
 
     #[test]
@@ -1404,6 +1429,151 @@ mod tests {
 
         let (events, _) = grow(&mut agents, &params);
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn grow_kappa_splits_surplus_between_soma_and_repro() {
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            growth_efficiency: 1.0, // perfect conversion for easy math
+            ..test_params()
+        };
+        let traits = TraitVector { kappa: 0.6, ..zero_traits() };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
+
+        let (_events, _dissipated) = grow(&mut agents, &params);
+
+        // surplus = 100.0, kappa=0.6
+        // soma = 60.0 -> all to structure (efficiency=1.0, dissipated=0)
+        // repro = 40.0 -> to repro_reserve
+        assert!((agents[0].structure - 60.0).abs() < 1e-3,
+            "kappa fraction should go to structure, got {}", agents[0].structure);
+        assert!((agents[0].repro_reserve - 40.0).abs() < 1e-3,
+            "1-kappa fraction should go to repro_reserve, got {}", agents[0].repro_reserve);
+        assert!((agents[0].reserve).abs() < 1e-3,
+            "all surplus should be consumed, got {}", agents[0].reserve);
+    }
+
+    #[test]
+    fn grow_zero_kappa_sends_all_surplus_to_repro_reserve() {
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            growth_efficiency: 0.8,
+            ..test_params()
+        };
+        let traits = TraitVector { kappa: 0.0, ..zero_traits() };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 50.0, traits)];
+
+        let (_events, _dissipated) = grow(&mut agents, &params);
+
+        // kappa=0: everything to repro
+        assert!((agents[0].structure).abs() < 1e-6, "zero kappa should not grow");
+        assert!((agents[0].repro_reserve - 50.0).abs() < 1e-3,
+            "all surplus to repro_reserve, got {}", agents[0].repro_reserve);
+    }
+
+    #[test]
+    fn grow_repro_reserve_accumulates_across_ticks() {
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            growth_efficiency: 1.0,
+            ..test_params()
+        };
+        let traits = TraitVector { kappa: 0.5, ..zero_traits() };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 20.0, traits)];
+
+        // First tick: surplus=20, repro=10
+        grow(&mut agents, &params);
+        let after_first = agents[0].repro_reserve;
+        assert!((after_first - 10.0).abs() < 1e-3);
+
+        // Give more reserve for second tick
+        agents[0].reserve = 20.0;
+        grow(&mut agents, &params);
+        // Should accumulate: 10.0 + 10.0 = 20.0
+        assert!((agents[0].repro_reserve - 20.0).abs() < 1e-3,
+            "repro_reserve should accumulate, got {}", agents[0].repro_reserve);
+    }
+
+    #[test]
+    fn reproduction_draws_from_repro_reserve_not_reserve() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_efficiency: 1.0,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            mobility: 1.0,
+            kappa: 0.5,
+            fecundity: 1.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 50.0, traits),
+            make_agent(2, (1.0, 0.0), 50.0, traits),
+        ];
+        agents[0].repro_reserve = 20.0;
+        agents[1].repro_reserve = 20.0;
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+
+        assert!(!result.offspring.is_empty(), "should reproduce");
+        // Reserve should be unchanged
+        assert!((agents[0].reserve - 50.0).abs() < 1e-3,
+            "reserve should be untouched, got {}", agents[0].reserve);
+        // Repro_reserve should be zero
+        assert!(agents[0].repro_reserve.abs() < 1e-3,
+            "repro_reserve should be spent, got {}", agents[0].repro_reserve);
+    }
+
+    #[test]
+    fn offspring_born_with_zero_repro_reserve() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            mobility: 1.0,
+            kappa: 0.5,
+            fecundity: 1.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 50.0, traits),
+            make_agent(2, (1.0, 0.0), 50.0, traits),
+        ];
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+
+        for child in &result.offspring {
+            assert!((child.repro_reserve).abs() < 1e-6,
+                "offspring should have zero repro_reserve, got {}", child.repro_reserve);
+        }
     }
 
     // --- Apply wear ---
@@ -1437,7 +1607,7 @@ mod tests {
         };
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
-            somatic_maintenance: 0.1,
+            kappa: 0.7,
             ..zero_traits()
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
@@ -1446,10 +1616,10 @@ mod tests {
         let _events = apply_wear(&mut agents, &params);
 
         // Accumulation: 0.1 * 0.5 = 0.05, so wear goes to 1.05
-        // Then repair: 0.1 * exp(-1.0 * 1.05) = 0.1 * 0.3499 = 0.03499
-        // Final: 1.05 - 0.03499 ≈ 1.015
-        assert!(agents[0].wear[0] < 1.05);
-        assert!(agents[0].wear[0] > 1.0);
+        // Then repair: kappa(0.7) * exp(-1.0 * 1.05) = 0.7 * 0.3499 = 0.2449
+        // Final: 1.05 - 0.2449 ≈ 0.805
+        assert!(agents[0].wear[0] < 1.05, "repair should reduce wear below accumulation");
+        assert!(agents[0].wear[0] > 0.0, "wear should still be positive");
     }
 
     #[test]
@@ -1471,7 +1641,7 @@ mod tests {
         let params = test_params();
         let mut agents = vec![make_agent(1, (0.0, 0.0), 0.0, zero_traits())];
 
-        let (events, carcasses) = check_death_thresholds(&mut agents, &params);
+        let (events, carcasses, _dissipated) = check_death_thresholds(&mut agents, &params);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::Died);
@@ -1484,7 +1654,7 @@ mod tests {
         let params = test_params();
         let mut agents = vec![make_agent(1, (0.0, 0.0), -5.0, zero_traits())];
 
-        let (events, carcasses) = check_death_thresholds(&mut agents, &params);
+        let (events, carcasses, _dissipated) = check_death_thresholds(&mut agents, &params);
 
         assert_eq!(events.len(), 1);
         assert_eq!(carcasses.len(), 1);
@@ -1498,9 +1668,8 @@ mod tests {
             photosynthetic_absorption: 0.1,
             heterotrophy: 0.1,
             mobility: 0.1,
-            reproductive_investment: 0.1,
+            kappa: 0.1,
             fecundity: 0.1,
-            somatic_maintenance: 0.1,
         };
         let threshold = crate::death_threshold(&traits);
         assert!(threshold > 0.0, "generalist should have nonzero threshold");
@@ -1508,7 +1677,7 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
         agents[0].structure = threshold * 0.5; // below threshold
 
-        let (events, carcasses) = check_death_thresholds(&mut agents, &params);
+        let (events, carcasses, _dissipated) = check_death_thresholds(&mut agents, &params);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::Died);
@@ -1521,7 +1690,7 @@ mod tests {
         let params = test_params();
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, zero_traits())];
 
-        let (events, carcasses) = check_death_thresholds(&mut agents, &params);
+        let (events, carcasses, _dissipated) = check_death_thresholds(&mut agents, &params);
 
         assert!(events.is_empty());
         assert!(carcasses.is_empty());
@@ -1535,7 +1704,7 @@ mod tests {
         agents[0].nutrient = 5.0;
         agents[0].structure = 10.0;
 
-        let (_, carcasses) = check_death_thresholds(&mut agents, &params);
+        let (_, carcasses, _) = check_death_thresholds(&mut agents, &params);
 
         assert_eq!(carcasses.len(), 1);
         assert!((carcasses[0].nutrient - 5.0).abs() < 1e-6);
@@ -1652,9 +1821,8 @@ mod tests {
             photosynthetic_absorption: 0.1,
             heterotrophy: 0.1,
             mobility: 0.1,
-            reproductive_investment: 0.1,
+            kappa: 0.1,
             fecundity: 0.1,
-            somatic_maintenance: 0.1,
         };
         let threshold = crate::death_threshold(&generalist_traits);
         assert!(threshold > 0.0, "generalist should have nonzero threshold");
@@ -1670,6 +1838,8 @@ mod tests {
         // Give target structure just above threshold, so draining pushes below
         agents[1].structure = threshold * 1.5;
         agents[1].nutrient = 3.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         let mut carcasses: Vec<Carcass> = Vec::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -2305,7 +2475,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0, // sensing range = 1.0 * 10.0 = 10.0
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2315,6 +2485,9 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        // Set repro_reserve above threshold (10.0)
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         let dead_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -2326,20 +2499,21 @@ mod tests {
             &mut agents, &dead_ids, &grid, &params, &mut rng,
         );
 
-        // Each parent invests reproductive_investment (0.3), capped at reserve
-        // Offspring energy = (0.3 + 0.3) * 0.7 = 0.42
-        // Dissipated = 0.6 - 0.42 = 0.18
+        // Each parent invests entire repro_reserve (15.0)
+        // Total = 30.0, offspring energy = 30.0 * 0.7 = 21.0
+        // Dissipated = 30.0 - 21.0 = 9.0
         assert!(!result.offspring.is_empty(), "should produce offspring");
         let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
-        assert!((total_offspring_energy - 0.42).abs() < 1e-3,
-            "offspring energy should be 0.42, got {}", total_offspring_energy);
-        assert!((result.dissipated - 0.18).abs() < 1e-3,
-            "dissipated should be 0.18, got {}", result.dissipated);
-        // Parents should have paid investment
-        assert!((agents[0].reserve - 99.7).abs() < 1e-3,
-            "parent A reserve should be 99.7, got {}", agents[0].reserve);
-        assert!((agents[1].reserve - 99.7).abs() < 1e-3,
-            "parent B reserve should be 99.7, got {}", agents[1].reserve);
+        assert!((total_offspring_energy - 21.0).abs() < 1e-3,
+            "offspring energy should be 21.0, got {}", total_offspring_energy);
+        assert!((result.dissipated - 9.0).abs() < 1e-3,
+            "dissipated should be 9.0, got {}", result.dissipated);
+        // Parents' reserve should be unchanged (investment came from repro_reserve)
+        assert!((agents[0].reserve - 100.0).abs() < 1e-3,
+            "parent A reserve should be unchanged, got {}", agents[0].reserve);
+        // Parents' repro_reserve should be 0
+        assert!(agents[0].repro_reserve.abs() < 1e-3,
+            "parent A repro_reserve should be 0, got {}", agents[0].repro_reserve);
     }
 
     #[test]
@@ -2352,7 +2526,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2362,6 +2536,8 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         // Mark agent 1 as dead (killed in drain pass)
         let mut dead_ids = std::collections::HashSet::new();
@@ -2392,7 +2568,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2402,6 +2578,8 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -2427,7 +2605,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2439,9 +2617,13 @@ mod tests {
         // demand = 10.0 * (0.1 + 0.2 * 0.5) = 10.0 * 0.2 = 2.0
         agents[0].structure = 10.0;
         agents[1].structure = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
         // Set nutrient below demand (2.0)
         agents[0].nutrient = 1.0;
         agents[1].nutrient = 1.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -2458,7 +2640,7 @@ mod tests {
     }
 
     #[test]
-    fn reproduction_investment_capped_at_reserve() {
+    fn reproduction_invests_entire_repro_reserve() {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
@@ -2467,11 +2649,10 @@ mod tests {
             mutation_magnitude: 0.0,
             ..test_params()
         };
-        // reproductive_investment=50.0 but reserve is only 15.0
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 50.0,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2481,6 +2662,8 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 20.0;
+        agents[1].repro_reserve = 20.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -2492,17 +2675,20 @@ mod tests {
             &mut agents, &dead_ids, &grid, &params, &mut rng,
         );
 
-        // Investment capped at reserve: 15.0 each
-        // Total = 30.0, offspring energy = 30.0 * 0.7 = 21.0
+        // Each parent invests entire repro_reserve: 20.0 each
+        // Total = 40.0, offspring energy = 40.0 * 0.7 = 28.0
         assert!(!result.offspring.is_empty());
         let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
-        assert!((total_offspring_energy - 21.0).abs() < 1e-3,
-            "offspring energy should be 21.0, got {}", total_offspring_energy);
-        // Parents should have 0 reserve (invested all)
-        assert!(agents[0].reserve.abs() < 1e-3,
-            "parent A should have 0 reserve, got {}", agents[0].reserve);
-        assert!(agents[1].reserve.abs() < 1e-3,
-            "parent B should have 0 reserve, got {}", agents[1].reserve);
+        assert!((total_offspring_energy - 28.0).abs() < 1e-3,
+            "offspring energy should be 28.0, got {}", total_offspring_energy);
+        // Parents' repro_reserve should be 0
+        assert!(agents[0].repro_reserve.abs() < 1e-3,
+            "parent A should have 0 repro_reserve, got {}", agents[0].repro_reserve);
+        assert!(agents[1].repro_reserve.abs() < 1e-3,
+            "parent B should have 0 repro_reserve, got {}", agents[1].repro_reserve);
+        // Parents' reserve should be unchanged
+        assert!((agents[0].reserve - 15.0).abs() < 1e-3,
+            "parent A reserve should be unchanged, got {}", agents[0].reserve);
     }
 
     #[test]
@@ -2519,7 +2705,7 @@ mod tests {
         let traits_ab = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2527,7 +2713,7 @@ mod tests {
             photosynthetic_absorption: 0.1,
             heterotrophy: 0.4,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2539,6 +2725,8 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
         agents[2].nutrient = 10.0;
 
         let dead_ids = std::collections::HashSet::new();
@@ -2578,7 +2766,7 @@ mod tests {
             photosynthetic_absorption: 0.8,
             heterotrophy: 0.0,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2586,7 +2774,7 @@ mod tests {
             photosynthetic_absorption: 0.0,
             heterotrophy: 0.8,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2596,6 +2784,8 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -2634,7 +2824,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 10.0,
+            kappa: 0.5,
             fecundity: 5.0, // Poisson mean=5
             ..zero_traits()
         };
@@ -2644,6 +2834,8 @@ mod tests {
         ];
         agents[0].nutrient = 20.0;
         agents[1].nutrient = 20.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -2660,7 +2852,7 @@ mod tests {
             "high fecundity should produce multiple offspring, got {}", result.offspring.len());
         // Total offspring energy should equal total_investment * efficiency
         let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
-        let total_investment = 20.0; // 10.0 + 10.0 (capped at reserve is 100, so invest=10)
+        let total_investment = 30.0; // 15.0 + 15.0 (entire repro_reserve of each parent)
         let expected_total = total_investment * 0.7;
         assert!((total_offspring_energy - expected_total).abs() < 1e-3,
             "total offspring energy should be {}, got {}", expected_total, total_offspring_energy);
@@ -2679,7 +2871,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 5.0,
+            kappa: 0.5,
             fecundity: 3.0,
             ..zero_traits()
         };
@@ -2689,6 +2881,8 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
         agents[0].contact_time = 100; // high contact time -> wider dispersal
         agents[1].contact_time = 100;
 
@@ -2741,7 +2935,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2751,6 +2945,8 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -2781,7 +2977,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 5.0,
+            kappa: 0.5,
             fecundity: 3.0,
             ..zero_traits()
         };
@@ -2793,6 +2989,8 @@ mod tests {
             ];
             agents[0].nutrient = 10.0;
             agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
             let dead_ids = std::collections::HashSet::new();
             let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -2831,7 +3029,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 10.0,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2841,6 +3039,8 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -2852,16 +3052,16 @@ mod tests {
             &mut agents, &dead_ids, &grid, &params, &mut rng,
         );
 
-        // Total investment = 10.0 + 10.0 = 20.0
-        // Offspring energy = 20.0 * 0.5 = 10.0
-        // Dissipated = 20.0 - 10.0 = 10.0
+        // Total investment = 15.0 + 15.0 = 30.0 (entire repro_reserve)
+        // Offspring energy = 30.0 * 0.5 = 15.0
+        // Dissipated = 30.0 - 15.0 = 15.0
         let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
-        assert!((total_offspring_energy - 10.0).abs() < 1e-3,
-            "offspring energy should be 10.0, got {}", total_offspring_energy);
-        assert!((result.dissipated - 10.0).abs() < 1e-3,
-            "dissipated should be 10.0, got {}", result.dissipated);
+        assert!((total_offspring_energy - 15.0).abs() < 1e-3,
+            "offspring energy should be 15.0, got {}", total_offspring_energy);
+        assert!((result.dissipated - 15.0).abs() < 1e-3,
+            "dissipated should be 15.0, got {}", result.dissipated);
         // Conservation: investment = offspring + dissipated
-        assert!((total_offspring_energy + result.dissipated - 20.0).abs() < 1e-3,
+        assert!((total_offspring_energy + result.dissipated - 30.0).abs() < 1e-3,
             "energy should be conserved");
     }
 
@@ -2966,7 +3166,7 @@ mod tests {
         let traits_a = TraitVector {
             photosynthetic_absorption: 1.0,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2974,7 +3174,7 @@ mod tests {
             photosynthetic_absorption: 0.0,
             heterotrophy: 1.0,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -2987,6 +3187,8 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3018,7 +3220,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
-            reproductive_investment: 0.3,
+            kappa: 0.5,
             fecundity: 1.0,
             ..zero_traits()
         };
@@ -3029,6 +3231,8 @@ mod tests {
         ];
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3091,8 +3295,8 @@ mod tests {
     // --- Trait vector dimensions ---
 
     #[test]
-    fn trait_vector_has_six_dimensions() {
-        assert_eq!(TraitVector::NUM_DIMS, 6);
+    fn trait_vector_has_five_dimensions() {
+        assert_eq!(TraitVector::NUM_DIMS, 5);
     }
 
     #[test]

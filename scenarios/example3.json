@@ -28,9 +28,8 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       }
     },
@@ -43,9 +42,8 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       }
     },
@@ -58,9 +56,8 @@
       "traits": {
         "photosynthetic_absorption": 0.35,
         "mobility": 0.0,
-        "reproductive_investment": 10.0,
         "fecundity": 0.1,
-        "somatic_maintenance": 0.05,
+        "kappa": 0.5,
         "heterotrophy": 0.0
       }
     }
