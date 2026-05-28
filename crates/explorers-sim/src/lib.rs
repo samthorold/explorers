@@ -419,6 +419,10 @@ pub struct World {
     event_log: event::EventLog,
     next_seq: u64,
     ledger: energy_ledger::EnergyLedger,
+    /// Per-agent distance moved during the previous tick's movement phase
+    /// (keyed by agent id). Movement is the final phase, running after wear,
+    /// so a tick's mobility use is folded into the *next* tick's mobility wear.
+    last_move_distance: std::collections::HashMap<u64, f32>,
 }
 
 impl World {
@@ -505,6 +509,7 @@ impl World {
             event_log: event::EventLog::new(),
             next_seq: 0,
             ledger: energy_ledger::EnergyLedger::new(),
+            last_move_distance: std::collections::HashMap::new(),
         }
     }
 
@@ -549,6 +554,7 @@ impl World {
                 event_log: event::EventLog::new(),
                 next_seq: 0,
                 ledger: energy_ledger::EnergyLedger::new(),
+                last_move_distance: std::collections::HashMap::new(),
             }
         } else if let Some(ref distribution) = recipe.initial_distribution {
             Self::new(recipe.parameters.clone(), distribution.clone(), seed)
@@ -687,7 +693,18 @@ impl World {
             let entry = usage_data.entry(ev.source).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
             entry[1] += ev.energy_delta;
         }
-        // Mobility wear is baseline-only within a tick (movement hasn't happened yet)
+        // Mobility usage: distance moved during the *previous* tick's movement
+        // phase. Movement is the final phase (runs after wear) so an agent's
+        // movement this tick cannot be folded in until the next tick. This keeps
+        // the phase contract clean: wear stays in its phase, movement stays last.
+        for agent in self.agents.iter() {
+            if let Some(&dist) = self.last_move_distance.get(&agent.id) {
+                if dist > 0.0 {
+                    let entry = usage_data.entry(agent.id).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
+                    entry[2] += dist;
+                }
+            }
+        }
         let wear_events = phase::apply_wear(&mut self.agents, &self.params, &usage_data);
         events.extend(wear_events);
 
@@ -715,6 +732,17 @@ impl World {
             &mut self.agents, &self.carcasses, &move_grid, &self.params, &mut self.rng,
         );
         self.dissipated_energy += move_result.dissipated;
+
+        // Carry this tick's per-agent movement distance forward so it becomes
+        // next tick's mobility use-wear (movement runs after wear by design).
+        self.last_move_distance.clear();
+        for (i, agent) in self.agents.iter().enumerate() {
+            let dist = move_result.move_distance[i];
+            if dist > 0.0 {
+                self.last_move_distance.insert(agent.id, dist);
+            }
+        }
+
         events.extend(move_result.events);
 
         // --- Energy ledger: record all flows for conservation verification ---
@@ -1280,6 +1308,62 @@ mod tests {
         assert!(consumer.wear[1] > baseline_only,
             "heterotrophy wear ({}) should exceed baseline ({baseline_only}) due to consumption",
             consumer.wear[1]);
+    }
+
+    #[test]
+    fn use_dependent_wear_mobility_through_world_step() {
+        // A mobile agent that moves should accumulate extra mobility wear beyond
+        // baseline. Movement is the final phase (after wear), so the distance
+        // moved on a given tick is folded into the *next* tick's mobility usage.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0, // no photosynthesis
+            base_metabolic_rate: 0.5, // small drain so reserve is retained, not dumped to repro
+            growth_efficiency: 0.0,
+            wear_rate: 0.01,
+            use_wear_rate: 0.02,
+            wear_degradation_steepness: 1.0,
+            repair_decay: 0.0, // no repair
+            movement_cost_coefficient: 0.0, // free movement so the agent survives
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // A mobile agent: nonzero mobility drives a random-walk move each tick.
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                mobility: 0.5,
+                ..zero_traits()
+            },
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        });
+
+        // First tick: agent moves (movement is phase 9); wear in this tick is
+        // baseline-only because the move hasn't happened when wear is applied.
+        world.step();
+        // Second tick: last tick's movement distance is folded into mobility usage,
+        // so wear[2] exceeds two ticks of baseline.
+        world.step();
+
+        let agent = world.agents().iter().find(|a| a.id == 0)
+            .expect("mobile agent should survive two ticks");
+        // Two ticks of baseline-only wear: 2 * wear_rate * mobility = 2 * 0.01 * 0.5
+        let baseline_only = 2.0 * 0.01 * 0.5;
+        assert!(agent.wear[2] > baseline_only,
+            "mobility wear ({}) should exceed two ticks of baseline ({baseline_only}) due to movement use-wear",
+            agent.wear[2]);
     }
 
     #[test]
