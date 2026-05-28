@@ -893,10 +893,33 @@ pub fn resolve_reproduction(
             continue;
         }
 
-        // Offspring count from Poisson distribution (single parent's fecundity)
+        // Offspring count from Poisson distribution (single parent's fecundity).
+        // A zero draw is reproductive failure (world-rules flow 4): the committed
+        // energy is still consumed but no offspring result.
         let fecundity = parent_traits.fecundity.max(0.1);
         let poisson = Poisson::new(fecundity as f64).unwrap();
-        let offspring_count = (poisson.sample(rng) as usize).max(1);
+        let offspring_count = poisson.sample(rng) as usize;
+
+        // The committed investment is always consumed from the parent.
+        agents[i].repro_reserve -= investment;
+
+        if offspring_count == 0 {
+            // Reproductive failure: no offspring carry the investment, so the
+            // entire committed energy dissipates. Nutrient is not donated and
+            // remains with the parent.
+            dissipated += investment;
+
+            events.push(Event {
+                tick: 0,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: parent_id,
+                target: None,
+                energy_delta: investment,
+                position: Some(parent_pos),
+            });
+            continue;
+        }
 
         let offspring_total_energy = investment * params.reproduction_efficiency;
         let energy_per_offspring = offspring_total_energy / offspring_count as f32;
@@ -908,8 +931,7 @@ pub fn resolve_reproduction(
             * (investment / (parent_reserve + parent_repro).max(1e-10)).min(0.5);
         let nutrient_per_offspring = nutrient_donated / offspring_count as f32;
 
-        // Deduct from parent
-        agents[i].repro_reserve -= investment;
+        // Deduct nutrient donation from parent
         agents[i].nutrient -= nutrient_donated;
 
         // Dispersal: sigma proportional to parent's dispersal trait
@@ -1070,11 +1092,37 @@ pub fn resolve_reproduction(
             continue;
         }
 
-        // Offspring count from Poisson distribution
+        // Offspring count from Poisson distribution. A zero draw is reproductive
+        // failure (world-rules flow 4): both parents' energy is still committed
+        // but no offspring result.
         let avg_fecundity = ((a_traits.fecundity + b_traits.fecundity) / 2.0).max(0.1);
         let poisson = Poisson::new(avg_fecundity as f64).unwrap();
-        let offspring_count_f: f64 = poisson.sample(rng);
-        let offspring_count = (offspring_count_f as usize).max(1);
+        let offspring_count = poisson.sample(rng) as usize;
+
+        // The committed investment is always consumed from both parents.
+        agents[*a_idx].repro_reserve -= invest_a;
+        agents[*b_idx].repro_reserve -= invest_b;
+
+        if offspring_count == 0 {
+            // Reproductive failure: no offspring carry the investment, so the
+            // entire combined committed energy dissipates. Nutrient is not
+            // donated and remains with the parents.
+            dissipated += total_investment;
+
+            let (dx, dy) = crate::toroidal_displacement(a_pos, b_pos, extent);
+            let mid_pos =
+                crate::wrap_position((a_pos.0 + dx / 2.0, a_pos.1 + dy / 2.0), extent);
+            events.push(Event {
+                tick: 0,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: a_id,
+                target: Some(b_id),
+                energy_delta: total_investment,
+                position: Some(mid_pos),
+            });
+            continue;
+        }
 
         let offspring_total_energy = total_investment * params.reproduction_efficiency;
         let energy_per_offspring = offspring_total_energy / offspring_count as f32;
@@ -1086,10 +1134,8 @@ pub fn resolve_reproduction(
         let nutrient_b = b_nutrient * (invest_b / (b_reserve + b_repro).max(1e-10)).min(0.5);
         let nutrient_per_offspring = (nutrient_a + nutrient_b) / offspring_count as f32;
 
-        // Deduct from parents' repro_reserve (not reserve)
-        agents[*a_idx].repro_reserve -= invest_a;
+        // Deduct nutrient donations from parents
         agents[*a_idx].nutrient -= nutrient_a;
-        agents[*b_idx].repro_reserve -= invest_b;
         agents[*b_idx].nutrient -= nutrient_b;
 
         // Parent midpoint for dispersal (toroidal-aware)
@@ -3528,6 +3574,109 @@ mod tests {
             "energy should be conserved");
     }
 
+    #[test]
+    fn asexual_zero_poisson_draw_consumes_energy_yields_no_offspring() {
+        use rand::SeedableRng;
+        // World-rules flow 4: reproductive failure (zero offspring despite energy
+        // investment) must be possible. With fecundity at its floor (0.1) the
+        // Poisson mean is 0.1, so a zero draw is overwhelmingly likely. The energy
+        // committed to reproduction is still consumed and dissipated.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 0.0, // floored to 0.1 mean -> P(0) ~ 90%
+            asexual_propensity: 1.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 20.0,
+        }];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+
+        // Zero offspring produced (reproductive failure).
+        assert!(result.offspring.is_empty(),
+            "zero Poisson draw should yield no offspring, got {}", result.offspring.len());
+        // Energy was still committed: parent's repro_reserve is consumed.
+        assert!(agents[0].repro_reserve < 1e-6,
+            "parent repro_reserve should be consumed even on failure, got {}",
+            agents[0].repro_reserve);
+        // Conservation: the entire committed investment (20.0) is dissipated since
+        // no offspring carry any of it.
+        assert!((result.dissipated - 20.0).abs() < 1e-3,
+            "full investment should dissipate on zero-offspring failure, got {}",
+            result.dissipated);
+    }
+
+    #[test]
+    fn sexual_zero_poisson_draw_consumes_energy_yields_no_offspring() {
+        use rand::SeedableRng;
+        // Sexual reproductive failure: both parents commit their repro_reserve but
+        // a zero Poisson draw yields no offspring. The full combined investment is
+        // dissipated.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 1.0,
+            kappa: 0.5,
+            fecundity: 0.0, // floored to 0.1 mean -> P(0) ~ 90%
+            asexual_propensity: 0.0, // force sexual path
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (1.0, 0.0), 100.0, traits),
+        ];
+        agents[0].nutrient = 10.0;
+        agents[1].nutrient = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[1].repro_reserve = 15.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+
+        // Zero offspring (reproductive failure).
+        assert!(result.offspring.is_empty(),
+            "zero Poisson draw should yield no offspring, got {}", result.offspring.len());
+        // Both parents' repro_reserve consumed.
+        assert!(agents[0].repro_reserve < 1e-6 && agents[1].repro_reserve < 1e-6,
+            "both parents' repro_reserve should be consumed, got {} and {}",
+            agents[0].repro_reserve, agents[1].repro_reserve);
+        // Full combined investment (15 + 15 = 30) dissipates.
+        assert!((result.dissipated - 30.0).abs() < 1e-3,
+            "full investment should dissipate on zero-offspring failure, got {}",
+            result.dissipated);
+    }
+
     // --- Derived sensing range ---
 
     #[test]
@@ -3784,7 +3933,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             kappa: 0.5,
-            fecundity: 1.0,
+            fecundity: 5.0,
             asexual_propensity: 1.0,
             ..zero_traits()
         };
@@ -3839,7 +3988,7 @@ mod tests {
             heterotrophy: 0.2,
             mobility: 0.1,
             kappa: 0.6,
-            fecundity: 1.0,
+            fecundity: 5.0,
             asexual_propensity: 1.0,
             dispersal: 0.0,
         };
@@ -4046,7 +4195,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             kappa: 0.5,
-            fecundity: 1.0,
+            fecundity: 5.0,
             asexual_propensity: 0.8,
             ..zero_traits()
         };
@@ -4161,7 +4310,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             kappa: 0.5,
-            fecundity: 1.0,
+            fecundity: 5.0,
             asexual_propensity: 1.0,
             ..zero_traits()
         };
@@ -4268,7 +4417,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             kappa: 0.5,
-            fecundity: 1.0,
+            fecundity: 5.0,
             asexual_propensity: 1.0,
             dispersal: 0.0, // zero dispersal
             ..zero_traits()
@@ -4444,7 +4593,7 @@ mod tests {
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             kappa: 0.5,
-            fecundity: 1.0,
+            fecundity: 5.0,
             asexual_propensity: 1.0,
             dispersal: 3.7,
             ..zero_traits()
