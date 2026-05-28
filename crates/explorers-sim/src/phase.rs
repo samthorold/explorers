@@ -209,11 +209,37 @@ pub fn grow(
         // Deduct entire surplus from reserve
         agent.reserve -= surplus;
 
-        // Soma fraction → growth (if growth_efficiency > 0)
+        // Repair gets priority from soma budget: counteract accumulated wear
+        let decay = params.repair_decay;
+        let mut repair_energy_spent = 0.0_f32;
+        if soma_fraction > 0.0 && decay > 0.0 {
+            let base_repair = kappa;
+            for ft in 0..crate::FUNCTIONAL_TRAIT_COUNT {
+                if agent.wear[ft] <= 0.0 {
+                    continue;
+                }
+                let effective_repair = base_repair * (-decay * agent.wear[ft]).exp();
+                let repair = effective_repair.min(agent.wear[ft]);
+                let cost = repair; // 1:1 energy-to-repair
+                if repair_energy_spent + cost > soma_fraction {
+                    let remaining = soma_fraction - repair_energy_spent;
+                    let capped_repair = remaining.min(agent.wear[ft]);
+                    agent.wear[ft] -= capped_repair;
+                    repair_energy_spent = soma_fraction;
+                    break;
+                }
+                agent.wear[ft] -= repair;
+                repair_energy_spent += cost;
+            }
+        }
+        total_dissipated += repair_energy_spent;
+
+        // Remainder of soma fraction → growth
+        let growth_budget = soma_fraction - repair_energy_spent;
         let efficiency = params.growth_efficiency;
-        if efficiency > 0.0 && soma_fraction > 0.0 {
-            let to_structure = soma_fraction * efficiency;
-            let dissipated = soma_fraction - to_structure;
+        if efficiency > 0.0 && growth_budget > 0.0 {
+            let to_structure = growth_budget * efficiency;
+            let dissipated = growth_budget - to_structure;
             agent.structure += to_structure;
             total_dissipated += dissipated;
 
@@ -226,9 +252,9 @@ pub fn grow(
                 energy_delta: to_structure,
                 position: Some(agent.position),
             });
-        } else {
-            // No growth: soma fraction is dissipated (maintenance cost)
-            total_dissipated += soma_fraction;
+        } else if growth_budget > 0.0 {
+            // No growth efficiency: remaining soma is dissipated
+            total_dissipated += growth_budget;
         }
 
         // Repro fraction → repro_reserve (accumulates across ticks)
@@ -238,7 +264,7 @@ pub fn grow(
 }
 
 /// Apply wear: baseline + use-dependent accumulation per functional trait.
-/// Somatic repair derived from kappa allocation: higher kappa = more repair.
+/// Accumulation only — repair is funded from soma energy in `grow()`.
 ///
 /// `usage` maps agent id → per-functional-trait usage amounts:
 ///   [0] = energy captured (autotrophy), [1] = energy drained (heterotrophy),
@@ -251,15 +277,12 @@ pub fn apply_wear(
     let mut events = Vec::new();
     let baseline_rate = params.wear_rate;
     let use_rate = params.use_wear_rate;
-    let decay = params.repair_decay;
 
     for agent in agents.iter_mut() {
         let mut total_wear_delta = 0.0_f32;
 
-        // Look up this agent's usage data (defaults to zero if absent)
         let agent_usage = usage.get(&agent.id).copied().unwrap_or([0.0; FUNCTIONAL_TRAIT_COUNT]);
 
-        // Accumulate wear: baseline + use-dependent
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
             let nominal = agent.traits.get(FUNCTIONAL_TRAIT_INDICES[ft]);
             let baseline = baseline_rate * nominal.max(0.0);
@@ -267,16 +290,6 @@ pub fn apply_wear(
             let accumulation = baseline + use_dependent;
             agent.wear[ft] += accumulation;
             total_wear_delta += accumulation;
-        }
-
-        // Somatic repair: derived from kappa (higher kappa = more repair)
-        let base_repair = agent.traits.kappa.clamp(0.0, 1.0);
-        if base_repair > 0.0 {
-            for ft in 0..FUNCTIONAL_TRAIT_COUNT {
-                let effective_repair = base_repair * (-decay * agent.wear[ft]).exp();
-                let repair = effective_repair.min(agent.wear[ft]);
-                agent.wear[ft] -= repair;
-            }
         }
 
         if total_wear_delta > 0.0 {
@@ -320,8 +333,13 @@ pub fn resolve_drains(
     let mut dead_agents: Vec<u64> = Vec::new();
     let mut new_carcasses: Vec<Carcass> = Vec::new();
     let k = params.wear_degradation_steepness;
-    let contact_radius = params.contact_radius;
+    let contact_range_coeff = params.contact_range_coefficient;
     let extent = params.world_extent;
+
+    // Max query radius: largest consumer contact range across all agents
+    let max_contact_range = agents.iter()
+        .map(|a| a.effective_trait_with_steepness(1, k) * contact_range_coeff)
+        .fold(0.0_f32, f32::max);
 
     // --- Pass over living targets ---
     // For each agent that has structure, find consumers in range.
@@ -347,9 +365,9 @@ pub fn resolve_drains(
         }
         let target_pos = agents[target_idx].position;
 
-        // Find consumers within contact range
+        // Find consumers within their individual contact range
         let mut consumers = Vec::new();
-        let nearby = grid.query_radius(target_pos, contact_radius);
+        let nearby = grid.query_radius(target_pos, max_contact_range);
         let mut seen = std::collections::HashSet::new();
         for neighbor_id in nearby {
             if !seen.insert(neighbor_id) {
@@ -364,12 +382,12 @@ pub fn resolve_drains(
                 if eff_heterotrophy <= 0.0 {
                     continue;
                 }
-                // Verify within contact radius (grid may return slightly outside)
+                let consumer_contact_range = eff_heterotrophy * contact_range_coeff;
                 if crate::toroidal_distance(
                     agents[consumer_idx].position,
                     target_pos,
                     extent,
-                ) > contact_radius
+                ) > consumer_contact_range
                 {
                     continue;
                 }
@@ -403,17 +421,11 @@ pub fn resolve_drains(
         let available = agents[drain.target_idx].structure;
         let total_demand: f32 = drain.consumers.iter().map(|(_, d, _)| *d).sum();
 
-        // Weighted split: weight = demand * trophic_eff
-        let total_weight: f32 = drain.consumers.iter()
-            .map(|(_, d, eff)| *d * *eff)
-            .sum();
-
         for &(consumer_idx, demand, trophic_eff) in &drain.consumers {
             let actual_drain = if total_demand <= available {
                 demand
             } else {
-                let weight = demand * trophic_eff;
-                (weight / total_weight) * available
+                (demand / total_demand) * available
             };
 
             let energy_gained = actual_drain * trophic_eff;
@@ -484,7 +496,7 @@ pub fn resolve_drains(
             continue;
         }
         let carcass_pos = carcasses[carcass_idx].position;
-        let nearby = grid.query_radius(carcass_pos, contact_radius);
+        let nearby = grid.query_radius(carcass_pos, max_contact_range);
         let mut consumers: Vec<(usize, f32, f32)> = Vec::new(); // (idx, demand, trophic_eff)
         let mut seen = std::collections::HashSet::new();
 
@@ -502,11 +514,12 @@ pub fn resolve_drains(
                 if eff_heterotrophy <= 0.0 {
                     continue;
                 }
+                let consumer_contact_range = eff_heterotrophy * contact_range_coeff;
                 if crate::toroidal_distance(
                     agents[consumer_idx].position,
                     carcass_pos,
                     extent,
-                ) > contact_radius
+                ) > consumer_contact_range
                 {
                     continue;
                 }
@@ -534,17 +547,11 @@ pub fn resolve_drains(
         let available = carcasses[carcass_idx].energy;
         let total_demand: f32 = consumers.iter().map(|(_, d, _)| *d).sum();
 
-        // Weighted split: weight = demand * trophic_eff
-        let total_weight: f32 = consumers.iter()
-            .map(|(_, d, eff)| *d * *eff)
-            .sum();
-
         for &(consumer_idx, demand, trophic_eff) in &consumers {
             let actual_drain = if total_demand <= available {
                 demand
             } else {
-                let weight = demand * trophic_eff;
-                (weight / total_weight) * available
+                (demand / total_demand) * available
             };
 
             let energy_gained = actual_drain * trophic_eff;
@@ -1200,7 +1207,7 @@ mod tests {
             reproduction_energy_threshold: 50.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            contact_radius: 5.0,
+            contact_range_coefficient: 5.0,
             world_extent: 100.0,
             initial_population_size: 0,
             light_competition_radius: 1000.0,
@@ -1859,7 +1866,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_wear_somatic_repair_reduces_wear() {
+    fn apply_wear_accumulates_without_repair() {
         let params = WorldParameters {
             wear_rate: 0.1,
             repair_decay: 1.0,
@@ -1876,10 +1883,31 @@ mod tests {
         let no_usage = std::collections::HashMap::new();
         let _events = apply_wear(&mut agents, &params, &no_usage);
 
-        // Accumulation: 0.1 * 0.5 = 0.05, so wear goes to 1.05
-        // Then repair: kappa(0.7) * exp(-1.0 * 1.05) = 0.7 * 0.3499 = 0.2449
-        // Final: 1.05 - 0.2449 ≈ 0.805
-        assert!(agents[0].wear[0] < 1.05, "repair should reduce wear below accumulation");
+        // Accumulation only: 0.1 * 0.5 = 0.05, wear goes to 1.05
+        assert!((agents[0].wear[0] - 1.05).abs() < 1e-6,
+            "apply_wear should only accumulate (repair is in grow), got {}", agents[0].wear[0]);
+    }
+
+    #[test]
+    fn grow_repairs_wear_from_soma_budget() {
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            growth_efficiency: 1.0,
+            repair_decay: 1.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.7,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
+        agents[0].wear[0] = 1.0;
+
+        let (_events, _dissipated) = grow(&mut agents, &params);
+
+        assert!(agents[0].wear[0] < 1.0,
+            "grow should repair wear from soma budget, got {}", agents[0].wear[0]);
         assert!(agents[0].wear[0] > 0.0, "wear should still be positive");
     }
 
@@ -3855,7 +3883,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            contact_radius: 100.0,
+            contact_range_coefficient: 100.0,
             reproductive_compatibility_distance: 10.0,
             ..test_params()
         };
@@ -4060,7 +4088,7 @@ mod tests {
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            contact_radius: 100.0,
+            contact_range_coefficient: 100.0,
             reproductive_compatibility_distance: 10.0,
             ..test_params()
         };
@@ -4285,7 +4313,7 @@ mod tests {
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            contact_radius: 100.0,
+            contact_range_coefficient: 100.0,
             reproductive_compatibility_distance: 10.0,
             ..test_params()
         };
@@ -4780,34 +4808,29 @@ mod tests {
     }
 
     #[test]
-    fn drain_trophic_efficiency_weights_proportional_split() {
+    fn drain_demand_only_proportional_split() {
         // Two consumers with equal raw demand (heterotrophy=1.0) but different
-        // trait distances to the target. With trophic_distance_decay > 0, the
-        // closer consumer has higher trophic efficiency and should receive a
-        // larger share of the available supply (weighted by demand*eff).
+        // trait distances to the target. The split is by demand only; trophic
+        // efficiency applies after the split to determine energy gained.
         let mut params = test_params();
         params.base_trophic_efficiency = 1.0;
-        params.trophic_distance_decay = 1.0; // nonzero so distance matters
+        params.trophic_distance_decay = 1.0;
 
-        // Target is a pure producer
         let target_traits = TraitVector {
             photosynthetic_absorption: 1.0,
             ..zero_traits()
         };
-        // Consumer A: close to target in trait space (also has some autotrophy)
         let consumer_a_traits = TraitVector {
             heterotrophy: 1.0,
-            photosynthetic_absorption: 0.8, // close to target
+            photosynthetic_absorption: 0.8,
             ..zero_traits()
         };
-        // Consumer B: far from target in trait space (no autotrophy, high mobility)
         let consumer_b_traits = TraitVector {
             heterotrophy: 1.0,
-            mobility: 2.0, // far from target
+            mobility: 2.0,
             ..zero_traits()
         };
 
-        // Compute expected trophic efficiencies
         let eff_a = crate::trophic_transfer_efficiency(
             &consumer_a_traits, &target_traits, &params,
         );
@@ -4817,11 +4840,11 @@ mod tests {
         assert!(eff_a > eff_b, "sanity: A should be more efficient than B");
 
         let mut agents = vec![
-            make_agent(1, (0.0, 0.0), 0.0, consumer_a_traits),  // close consumer
-            make_agent(2, (1.0, 0.0), 0.0, consumer_b_traits),  // far consumer
-            make_agent(3, (0.5, 0.0), 0.0, target_traits),      // target
+            make_agent(1, (0.0, 0.0), 0.0, consumer_a_traits),
+            make_agent(2, (1.0, 0.0), 0.0, consumer_b_traits),
+            make_agent(3, (0.5, 0.0), 0.0, target_traits),
         ];
-        agents[2].structure = 1.0; // limited supply to force proportional split
+        agents[2].structure = 1.0;
 
         let mut carcasses: Vec<Carcass> = Vec::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -4834,30 +4857,15 @@ mod tests {
             &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
         );
 
-        // Both have demand=1.0. With trophic-weighted split:
-        //   weight_a = 1.0 * eff_a, weight_b = 1.0 * eff_b
-        //   drain_a = weight_a / (weight_a + weight_b) * 1.0
-        //   drain_b = weight_b / (weight_a + weight_b) * 1.0
-        // So drain_a > drain_b, and energy_a = drain_a * eff_a, energy_b = drain_b * eff_b
-        //
-        // Without weighting, drain_a = drain_b = 0.5, so:
-        //   energy_a_unweighted = 0.5 * eff_a
-        //   energy_b_unweighted = 0.5 * eff_b
-        //   ratio_unweighted = eff_a / eff_b
-        //
-        // With weighting, drain_a/drain_b = eff_a/eff_b, so:
-        //   energy_a / energy_b = (eff_a/eff_b) * (eff_a/eff_b) = (eff_a/eff_b)^2
-        //
-        // The ratio of energy gained should be (eff_a/eff_b)^2, not eff_a/eff_b.
+        // Equal demand → equal drain (0.5 each). Energy = drain * trophic_eff.
+        // Ratio of energy gained = eff_a / eff_b.
         let a_gained = agents[0].reserve;
         let b_gained = agents[1].reserve;
         let actual_ratio = a_gained / b_gained;
-        let eff_ratio = eff_a / eff_b;
-        let expected_ratio = eff_ratio * eff_ratio; // (eff_a/eff_b)^2
+        let expected_ratio = eff_a / eff_b;
 
         assert!((actual_ratio - expected_ratio).abs() < 0.01,
-            "energy ratio should be (eff_a/eff_b)^2 = {expected_ratio:.4}, \
-             got {actual_ratio:.4} (unweighted would give {eff_ratio:.4})");
+            "energy ratio should be eff_a/eff_b = {expected_ratio:.4}, got {actual_ratio:.4}");
     }
 
     #[test]

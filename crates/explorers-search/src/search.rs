@@ -111,7 +111,7 @@ pub fn default_ranges() -> Vec<ParameterRange> {
         ParameterRange { name: "reproduction_energy_threshold".into(), min: 5.0, max: 50.0 },  // 7
         ParameterRange { name: "mutation_rate".into(), min: 0.01, max: 0.5 },                  // 8
         ParameterRange { name: "mutation_magnitude".into(), min: 0.01, max: 0.5 },             // 9
-        ParameterRange { name: "contact_radius".into(), min: 0.5, max: 5.0 },                  // 10
+        ParameterRange { name: "contact_range_coefficient".into(), min: 0.5, max: 5.0 },         // 10
         ParameterRange { name: "world_extent".into(), min: 20.0, max: 100.0 },                 // 11
         ParameterRange { name: "initial_population_size".into(), min: 5.0, max: 50.0 },        // 12
         ParameterRange { name: "light_competition_radius".into(), min: 1.0, max: 20.0 },       // 13
@@ -129,6 +129,7 @@ pub fn default_ranges() -> Vec<ParameterRange> {
         ParameterRange { name: "specification_nutrient_coefficient".into(), min: 0.01, max: 0.5 }, // 25
         ParameterRange { name: "mean_asexual_propensity".into(), min: 0.0, max: 1.0 },        // 26
         ParameterRange { name: "mean_dispersal".into(), min: 0.0, max: 2.0 },                 // 27
+        ParameterRange { name: "maintenance_cost_exponent".into(), min: 1.5, max: 3.0 },     // 28
     ]
 }
 
@@ -149,7 +150,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         reproduction_energy_threshold: v(7) as f32,
         mutation_rate: v(8) as f32,
         mutation_magnitude: v(9) as f32,
-        contact_radius: v(10) as f32,
+        contact_range_coefficient: v(10) as f32,
         world_extent: v(11) as f32,
         initial_population_size: v(12).round() as u32,
         light_competition_radius: v(13) as f32,
@@ -167,7 +168,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         base_nutrient_ratio: v(24) as f32,
         specification_nutrient_coefficient: v(25) as f32,
         mobility_maintenance_cost: 0.0,
-        maintenance_cost_exponent: 1.0,
+        maintenance_cost_exponent: v(28) as f32,
         consumption_contact_half_saturation: 0.001,
         nutrient_grid_cell_size: 10.0,
     };

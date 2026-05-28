@@ -108,7 +108,7 @@ mod tests {
             reproduction_energy_threshold: 20.0,
             mutation_rate: 0.1,
             mutation_magnitude: 0.1,
-            contact_radius: 2.0,
+            contact_range_coefficient: 2.0,
             world_extent: 50.0,
             initial_population_size: 10,
             light_competition_radius: 1000.0,
@@ -168,7 +168,7 @@ mod tests {
     fn different_seeds_produce_different_runs() {
         let params = WorldParameters {
             initial_population_size: 30,
-            contact_radius: 10.0,
+            contact_range_coefficient: 10.0,
             reproduction_energy_threshold: 10.0,
             world_extent: 20.0,
             solar_flux_magnitude: 10.0,
@@ -302,7 +302,7 @@ mod tests {
     fn single_run_completes_at_max_ticks_when_no_failure() {
         let params = WorldParameters {
             reproduction_energy_threshold: 500.0, // prevent reproduction-related death
-            contact_radius: 5.0,
+            contact_range_coefficient: 5.0,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.01,
             growth_efficiency: 0.5,
