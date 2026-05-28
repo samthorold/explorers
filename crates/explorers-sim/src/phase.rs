@@ -655,6 +655,10 @@ pub struct MoveResult {
     /// Per-agent sensing throughput: number of agents + carcasses detected.
     /// Indexed by position in the agents slice.
     pub sensing_throughput: Vec<f32>,
+    /// Per-agent distance actually moved this tick (mobility use). Indexed by
+    /// position in the agents slice. Movement is the final phase, so this is
+    /// folded into the *next* tick's mobility use-wear.
+    pub move_distance: Vec<f32>,
 }
 
 /// Move agents: the final phase of the tick loop. Agents reposition based on
@@ -672,6 +676,7 @@ pub fn move_agents(
     let mut events = Vec::new();
     let mut total_dissipated = 0.0_f32;
     let mut sensing_throughput = vec![0.0_f32; agents.len()];
+    let mut move_distance = vec![0.0_f32; agents.len()];
     let k = params.wear_degradation_steepness;
     let extent = params.world_extent;
 
@@ -792,6 +797,7 @@ pub fn move_agents(
         if moved {
             agents[i].position = new_pos;
             agents[i].contact_time = 0;
+            move_distance[i] = distance;
         } else {
             agents[i].contact_time += 1;
         }
@@ -811,6 +817,7 @@ pub fn move_agents(
         events,
         dissipated: total_dissipated,
         sensing_throughput,
+        move_distance,
     }
 }
 
