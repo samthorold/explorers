@@ -1,4 +1,5 @@
 pub mod energy_ledger;
+pub mod nutrient_ledger;
 pub mod event;
 pub mod phase;
 pub mod spatial;
@@ -419,6 +420,7 @@ pub struct World {
     event_log: event::EventLog,
     next_seq: u64,
     ledger: energy_ledger::EnergyLedger,
+    nutrient_ledger: nutrient_ledger::NutrientLedger,
     /// Per-agent distance moved during the previous tick's movement phase
     /// (keyed by agent id). Movement is the final phase, running after wear,
     /// so a tick's mobility use is folded into the *next* tick's mobility wear.
@@ -509,6 +511,7 @@ impl World {
             event_log: event::EventLog::new(),
             next_seq: 0,
             ledger: energy_ledger::EnergyLedger::new(),
+            nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
             last_move_distance: std::collections::HashMap::new(),
         }
     }
@@ -554,6 +557,7 @@ impl World {
                 event_log: event::EventLog::new(),
                 next_seq: 0,
                 ledger: energy_ledger::EnergyLedger::new(),
+                nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
                 last_move_distance: std::collections::HashMap::new(),
             }
         } else if let Some(ref distribution) = recipe.initial_distribution {
@@ -585,6 +589,14 @@ impl World {
         let pre_carcass_energy: std::collections::HashMap<u64, f32> = self.carcasses.iter()
             .map(|c| (c.id, c.energy))
             .collect();
+
+        // Snapshot pre-tick nutrient per pool for the nutrient ledger.
+        // Nutrient is a closed resource: the ledger verifies that the total
+        // across all pools (grid cells + living agents + carcasses) at tick
+        // end equals the total at tick start.
+        let pre_grid_nutrient: f32 = self.nutrient_grid.total();
+        let pre_agent_nutrient: f32 = self.agents.iter().map(|a| a.nutrient).sum();
+        let pre_carcass_nutrient: f32 = self.carcasses.iter().map(|c| c.nutrient).sum();
 
         // Snapshot trait vectors for ledger efficiency calculations
         let pre_agent_traits: std::collections::HashMap<u64, TraitVector> = self.agents.iter()
@@ -874,6 +886,28 @@ impl World {
             }
         }
 
+        // --- Nutrient ledger: verify the closed-system conservation invariant ---
+        // Nutrient cycles between three pool categories (grid, agents, carcasses)
+        // and is never created or destroyed. The ledger endows each category
+        // with its pre-tick total and reconciles the post-tick deltas, so any
+        // net creation or destruction trips assert_balanced().
+        let pre_pools = nutrient_ledger::PoolTotals {
+            grid: pre_grid_nutrient,
+            agents: pre_agent_nutrient,
+            carcasses: pre_carcass_nutrient,
+        };
+        let post_pools = nutrient_ledger::PoolTotals {
+            grid: self.nutrient_grid.total(),
+            agents: self.agents.iter().map(|a| a.nutrient).sum(),
+            carcasses: self.carcasses.iter().map(|c| c.nutrient).sum(),
+        };
+        self.nutrient_ledger.build_from_pool_totals(pre_pools, post_pools);
+        // Verify conservation eagerly in debug builds; in release the check is
+        // compiled out, keeping the ledger an orthogonal, zero-cost wrapper
+        // (mirrors the energy ledger's disable-in-release approach).
+        #[cfg(debug_assertions)]
+        self.nutrient_ledger.assert_balanced();
+
         self.last_tick_deaths = drain_dead_ids.len() + threshold_deaths;
 
         // Append events to log
@@ -941,6 +975,10 @@ impl World {
 
     pub fn energy_ledger(&self) -> &energy_ledger::EnergyLedger {
         &self.ledger
+    }
+
+    pub fn nutrient_ledger(&self) -> &nutrient_ledger::NutrientLedger {
+        &self.nutrient_ledger
     }
 
     /// Emit an event to the log. Retained for coordinated phases (not yet implemented).
@@ -1703,6 +1741,198 @@ mod tests {
             assert!(diff < tolerance,
                 "nutrient conservation violated at tick {t}: initial={initial_nutrient}, current={current_nutrient}, diff={diff}");
 
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+    }
+
+    // --- Nutrient ledger conservation tests ---
+
+    #[test]
+    fn nutrient_ledger_balanced_after_uptake() {
+        // A producer absorbs nutrient from the grid. The nutrient ledger must
+        // remain balanced: nutrient moved grid -> agent, none created or lost.
+        let params = conservation_params();
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.6,
+                kappa: 0.7,
+                ..zero_traits()
+            },
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        });
+
+        world.step();
+
+        world.nutrient_ledger().assert_balanced();
+    }
+
+    #[test]
+    fn nutrient_ledger_balanced_after_consumption_with_excretion() {
+        // A heterotroph consumes a nutrient-rich neighbour. Some nutrient is
+        // retained, the excess is excreted back to the grid. Total nutrient
+        // (grid + agents + carcasses) is unchanged: the ledger stays balanced.
+        let params = conservation_params();
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        // Consumer: heterotroph, co-located with target.
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 40.0,
+            structure: 3.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                heterotrophy: 0.5,
+                kappa: 0.5,
+                ..zero_traits()
+            },
+            contact_time: 50,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        });
+        // Nutrient-rich target.
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.5, 0.0),
+            reserve: 10.0,
+            structure: 10.0,
+            nutrient: 20.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.1,
+                kappa: 0.7,
+                ..zero_traits()
+            },
+            contact_time: 50,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        });
+
+        world.step();
+
+        world.nutrient_ledger().assert_balanced();
+    }
+
+    #[test]
+    fn nutrient_ledger_balanced_after_death_to_carcass() {
+        // An agent dies (starvation: zero reserve, no income) and its nutrient
+        // transfers to a carcass. Total nutrient is conserved across the
+        // death→carcass transition.
+        let params = WorldParameters {
+            base_metabolic_rate: 100.0, // guarantee starvation this tick
+            ..conservation_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 1.0, // tiny reserve — wiped out by metabolism
+            structure: 5.0,
+            nutrient: 12.0,
+            traits: TraitVector {
+                heterotrophy: 0.3,
+                kappa: 0.7,
+                ..zero_traits()
+            },
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        });
+
+        world.step();
+
+        // The agent should have died and become a carcass holding its nutrient.
+        assert!(world.agents().is_empty(), "agent should have starved");
+        assert!(!world.carcasses().is_empty(), "a carcass should exist");
+        world.nutrient_ledger().assert_balanced();
+    }
+
+    #[test]
+    fn nutrient_ledger_balanced_after_reproduction() {
+        // An agent reproduces asexually, donating nutrient to its offspring.
+        // Donated nutrient leaves the parent and enters the offspring; total
+        // nutrient across all living agents is conserved.
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0, // preserve repro_reserve through metabolism
+            reproduction_energy_threshold: 5.0,
+            ..conservation_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 60.0,
+            structure: 5.0,
+            nutrient: 20.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.3,
+                kappa: 0.7,
+                fecundity: 5.0,
+                asexual_propensity: 1.0, // guaranteed asexual reproduction
+                ..zero_traits()
+            },
+            contact_time: 50,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 50.0,
+        });
+
+        let agents_before = world.agents().len();
+        world.step();
+
+        assert!(world.agents().len() > agents_before, "reproduction should add offspring");
+        world.nutrient_ledger().assert_balanced();
+    }
+
+    #[test]
+    fn nutrient_ledger_balanced_500_ticks_mixed_population() {
+        // Run a mixed population through many ticks, exercising every nutrient
+        // path (uptake, consumption + excretion, carcass consumption, death,
+        // reproduction). The nutrient ledger must stay balanced on every tick.
+        let params = conservation_params();
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        seed_mixed_population(&mut world);
+
+        for _tick in 0..500 {
+            world.step();
+            world.nutrient_ledger().assert_balanced();
             if world.agents().is_empty() {
                 break;
             }
