@@ -95,7 +95,7 @@ fn main() {
                 reproduction_energy_threshold: 50.0,
                 mutation_rate: 0.1,
                 mutation_magnitude: 0.05,
-                contact_radius: 5.0,
+                contact_range_coefficient: 5.0,
                 world_extent: 200.0,
                 initial_population_size: 3,
                 light_competition_radius: 20.0,
@@ -404,7 +404,7 @@ mod tests {
                 reproduction_energy_threshold: 50.0,
                 mutation_rate: 0.1,
                 mutation_magnitude: 0.05,
-                contact_radius: 5.0,
+                contact_range_coefficient: 5.0,
                 world_extent,
                 initial_population_size: 0,
                 light_competition_radius: 1000.0,
@@ -954,7 +954,7 @@ fn debug_panel_ui(
                     ui.add(bevy_egui::egui::Slider::new(&mut params.heterotrophy_maintenance_cost, 0.0..=0.5).text("Heterotrophy maintenance"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.mutation_rate, 0.0..=1.0).text("Mutation rate"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.mutation_magnitude, 0.0..=0.5).text("Mutation magnitude"));
-                    ui.add(bevy_egui::egui::Slider::new(&mut params.contact_radius, 1.0..=50.0).text("Contact radius"));
+                    ui.add(bevy_egui::egui::Slider::new(&mut params.contact_range_coefficient, 1.0..=50.0).text("Contact range coefficient"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.light_competition_radius, 1.0..=100.0).text("Light competition radius"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.growth_efficiency, 0.0..=1.0).text("Growth efficiency"));
                     ui.add(bevy_egui::egui::Slider::new(&mut params.wear_rate, 0.0..=1.0).text("Wear rate"));

@@ -130,7 +130,7 @@ fn default_base_nutrient_ratio() -> f32 { 0.1 }
 fn default_specification_nutrient_coefficient() -> f32 { 0.2 }
 fn default_sensing_range_coefficient() -> f32 { 10.0 }
 fn default_reproductive_compatibility_distance() -> f32 { 2.0 }
-fn default_maintenance_cost_exponent() -> f32 { 1.0 }
+fn default_maintenance_cost_exponent() -> f32 { 2.0 }
 fn default_consumption_contact_half_saturation() -> f32 { 0.001 }
 fn default_nutrient_grid_cell_size() -> f32 { 10.0 }
 
@@ -156,7 +156,8 @@ pub struct WorldParameters {
     pub reproduction_energy_threshold: f32,
     pub mutation_rate: f32,
     pub mutation_magnitude: f32,
-    pub contact_radius: f32,
+    #[serde(alias = "contact_radius")]
+    pub contact_range_coefficient: f32,
     pub world_extent: f32,
     pub initial_population_size: u32,
     pub light_competition_radius: f32,
@@ -691,12 +692,13 @@ impl World {
         events.extend(wear_events);
 
         // 8. Check death thresholds
-        let (death_events, new_carcasses, death_dissipated) = phase::check_death_thresholds(
+        let (death_events, threshold_carcasses, death_dissipated) = phase::check_death_thresholds(
             &mut self.agents, &self.params,
         );
+        let threshold_deaths = threshold_carcasses.len();
         self.dissipated_energy += death_dissipated;
         events.extend(death_events);
-        for c in new_carcasses {
+        for c in threshold_carcasses {
             self.carcasses.push(c);
         }
 
@@ -705,8 +707,12 @@ impl World {
 
         // 9. Move agents (runs last: all phases resolve at stable positions,
         // movement energy is bounded by what remains after all other costs)
+        let mut move_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
+        for (i, a) in self.agents.iter().enumerate() {
+            move_grid.insert(i as u64, a.position);
+        }
         let move_result = phase::move_agents(
-            &mut self.agents, &self.carcasses, &grid, &self.params, &mut self.rng,
+            &mut self.agents, &self.carcasses, &move_grid, &self.params, &mut self.rng,
         );
         self.dissipated_energy += move_result.dissipated;
         events.extend(move_result.events);
@@ -840,6 +846,8 @@ impl World {
             }
         }
 
+        self.last_tick_deaths = drain_dead_ids.len() + threshold_deaths;
+
         // Append events to log
         for mut ev in events {
             ev.tick = self.tick;
@@ -952,7 +960,7 @@ mod tests {
             reproduction_energy_threshold: 50.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            contact_radius: 5.0,
+            contact_range_coefficient: 5.0,
             world_extent: 100.0,
             initial_population_size: 10,
             light_competition_radius: 1000.0,
@@ -1216,7 +1224,7 @@ mod tests {
             use_wear_rate: 0.02,
             wear_degradation_steepness: 1.0,
             repair_decay: 0.0, // no repair
-            contact_radius: 10.0,
+            contact_range_coefficient: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
             initial_population_size: 0,
@@ -1427,7 +1435,7 @@ mod tests {
             initial_nutrient_pool: 100.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
-            contact_radius: 10.0,
+            contact_range_coefficient: 10.0,
             world_extent: 50.0,
             light_competition_radius: 100.0,
             photo_maintenance_cost: 0.05,
@@ -1834,7 +1842,7 @@ mod tests {
             use_wear_rate: 0.0,
             wear_degradation_steepness: 1.0,
             repair_decay: 0.0,          // no repair
-            contact_radius: 5.0,
+            contact_range_coefficient: 5.0,
             movement_cost_coefficient: 0.0,
             initial_population_size: 0,
             ..test_params()
