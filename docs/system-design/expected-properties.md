@@ -102,6 +102,8 @@ On Earth, the substrate is the product of 4.5 billion years of geology — tecto
 
 ### Two-phase world creation
 
+> **Status:** Not yet implemented — see [#250](https://github.com/samthorold/explorers/issues/250). Current implementation has a `NutrientGrid` but no separate substrate-validation step.
+
 World creation is a two-phase process:
 
 1. **Substrate generation.** The physical medium is procedurally generated — nutrient distributions (both available and unavailable pools), terrain properties, and spatial structure. This phase compresses geological history into an algorithm. The substrate is generated and validated independently of any agents.
