@@ -36,26 +36,80 @@ fn carcass_color(energy: f32) -> Color32 {
     Color32::from_rgb(gray, gray, gray)
 }
 
-/// Accumulates elapsed wall-clock time and emits whole simulation steps at a
-/// fixed interval. Framework-agnostic so the stepping cadence can be unit
-/// tested without a window.
-struct TickAccumulator {
-    interval: f32,
+/// Default simulation rate when the app starts, in ticks per second.
+const DEFAULT_TICKS_PER_SECOND: f32 = 1.0;
+/// Slowest the clock can be driven, in ticks per second (one tick every 2s).
+/// Mirrors the old Bevy 2000ms timestep ceiling.
+const MIN_TICKS_PER_SECOND: f32 = 0.5;
+/// Fastest the clock can be driven, in ticks per second (one tick every 10ms).
+/// Mirrors the old Bevy 10ms timestep floor.
+const MAX_TICKS_PER_SECOND: f32 = 100.0;
+
+/// Drives simulation time off the eframe update loop. Owns the run/pause state,
+/// the target ticks-per-second, and the carried-over time accumulator. Lives in
+/// the app (never in `explorers-sim`) per ADR 0001: the sim has no opinion about
+/// timing. Framework-agnostic so the clock logic is unit-testable without a
+/// window.
+struct RunClock {
+    ticks_per_second: f32,
     accumulated: f32,
+    paused: bool,
 }
 
-impl TickAccumulator {
-    fn new(interval: f32) -> Self {
-        Self { interval, accumulated: 0.0 }
+impl RunClock {
+    fn new() -> Self {
+        Self {
+            ticks_per_second: DEFAULT_TICKS_PER_SECOND,
+            accumulated: 0.0,
+            paused: false,
+        }
     }
 
-    /// Add `dt` seconds of elapsed time and return how many sim steps are now
-    /// due. The remainder is carried over to the next call.
+    fn ticks_per_second(&self) -> f32 {
+        self.ticks_per_second
+    }
+
+    fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Toggle between running and paused.
+    fn toggle_pause(&mut self) {
+        self.paused = !self.paused;
+    }
+
+    /// Double the tick rate, clamped to the ceiling.
+    fn speed_up(&mut self) {
+        self.ticks_per_second = (self.ticks_per_second * 2.0).min(MAX_TICKS_PER_SECOND);
+    }
+
+    /// Halve the tick rate, clamped to the floor.
+    fn slow_down(&mut self) {
+        self.ticks_per_second = (self.ticks_per_second / 2.0).max(MIN_TICKS_PER_SECOND);
+    }
+
+    /// Request a single manual tick. Only meaningful while paused: returns 1 to
+    /// signal one step is due, or 0 when running (where time already drives the
+    /// clock). Does not touch the carried-over accumulator.
+    fn step_once(&mut self) -> u32 {
+        if self.paused {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Add `dt` seconds of elapsed wall-clock time and return how many sim steps
+    /// are now due. Emits nothing while paused; the remainder carries over.
     fn advance(&mut self, dt: f32) -> u32 {
+        if self.paused {
+            return 0;
+        }
         self.accumulated += dt;
+        let interval = 1.0 / self.ticks_per_second;
         let mut steps = 0;
-        while self.accumulated >= self.interval {
-            self.accumulated -= self.interval;
+        while self.accumulated >= interval {
+            self.accumulated -= interval;
             steps += 1;
         }
         steps
@@ -119,8 +173,6 @@ fn parse_args(args: &[String]) -> CliOutcome {
 const AGENT_RADIUS: f32 = 3.0;
 /// Half-side length of a carcass square, in world units.
 const CARCASS_HALF_SIDE: f32 = 3.0;
-/// Wall-clock seconds between simulation steps.
-const STEP_INTERVAL: f32 = 1.0;
 
 fn print_help() {
     eprintln!("Usage: explorers-app [OPTIONS]");
@@ -245,15 +297,20 @@ fn main() -> eframe::Result {
 struct ExplorersApp {
     world: World,
     tick_count: u64,
-    accumulator: TickAccumulator,
+    clock: RunClock,
 }
 
 impl ExplorersApp {
     fn new(world: World, tick_count: u64) -> Self {
-        Self {
-            world,
-            tick_count,
-            accumulator: TickAccumulator::new(STEP_INTERVAL),
+        Self { world, tick_count, clock: RunClock::new() }
+    }
+
+    /// Advance the simulation by `steps` whole ticks, keeping the tick readout
+    /// in sync.
+    fn apply_steps(&mut self, steps: u32) {
+        for _ in 0..steps {
+            self.world.step();
+            self.tick_count += 1;
         }
     }
 }
@@ -261,12 +318,42 @@ impl ExplorersApp {
 impl eframe::App for ExplorersApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Drive the simulation off wall-clock time, independent of frame rate.
+        // While paused this yields nothing; speed changes alter the target rate.
         let dt = ctx.input(|i| i.stable_dt);
-        let steps = self.accumulator.advance(dt);
-        for _ in 0..steps {
-            self.world.step();
-            self.tick_count += 1;
-        }
+        let steps = self.clock.advance(dt);
+        self.apply_steps(steps);
+
+        // Run-control toolbar, co-located with the spatial view: play/pause,
+        // single-step, speed, and a live tick + agent-count readout.
+        egui::TopBottomPanel::top("run_control").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let pause_label = if self.clock.is_paused() { "Play" } else { "Pause" };
+                if ui.button(pause_label).clicked() {
+                    self.clock.toggle_pause();
+                }
+                if ui
+                    .add_enabled(self.clock.is_paused(), egui::Button::new("Step"))
+                    .clicked()
+                {
+                    let steps = self.clock.step_once();
+                    self.apply_steps(steps);
+                }
+                if ui.button("Slower").clicked() {
+                    self.clock.slow_down();
+                }
+                if ui.button("Faster").clicked() {
+                    self.clock.speed_up();
+                }
+                ui.separator();
+                ui.label(format!("{:.2} ticks/s", self.clock.ticks_per_second()));
+                if self.clock.is_paused() {
+                    ui.label("PAUSED");
+                }
+                ui.separator();
+                ui.label(format!("Tick: {}", self.tick_count));
+                ui.label(format!("Agents: {}", self.world.agents().len()));
+            });
+        });
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().fill(Color32::BLACK))
@@ -405,23 +492,130 @@ mod tests {
     }
 
     #[test]
-    fn accumulator_emits_no_step_before_interval_elapses() {
-        let mut acc = TickAccumulator::new(1.0);
-        assert_eq!(acc.advance(0.4), 0);
-        assert_eq!(acc.advance(0.4), 0);
+    fn new_clock_runs_and_emits_steps_as_time_accumulates() {
+        let mut clock = RunClock::new();
+        // At the default rate, one interval's worth of dt yields one step.
+        let interval = 1.0 / clock.ticks_per_second();
+        assert!(!clock.is_paused());
+        assert_eq!(clock.advance(interval), 1);
     }
 
     #[test]
-    fn accumulator_emits_one_step_when_interval_reached() {
-        let mut acc = TickAccumulator::new(1.0);
-        assert_eq!(acc.advance(0.6), 0);
-        assert_eq!(acc.advance(0.6), 1);
+    fn paused_clock_emits_no_steps() {
+        let mut clock = RunClock::new();
+        clock.toggle_pause();
+        assert!(clock.is_paused());
+        // Even a large dt must not advance the simulation while paused.
+        assert_eq!(clock.advance(100.0), 0);
     }
 
     #[test]
-    fn accumulator_emits_multiple_steps_for_large_dt() {
-        let mut acc = TickAccumulator::new(0.5);
-        assert_eq!(acc.advance(1.6), 3);
+    fn toggle_pause_resumes_advancement() {
+        let mut clock = RunClock::new();
+        let interval = 1.0 / clock.ticks_per_second();
+        clock.toggle_pause();
+        assert!(clock.is_paused());
+        clock.toggle_pause();
+        assert!(!clock.is_paused());
+        // After resuming, time advances the simulation again.
+        assert_eq!(clock.advance(interval), 1);
+    }
+
+    #[test]
+    fn speed_up_doubles_the_tick_rate() {
+        let mut clock = RunClock::new();
+        let before = clock.ticks_per_second();
+        clock.speed_up();
+        assert_eq!(clock.ticks_per_second(), before * 2.0);
+    }
+
+    #[test]
+    fn slow_down_halves_the_tick_rate() {
+        let mut clock = RunClock::new();
+        let before = clock.ticks_per_second();
+        clock.slow_down();
+        assert_eq!(clock.ticks_per_second(), before / 2.0);
+    }
+
+    #[test]
+    fn speed_up_is_clamped_to_the_ceiling() {
+        let mut clock = RunClock::new();
+        for _ in 0..50 {
+            clock.speed_up();
+        }
+        assert_eq!(clock.ticks_per_second(), MAX_TICKS_PER_SECOND);
+    }
+
+    #[test]
+    fn slow_down_is_clamped_to_the_floor() {
+        let mut clock = RunClock::new();
+        for _ in 0..50 {
+            clock.slow_down();
+        }
+        assert_eq!(clock.ticks_per_second(), MIN_TICKS_PER_SECOND);
+    }
+
+    #[test]
+    fn speeding_up_yields_more_steps_for_the_same_dt() {
+        let mut clock = RunClock::new();
+        // Default 1 TPS: one second of dt -> one step.
+        clock.speed_up(); // now 2 TPS.
+        assert_eq!(clock.advance(1.0), 2);
+    }
+
+    #[test]
+    fn step_once_advances_exactly_one_tick_while_paused() {
+        let mut clock = RunClock::new();
+        clock.toggle_pause();
+        assert_eq!(clock.step_once(), 1);
+        // A second request is a separate, single step.
+        assert_eq!(clock.step_once(), 1);
+    }
+
+    #[test]
+    fn step_once_does_nothing_while_running() {
+        let mut clock = RunClock::new();
+        assert!(!clock.is_paused());
+        assert_eq!(clock.step_once(), 0);
+    }
+
+    #[test]
+    fn step_once_does_not_disturb_the_accumulator() {
+        let mut clock = RunClock::new();
+        let interval = 1.0 / clock.ticks_per_second();
+        // Build up almost-but-not-quite a full interval of carried time.
+        clock.toggle_pause();
+        clock.toggle_pause();
+        assert_eq!(clock.advance(interval * 0.9), 0);
+        clock.toggle_pause();
+        // Stepping by hand emits its single tick without consuming carried time.
+        assert_eq!(clock.step_once(), 1);
+        clock.toggle_pause();
+        // The carried 0.9 interval is still there: a further 0.1 completes a tick.
+        assert_eq!(clock.advance(interval * 0.1), 1);
+    }
+
+    #[test]
+    fn clock_emits_no_step_before_interval_elapses() {
+        // Default 1 TPS -> 1s interval.
+        let mut clock = RunClock::new();
+        assert_eq!(clock.advance(0.4), 0);
+        assert_eq!(clock.advance(0.4), 0);
+    }
+
+    #[test]
+    fn clock_emits_one_step_when_interval_reached() {
+        let mut clock = RunClock::new();
+        assert_eq!(clock.advance(0.6), 0);
+        assert_eq!(clock.advance(0.6), 1);
+    }
+
+    #[test]
+    fn clock_emits_multiple_steps_for_large_dt() {
+        // 2 TPS -> 0.5s interval; 1.6s of dt clears three intervals.
+        let mut clock = RunClock::new();
+        clock.speed_up();
+        assert_eq!(clock.advance(1.6), 3);
     }
 
     fn args(parts: &[&str]) -> Vec<String> {
@@ -492,13 +686,14 @@ mod tests {
     }
 
     #[test]
-    fn accumulator_carries_remainder_across_calls() {
-        let mut acc = TickAccumulator::new(1.0);
-        assert_eq!(acc.advance(0.9), 0);
+    fn clock_carries_remainder_across_calls() {
+        // Default 1 TPS -> 1s interval.
+        let mut clock = RunClock::new();
+        assert_eq!(clock.advance(0.9), 0);
         // 0.9 + 0.2 = 1.1 -> one step, 0.1 carried.
-        assert_eq!(acc.advance(0.2), 1);
-        assert_eq!(acc.advance(0.85), 0);
+        assert_eq!(clock.advance(0.2), 1);
+        assert_eq!(clock.advance(0.85), 0);
         // 0.1 + 0.85 + 0.06 = 1.01 -> one step.
-        assert_eq!(acc.advance(0.06), 1);
+        assert_eq!(clock.advance(0.06), 1);
     }
 }
