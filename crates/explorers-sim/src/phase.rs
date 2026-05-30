@@ -2883,6 +2883,73 @@ mod tests {
             "all excreted nutrient should be in target's cell");
     }
 
+    #[test]
+    fn drain_carcass_excreted_nutrient_conserves_into_available_pool() {
+        // Direct positive routing test (WR-25): when a low-demand consumer
+        // decomposes a nutrient-rich carcass, the nutrient drained from the
+        // carcass splits exactly into (a) nutrient retained by the consumer and
+        // (b) excess excreted to the NutrientGrid at the carcass's cell. Nothing
+        // dissipates: consumer gain + grid delta == total drained from target.
+        let params = test_params();
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            ..zero_traits()
+        };
+        let carcass_traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        // Low stoichiometric demand consumer (small structure), placed within
+        // contact range (contact_radius = 5.0 in test_params).
+        let carcass_pos = (40.0, 0.0);
+        let consumer_pos = (41.0, 0.0);
+        let mut agents = vec![make_agent(1, consumer_pos, 10.0, consumer_traits)];
+        agents[0].structure = 5.0;
+
+        let mut carcasses = vec![Carcass {
+            id: 99,
+            position: carcass_pos,
+            energy: 10.0,
+            nutrient: 20.0, // nutrient-rich target
+            traits: carcass_traits,
+        }];
+
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(1, consumer_pos); // grid id must match agent id for lookup
+
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+
+        // Record before-state.
+        let consumer_nutrient_before = agents[0].nutrient;
+        let carcass_nutrient_before = carcasses[0].nutrient;
+        let grid_total_before = nutrient_grid.total();
+
+        let _result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+        );
+
+        // Deltas across the single consumption tick.
+        let consumer_gain = agents[0].nutrient - consumer_nutrient_before;
+        let drained_from_carcass = carcass_nutrient_before - carcasses[0].nutrient;
+        let excreted_to_grid = nutrient_grid.total() - grid_total_before;
+
+        // Routing must split the drained nutrient with no loss.
+        assert!(consumer_gain > 0.0, "consumer should retain some nutrient");
+        assert!(excreted_to_grid > 0.0, "excess should reach the available pool");
+        assert!(
+            (consumer_gain + excreted_to_grid - drained_from_carcass).abs() < 1e-4,
+            "consumer gain ({consumer_gain}) + excreted ({excreted_to_grid}) must equal \
+             nutrient drained from carcass ({drained_from_carcass})"
+        );
+
+        // The excreted nutrient lands at the carcass's cell specifically.
+        let carcass_cell = *nutrient_grid.at_position(carcass_pos);
+        assert!(
+            (carcass_cell - excreted_to_grid).abs() < 1e-6,
+            "all excreted nutrient should be in the carcass's cell"
+        );
+    }
+
     // --- Distance-dependent trophic efficiency in drains ---
 
     #[test]
