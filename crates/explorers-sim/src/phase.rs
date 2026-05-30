@@ -243,21 +243,43 @@ pub fn grow(
         let growth_budget = soma_fraction - repair_energy_spent;
         let efficiency = params.growth_efficiency;
         if efficiency > 0.0 && growth_budget > 0.0 {
-            let to_structure = growth_budget * efficiency;
-            let dissipated = growth_budget - to_structure;
+            // Energy alone would build this much structure...
+            let energy_limited = growth_budget * efficiency;
+            // ...but structure is co-limited by nutrient (Liebig's law of the
+            // minimum): the body can only hold as much structure as the agent's
+            // nutrient store stoichiometrically supports (structure * ratio <=
+            // nutrient). No hard gate — growth throttles smoothly to zero as
+            // nutrient binds up, which keeps `nutrient >= structure * ratio` and
+            // so leaves the reproduction nutrient gate reachable. Nutrient is not
+            // consumed (there is no structural-nutrient pool to recycle it into);
+            // it is the build permit, not the building material.
+            let ratio = crate::stoichiometric_demand(&agent.traits, 1.0, params);
+            let nutrient_headroom = if ratio > 0.0 {
+                (agent.nutrient / ratio - agent.structure).max(0.0)
+            } else {
+                f32::INFINITY
+            };
+            let to_structure = energy_limited.min(nutrient_headroom);
+            // Energy actually spent on that structure; the rest could not be
+            // matched by nutrient, so it stays in reserve rather than burning.
+            let energy_spent = to_structure / efficiency;
+            let dissipated = energy_spent - to_structure;
             agent.structure += to_structure;
+            agent.reserve += growth_budget - energy_spent;
             total_dissipated += dissipated;
 
-            events.push(Event {
-                tick: 0,
-                seq: 0,
-                kind: EventKind::Grew,
-                source: agent.id,
-                target: None,
-                energy_delta: to_structure,
-                position: Some(agent.position),
-                target_was_carcass: false,
-            });
+            if to_structure > 0.0 {
+                events.push(Event {
+                    tick: 0,
+                    seq: 0,
+                    kind: EventKind::Grew,
+                    source: agent.id,
+                    target: None,
+                    energy_delta: to_structure,
+                    position: Some(agent.position),
+                    target_was_carcass: false,
+                });
+            }
         } else if growth_budget > 0.0 {
             // No growth efficiency: remaining soma is dissipated
             total_dissipated += growth_budget;
@@ -1832,6 +1854,7 @@ mod tests {
         // retention = metabolic_cost * 2 = (0 + 0 + 0 + 1.0*1.0 + 0) * 2 = 2.0
         // surplus = reserve - retention = 10.0 - 2.0 = 8.0
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        agents[0].nutrient = 1_000.0; // ample: growth is energy-limited here
 
         let (_events, _dissipated) = grow(&mut agents, &params);
 
@@ -1863,6 +1886,7 @@ mod tests {
         // metabolic_cost = 1.0^1 * 1.0 = 1.0; retention = 1.0 * 2 = 2.0
         // surplus = 10.0 - 2.0 = 8.0
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        agents[0].nutrient = 1_000.0; // ample: growth is energy-limited here
 
         let (_events, _dissipated) = grow(&mut agents, &params);
 
@@ -1873,6 +1897,68 @@ mod tests {
     // --- Grow ---
 
     #[test]
+    fn grow_caps_structure_at_nutrient_supply() {
+        // Building structure is co-limited by nutrient: an agent can only lay down
+        // as much structure as its nutrient store stoichiometrically supports
+        // (structure <= nutrient / ratio). Energy it cannot match with nutrient
+        // stays in reserve rather than being burned.
+        let params = WorldParameters {
+            base_metabolic_rate: 1.0,
+            growth_efficiency: 1.0,
+            specification_nutrient_coefficient: 0.0, // ratio = base_nutrient_ratio = 0.1
+            ..test_params()
+        };
+        let traits = TraitVector { kappa: 1.0, ..zero_traits() }; // all surplus to soma
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
+        agents[0].nutrient = 1.0; // ratio 0.1 -> supports at most 10.0 structure
+
+        let (events, dissipated) = grow(&mut agents, &params);
+
+        // retention = 1.0 * 2.0 = 2.0; surplus = 98.0; efficiency 1.0 would give
+        // 98.0 structure, but nutrient caps it at 1.0 / 0.1 = 10.0.
+        assert_eq!(events.len(), 1);
+        assert!((agents[0].structure - 10.0).abs() < 1e-3,
+            "structure capped at nutrient supply, got {}", agents[0].structure);
+        // Unspent growth energy (88.0) returns to reserve on top of retention.
+        assert!((agents[0].reserve - 90.0).abs() < 1e-3,
+            "leftover growth energy stays in reserve, got {}", agents[0].reserve);
+        // Nutrient is not moved (conservation-safe build permit).
+        assert!((agents[0].nutrient - 1.0).abs() < 1e-6,
+            "growth does not consume nutrient, got {}", agents[0].nutrient);
+        // No energy dissipated at efficiency 1.0.
+        assert!(dissipated.abs() < 1e-3, "no dissipation at efficiency 1.0, got {dissipated}");
+        // The repro nutrient gate (nutrient >= structure * ratio) now holds.
+        assert!(
+            agents[0].nutrient >= crate::stoichiometric_demand(&agents[0].traits, agents[0].structure, &params),
+            "agent stays reproduction-eligible on the nutrient axis"
+        );
+    }
+
+    #[test]
+    fn grow_without_nutrient_builds_no_structure() {
+        // With no nutrient, an energy-rich agent cannot lay down structure at all
+        // (nutrient is the binding constraint). The growth energy is retained in
+        // reserve rather than burned.
+        let params = WorldParameters {
+            base_metabolic_rate: 1.0,
+            growth_efficiency: 1.0,
+            ..test_params()
+        };
+        let traits = TraitVector { kappa: 1.0, ..zero_traits() };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
+        // make_agent leaves nutrient at 0.0.
+
+        let (events, dissipated) = grow(&mut agents, &params);
+
+        assert!(events.is_empty(), "no Grew event when nutrient-starved");
+        assert!(agents[0].structure.abs() < 1e-6, "no structure built without nutrient");
+        // Surplus (98.0) was not burned: retention (2.0) + returned growth energy.
+        assert!((agents[0].reserve - 100.0).abs() < 1e-3,
+            "growth energy stays in reserve, got {}", agents[0].reserve);
+        assert!(dissipated.abs() < 1e-6, "nothing dissipated, got {dissipated}");
+    }
+
+    #[test]
     fn grow_converts_surplus_reserve_to_structure() {
         let params = WorldParameters {
             base_metabolic_rate: 1.0,
@@ -1881,6 +1967,7 @@ mod tests {
         };
         let traits = TraitVector { kappa: 1.0, ..zero_traits() }; // all surplus to soma
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
+        agents[0].nutrient = 1_000.0; // ample: growth is energy-limited here
 
         let (events, dissipated) = grow(&mut agents, &params);
 
@@ -1927,6 +2014,7 @@ mod tests {
         // surplus = 10.0 - 5.0 = 5.0; kappa=1, growth_efficiency=1
         // -> structure = 5.0; reserve = 5.0
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        agents[0].nutrient = 1_000.0; // ample: growth is energy-limited here
         let (_events, _dissipated) = grow(&mut agents, &params);
         assert!((agents[0].reserve - 5.0).abs() < 1e-6,
             "reserve should equal retention (5.0) under multiplier=5.0");
@@ -1971,6 +2059,7 @@ mod tests {
         };
         let traits = TraitVector { kappa: 0.6, ..zero_traits() };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
+        agents[0].nutrient = 1_000.0; // ample: growth is energy-limited here
 
         let (_events, _dissipated) = grow(&mut agents, &params);
 
