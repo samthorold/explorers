@@ -126,7 +126,14 @@ pub fn absorb_nutrients(
             } else {
                 demand / total_demand * available
             };
-            agents[i].nutrient += uptake;
+            // Split uptake by kappa, mirroring the energy allocation: the
+            // kappa share feeds the free store (the growth build-permit), the
+            // (1 - kappa) share feeds the reproductive-nutrient earmark. Unlike
+            // energy there is no retention buffer — nutrient has no per-tick
+            // holding cost, so the whole uptake flow is split.
+            let kappa = agents[i].traits.kappa.clamp(0.0, 1.0);
+            agents[i].nutrient += uptake * kappa;
+            agents[i].repro_nutrient += uptake * (1.0 - kappa);
             *cell_pool -= uptake;
             events.push(Event {
                 tick: 0,
@@ -245,14 +252,17 @@ pub fn grow(
         if efficiency > 0.0 && growth_budget > 0.0 {
             // Energy alone would build this much structure...
             let energy_limited = growth_budget * efficiency;
-            // ...but structure is co-limited by nutrient (Liebig's law of the
-            // minimum): the body can only hold as much structure as the agent's
-            // nutrient store stoichiometrically supports (structure * ratio <=
-            // nutrient). No hard gate — growth throttles smoothly to zero as
-            // nutrient binds up, which keeps `nutrient >= structure * ratio` and
-            // so leaves the reproduction nutrient gate reachable. Nutrient is not
-            // consumed (there is no structural-nutrient pool to recycle it into);
-            // it is the build permit, not the building material.
+            // ...but structure is co-limited by the free nutrient store (Liebig's
+            // law of the minimum): the body can only hold as much structure as
+            // the agent's free nutrient store stoichiometrically supports
+            // (structure * ratio <= nutrient). Growth throttles smoothly to zero
+            // as nutrient binds up. This is the ADR-0002 build permit: the free
+            // store gates structure but is not consumed (embodiment is slice 2,
+            // ADR-0003). Crucially, growth touches only the free store; the
+            // reproductive-nutrient earmark (fed the (1 - kappa) uptake share in
+            // absorb_nutrients) is off-limits to growth, and the reproduction
+            // gate reads that earmark — so growth can never pin the agent on the
+            // reproduction nutrient gate (#269).
             let ratio = crate::stoichiometric_demand(&agent.traits, 1.0, params);
             let nutrient_headroom = if ratio > 0.0 {
                 (agent.nutrient / ratio - agent.structure).max(0.0)
@@ -516,7 +526,7 @@ pub fn resolve_drains(
                 id: agent.id,
                 position: agent.position,
                 energy: agent.structure.max(0.0),
-                nutrient: agent.nutrient,
+                nutrient: agent.nutrient_total(),
                 traits: agent.traits,
             });
         }
@@ -673,12 +683,16 @@ pub fn check_death_thresholds(
                 id: agent.id,
                 position: agent.position,
                 energy: carcass_energy,
-                nutrient: agent.nutrient,
+                nutrient: agent.nutrient_total(),
                 traits: agent.traits,
             });
-            // Mark for removal by setting reserve to 0
+            // Mark for removal by setting reserve to 0. Nutrient (free store and
+            // earmark) has already been transferred to the carcass above.
             agent.reserve = 0.0;
             agent.repro_reserve = 0.0;
+            agent.repro_nutrient = 0.0;
+            agent.nutrient = 0.0;
+            agent.repro_nutrient = 0.0;
         }
     }
     (events, carcasses, dissipated)
@@ -887,15 +901,18 @@ pub fn resolve_reproduction(
     let mut offspring = Vec::new();
     let extent = params.world_extent;
 
-    // Build eligible set: alive, repro_reserve above threshold, sufficient nutrient.
-    // Reproduction draws from repro_reserve, not reserve.
+    // Build eligible set: alive, with both reproductive earmarks above their
+    // thresholds. Reproduction draws from the earmarks (repro_reserve and
+    // repro_nutrient), never from the free reserve or free nutrient store, so
+    // growth cannot pin an agent on either gate. The old body-support nutrient
+    // gate (`nutrient >= structure * demand`) is gone.
     let eligible: std::collections::HashSet<usize> = agents
         .iter()
         .enumerate()
         .filter(|(_, a)| {
             !dead_ids.contains(&a.id)
                 && a.repro_reserve >= params.reproduction_energy_threshold
-                && a.nutrient >= crate::stoichiometric_demand(&a.traits, a.structure, params)
+                && a.repro_nutrient >= params.reproduction_nutrient_threshold
         })
         .map(|(i, _)| i)
         .collect();
@@ -928,8 +945,7 @@ pub fn resolve_reproduction(
 
         let parent_traits = agents[i].traits;
         let parent_repro = agents[i].repro_reserve;
-        let parent_nutrient = agents[i].nutrient;
-        let parent_reserve = agents[i].reserve;
+        let parent_repro_nutrient = agents[i].repro_nutrient.max(0.0);
         let parent_pos = agents[i].position;
         let parent_id = agents[i].id;
 
@@ -983,13 +999,16 @@ pub fn resolve_reproduction(
         let offspring_reserve = energy_per_offspring - structure_energy_share;
         dissipated += structure_heat_per * offspring_count as f32;
 
-        // Nutrient donation from single parent
-        let nutrient_donated = parent_nutrient
-            * (investment / (parent_reserve + parent_repro).max(1e-10)).min(0.5);
+        // Nutrient donation: the parent donates its entire reproductive-nutrient
+        // earmark to the offspring, divided by the realised offspring count
+        // (mirroring how repro_reserve energy is divided). The free store is
+        // never touched. Offspring receive the donation as their starting free
+        // nutrient store so they can grow.
+        let nutrient_donated = parent_repro_nutrient;
         let nutrient_per_offspring = nutrient_donated / offspring_count as f32;
 
-        // Deduct nutrient donation from parent
-        agents[i].nutrient -= nutrient_donated;
+        // Deduct the donated earmark from the parent.
+        agents[i].repro_nutrient -= nutrient_donated;
 
         // Dispersal: sigma proportional to parent's dispersal trait
         let dispersal_radius = parent_traits.dispersal;
@@ -1035,6 +1054,7 @@ pub fn resolve_reproduction(
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 0.0,
+                repro_nutrient: 0.0,
             };
             next_id += 1;
             offspring.push(child);
@@ -1132,10 +1152,8 @@ pub fn resolve_reproduction(
         let b_traits = agents[*b_idx].traits;
         let a_repro = agents[*a_idx].repro_reserve;
         let b_repro = agents[*b_idx].repro_reserve;
-        let a_nutrient = agents[*a_idx].nutrient;
-        let b_nutrient = agents[*b_idx].nutrient;
-        let a_reserve = agents[*a_idx].reserve;
-        let b_reserve = agents[*b_idx].reserve;
+        let a_repro_nutrient = agents[*a_idx].repro_nutrient.max(0.0);
+        let b_repro_nutrient = agents[*b_idx].repro_nutrient.max(0.0);
         let a_pos = agents[*a_idx].position;
         let b_pos = agents[*b_idx].position;
         let a_id = agents[*a_idx].id;
@@ -1197,14 +1215,18 @@ pub fn resolve_reproduction(
         let offspring_reserve = energy_per_offspring - structure_energy_share;
         dissipated += structure_heat_per * offspring_count as f32;
 
-        // Nutrient donation: each parent donates proportional to investment fraction
-        let nutrient_a = a_nutrient * (invest_a / (a_reserve + a_repro).max(1e-10)).min(0.5);
-        let nutrient_b = b_nutrient * (invest_b / (b_reserve + b_repro).max(1e-10)).min(0.5);
+        // Nutrient donation: each parent donates its entire reproductive-nutrient
+        // earmark; the combined donation is split equally among offspring
+        // (mirroring how the combined repro_reserve energy is divided). Free
+        // stores are untouched. Offspring receive the donation as their starting
+        // free nutrient store.
+        let nutrient_a = a_repro_nutrient;
+        let nutrient_b = b_repro_nutrient;
         let nutrient_per_offspring = (nutrient_a + nutrient_b) / offspring_count as f32;
 
-        // Deduct nutrient donations from parents
-        agents[*a_idx].nutrient -= nutrient_a;
-        agents[*b_idx].nutrient -= nutrient_b;
+        // Deduct the donated earmarks from each parent.
+        agents[*a_idx].repro_nutrient -= nutrient_a;
+        agents[*b_idx].repro_nutrient -= nutrient_b;
 
         // Parent midpoint for dispersal (toroidal-aware)
         let (dx, dy) = crate::toroidal_displacement(a_pos, b_pos, extent);
@@ -1268,6 +1290,7 @@ pub fn resolve_reproduction(
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 0.0, // offspring born with zero repro_reserve
+                repro_nutrient: 0.0,
             };
             next_id += 1;
             offspring.push(child);
@@ -1320,6 +1343,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             movement_cost_coefficient: 0.0,
             reproduction_energy_threshold: 50.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             contact_range_coefficient: 5.0,
@@ -1360,6 +1384,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         }
     }
 
@@ -1510,6 +1535,31 @@ mod tests {
     // --- Absorb nutrients ---
 
     #[test]
+    fn absorb_nutrients_splits_uptake_by_kappa() {
+        // Each tick's nutrient uptake is split by kappa: the (1 - kappa) share
+        // goes to the repro_nutrient earmark, the kappa share to the free store.
+        let params = test_params();
+        let traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            kappa: 0.3,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
+
+        absorb_nutrients(&mut agents, &mut grid, &params);
+
+        // Total uptake = effective autotrophy = 1.0.
+        let total = agents[0].nutrient + agents[0].repro_nutrient;
+        assert!((total - 1.0).abs() < 1e-3, "total uptake should be 1.0, got {total}");
+        // kappa share (0.3) to free store, (1 - kappa) share (0.7) to earmark.
+        assert!((agents[0].nutrient - 0.3).abs() < 1e-3,
+            "free store should get kappa share 0.3, got {}", agents[0].nutrient);
+        assert!((agents[0].repro_nutrient - 0.7).abs() < 1e-3,
+            "earmark should get (1-kappa) share 0.7, got {}", agents[0].repro_nutrient);
+    }
+
+    #[test]
     fn absorb_nutrients_demand_equals_effective_autotrophy() {
         let params = test_params();
         let traits = TraitVector {
@@ -1525,8 +1575,8 @@ mod tests {
         assert_eq!(events[0].kind, EventKind::NutrientAbsorbed);
         // demand = eff_autotrophy = 0.5 (no wear degradation on fresh agent)
         let expected = 0.5;
-        assert!((agents[0].nutrient - expected).abs() < 1e-3,
-            "uptake should equal effective autotrophy, got {}", agents[0].nutrient);
+        assert!((agents[0].nutrient_total() - expected).abs() < 1e-3,
+            "uptake should equal effective autotrophy, got {}", agents[0].nutrient_total());
         assert!((grid.total() - (100.0 - expected)).abs() < 1e-3);
     }
 
@@ -1549,9 +1599,9 @@ mod tests {
 
         assert_eq!(events.len(), 2);
         // Both have same demand, so each gets half
-        let total_uptake = agents[0].nutrient + agents[1].nutrient;
+        let total_uptake = agents[0].nutrient_total() + agents[1].nutrient_total();
         assert!((total_uptake - 0.1).abs() < 1e-3);
-        assert!((agents[0].nutrient - agents[1].nutrient).abs() < 1e-3);
+        assert!((agents[0].nutrient_total() - agents[1].nutrient_total()).abs() < 1e-3);
     }
 
     #[test]
@@ -1570,7 +1620,7 @@ mod tests {
 
         let events = absorb_nutrients(&mut agents, &mut grid, &params);
         assert_eq!(events.len(), 1, "agent with autotrophy should get nutrients regardless of contact_time");
-        assert!(agents[0].nutrient > 0.0, "nutrient uptake should be positive");
+        assert!(agents[0].nutrient_total() > 0.0, "nutrient uptake should be positive");
     }
 
     #[test]
@@ -1591,8 +1641,8 @@ mod tests {
         assert_eq!(events[0].kind, EventKind::NutrientAbsorbed);
         // demand = effective_autotrophy = 0.5
         let expected = 0.5;
-        assert!((agents[0].nutrient - expected).abs() < 1e-3,
-            "autotrophy-derived uptake expected {expected}, got {}", agents[0].nutrient);
+        assert!((agents[0].nutrient_total() - expected).abs() < 1e-3,
+            "autotrophy-derived uptake expected {expected}, got {}", agents[0].nutrient_total());
     }
 
     #[test]
@@ -1612,7 +1662,7 @@ mod tests {
 
         assert!(events.is_empty(),
             "zero-autotrophy agent should get no nutrient uptake events");
-        assert!((agents[0].nutrient).abs() < 1e-6,
+        assert!((agents[0].nutrient_total()).abs() < 1e-6,
             "zero-autotrophy agent should have zero nutrient");
         assert!((grid.total() - 100.0).abs() < 1e-6,
             "pool should be unchanged when no uptake occurs");
@@ -1640,13 +1690,13 @@ mod tests {
         let _events = absorb_nutrients(&mut agents, &mut grid, &params);
 
         // Agent A should have absorbed nutrient
-        assert!(agents[0].nutrient > 0.0,
-            "agent in nutrient-rich cell should absorb, got {}", agents[0].nutrient);
+        assert!(agents[0].nutrient_total() > 0.0,
+            "agent in nutrient-rich cell should absorb, got {}", agents[0].nutrient_total());
         // Agent B should have absorbed nothing
-        assert!((agents[1].nutrient).abs() < 1e-6,
-            "agent in nutrient-poor cell should absorb nothing, got {}", agents[1].nutrient);
+        assert!((agents[1].nutrient_total()).abs() < 1e-6,
+            "agent in nutrient-poor cell should absorb nothing, got {}", agents[1].nutrient_total());
         // Total nutrient conserved
-        let total = grid.total() + agents[0].nutrient + agents[1].nutrient;
+        let total = grid.total() + agents[0].nutrient_total() + agents[1].nutrient_total();
         assert!((total - 5.0).abs() < 1e-3,
             "total nutrient should be conserved, got {}", total);
     }
@@ -2121,6 +2171,7 @@ mod tests {
         let params = WorldParameters {
             reproduction_efficiency: 1.0,
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             ..test_params()
@@ -2136,7 +2187,9 @@ mod tests {
             make_agent(2, (1.0, 0.0), 50.0, traits),
         ];
         agents[0].repro_reserve = 20.0;
+        agents[0].repro_nutrient = 20.0;
         agents[1].repro_reserve = 20.0;
+        agents[1].repro_nutrient = 20.0;
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
 
@@ -2163,6 +2216,7 @@ mod tests {
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             ..test_params()
@@ -2178,7 +2232,9 @@ mod tests {
             make_agent(2, (1.0, 0.0), 50.0, traits),
         ];
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
 
@@ -2206,6 +2262,7 @@ mod tests {
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             ..test_params()
@@ -2225,6 +2282,7 @@ mod tests {
         for agent in agents.iter_mut() {
             agent.wear = [0.9; FUNCTIONAL_TRAIT_COUNT];
             agent.repro_reserve = 15.0;
+            agent.repro_nutrient = 15.0;
             agent.nutrient = 10.0;
         }
 
@@ -2254,6 +2312,7 @@ mod tests {
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             ..test_params()
@@ -2273,6 +2332,7 @@ mod tests {
         for agent in agents.iter_mut() {
             agent.wear = [0.9; FUNCTIONAL_TRAIT_COUNT];
             agent.repro_reserve = 15.0;
+            agent.repro_nutrient = 15.0;
             agent.nutrient = 10.0;
         }
 
@@ -2712,7 +2772,9 @@ mod tests {
         agents[1].structure = threshold * 1.5;
         agents[1].nutrient = 3.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let mut carcasses: Vec<Carcass> = Vec::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3471,6 +3533,7 @@ mod tests {
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             offspring_structure_fraction: 0.0,
@@ -3491,7 +3554,9 @@ mod tests {
         agents[1].nutrient = 10.0;
         // Set repro_reserve above threshold (10.0)
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3525,6 +3590,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             ..test_params()
         };
         let traits = TraitVector {
@@ -3541,7 +3607,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         // Mark agent 1 as dead (killed in drain pass)
         let mut dead_ids = std::collections::HashSet::new();
@@ -3583,7 +3651,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3600,10 +3670,14 @@ mod tests {
     }
 
     #[test]
-    fn reproduction_nutrient_gating_blocks_reproduction() {
+    fn reproduction_blocked_when_repro_nutrient_earmark_below_threshold() {
+        // The reproduction gate reads the reproductive-nutrient earmark, not the
+        // free store. An agent with an ample free store but an earmark below the
+        // threshold cannot reproduce.
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 5.0,
             ..test_params()
         };
         let traits = TraitVector {
@@ -3617,17 +3691,17 @@ mod tests {
             make_agent(1, (0.0, 0.0), 100.0, traits),
             make_agent(2, (1.0, 0.0), 100.0, traits),
         ];
-        // Give agents structure so stoichiometric demand is meaningful
-        // demand = 10.0 * (0.1 + 0.2 * 0.5) = 10.0 * 0.2 = 2.0
         agents[0].structure = 10.0;
         agents[1].structure = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
-        // Set nutrient below demand (2.0)
-        agents[0].nutrient = 1.0;
-        agents[1].nutrient = 1.0;
-        agents[0].repro_reserve = 15.0;
-        agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
+        // Ample free store, but earmark below the 5.0 threshold.
+        agents[0].nutrient = 100.0;
+        agents[1].nutrient = 100.0;
+        agents[0].repro_nutrient = 1.0;
+        agents[1].repro_nutrient = 1.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3640,7 +3714,51 @@ mod tests {
         );
 
         assert!(result.offspring.is_empty(),
-            "nutrient-poor agents should not reproduce");
+            "agents with earmark below threshold should not reproduce");
+    }
+
+    #[test]
+    fn reproduction_proceeds_on_earmark_despite_depleted_free_store() {
+        // The old body-support gate (`nutrient >= structure * demand`) is gone:
+        // a near-empty free store no longer blocks reproduction so long as the
+        // reproductive-nutrient earmark clears its threshold.
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 5.0,
+            asexual_propensity_maintenance_cost: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 1.0,
+            kappa: 0.5,
+            fecundity: 2.0,
+            asexual_propensity: 1.0, // force asexual path
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+        ];
+        // Large structure → old body-support demand (10 * 0.2 = 2.0) far exceeds
+        // the tiny free store, which would have blocked reproduction before.
+        agents[0].structure = 10.0;
+        agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
+        agents[0].nutrient = 0.01; // free store nearly empty
+        agents[0].repro_nutrient = 20.0; // earmark well above threshold
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty(),
+            "earmark above threshold should permit reproduction despite empty free store");
     }
 
     #[test]
@@ -3649,6 +3767,7 @@ mod tests {
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             offspring_structure_fraction: 0.0,
@@ -3668,7 +3787,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 20.0;
+        agents[0].repro_nutrient = 20.0;
         agents[1].repro_reserve = 20.0;
+        agents[1].repro_nutrient = 20.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3701,6 +3822,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -3731,7 +3853,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
         agents[2].nutrient = 10.0;
 
         let dead_ids = std::collections::HashSet::new();
@@ -3762,6 +3886,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0, // no mutation to isolate crossover
             mutation_magnitude: 0.0,
@@ -3790,7 +3915,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3820,6 +3947,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -3841,7 +3969,9 @@ mod tests {
         agents[0].nutrient = 20.0;
         agents[1].nutrient = 20.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3869,6 +3999,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -3889,7 +4020,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3934,6 +4067,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             ..test_params()
         };
@@ -3951,7 +4085,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3974,6 +4110,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.5,
             mutation_magnitude: 0.1,
@@ -3995,7 +4132,9 @@ mod tests {
             agents[0].nutrient = 10.0;
             agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
             let dead_ids = std::collections::HashSet::new();
             let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -4026,6 +4165,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.5, // 50% efficient
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4046,7 +4186,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -4080,6 +4222,7 @@ mod tests {
         // committed to reproduction is still consumed and dissipated.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4102,6 +4245,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
+            repro_nutrient: 20.0,
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -4131,6 +4275,7 @@ mod tests {
         // dissipated.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4151,7 +4296,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -4265,6 +4412,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4297,7 +4445,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -4320,6 +4470,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4341,7 +4492,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -4422,6 +4575,7 @@ mod tests {
         // An agent with asexual_propensity=1.0 should always reproduce asexually.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4445,6 +4599,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
+                repro_nutrient: 20.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -4475,6 +4630,7 @@ mod tests {
         // With mutation_rate=0, asexual offspring should have exact parent traits.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4500,6 +4656,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
+                repro_nutrient: 20.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -4526,6 +4683,7 @@ mod tests {
         // Two eligible agents with asexual_propensity=0.0 should use sexual reproduction.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4552,6 +4710,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
+                repro_nutrient: 20.0,
             },
             Agent {
                 id: 2,
@@ -4563,6 +4722,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
+                repro_nutrient: 20.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -4588,6 +4748,7 @@ mod tests {
         // Verify that asexual reproduction draws from single parent's repro_reserve only.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.5,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4612,6 +4773,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: initial_repro,
+                repro_nutrient: 10.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -4641,6 +4803,7 @@ mod tests {
         // An agent with asexual_propensity=0.0 and no mate should not reproduce.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             ..test_params()
@@ -4663,6 +4826,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
+                repro_nutrient: 20.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -4685,6 +4849,7 @@ mod tests {
         // Offspring of asexual reproduction should inherit asexual_propensity.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             ..test_params()
@@ -4707,6 +4872,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
+                repro_nutrient: 20.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -4731,6 +4897,7 @@ mod tests {
         // (from crossover), not a clone of either parent.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4761,11 +4928,13 @@ mod tests {
                 id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
                 nutrient: 100.0, traits: traits_a, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
+                repro_nutrient: 20.0,
             },
             Agent {
                 id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
                 nutrient: 100.0, traits: traits_b, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
+                repro_nutrient: 20.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -4800,6 +4969,7 @@ mod tests {
         // Verify nutrient donation comes from single parent in asexual reproduction.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             ..test_params()
@@ -4811,18 +4981,22 @@ mod tests {
             asexual_propensity: 1.0,
             ..zero_traits()
         };
-        let initial_nutrient = 50.0;
+        // Donation comes from the reproductive-nutrient earmark, not the free
+        // store. The free store is left untouched by reproduction.
+        let initial_free = 50.0;
+        let initial_earmark = 20.0;
         let mut agents = vec![
             Agent {
                 id: 1,
                 position: (0.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
-                nutrient: initial_nutrient,
+                nutrient: initial_free,
                 traits,
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
+                repro_nutrient: initial_earmark,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -4833,16 +5007,89 @@ mod tests {
             &mut agents, &dead_ids, &grid, &params, &mut rng,
         );
 
-        // Parent should have less nutrient after donating to offspring
-        assert!(agents[0].nutrient < initial_nutrient,
-            "parent nutrient should decrease from {}, got {}", initial_nutrient, agents[0].nutrient);
-        // Offspring should have non-zero nutrient
+        assert!(!result.offspring.is_empty(), "parent should have reproduced");
+        // The free store is untouched by reproduction.
+        assert!((agents[0].nutrient - initial_free).abs() < 1e-6,
+            "free store should be untouched, got {}", agents[0].nutrient);
+        // The entire earmark is donated to offspring, split by count.
+        assert!(agents[0].repro_nutrient.abs() < 1e-6,
+            "parent earmark should be depleted, got {}", agents[0].repro_nutrient);
+        // Offspring receive the donated earmark as their free nutrient store.
         let offspring_nutrient: f32 = result.offspring.iter().map(|c| c.nutrient).sum();
-        assert!(offspring_nutrient > 0.0, "offspring should receive nutrient");
-        // Conservation: parent loss = offspring gain
-        let parent_loss = initial_nutrient - agents[0].nutrient;
-        assert!((parent_loss - offspring_nutrient).abs() < 1e-3,
-            "nutrient should be conserved: parent_loss={}, offspring_gain={}", parent_loss, offspring_nutrient);
+        assert!((offspring_nutrient - initial_earmark).abs() < 1e-3,
+            "offspring should collectively receive the donated earmark {}, got {}",
+            initial_earmark, offspring_nutrient);
+        // Per-offspring share is equal.
+        let n = result.offspring.len() as f32;
+        for child in &result.offspring {
+            assert!((child.nutrient - initial_earmark / n).abs() < 1e-3,
+                "each offspring should get an equal earmark share");
+            assert!(child.repro_nutrient.abs() < 1e-6,
+                "offspring born with zero earmark, got {}", child.repro_nutrient);
+        }
+    }
+
+    #[test]
+    fn sexual_nutrient_donated_from_both_earmarks() {
+        use rand::SeedableRng;
+        // Both parents donate their entire reproductive-nutrient earmark; the
+        // combined donation is split equally among offspring. Free stores are
+        // untouched.
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproduction_efficiency: 1.0,
+            reproductive_compatibility_distance: 10.0,
+            mutation_rate: 0.0,
+            asexual_propensity_maintenance_cost: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 1.0,
+            kappa: 0.5,
+            fecundity: 4.0,
+            asexual_propensity: 0.0, // force sexual path
+            ..zero_traits()
+        };
+        let earmark_a = 12.0;
+        let earmark_b = 8.0;
+        let free_store = 50.0;
+        let mut agents = vec![
+            Agent {
+                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
+                nutrient: free_store, traits, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
+                repro_nutrient: earmark_a,
+            },
+            Agent {
+                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
+                nutrient: free_store, traits, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
+                repro_nutrient: earmark_b,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty(), "the pair should have reproduced");
+        // Free stores untouched.
+        assert!((agents[0].nutrient - free_store).abs() < 1e-6, "parent A free store changed");
+        assert!((agents[1].nutrient - free_store).abs() < 1e-6, "parent B free store changed");
+        // Both earmarks fully donated.
+        assert!(agents[0].repro_nutrient.abs() < 1e-6, "parent A earmark not depleted");
+        assert!(agents[1].repro_nutrient.abs() < 1e-6, "parent B earmark not depleted");
+        // Offspring collectively receive both earmarks.
+        let offspring_nutrient: f32 = result.offspring.iter().map(|c| c.nutrient).sum();
+        assert!((offspring_nutrient - (earmark_a + earmark_b)).abs() < 1e-3,
+            "offspring should receive both earmarks {}, got {}", earmark_a + earmark_b, offspring_nutrient);
     }
 
     // --- Dispersal trait tests ---
@@ -4854,6 +5101,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4880,6 +5128,7 @@ mod tests {
                     contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                     repro_reserve: 50.0,
+                    repro_nutrient: 50.0,
                 },
             ];
             let dead_ids = std::collections::HashSet::new();
@@ -4907,6 +5156,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             ..test_params()
@@ -4930,6 +5180,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
+                repro_nutrient: 20.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -4956,6 +5207,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -4988,11 +5240,13 @@ mod tests {
                     id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
                     nutrient: 100.0, traits: traits_a, contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                    repro_nutrient: 30.0,
                 },
                 Agent {
                     id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
                     nutrient: 100.0, traits: traits_b, contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                    repro_nutrient: 30.0,
                 },
             ];
             let dead_ids = std::collections::HashSet::new();
@@ -5034,6 +5288,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             ..test_params()
@@ -5058,6 +5313,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 50.0,
+                repro_nutrient: 50.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -5083,6 +5339,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
             mutation_rate: 0.0,
             ..test_params()
@@ -5106,6 +5363,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
+                repro_nutrient: 20.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -5131,6 +5389,7 @@ mod tests {
         let params = WorldParameters {
             reproduction_efficiency: 1.0,
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             world_extent: 100.0,
@@ -5151,7 +5410,9 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
         agents[0].repro_reserve = 15.0;
+        agents[0].repro_nutrient = 15.0;
         agents[1].repro_reserve = 15.0;
+        agents[1].repro_nutrient = 15.0;
 
         let dead_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -5639,6 +5900,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             growth_efficiency: 0.8,
             offspring_structure_fraction: 0.25,
@@ -5664,6 +5926,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: initial_repro_reserve,
+            repro_nutrient: 10.0,
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -5704,6 +5967,7 @@ mod tests {
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.6,
             growth_efficiency: 0.5,
             offspring_structure_fraction: 0.3,
@@ -5728,11 +5992,13 @@ mod tests {
                 id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
                 nutrient: 100.0, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: invest_a,
+                repro_nutrient: 10.0,
             },
             Agent {
                 id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
                 nutrient: 100.0, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: invest_b,
+                repro_nutrient: 10.0,
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -5772,6 +6038,7 @@ mod tests {
         fn run(fecundity: f32, seed: u64) -> (usize, f32) {
             let params = WorldParameters {
                 reproduction_energy_threshold: 10.0,
+                reproduction_nutrient_threshold: 1.0,
                 reproduction_efficiency: 1.0,
                 growth_efficiency: 1.0,
                 offspring_structure_fraction: 0.5,
@@ -5790,6 +6057,7 @@ mod tests {
                 id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
                 nutrient: 1000.0, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 100.0,
+                repro_nutrient: 100.0,
             }];
             let dead_ids = std::collections::HashSet::new();
             let grid = SpatialGrid::new(100.0, 10.0);

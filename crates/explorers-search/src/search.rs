@@ -150,6 +150,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         movement_cost_coefficient: v(5) as f32,
         sensing_range_coefficient: v(6) as f32,
         reproduction_energy_threshold: v(7) as f32,
+        reproduction_nutrient_threshold: 1.0,
         mutation_rate: v(8) as f32,
         mutation_magnitude: v(9) as f32,
         contact_range_coefficient: v(10) as f32,
