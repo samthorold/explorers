@@ -126,14 +126,13 @@ pub fn absorb_nutrients(
             } else {
                 demand / total_demand * available
             };
-            // Split uptake by kappa, mirroring the energy allocation: the
-            // kappa share feeds the free store (the growth build-permit), the
-            // (1 - kappa) share feeds the reproductive-nutrient earmark. Unlike
-            // energy there is no retention buffer — nutrient has no per-tick
-            // holding cost, so the whole uptake flow is split.
-            let kappa = agents[i].traits.kappa.clamp(0.0, 1.0);
-            agents[i].nutrient += uptake * kappa;
-            agents[i].repro_nutrient += uptake * (1.0 - kappa);
+            // Credit the uptake, split by kappa (ADR-0003): the kappa share feeds
+            // the free store (the growth build-permit), the (1 - kappa) share the
+            // reproductive-nutrient earmark. Unlike energy there is no retention
+            // buffer — nutrient has no per-tick holding cost, so the whole uptake
+            // flow is split. The same route-agnostic split feeds consumption
+            // nutrient (ADR-0004).
+            agents[i].credit_nutrient(uptake);
             *cell_pool -= uptake;
             events.push(Event {
                 tick: 0,
@@ -497,7 +496,10 @@ pub fn resolve_drains(
                 let retained = nutrient_released.min(consumer_nutrient_need);
                 let excreted = nutrient_released - retained;
 
-                agents[consumer_idx].nutrient += retained;
+                // Credit the retained nutrient, split by kappa (ADR-0004): a
+                // heterotroph funds reproduction from ingested nutrient, exactly as
+                // a producer does from autotrophic pool uptake (flow 2).
+                agents[consumer_idx].credit_nutrient(retained);
                 // Excrete excess nutrient to the local cell at the target's position
                 *nutrient_grid.at_position(agents[drain.target_idx].position) += excreted;
             }
@@ -624,7 +626,10 @@ pub fn resolve_drains(
                 let excreted = nutrient_transferred - retained;
 
                 carcasses[carcass_idx].nutrient -= nutrient_transferred;
-                agents[consumer_idx].nutrient += retained;
+                // Credit the retained nutrient, split by kappa (ADR-0004): the
+                // detrital chain funds decomposer reproduction from carcass
+                // nutrient, the same route-agnostic split as living prey and uptake.
+                agents[consumer_idx].credit_nutrient(retained);
                 // Excrete excess nutrient to the local cell at the carcass's position
                 *nutrient_grid.at_position(carcass_pos) += excreted;
             }
@@ -3380,8 +3385,12 @@ mod tests {
         // energy_gained = 2.0 * 0.5 = 1.0
         // consumer_nutrient_need = demand(2.5) * energy_gained(1.0) = 2.5
         // retained = min(1.8, 2.5) = 1.8; excreted = 0.0
-        assert!((agents[0].nutrient - 1.8).abs() < 1e-3,
-            "consumer should retain the 1.8 bound nutrient released, got {}", agents[0].nutrient);
+        // kappa = 0 here, so the retained nutrient lands entirely in the
+        // reproductive-nutrient earmark (ADR-0004). This test asserts the
+        // retention magnitude, so check the total retained across both stores.
+        let retained = agents[0].nutrient + agents[0].repro_nutrient;
+        assert!((retained - 1.8).abs() < 1e-3,
+            "consumer should retain the 1.8 bound nutrient released, got {retained}");
         assert!((nutrient_grid.total()).abs() < 1e-3,
             "consumer need exceeds release, so nothing is excreted, got {}", nutrient_grid.total());
         assert!((agents[1].nutrient - 20.0).abs() < 1e-3,
@@ -3423,12 +3432,110 @@ mod tests {
 
         // bound released = 2.0 * 0.9 = 1.8; consumer need = 0.05 * 1.0 = 0.05
         // retained = 0.05; excreted = 1.75
-        assert!((agents[0].nutrient - 0.05).abs() < 1e-3,
-            "consumer retains its demand 0.05, got {}", agents[0].nutrient);
+        // kappa = 0 routes the retained nutrient to the earmark (ADR-0004); the
+        // retention magnitude is the total across both stores.
+        let retained = agents[0].nutrient + agents[0].repro_nutrient;
+        assert!((retained - 0.05).abs() < 1e-3,
+            "consumer retains its demand 0.05, got {retained}");
         assert!((nutrient_grid.total() - 1.75).abs() < 1e-3,
             "excess bound nutrient 1.75 is excreted, got {}", nutrient_grid.total());
         assert!((agents[1].nutrient - 20.0).abs() < 1e-3,
             "target's free store untouched, got {}", agents[1].nutrient);
+    }
+
+    #[test]
+    fn pure_heterotroph_earmarks_reproductive_nutrient_from_prey_alone() {
+        // ADR-0004 headline: a pure heterotroph (zero autotrophy) draws nothing
+        // from the available pool (flow 2), so before this change its
+        // reproductive-nutrient earmark could never grow and it could never clear
+        // reproduction_nutrient_threshold — predation sustained a body but never a
+        // lineage. With consumption nutrient split by kappa, ingested prey now
+        // funds the earmark.
+        let params = test_params();
+        let consumer_traits = TraitVector {
+            photosynthetic_absorption: 0.0, // pure heterotroph: no pool uptake
+            heterotrophy: 2.0,
+            kappa: 0.5,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 4.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
+            make_agent(2, (1.0, 0.0), 10.0, target_traits),
+        ];
+        agents[0].structure = 5.0;
+        agents[1].structure = 10.0;
+
+        // A nutrient-rich pool the consumer cannot tap (zero autotrophy).
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
+        absorb_nutrients(&mut agents, &mut nutrient_grid, &params);
+        assert!((agents[0].repro_nutrient).abs() < 1e-6,
+            "pure heterotroph draws no earmark from pool uptake, got {}",
+            agents[0].repro_nutrient);
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let _result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+        );
+
+        // Consumption now feeds the earmark: released 1.8, retained 1.8, half to
+        // the earmark = 0.9, which clears the test threshold of 1.0? No — 0.9 < 1.0
+        // here, but the earmark is non-zero and accumulates, which is the point.
+        assert!(agents[0].repro_nutrient > 0.0,
+            "heterotroph should earmark reproductive nutrient from prey, got {}",
+            agents[0].repro_nutrient);
+    }
+
+    #[test]
+    fn drain_living_target_splits_retained_nutrient_by_kappa() {
+        // ADR-0004: nutrient retained from consuming a living target is split by
+        // kappa, mirroring the autotrophic uptake split (flow 2) and the energy
+        // side. The kappa share feeds the free store; the (1 - kappa) share feeds
+        // the reproductive-nutrient earmark. The cap on how much is retained is
+        // unchanged — only the routing of the retained amount changes.
+        let params = test_params();
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            kappa: 0.25,
+            ..zero_traits()
+        };
+        // High-demand target so the bound released (1.8) is below the consumer's
+        // need (2.5), forcing the whole release to be retained and then split.
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 4.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
+            make_agent(2, (1.0, 0.0), 10.0, target_traits),
+        ];
+        agents[0].structure = 5.0; // demand = 5.0 * 0.5 = 2.5
+        agents[1].structure = 10.0;
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let _result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+        );
+
+        // released = 2.0 * 0.9 = 1.8; need = 2.5; retained = 1.8; excreted = 0.0.
+        // kappa share (0.25) -> free store = 0.45; (1 - kappa) share -> earmark = 1.35.
+        assert!((agents[0].nutrient - 0.45).abs() < 1e-3,
+            "free store should get kappa share 0.45, got {}", agents[0].nutrient);
+        assert!((agents[0].repro_nutrient - 1.35).abs() < 1e-3,
+            "earmark should get (1-kappa) share 1.35, got {}", agents[0].repro_nutrient);
+        assert!((nutrient_grid.total()).abs() < 1e-3,
+            "release is below need, so nothing is excreted, got {}", nutrient_grid.total());
     }
 
     #[test]
@@ -3477,8 +3584,11 @@ mod tests {
         // bound released = actual_drain(2.0) * target_ratio(0.9) = 1.8
         // consumer need = demand(0.05) * energy_gained(1.0) = 0.05
         // retained = 0.05; excreted = 1.75
-        assert!((agents[0].nutrient - 0.05).abs() < 1e-3,
-            "consumer retains its stoichiometric demand 0.05, got {}", agents[0].nutrient);
+        // kappa = 0 routes the consumer's retained nutrient to the earmark
+        // (ADR-0004); the magnitude retained is the total across both stores.
+        let retained = agents[0].nutrient + agents[0].repro_nutrient;
+        assert!((retained - 0.05).abs() < 1e-3,
+            "consumer retains its stoichiometric demand 0.05, got {retained}");
         assert!(nutrient_grid.total() > 0.0,
             "excess bound nutrient must be excreted to the pool, got {}", nutrient_grid.total());
         assert!((nutrient_grid.total() - 1.75).abs() < 1e-3,
@@ -3578,8 +3688,9 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
 
-        // Record before-state.
-        let consumer_nutrient_before = agents[0].nutrient;
+        // Record before-state. kappa = 0 routes retained nutrient to the earmark
+        // (ADR-0004), so the consumer's holdings span both stores.
+        let consumer_nutrient_before = agents[0].nutrient + agents[0].repro_nutrient;
         let carcass_nutrient_before = carcasses[0].nutrient;
         let grid_total_before = nutrient_grid.total();
 
@@ -3588,7 +3699,7 @@ mod tests {
         );
 
         // Deltas across the single consumption tick.
-        let consumer_gain = agents[0].nutrient - consumer_nutrient_before;
+        let consumer_gain = (agents[0].nutrient + agents[0].repro_nutrient) - consumer_nutrient_before;
         let drained_from_carcass = carcass_nutrient_before - carcasses[0].nutrient;
         let excreted_to_grid = nutrient_grid.total() - grid_total_before;
 
@@ -3607,6 +3718,54 @@ mod tests {
             (carcass_cell - excreted_to_grid).abs() < 1e-6,
             "all excreted nutrient should be in the carcass's cell"
         );
+    }
+
+    #[test]
+    fn drain_carcass_splits_retained_nutrient_by_kappa() {
+        // ADR-0004: nutrient retained from decomposing a carcass is split by
+        // kappa, exactly like the living-target route and autotrophic uptake. The
+        // detrital chain funds decomposer reproduction from ingested nutrient.
+        let params = test_params();
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            kappa: 0.25,
+            ..zero_traits()
+        };
+        let carcass_traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let carcass_pos = (40.0, 0.0);
+        let consumer_pos = (41.0, 0.0);
+        let mut agents = vec![make_agent(1, consumer_pos, 10.0, consumer_traits)];
+        agents[0].structure = 5.0; // demand = 5.0 * 0.5 = 2.5
+
+        let mut carcasses = vec![Carcass {
+            id: 99,
+            position: carcass_pos,
+            energy: 10.0,
+            nutrient: 20.0,
+            traits: carcass_traits,
+        }];
+
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(1, consumer_pos);
+
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let _result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+        );
+
+        // actual_drain = 2.0; energy_gained = 2.0 * 0.5 = 1.0; need = 2.5 * 1.0 = 2.5.
+        // transferred = 20.0 * (2.0/10.0) = 4.0; retained = min(4.0, 2.5) = 2.5.
+        // kappa share (0.25) -> free store = 0.625; (1 - kappa) -> earmark = 1.875.
+        assert!((agents[0].nutrient - 0.625).abs() < 1e-3,
+            "free store should get kappa share 0.625, got {}", agents[0].nutrient);
+        assert!((agents[0].repro_nutrient - 1.875).abs() < 1e-3,
+            "earmark should get (1-kappa) share 1.875, got {}", agents[0].repro_nutrient);
+        // Excretion is unchanged by the split: 4.0 - 2.5 = 1.5 reaches the pool.
+        assert!((nutrient_grid.total() - 1.5).abs() < 1e-3,
+            "excess 1.5 still excreted to the pool, got {}", nutrient_grid.total());
     }
 
     // --- Distance-dependent trophic efficiency in drains ---
