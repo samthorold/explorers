@@ -83,7 +83,7 @@ Autonomous phases, in the order they run:
 1. **Photosynthesise** — agents with photosynthetic absorption absorb energy from local solar flux into reserve. Light is shared proportionally among co-located producers (spatial grid query). Photosynthesis is unconditional — it is not exclusive with consumption or any other activity. The trait budget makes dual investment expensive, but the physics do not forbid it.
 2. **Absorb nutrients** — agents with autotrophy investment extract nutrient from the local available pool. Uptake depends on the agent's autotrophy trait — the same infrastructure that captures light also extracts nutrients.
 3. **Metabolise** — agents pay fixed energy costs from reserve to heat: base rate, trait maintenance, somatic maintenance, structure maintenance. These costs are independent of activity — they are the price of existing with a given trait vector.
-4. **Grow** — agents convert reserve surplus to structure (lossy). Growth is automatic — a consequence of being well-fed, not a decision.
+4. **Grow** — agents split reserve surplus by kappa (DEB-style flow allocation). The kappa share funds soma — somatic repair first, then growth (reserve → structure, lossy). The (1 − kappa) share is committed to the agent's reproductive allocation, an earmarked sub-account of reserve that accumulates across ticks until a reproductive event draws it down. The allocation happens to the *flow* of surplus, not to the *stock* of reserve at spend time — once earmarked, the reproductive share is not available to fund subsequent metabolism. Growth itself is automatic — a consequence of being well-fed, not a decision.
 5. **Wear** — agents' functional traits degrade from baseline accumulation and use-dependent wear. Somatic repair reduces wear proportional to the agent's somatic maintenance trait. (Runs after coordinated phases so the full tick's activity is accounted for.)
 6. **Check death thresholds** — agents whose reserve has reached zero (starvation) or whose structure has dropped below their complexity-dependent death threshold die, producing carcasses. (Runs after wear.)
 7. **Move** — agents reposition on the physical surface. Movement direction is derived from the agent's traits and current spatial context (nearby agents and carcasses, sensed via the spatial grid). Movement distance is scaled by effective mobility. Movement costs energy from reserve. (Runs last — movement is an investment in next tick's positioning.)
@@ -124,7 +124,7 @@ Resolve all interactions that drain a target. Living agents and carcasses are re
 Resolve all interactions where the source invests its own resources:
 
 1. Compute each agent's remaining budget (current stock minus drains received in pass 1).
-2. For reproduction: filter to agents still alive and above reproduction threshold post-drain, pair candidates by closest trait-space distance within spatial range, compute investment costs, cap at remaining budget.
+2. For reproduction: filter to agents still alive and above reproduction threshold post-drain, pair candidates by closest trait-space distance within spatial range, compute investment costs, cap at the parent's accumulated reproductive allocation (the earmarked sub-account of reserve filled by kappa in the grow phase — see world rules flow 9). Reproduction does not draw from unallocated reserve.
 3. For redistribution: compute transfer amounts, cap at remaining budget. (Deferred.)
 4. Apply results to agent state.
 

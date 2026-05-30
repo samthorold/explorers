@@ -15,8 +15,8 @@ A seven-dimensional vector of continuous values that defines an agent's identity
 _Avoid_: stats, attributes, genome (genome implies a genotype/phenotype distinction that doesn't exist here)
 
 **Kappa**:
-The DEB-derived allocation parameter (Kooijman 2010) governing the fraction of mobilised energy routed to soma versus reproduction. High kappa directs more energy to somatic maintenance and growth — producing long-lived, slow-reproducing agents. Low kappa directs more energy to reproduction — producing short-lived, prolific agents. Kappa is an evolvable trait, not a fixed parameter. Kappa governs how much energy is available for all somatic functions (maintenance, growth, activity costs) versus reproduction.
-_Avoid_: allocation ratio (too generic), maintenance trait (kappa governs more than maintenance)
+The DEB-derived allocation parameter (Kooijman 2010) governing the fraction of mobilised energy routed to soma versus reproduction. High kappa directs more energy to somatic maintenance and growth — producing long-lived, slow-reproducing agents. Low kappa directs more energy to reproduction — producing short-lived, prolific agents. Kappa is an evolvable trait, not a fixed parameter. Kappa governs how much energy is available for all somatic functions (maintenance, growth, activity costs) versus reproduction. Kappa is a **flow-allocation rule applied to surplus**, not a spend-time partition: in the grow phase, whatever surplus reserve an agent has after retaining for next-tick metabolism is split immediately — kappa × surplus is committed to soma (spent that tick on repair and growth) and (1 − kappa) × surplus is committed to a **reproductive allocation** that earmarks but does not separately store the energy. This DEB-style flow allocation decouples reproduction timing from current-tick reserve fluctuations: an agent accumulates its committed reproductive allocation over many ticks before any single reproductive event fires.
+_Avoid_: allocation ratio (too generic), maintenance trait (kappa governs more than maintenance), spend-time partition (kappa allocates flow at the moment of surplus, not at the moment of spending)
 
 **Autotrophy**:
 Investment in photosynthetic machinery — the specification trait governing an agent's capacity to convert solar flux into energy. Implicitly requires nutrient uptake from the substrate: the biological machinery for photosynthesis and nutrient extraction are coupled (analogous to leaves requiring roots). An agent with high autotrophy and low mobility is a producer. Autotrophy and heterotrophy are independent dimensions, not a spectrum — an agent can invest in both, though superlinear maintenance costs make this expensive.
@@ -39,7 +39,7 @@ The universal currency of the simulation. Enters the world only through solar fl
 _Avoid_: health, mana, resources
 
 **Reserve**:
-An agent's metabolic fuel — the operating account through which all energy flows. Photosynthesis and consumption income enter as reserve. Metabolic costs, growth, and reproduction are paid from reserve. Reserve fluctuates each tick as income and costs are applied. Death occurs when reserve reaches zero (starvation). Distinct from structure: reserve is the fuel gauge, not the body.
+An agent's metabolic fuel — the operating account through which all energy flows. Photosynthesis and consumption income enter as reserve. Metabolic costs, growth, and reproduction are paid from reserve. Reserve fluctuates each tick as income and costs are applied. Death occurs when reserve reaches zero (starvation). Distinct from structure: reserve is the fuel gauge, not the body. Reserve has an earmarked sub-account, the **reproductive allocation**, which accumulates the (1 − kappa) share of surplus committed by kappa in the grow phase; it is still part of reserve (and still part of the agent's energy total for conservation purposes) but is reserved for reproduction and is not available to fund metabolism. Energy still exists in only two forms — reserve and structure — the reproductive allocation is a labelled fraction of reserve, not a third form.
 _Avoid_: energy (when specifically meaning the metabolic balance), stamina
 
 **Structure**:
@@ -135,7 +135,7 @@ Not an explicit trait dimension. Reproductive isolation emerges from trait-space
 _Avoid_: choosiness, pickiness, compatibility trait
 
 **Reproductive investment**:
-The energy a parent transfers to offspring at birth, drawn from the reproduction fraction of mobilised energy (1 − kappa). Not an independent trait dimension — the amount available for reproduction is governed by kappa, and fecundity determines how that amount is divided among offspring. High kappa (more to soma) means less available for reproduction; low kappa means more.
+The energy a parent transfers to offspring at birth, drawn from the parent's accumulated **reproductive allocation** — the earmarked share of reserve built up over many ticks from the (1 − kappa) fraction of each tick's surplus. Not an independent trait dimension — the rate at which the allocation fills is governed by kappa, and fecundity determines how that amount is divided among offspring at the reproductive event. High kappa (more to soma) fills the allocation slowly; low kappa fills it quickly. Reproduction draws from this accumulated allocation, not from unallocated reserve, so an agent that is energy-marginal for metabolism can still reproduce if its allocation is full, and an agent flush with unallocated reserve cannot reproduce until kappa has routed surplus into the allocation.
 _Avoid_: brood size, litter size
 
 **Fecundity**:
