@@ -196,7 +196,7 @@ pub fn grow(
             + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
             + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
-        let retention = metabolic_cost * 2.0;
+        let retention = metabolic_cost * params.growth_retention_multiplier;
         let surplus = (agent.reserve - retention).max(0.0);
         if surplus <= 0.0 {
             continue;
@@ -1281,6 +1281,7 @@ mod tests {
             maintenance_cost_exponent: 1.0,
             consumption_contact_half_saturation: 0.0,
             nutrient_grid_cell_size: 10.0,
+            growth_retention_multiplier: 2.0,
         }
     }
 
@@ -1720,6 +1721,42 @@ mod tests {
         assert!((agents[0].reserve - 2.0).abs() < 1e-3);
         assert!((dissipated - 19.6).abs() < 1e-3);
         assert!((agents[0].repro_reserve).abs() < 1e-6, "kappa=1 should send nothing to repro");
+    }
+
+    #[test]
+    fn growth_retention_multiplier_default_is_two() {
+        // The retention buffer multiplier defaults to 2.0 to preserve historical behaviour.
+        let params = test_params();
+        assert!((params.growth_retention_multiplier - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn growth_retention_multiplier_scales_retention() {
+        // Overriding the multiplier should change how much reserve grow retains
+        // before computing surplus. With multiplier=5.0 and metabolic_cost=1.0,
+        // retention=5.0 (vs. default 2.0), so surplus shrinks from 9.0 to 5.0.
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            mobility_maintenance_cost: 1.0,
+            movement_cost_coefficient: 0.0,
+            growth_efficiency: 1.0,
+            growth_retention_multiplier: 5.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            mobility: 1.0,
+            kappa: 1.0,
+            ..zero_traits()
+        };
+        // metabolic_cost = 1.0; retention = 1.0 * 5.0 = 5.0
+        // surplus = 10.0 - 5.0 = 5.0; kappa=1, growth_efficiency=1
+        // -> structure = 5.0; reserve = 5.0
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let (_events, _dissipated) = grow(&mut agents, &params);
+        assert!((agents[0].reserve - 5.0).abs() < 1e-6,
+            "reserve should equal retention (5.0) under multiplier=5.0");
+        assert!((agents[0].structure - 5.0).abs() < 1e-6,
+            "surplus (5.0) should become structure");
     }
 
     #[test]
