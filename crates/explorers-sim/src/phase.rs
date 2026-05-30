@@ -986,7 +986,16 @@ pub fn resolve_reproduction(
             continue;
         }
 
-        let offspring_total_energy = investment * params.reproduction_efficiency;
+        let post_efficiency = investment * params.reproduction_efficiency;
+        // Dispersal propagule cost: part of the reproductive budget is spent
+        // building propagule structures before the remainder is divided among
+        // offspring. Superlinear in the parent's dispersal trait; the spent
+        // energy dissipates (energy conserved), so higher dispersal leaves less
+        // to provision each offspring. Charged only here, never per tick.
+        let propagule_fraction =
+            crate::dispersal_propagule_cost_fraction(parent_traits.dispersal, params);
+        let propagule_cost = post_efficiency * propagule_fraction;
+        let offspring_total_energy = post_efficiency - propagule_cost;
         let energy_per_offspring = offspring_total_energy / offspring_count as f32;
         let tick_dissipated = investment - offspring_total_energy;
         dissipated += tick_dissipated;
@@ -1214,7 +1223,16 @@ pub fn resolve_reproduction(
             continue;
         }
 
-        let offspring_total_energy = total_investment * params.reproduction_efficiency;
+        let post_efficiency = total_investment * params.reproduction_efficiency;
+        // Dispersal propagule cost (sexual): keyed on the parents' average
+        // dispersal trait — the same average that sets the offspring-scatter
+        // kernel below. Superlinear; the spent energy dissipates, leaving less
+        // to provision each offspring. Charged only at the event, never per tick.
+        let avg_dispersal = (a_traits.dispersal + b_traits.dispersal) / 2.0;
+        let propagule_fraction =
+            crate::dispersal_propagule_cost_fraction(avg_dispersal, params);
+        let propagule_cost = post_efficiency * propagule_fraction;
+        let offspring_total_energy = post_efficiency - propagule_cost;
         let energy_per_offspring = offspring_total_energy / offspring_count as f32;
         let tick_dissipated = total_investment - offspring_total_energy;
         dissipated += tick_dissipated;
@@ -1392,7 +1410,9 @@ mod tests {
             growth_retention_multiplier: 2.0,
             offspring_structure_fraction: 0.2,
             asexual_propensity_maintenance_cost: 0.0,
-        }
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
+            }
     }
 
     fn make_agent(id: u64, position: (f32, f32), reserve: f32, traits: TraitVector) -> Agent {
@@ -1768,6 +1788,8 @@ mod tests {
         let params = WorldParameters {
             base_metabolic_rate: 0.0,
             asexual_propensity_maintenance_cost: 2.0,
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
             maintenance_cost_exponent: 1.0,
             ..test_params()
         };
@@ -1792,6 +1814,8 @@ mod tests {
         let params = WorldParameters {
             base_metabolic_rate: 0.0,
             asexual_propensity_maintenance_cost: 2.0,
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
             maintenance_cost_exponent: 2.0,
             ..test_params()
         };
@@ -1813,6 +1837,8 @@ mod tests {
         let params = WorldParameters {
             base_metabolic_rate: 0.0,
             asexual_propensity_maintenance_cost: 1.0,
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
             maintenance_cost_exponent: 2.0,
             ..test_params()
         };
@@ -1848,6 +1874,8 @@ mod tests {
         let params = WorldParameters {
             base_metabolic_rate: 0.0,
             asexual_propensity_maintenance_cost: 0.0,
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
             maintenance_cost_exponent: 2.0,
             ..test_params()
         };
@@ -1946,6 +1974,8 @@ mod tests {
         let params = WorldParameters {
             base_metabolic_rate: 0.0,
             asexual_propensity_maintenance_cost: 1.0,
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
             maintenance_cost_exponent: 1.0,
             growth_efficiency: 1.0,
             ..test_params()
@@ -3909,6 +3939,8 @@ mod tests {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 5.0,
             asexual_propensity_maintenance_cost: 0.0,
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
             ..test_params()
         };
         let traits = TraitVector {
@@ -4979,6 +5011,183 @@ mod tests {
         assert!((result.events[0].energy_delta - initial_repro).abs() < 1e-3);
     }
 
+    /// Helper: run a single-parent asexual reproduction with the given dispersal
+    /// trait and propagule-cost coefficient, returning total energy provisioned
+    /// into offspring (reserve + structure).
+    fn asexual_offspring_energy(dispersal: f32, propagule_coeff: f32) -> f32 {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproduction_efficiency: 1.0,
+            growth_efficiency: 1.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            dispersal_propagule_cost_coefficient: propagule_coeff,
+            dispersal_propagule_cost_exponent: 2.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 3.0,
+            asexual_propensity: 1.0,
+            dispersal,
+            ..zero_traits()
+        };
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 40.0,
+            repro_nutrient: 40.0,
+        }];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        assert!(!result.offspring.is_empty(), "fixture should produce offspring");
+        result
+            .offspring
+            .iter()
+            .map(|c| c.reserve + c.structure)
+            .sum()
+    }
+
+    #[test]
+    fn higher_dispersal_reduces_offspring_provisioning() {
+        // With a propagule-cost coefficient active, an agent with higher dispersal
+        // spends more of its reproductive budget on propagule structures, leaving
+        // less to provision offspring.
+        let low = asexual_offspring_energy(0.5, 0.5);
+        let high = asexual_offspring_energy(1.0, 0.5);
+        assert!(
+            high < low,
+            "higher dispersal should provision less offspring energy: low={low}, high={high}"
+        );
+    }
+
+    /// Helper: run a sexual reproduction between two identical parents with the
+    /// given dispersal trait and propagule coefficient; returns total offspring
+    /// energy provisioned (reserve + structure).
+    fn sexual_offspring_energy(dispersal: f32, propagule_coeff: f32) -> f32 {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproduction_efficiency: 1.0,
+            growth_efficiency: 1.0,
+            reproductive_compatibility_distance: 5.0,
+            sensing_range_coefficient: 50.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            dispersal_propagule_cost_coefficient: propagule_coeff,
+            dispersal_propagule_cost_exponent: 2.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 0.5,
+            kappa: 0.5,
+            fecundity: 3.0,
+            asexual_propensity: 0.0, // force sexual
+            dispersal,
+            ..zero_traits()
+        };
+        let mk = |id: u64, pos: (f32, f32)| Agent {
+            id,
+            position: pos,
+            reserve: 50.0,
+            structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 40.0,
+            repro_nutrient: 40.0,
+        };
+        let mut agents = vec![mk(1, (0.0, 0.0)), mk(2, (1.0, 0.0))];
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, agents[0].position);
+        grid.insert(1, agents[1].position);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        assert!(!result.offspring.is_empty(), "fixture should produce offspring");
+        result
+            .offspring
+            .iter()
+            .map(|c| c.reserve + c.structure)
+            .sum()
+    }
+
+    #[test]
+    fn higher_dispersal_reduces_sexual_offspring_provisioning() {
+        // The propagule cost applies on the sexual path too, keyed on the
+        // parents' average dispersal trait.
+        let low = sexual_offspring_energy(0.5, 0.5);
+        let high = sexual_offspring_energy(1.0, 0.5);
+        assert!(
+            high < low,
+            "higher dispersal should provision less sexual offspring energy: low={low}, high={high}"
+        );
+    }
+
+    #[test]
+    fn dispersal_adds_no_per_tick_maintenance_cost() {
+        // A non-reproducing agent's metabolism must be independent of its
+        // dispersal value, even with the propagule-cost coefficient active.
+        // Dispersal is a reproduction-event cost, never a standing maintenance cost.
+        let params = WorldParameters {
+            maintenance_cost_exponent: 2.0,
+            dispersal_propagule_cost_coefficient: 1.0,
+            dispersal_propagule_cost_exponent: 2.0,
+            ..test_params()
+        };
+        let mut low = vec![make_agent(
+            1,
+            (0.0, 0.0),
+            100.0,
+            TraitVector { dispersal: 0.0, ..zero_traits() },
+        )];
+        let mut high = vec![make_agent(
+            2,
+            (0.0, 0.0),
+            100.0,
+            TraitVector { dispersal: 5.0, ..zero_traits() },
+        )];
+        let (_, lost_low) = metabolise(&mut low, &params);
+        let (_, lost_high) = metabolise(&mut high, &params);
+        assert!(
+            (lost_low - lost_high).abs() < 1e-6,
+            "metabolism must not depend on dispersal: low={lost_low}, high={lost_high}"
+        );
+        assert!(
+            (low[0].reserve - high[0].reserve).abs() < 1e-6,
+            "reserve after metabolise must not depend on dispersal"
+        );
+    }
+
+    #[test]
+    fn dispersal_propagule_cost_is_superlinear() {
+        // The provisioning reduction must grow faster than linearly in dispersal.
+        // Baseline (no cost) provisioning, then the lost energy at dispersal d and 2d.
+        let baseline = asexual_offspring_energy(0.0, 0.5);
+        let lost_at_d = baseline - asexual_offspring_energy(0.5, 0.5);
+        let lost_at_2d = baseline - asexual_offspring_energy(1.0, 0.5);
+        assert!(lost_at_d > 0.0 && lost_at_2d > 0.0, "cost should be positive");
+        // Superlinear: doubling dispersal more than doubles the lost energy.
+        assert!(
+            lost_at_2d > 2.0 * lost_at_d,
+            "doubling dispersal should more than double the cost: lost_d={lost_at_d}, lost_2d={lost_at_2d}"
+        );
+    }
+
     #[test]
     fn zero_asexual_propensity_never_reproduces_alone() {
         use rand::SeedableRng;
@@ -5224,6 +5433,8 @@ mod tests {
             reproductive_compatibility_distance: 10.0,
             mutation_rate: 0.0,
             asexual_propensity_maintenance_cost: 0.0,
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
             ..test_params()
         };
         let traits = TraitVector {
@@ -6136,6 +6347,70 @@ mod tests {
         assert!((committed - accounted).abs() < 1e-4,
             "energy conservation: committed {committed} != reserve {offspring_reserve_sum} + structure {offspring_structure_sum} + dissipated {} (sum {accounted})",
             result.dissipated);
+    }
+
+    /// Energy conservation must still hold when the dispersal propagule cost is
+    /// active: the energy spent on propagule structures dissipates rather than
+    /// vanishing, so committed == reserve + structure + dissipated.
+    #[test]
+    fn dispersal_propagule_cost_conserves_energy() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproduction_efficiency: 0.7,
+            growth_efficiency: 0.8,
+            offspring_structure_fraction: 0.25,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            dispersal_propagule_cost_coefficient: 0.5,
+            dispersal_propagule_cost_exponent: 2.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 3.0,
+            asexual_propensity: 1.0,
+            dispersal: 1.0, // active propagule cost
+            ..zero_traits()
+        };
+        let initial_repro_reserve = 30.0_f32;
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: initial_repro_reserve,
+            repro_nutrient: 10.0,
+        }];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+
+        assert!(!result.offspring.is_empty(), "should produce offspring");
+        let offspring_reserve_sum: f32 = result.offspring.iter().map(|c| c.reserve).sum();
+        let offspring_structure_sum: f32 = result.offspring.iter().map(|c| c.structure).sum();
+        let committed = initial_repro_reserve;
+        let accounted = offspring_reserve_sum + offspring_structure_sum + result.dissipated;
+        assert!(
+            (committed - accounted).abs() < 1e-4,
+            "energy conservation with propagule cost: committed {committed} != reserve {offspring_reserve_sum} + structure {offspring_structure_sum} + dissipated {} (sum {accounted})",
+            result.dissipated
+        );
+        // Sanity: the propagule cost actually bit (dissipated exceeds the bare
+        // reproduction-efficiency loss).
+        let efficiency_loss = initial_repro_reserve * (1.0 - params.reproduction_efficiency);
+        assert!(
+            result.dissipated > efficiency_loss + 1e-3,
+            "propagule cost should add to dissipation beyond the efficiency loss"
+        );
     }
 
     /// Sexual reproduction must observe the same conservation equation:

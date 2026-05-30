@@ -458,7 +458,9 @@ fn default_recipe() -> WorldRecipe {
             growth_retention_multiplier: 2.0,
             offspring_structure_fraction: 0.2,
             asexual_propensity_maintenance_cost: 0.01,
-        },
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
+            },
         initial_distribution: Some(InitialDistribution {
             mean_traits: TraitVector {
                 photosynthetic_absorption: 0.5,
