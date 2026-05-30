@@ -159,7 +159,7 @@ Grounded in Lindeman's (1942) trophic-dynamic concept. Real trophic transfer eff
 
 **8. Metabolism.** Living agent (reserve) → Heat. Every living agent pays a continuous energy cost from reserve simply to exist. This cost has three components:
 - A base rate — the minimum cost of being alive, independent of traits or activity.
-- Trait maintenance costs — each capability (autotrophy, heterotrophy, sensing, mobility) costs energy to maintain whether or not it is currently in use. These costs scale superlinearly with investment, making them the mechanism behind the specialist-generalist trade-off: an agent investing in multiple capabilities pays accelerating overhead for all of them.
+- Trait maintenance costs — each capability (autotrophy, heterotrophy, mobility) costs energy to maintain whether or not it is currently in use. These costs scale superlinearly with investment, making them the mechanism behind the specialist-generalist trade-off: an agent investing in multiple capabilities pays accelerating overhead for all of them. Sensing is not separately priced — it is subordinate to mobility, and the cost of sensing range is folded into mobility maintenance (a mobile agent that reaches further also perceives further).
 - Somatic maintenance — governed by kappa, the fraction of surplus energy allocated to soma vs. reproduction. Higher somatic allocation slows aging but competes directly with the energy available for reproduction and growth. This is the mechanism behind the reproduce-vs-survive trade-off.
 
 Metabolism dissipates reserve to heat. It does not release nutrient — nutrient leaves living agents only through death (flow 6). This makes decomposition structurally necessary for nutrient cycling.
@@ -259,7 +259,7 @@ This distinction is a law of physics, not a strategy choice. No amount of trait 
 
 The surface carries both perception and physical channels. Each operates at a range determined by the interacting agents' traits.
 
-- **Surface perception** — detecting agents and carcasses on the surface. Chemical gradients, visual detection, vibration. The range at which an agent perceives its surroundings is determined by its trait investment in sensing. Signals are distance-weighted: closer agents produce stronger signals.
+- **Surface perception** — detecting agents and carcasses on the surface. Chemical gradients, visual detection, vibration. The range at which an agent perceives its surroundings is derived from its mobility investment — sensing is subordinate to mobility, not a separately-priced capability. A more mobile agent both reaches further and perceives further. Signals are distance-weighted: closer agents produce stronger signals.
 - **Surface contact** — physical interaction on the surface. Required for consumption, reproduction, and nutrient uptake. The range at which an agent can physically interact is determined by its trait vector — not a uniform world parameter. An agent's physical reach is a property of the agent, not the world.
 
 ### Channels on the network
@@ -289,7 +289,7 @@ The cost structure is what prevents any agent from being good at everything. The
 
 **5. Specialist vs. generalist.** Superlinear maintenance costs make this trade-off inescapable: the total cost of maintaining two traits at moderate investment exceeds the cost of maintaining one trait at high investment. A specialist concentrating in one capability achieves higher net return in that niche than a generalist spreading investment across many. The generalist can exploit multiple niches but is outcompeted by any specialist within the specialist's niche. This is a mathematical property of convex maintenance costs, not a parameter to be tuned.
 
-**6. Sense vs. save.** Wider sensing range enables better decisions but costs energy through superlinear maintenance. Agents must balance the value of information against its price in metabolic overhead.
+**6. Mobility buys both reach and awareness.** Sensing range is not independently priced — it is derived from mobility investment. Paying for mobility buys both physical reach and a wider perceptual horizon; investing less in mobility narrows both. There is no separate "sense vs. save" knob: the cost of wider awareness is paid through the superlinear mobility maintenance cost, and the trade-off against saving energy is the same one a sessile strategy already makes against an active one. This is why sessile autotrophs do not need rich perception — without reach, distant information has no actionable value.
 
 **7. Stoichiometric constraint.** Agents need nutrient in amounts determined by their traits — more capable agents demand more nutrient per unit energy. Food sources have varying nutrient-to-energy ratios. An agent consuming nutrient-poor food must eat more to satisfy its nutrient demand, wasting excess energy as heat. An agent consuming nutrient-rich food retains what it needs and excretes the excess nutrient to the available pool. The limiting currency (energy or nutrient) constrains how much of the consumed material the consumer can actually use.
 
