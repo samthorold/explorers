@@ -1270,6 +1270,9 @@ mod tests {
             wear_degradation_steepness: 1.0,
             repair_decay: 1.0,
             initial_population_size: 0,
+            // Producers need environmental nutrient to bootstrap structure: growth
+            // is nutrient-co-limited, and photosynthesis needs structure > 0.
+            initial_nutrient_pool: 100.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -1279,14 +1282,15 @@ mod tests {
             initial_energy_per_agent: 50.0,
         };
         let mut world = World::new(params, dist, 42);
-        // Manually add pure producers
+        // Manually add pure producers, seeded with a little nutrient so they can
+        // lay down initial structure on the first tick.
         for i in 0..10 {
             world.add_agent(Agent {
                 id: 0, // will be reassigned
                 position: (i as f32 * 5.0 - 25.0, 0.0),
                 reserve: 50.0,
                 structure: 0.0,
-                nutrient: 0.0,
+                nutrient: 5.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 0.8,
                     kappa: 0.7,

@@ -1,0 +1,20 @@
+# Structure growth is co-limited by nutrient (build-permit, not consumption)
+
+Building structure in the grow phase is limited by whichever of energy or nutrient is scarcer (Liebig's law of the minimum). An agent can lay down structure only up to what its nutrient store stoichiometrically supports — `structure × demand ≤ nutrient`, where `demand = base_nutrient_ratio + specification_nutrient_coefficient × specification_sum`. Growth throttles smoothly toward zero as the body approaches that ceiling (no hard gate), and growth energy that cannot be matched with nutrient stays in reserve rather than being dissipated. Nutrient is **not** consumed by growth — it is the build permit, not the building material.
+
+## Problem
+
+Growth previously converted reserve surplus into structure using energy alone; nutrient was never consulted. Energy enters the world from an open tap (solar) while nutrient is a closed, conserved loop. So structure — funded by abundant energy — could climb to an energy-determined plateau far above what the (much tighter) nutrient economy could support. The reproduction nutrient gate is `nutrient ≥ structure × demand`, so as structure outgrew nutrient the gate became permanently unreachable: agents sat on plenty of reserve and a healthy nutrient store yet could never reproduce, because their bodies were too large for that store. Energy abundance actively made it worse by inflating the denominator.
+
+## Considered options
+
+- **Build-permit cap (chosen).** Cap growth at `nutrient / demand` and leave unmatched energy in reserve. Conservation-safe — no nutrient moves — so the closed-loop nutrient ledger is untouched. Keeps `nutrient ≥ structure × demand` by construction, so any agent that can grow stays reproduction-eligible on the nutrient axis. Smooth co-limitation, consistent with the existing stoichiometric `demand` already used by the reproduction gate. Cost: nutrient is a build permit rather than a consumed material, so it is not literally embodied in tissue.
+- **True consumption with a structural-nutrient pool (rejected, for now).** Growth draws nutrient from the free store into a tracked structural pool, which returns to the carcass on death and recycles through decomposition. Physically the most faithful (N/P literally bound in biomass) and creates a real grow-vs-breed allocation tension on the nutrient axis. Rejected as the immediate fix because it is a much larger change — a new field on `Agent` and `Carcass`, updates to the nutrient pool totals and death/decomposition plumbing, and the reproduction gate would then read a free store that growth depletes (risking a different lockout). Revisit if the build-permit form proves too permissive (it makes the nutrient component of the reproduction gate redundant for active growers).
+- **Retune parameters only (rejected).** Lower the nutrient ratio or raise the pool so the nutrient economy can sustain the energy-determined structure. Treats the symptom: energy-only growth can always outrun a closed nutrient loop given enough solar, so the lockout resurfaces under different parameters.
+
+## Consequences
+
+- An agent with no nutrient builds no structure, even with abundant reserve. Producers must take up environmental nutrient (uptake scales with autotrophy) to bootstrap structure; a scenario with an empty nutrient pool yields agents that never grow and therefore never photosynthesise (photosynthesis needs `structure > 0`).
+- Nutrient becomes a genuine limiting resource for body size, not just reproduction: nutrient-rich patches let agents grow larger, and high trait specialisation (a larger `demand`) costs more nutrient per unit structure.
+- The nutrient component of the reproduction gate is satisfied by construction for agents that are actively growing; the energy reproduction threshold (the accumulated reproductive allocation) remains the binding timing constraint.
+- Conservation invariants are unaffected — `nutrient_ledger` balance and the energy ledger both hold, because growth still only moves energy (reserve → structure, with loss) and never moves nutrient.
