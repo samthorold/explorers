@@ -138,6 +138,7 @@ fn default_nutrient_grid_cell_size() -> f32 { 10.0 }
 fn default_growth_retention_multiplier() -> f32 { 2.0 }
 fn default_offspring_structure_fraction() -> f32 { 0.2 }
 fn default_asexual_propensity_maintenance_cost() -> f32 { 0.01 }
+fn default_dispersal_propagule_cost_exponent() -> f32 { 2.0 }
 
 /// Split a per-agent initial energy budget into a (reserve, structure, heat)
 /// triple using the same reserve/structure provisioning that reproduction
@@ -155,6 +156,25 @@ pub fn provision_initial_reserve_structure(
     let heat = structure_share - structure;
     let reserve = budget - structure_share;
     (reserve, structure, heat)
+}
+
+/// Fraction of the post-efficiency reproductive energy budget spent at a
+/// reproduction event on building propagule structures (spores, plumes, fruit),
+/// as a function of the dispersal trait. Rises superlinearly with dispersal
+/// (`coefficient * dispersal^exponent`) to enforce anti-generalist economics,
+/// and is clamped to [0, 1]. The spent fraction dissipates as heat rather than
+/// provisioning offspring, so higher dispersal leaves less for each offspring —
+/// the dispersal analogue of the fecundity quantity/quality trade-off, charged
+/// only at the reproduction event (never per tick). A zero coefficient disables
+/// the cost.
+pub fn dispersal_propagule_cost_fraction(dispersal: f32, params: &WorldParameters) -> f32 {
+    if params.dispersal_propagule_cost_coefficient <= 0.0 {
+        return 0.0;
+    }
+    let d = dispersal.max(0.0);
+    let frac = params.dispersal_propagule_cost_coefficient
+        * d.powf(params.dispersal_propagule_cost_exponent);
+    frac.clamp(0.0, 1.0)
 }
 
 /// How a newborn (offspring or tick-0 seeded agent) is provisioned across both
@@ -336,6 +356,22 @@ pub struct WorldParameters {
     /// any threshold or gate.
     #[serde(default = "default_asexual_propensity_maintenance_cost")]
     pub asexual_propensity_maintenance_cost: f32,
+    /// Coefficient on the dispersal propagule cost charged **at a reproduction
+    /// event** (not per tick). At a reproduction event, a fraction
+    /// `(coefficient * dispersal^exponent)` of the post-efficiency reproductive
+    /// energy budget is spent building propagule structures (spores, plumes,
+    /// fruit) before the remainder is divided among offspring — so higher
+    /// dispersal leaves less to provision each offspring. The spent energy
+    /// dissipates as heat (energy conserved). This is the dispersal analogue of
+    /// the fecundity quantity/quality trade-off, expressed only when the agent
+    /// reproduces. Default 0.0 disables the cost (backward-compatible).
+    #[serde(default)]
+    pub dispersal_propagule_cost_coefficient: f32,
+    /// Exponent applied to the dispersal trait in the propagule cost. Values > 1
+    /// make the cost superlinear (anti-generalist economics): broadcasting widely
+    /// is disproportionately expensive. Default 2.0.
+    #[serde(default = "default_dispersal_propagule_cost_exponent")]
+    pub dispersal_propagule_cost_exponent: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1170,6 +1206,8 @@ mod tests {
     fn test_params() -> WorldParameters {
         WorldParameters {
             asexual_propensity_maintenance_cost: 0.0,
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -1222,6 +1260,27 @@ mod tests {
             initial_cluster_count: 1,
             initial_energy_per_agent: 100.0,
         }
+    }
+
+    #[test]
+    fn propagule_cost_fraction_is_zero_when_coefficient_disabled() {
+        let params = WorldParameters { dispersal_propagule_cost_coefficient: 0.0, ..test_params() };
+        assert_eq!(dispersal_propagule_cost_fraction(3.0, &params), 0.0);
+    }
+
+    #[test]
+    fn propagule_cost_fraction_is_superlinear_and_clamped() {
+        let params = WorldParameters {
+            dispersal_propagule_cost_coefficient: 0.1,
+            dispersal_propagule_cost_exponent: 2.0,
+            ..test_params()
+        };
+        let f1 = dispersal_propagule_cost_fraction(1.0, &params);
+        let f2 = dispersal_propagule_cost_fraction(2.0, &params);
+        // Superlinear: doubling the trait more than doubles the fraction.
+        assert!(f2 > 2.0 * f1, "fraction should rise superlinearly: f1={f1}, f2={f2}");
+        // Clamped to at most 1.0 even for large dispersal.
+        assert_eq!(dispersal_propagule_cost_fraction(100.0, &params), 1.0);
     }
 
     #[test]
@@ -1857,6 +1916,8 @@ mod tests {
     fn conservation_params() -> WorldParameters {
         WorldParameters {
             asexual_propensity_maintenance_cost: 0.0,
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,

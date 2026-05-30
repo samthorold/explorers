@@ -177,7 +177,9 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         growth_retention_multiplier: v(29) as f32,
         offspring_structure_fraction: v(30) as f32,
         asexual_propensity_maintenance_cost: 0.01,
-    };
+        dispersal_propagule_cost_coefficient: 0.0,
+        dispersal_propagule_cost_exponent: 2.0,
+        };
 
     let dist = InitialDistribution {
         mean_traits: TraitVector {

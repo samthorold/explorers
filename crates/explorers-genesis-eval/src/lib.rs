@@ -594,7 +594,9 @@ mod tests {
             growth_retention_multiplier: 2.0,
             offspring_structure_fraction: 0.2,
             asexual_propensity_maintenance_cost: 0.0,
-        }
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
+            }
     }
 
     fn test_distribution() -> explorers_sim::InitialDistribution {
@@ -817,7 +819,9 @@ mod tests {
             growth_retention_multiplier: 2.0,
             offspring_structure_fraction: 0.2,
             asexual_propensity_maintenance_cost: 0.0,
-        };
+            dispersal_propagule_cost_coefficient: 0.0,
+            dispersal_propagule_cost_exponent: 2.0,
+            };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.0,
