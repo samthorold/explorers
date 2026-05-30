@@ -1,5 +1,7 @@
 # Structure growth is co-limited by nutrient (build-permit, not consumption)
 
+_Superseded by [ADR-0003](0003-nutrient-embodiment-and-reproductive-earmark.md)._ The co-limitation principle this ADR established stands; the **build-permit mechanism** (nutrient as a non-consumed permit) is replaced by embodiment — growth now consumes free nutrient and binds it into structure. The "true consumption" option this ADR rejected "for now" is the one ADR-0003 adopts, because the reproductive-nutrient earmark removes the lockout risk that made it unsafe here.
+
 Building structure in the grow phase is limited by whichever of energy or nutrient is scarcer (Liebig's law of the minimum). An agent can lay down structure only up to what its nutrient store stoichiometrically supports — `structure × demand ≤ nutrient`, where `demand = base_nutrient_ratio + specification_nutrient_coefficient × specification_sum`. Growth throttles smoothly toward zero as the body approaches that ceiling (no hard gate), and growth energy that cannot be matched with nutrient stays in reserve rather than being dissipated. Nutrient is **not** consumed by growth — it is the build permit, not the building material.
 
 ## Problem
