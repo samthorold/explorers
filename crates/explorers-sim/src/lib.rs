@@ -132,7 +132,7 @@ fn default_specification_nutrient_coefficient() -> f32 { 0.2 }
 fn default_sensing_range_coefficient() -> f32 { 10.0 }
 fn default_reproductive_compatibility_distance() -> f32 { 2.0 }
 fn default_maintenance_cost_exponent() -> f32 { 2.0 }
-fn default_consumption_contact_half_saturation() -> f32 { 0.001 }
+fn default_consumption_contact_half_saturation() -> f32 { 3.0 }
 fn default_nutrient_grid_cell_size() -> f32 { 10.0 }
 fn default_growth_retention_multiplier() -> f32 { 2.0 }
 
@@ -204,9 +204,14 @@ pub struct WorldParameters {
     /// enforcing the specialist-generalist trade-off.
     #[serde(default = "default_maintenance_cost_exponent")]
     pub maintenance_cost_exponent: f32,
-    /// Michaelis-Menten half-saturation constant for contact-duration scaling
-    /// of consumption demand. demand = eff_heterotrophy * ct / (ct + K).
-    /// Near-zero default makes this effectively a no-op for backward compat.
+    /// Michaelis-Menten half-saturation constant (in ticks of sustained
+    /// contact) for contact-duration scaling of consumption demand.
+    /// demand = eff_heterotrophy * ct / (ct + K).
+    /// At ct = K, demand equals half of eff_heterotrophy; raising K lengthens
+    /// the ramp so consumers need more sustained contact before approaching
+    /// their full extraction rate. The default (K ~ 3) produces a recognisable
+    /// multi-tick ramp; very small values collapse the curve into a step at
+    /// ct = 1, and K = 0 disables the scaling entirely.
     #[serde(default = "default_consumption_contact_half_saturation")]
     pub consumption_contact_half_saturation: f32,
     /// Cell size for the spatial nutrient grid. Nutrient is distributed across
