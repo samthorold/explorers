@@ -1239,9 +1239,12 @@ pub fn resolve_reproduction(
 
         let post_efficiency = total_investment * params.reproduction_efficiency;
         // Dispersal propagule cost (sexual): keyed on the parents' average
-        // dispersal trait — the same average that sets the offspring-scatter
-        // kernel below. Superlinear; the spent energy dissipates, leaving less
-        // to provision each offspring. Charged only at the event, never per tick.
+        // dispersal trait — both parents contribute gametes to the event, so the
+        // provisioning cost reflects their joint dispersal investment. This is
+        // the cost framing only; offspring *placement* is governed separately by
+        // the seed parent's own kernel (issue #283). Superlinear; the spent
+        // energy dissipates, leaving less to provision each offspring. Charged
+        // only at the event, never per tick.
         let avg_dispersal = (a_traits.dispersal + b_traits.dispersal) / 2.0;
         let propagule_fraction =
             crate::dispersal_propagule_cost_fraction(avg_dispersal, params);
@@ -1271,12 +1274,23 @@ pub fn resolve_reproduction(
         agents[*a_idx].repro_nutrient -= nutrient_a;
         agents[*b_idx].repro_nutrient -= nutrient_b;
 
-        // Parent midpoint for dispersal (toroidal-aware)
-        let (dx, dy) = crate::toroidal_displacement(a_pos, b_pos, extent);
-        let mid_pos = crate::wrap_position((a_pos.0 + dx / 2.0, a_pos.1 + dy / 2.0), extent);
+        // Seed-parent placement (issue #283): offspring originate at one
+        // parent's position, chosen once per event, and are scattered by *that*
+        // parent's offspring-dispersal kernel. This keeps offspring anchored to
+        // a real organism no matter how far apart the mates are — mate-finding
+        // reach (#285) can pair spatially distant agents via gamete broadcast,
+        // but that reach geometry must not leak into placement (offspring must
+        // not land in the empty space between distant parents). Co-located
+        // parents are unaffected: either seed sits at effectively the same spot.
+        let (seed_pos, seed_dispersal) = if rng.random::<bool>() {
+            (a_pos, a_traits.dispersal)
+        } else {
+            (b_pos, b_traits.dispersal)
+        };
 
-        // Dispersal: sigma = average of parents' dispersal traits
-        let dispersal_radius = (a_traits.dispersal + b_traits.dispersal) / 2.0;
+        // Dispersal: sigma = the seed parent's own dispersal trait, independent
+        // of the mate's dispersal and of the inter-parent distance.
+        let dispersal_radius = seed_dispersal;
 
         for _ in 0..offspring_count {
             // Trait crossover: each dimension from one parent (uniform crossover)
@@ -1319,7 +1333,7 @@ pub fn resolve_reproduction(
                 (0.0, 0.0)
             };
             let pos = crate::wrap_position(
-                (mid_pos.0 + dx, mid_pos.1 + dy),
+                (seed_pos.0 + dx, seed_pos.1 + dy),
                 extent,
             );
 
@@ -1358,7 +1372,9 @@ pub fn resolve_reproduction(
             source: a_id,
             target: Some(b_id),
             energy_delta: total_investment,
-            position: Some(mid_pos),
+            // The event is anchored at the seed parent — the same location the
+            // offspring originate from (issue #283).
+            position: Some(seed_pos),
             target_was_carcass: false,
         });
     }
@@ -4905,9 +4921,9 @@ mod tests {
     fn mate_reach_does_not_move_offspring() {
         // Reach is the eligibility axis only: it decides whether a pair forms,
         // not where offspring land. Offspring placement is governed independently
-        // by the dispersal trait around the parent midpoint. Running the same
-        // scenario with different dispersal_reach_coefficient values must yield
-        // identical offspring positions.
+        // by the dispersal trait around the seed parent (issue #283). Running the
+        // same scenario with different dispersal_reach_coefficient values must
+        // yield identical offspring positions.
         use rand::SeedableRng;
         let base = WorldParameters {
             reproduction_energy_threshold: 10.0,
@@ -4921,7 +4937,7 @@ mod tests {
         };
         // Mobile (reach via mobility, so the pair forms regardless of the
         // dispersal-reach coefficient) but dispersal trait 0 -> offspring land
-        // exactly at the parent midpoint.
+        // exactly on the seed parent.
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
@@ -4957,10 +4973,13 @@ mod tests {
         assert!(!no_reach.is_empty(), "scenario should produce offspring");
         assert_eq!(no_reach, wide_reach,
             "offspring positions must be unaffected by the mate-reach coefficient");
-        // With dispersal trait 0, offspring land at the parent midpoint (12,10).
+        // With dispersal trait 0, offspring land exactly on the seed parent —
+        // one of the two parent positions (10,10) or (14,10), never between.
         for pos in &no_reach {
-            assert!((pos.0 - 12.0).abs() < 1e-4 && (pos.1 - 10.0).abs() < 1e-4,
-                "offspring should land at parent midpoint, got {:?}", pos);
+            let at_a = (pos.0 - 10.0).abs() < 1e-4 && (pos.1 - 10.0).abs() < 1e-4;
+            let at_b = (pos.0 - 14.0).abs() < 1e-4 && (pos.1 - 10.0).abs() < 1e-4;
+            assert!(at_a || at_b,
+                "offspring should land on a parent (seed), got {:?}", pos);
         }
     }
 
@@ -5834,9 +5853,11 @@ mod tests {
     }
 
     #[test]
-    fn sexual_reproduction_averages_parents_dispersal() {
-        // Two parents with different dispersal values: offspring placement
-        // should use the average dispersal as kernel width.
+    fn sexual_reproduction_scatter_widens_with_dispersal() {
+        // Seed-parent placement (issue #283): offspring are scattered by the
+        // seed parent's own dispersal kernel. With both parents sharing the same
+        // dispersal trait, a wider trait must produce a wider scatter regardless
+        // of which parent is seeded.
         use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
@@ -5891,27 +5912,161 @@ mod tests {
             let result = resolve_reproduction(
                 &mut agents, &dead_ids, &grid, &params, &mut rng,
             );
-            let mid = (0.5, 0.0); // midpoint of parents
+            // Scatter is measured from whichever parent each offspring is
+            // closest to — the seed anchor is a real parent position, so the
+            // distance to the nearest parent is the scatter magnitude.
+            let parents = [(0.0_f32, 0.0_f32), (1.0_f32, 0.0_f32)];
             let total_dist: f32 = result.offspring.iter()
                 .map(|o| {
-                    let dx = o.position.0 - mid.0;
-                    let dy = o.position.1 - mid.1;
-                    (dx * dx + dy * dy).sqrt()
+                    parents.iter()
+                        .map(|p| {
+                            let dx = o.position.0 - p.0;
+                            let dy = o.position.1 - p.1;
+                            (dx * dx + dy * dy).sqrt()
+                        })
+                        .fold(f32::INFINITY, f32::min)
                 })
                 .sum();
             total_dist / result.offspring.len().max(1) as f32
         };
 
-        // Both parents have equal dispersal (2.0): avg = 2.0
-        let equal_spread = run(2.0, 2.0);
-        // One parent 0.0, other 4.0: avg = 2.0 — should be similar to equal case
-        let _mixed_spread = run(0.0, 4.0);
-        // Both parents have high dispersal (4.0): avg = 4.0
-        let high_spread = run(4.0, 4.0);
+        // Both parents share dispersal 2.0.
+        let narrow_spread = run(2.0, 2.0);
+        // Both parents share dispersal 4.0.
+        let wide_spread = run(4.0, 4.0);
 
-        // High should be wider than equal (4.0 > 2.0)
-        assert!(high_spread > equal_spread,
-            "higher avg dispersal should produce wider spread: equal={}, high={}", equal_spread, high_spread);
+        assert!(wide_spread > narrow_spread,
+            "wider dispersal should produce wider scatter: narrow={}, wide={}", narrow_spread, wide_spread);
+    }
+
+    #[test]
+    fn sexual_distant_parents_place_offspring_at_a_parent_not_the_midpoint() {
+        // Two spatially distant but trait-compatible parents pair via gamete
+        // broadcast (reproductive reach, #285). With zero dispersal, each
+        // offspring should originate at one of the two parents' positions —
+        // never in the empty space between them (the old midpoint behaviour).
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            sensing_range_coefficient: 2000.0, // mobility 0.3 -> reach 600 > gap 300
+            reproductive_compatibility_distance: 10.0,
+            world_extent: 1000.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 0.3,
+            kappa: 0.5,
+            fecundity: 10.0,
+            asexual_propensity: 0.0,
+            dispersal: 0.0, // zero dispersal: offspring land exactly on the seed parent
+            ..zero_traits()
+        };
+        let a_pos = (0.0, 0.0);
+        let b_pos = (300.0, 0.0); // far apart; midpoint would be (150, 0)
+        let mut agents = vec![
+            Agent {
+                id: 1, position: a_pos, reserve: 50.0, structure: 5.0,
+                nutrient: 100.0, traits, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                repro_nutrient: 30.0,
+            },
+            Agent {
+                id: 2, position: b_pos, reserve: 50.0, structure: 5.0,
+                nutrient: 100.0, traits, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                repro_nutrient: 30.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(1000.0, 10.0);
+        grid.insert(0, a_pos);
+        grid.insert(1, b_pos);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty(), "should produce offspring");
+        for child in &result.offspring {
+            let at_a = (child.position.0 - a_pos.0).abs() < 1e-6
+                && (child.position.1 - a_pos.1).abs() < 1e-6;
+            let at_b = (child.position.0 - b_pos.0).abs() < 1e-6
+                && (child.position.1 - b_pos.1).abs() < 1e-6;
+            assert!(
+                at_a || at_b,
+                "offspring should originate at a parent's position, not the \
+                 midpoint; got {:?} (parents at {:?} and {:?})",
+                child.position, a_pos, b_pos
+            );
+        }
+    }
+
+    #[test]
+    fn sexual_colocated_parents_place_offspring_near_both() {
+        // When the two parents share (effectively) the same position, seed-parent
+        // placement is indistinguishable from the old midpoint behaviour: with
+        // zero dispersal every offspring lands on that shared spot — near both
+        // parents (issue #283 acceptance: co-located parents unchanged).
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproduction_efficiency: 1.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            sensing_range_coefficient: 100.0,
+            reproductive_compatibility_distance: 10.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 0.3,
+            kappa: 0.5,
+            fecundity: 10.0,
+            asexual_propensity: 0.0,
+            dispersal: 0.0, // zero dispersal: offspring land on the shared spot
+            ..zero_traits()
+        };
+        let shared = (20.0, 20.0);
+        let mut agents = vec![
+            Agent {
+                id: 1, position: shared, reserve: 50.0, structure: 5.0,
+                nutrient: 100.0, traits, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                repro_nutrient: 30.0,
+            },
+            Agent {
+                id: 2, position: shared, reserve: 50.0, structure: 5.0,
+                nutrient: 100.0, traits, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                repro_nutrient: 30.0,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, shared);
+        grid.insert(1, shared);
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty(), "should produce offspring");
+        for child in &result.offspring {
+            assert!(
+                (child.position.0 - shared.0).abs() < 1e-6
+                    && (child.position.1 - shared.1).abs() < 1e-6,
+                "co-located parents: offspring should land on the shared spot {:?}, got {:?}",
+                shared, child.position
+            );
+        }
     }
 
     #[test]
@@ -6015,42 +6170,48 @@ mod tests {
     }
 
     #[test]
-    fn sexual_reproduction_midpoint_wraps_on_torus() {
-        // Parents near opposite edges of the torus should produce offspring
-        // near the wrap edge, not at the naive average (0, 0).
+    fn sexual_reproduction_seed_parent_scatter_wraps_on_torus() {
+        // A seed parent sitting right at the wrap edge, scattering offspring
+        // with a dispersal kernel wide enough to push some across the seam,
+        // must produce offspring wrapped to within the world bounds — not
+        // placed off the edge of the torus (issue #283).
         use rand::SeedableRng;
+        let extent = 100.0_f32;
         let params = WorldParameters {
             reproduction_efficiency: 1.0,
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            world_extent: 100.0,
+            sensing_range_coefficient: 2000.0, // wide reach so the distant pair forms
+            reproductive_compatibility_distance: 10.0,
+            world_extent: extent,
             ..test_params()
         };
+        // Both parents sit at the +x edge so whichever is seeded, scatter
+        // straddles the wrap seam.
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
             kappa: 0.5,
-            fecundity: 1.0,
-            dispersal: 0.0, // zero dispersal so offspring land exactly at midpoint
+            fecundity: 20.0, // many offspring so scatter explores the seam
+            dispersal: 5.0,  // wide enough to cross the edge
             ..zero_traits()
         };
         let mut agents = vec![
-            make_agent(1, (-48.0, 0.0), 100.0, traits),
-            make_agent(2, (48.0, 0.0), 100.0, traits),
+            make_agent(1, (49.0, 0.0), 100.0, traits),
+            make_agent(2, (48.0, 30.0), 100.0, traits),
         ];
-        agents[0].nutrient = 10.0;
-        agents[1].nutrient = 10.0;
-        agents[0].repro_reserve = 15.0;
-        agents[0].repro_nutrient = 15.0;
-        agents[1].repro_reserve = 15.0;
-        agents[1].repro_nutrient = 15.0;
+        for a in agents.iter_mut() {
+            a.nutrient = 10.0;
+            a.repro_reserve = 15.0;
+            a.repro_nutrient = 15.0;
+        }
 
         let dead_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
-        grid.insert(0, (-48.0, 0.0));
-        grid.insert(1, (48.0, 0.0));
+        grid.insert(0, agents[0].position);
+        grid.insert(1, agents[1].position);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
         let result = resolve_reproduction(
@@ -6058,17 +6219,26 @@ mod tests {
         );
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
+        let half = extent / 2.0;
         for child in &result.offspring {
-            // The toroidal midpoint of (-48, 0) and (48, 0) on extent=100
-            // is at x = -48 + (-4/2) = -50 (equivalently +50), not 0.
-            // The offspring should be near the wrap edge (|x| close to 50).
-            let x = child.position.0;
+            // Positions on a [-50, 50] torus must stay within bounds.
             assert!(
-                x.abs() > 40.0,
-                "offspring x={} should be near the wrap edge (|x| > 40), not near 0",
-                x
+                child.position.0 >= -half - 1e-3 && child.position.0 <= half + 1e-3,
+                "offspring x={} must be wrapped within [-50, 50]",
+                child.position.0
+            );
+            assert!(
+                child.position.1 >= -half - 1e-3 && child.position.1 <= half + 1e-3,
+                "offspring y={} must be wrapped within [-50, 50]",
+                child.position.1
             );
         }
+        // Sanity: at least one offspring actually landed on the far side of the
+        // seam (negative x), proving wrapping occurred rather than clamping.
+        assert!(
+            result.offspring.iter().any(|c| c.position.0 < 0.0),
+            "expected some offspring to wrap across the +x edge to negative x"
+        );
     }
 
     #[test]
