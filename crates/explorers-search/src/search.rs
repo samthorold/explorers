@@ -179,6 +179,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         asexual_propensity_maintenance_cost: 0.01,
         dispersal_propagule_cost_coefficient: 0.0,
         dispersal_propagule_cost_exponent: 2.0,
+        dispersal_reach_coefficient: 0.0,
         };
 
     let dist = InitialDistribution {

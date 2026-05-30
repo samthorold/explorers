@@ -372,6 +372,18 @@ pub struct WorldParameters {
     /// is disproportionately expensive. Default 2.0.
     #[serde(default = "default_dispersal_propagule_cost_exponent")]
     pub dispersal_propagule_cost_exponent: f32,
+    /// Coefficient on the dispersal contribution to sexual **mate-finding reach**.
+    /// Mate-search reach = `effective_mobility * sensing_range_coefficient +
+    /// dispersal * dispersal_reach_coefficient`. This lets a sessile (mobility-0)
+    /// agent broadcast gametes far enough to pair with a compatible neighbour:
+    /// dispersal is the sessile solution to mate-finding, mirroring how it scatters
+    /// offspring. Reach gates eligibility only — it does not move offspring (that
+    /// remains governed by the dispersal trait at the placement step). Unlike the
+    /// mobility term, dispersal does not wear, so this contribution is age-stable.
+    /// Default 0.0 disables it (backward-compatible: existing recipes keep the
+    /// pure-mobility reach).
+    #[serde(default)]
+    pub dispersal_reach_coefficient: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1208,6 +1220,7 @@ mod tests {
             asexual_propensity_maintenance_cost: 0.0,
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
+            dispersal_reach_coefficient: 0.0,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -1365,6 +1378,33 @@ mod tests {
         )
         .expect("params omitting reproduction_nutrient_threshold should deserialise");
         assert_eq!(params.reproduction_nutrient_threshold, default_reproduction_nutrient_threshold());
+    }
+
+    #[test]
+    fn dispersal_reach_coefficient_has_serde_default() {
+        // The dispersal contribution to mate-finding reach is a new world
+        // parameter with a serde default of 0.0, so existing recipes/scenarios
+        // that omit it deserialise unchanged and keep the pure-mobility reach.
+        let params: WorldParameters = serde_json::from_str(
+            r#"{
+                "solar_flux_magnitude": 10.0,
+                "base_trophic_efficiency": 1.0,
+                "reproduction_efficiency": 0.7,
+                "base_metabolic_rate": 0.0,
+                "movement_cost_coefficient": 0.0,
+                "reproduction_energy_threshold": 50.0,
+                "mutation_rate": 0.0,
+                "mutation_magnitude": 0.0,
+                "contact_range_coefficient": 5.0,
+                "world_extent": 100.0,
+                "initial_population_size": 0,
+                "light_competition_radius": 1000.0,
+                "photo_maintenance_cost": 0.0,
+                "heterotrophy_maintenance_cost": 0.0
+            }"#,
+        )
+        .expect("params omitting dispersal_reach_coefficient should deserialise");
+        assert_eq!(params.dispersal_reach_coefficient, 0.0);
     }
 
     #[test]
@@ -1918,6 +1958,7 @@ mod tests {
             asexual_propensity_maintenance_cost: 0.0,
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
+            dispersal_reach_coefficient: 0.0,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,
