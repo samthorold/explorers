@@ -116,6 +116,126 @@ impl RunClock {
     }
 }
 
+/// A fixed-capacity ring buffer of samples. Pushing past capacity evicts the
+/// oldest sample, so memory stays bounded over an arbitrarily long run. Iterates
+/// oldest-to-newest. Framework-agnostic and unit-testable; lives in the app
+/// (never in `explorers-sim`) per ADR 0001 — history is an observation concern.
+struct RingBuffer<T> {
+    samples: std::collections::VecDeque<T>,
+    capacity: usize,
+}
+
+impl<T> RingBuffer<T> {
+    /// Create an empty ring buffer holding at most `capacity` samples.
+    fn new(capacity: usize) -> Self {
+        Self { samples: std::collections::VecDeque::with_capacity(capacity), capacity }
+    }
+
+    /// Append a sample. If already at capacity, the oldest sample is dropped
+    /// first so the length never exceeds the capacity.
+    fn push(&mut self, sample: T) {
+        if self.capacity == 0 {
+            return;
+        }
+        if self.samples.len() == self.capacity {
+            self.samples.pop_front();
+        }
+        self.samples.push_back(sample);
+    }
+
+    /// Iterate the retained samples oldest-to-newest.
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.samples.iter()
+    }
+
+    /// Number of retained samples (never exceeds the capacity).
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn len(&self) -> usize {
+        self.samples.len()
+    }
+}
+
+/// Default number of samples each history series retains. At ~100 ticks/s this
+/// is roughly a minute of fast-forward; older samples roll off so memory is
+/// bounded regardless of run length.
+const DEFAULT_HISTORY_CAPACITY: usize = 2048;
+
+/// Accumulated time-series history of aggregate world metrics, owned entirely by
+/// the app (the sim stays history-free per ADR 0001). One fixed-capacity ring
+/// buffer per series: population by dominant role, energy by pool, and nutrient
+/// by pool. Sampled once per applied `world.step()` so the plots reflect
+/// pause/step/speed. Framework-agnostic and unit-testable.
+struct History {
+    producers: RingBuffer<f64>,
+    consumers: RingBuffer<f64>,
+    decomposers: RingBuffer<f64>,
+    living_energy: RingBuffer<f64>,
+    carcass_energy: RingBuffer<f64>,
+    dissipated_energy: RingBuffer<f64>,
+    nutrient_available: RingBuffer<f64>,
+    nutrient_living: RingBuffer<f64>,
+    nutrient_carcasses: RingBuffer<f64>,
+}
+
+impl History {
+    /// Create an empty history where each series retains at most `capacity`
+    /// samples.
+    fn new(capacity: usize) -> Self {
+        Self {
+            producers: RingBuffer::new(capacity),
+            consumers: RingBuffer::new(capacity),
+            decomposers: RingBuffer::new(capacity),
+            living_energy: RingBuffer::new(capacity),
+            carcass_energy: RingBuffer::new(capacity),
+            dissipated_energy: RingBuffer::new(capacity),
+            nutrient_available: RingBuffer::new(capacity),
+            nutrient_living: RingBuffer::new(capacity),
+            nutrient_carcasses: RingBuffer::new(capacity),
+        }
+    }
+
+    /// Append one sample per series from the world's current aggregate state.
+    /// Reuses the existing aggregations ([`RoleBreakdown`],
+    /// [`compute_energy_budget`]) rather than recomputing from scratch. Called
+    /// once per applied step.
+    fn sample(&mut self, world: &World) {
+        let breakdown = RoleBreakdown::count(world.agents());
+        let budget = compute_energy_budget(world);
+
+        self.producers.push(breakdown.producers as f64);
+        self.consumers.push(breakdown.consumers as f64);
+        self.decomposers.push(breakdown.decomposers as f64);
+
+        self.living_energy.push(budget.living_energy as f64);
+        self.carcass_energy.push(budget.carcass_energy as f64);
+        self.dissipated_energy.push(budget.dissipated_energy as f64);
+
+        self.nutrient_available.push(budget.nutrient_available as f64);
+        self.nutrient_living.push(budget.nutrient_living as f64);
+        self.nutrient_carcasses.push(budget.nutrient_carcasses as f64);
+    }
+
+    /// Number of samples retained per series (every series shares one length,
+    /// since `sample` appends to all of them together).
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn len(&self) -> usize {
+        self.producers.len()
+    }
+}
+
+/// Build an `egui_plot` line from a ring-buffered series. The x-axis is the
+/// sample index (oldest at 0), so the most recent sample sits at the right edge
+/// and older samples scroll left as eviction advances. Thin glue over the
+/// buffer; the buffer itself is the unit-tested part.
+fn series_line(name: &str, series: &RingBuffer<f64>) -> egui_plot::Line<'static> {
+    let points: egui_plot::PlotPoints = series
+        .iter()
+        .enumerate()
+        .map(|(i, &y)| [i as f64, y])
+        .collect();
+    egui_plot::Line::new(name.to_owned(), points)
+}
+
 /// Parsed command-line configuration.
 #[derive(Debug, PartialEq)]
 struct CliConfig {
@@ -414,19 +534,31 @@ struct ExplorersApp {
     /// agent has died is handled gracefully at lookup time (the painter and any
     /// reader treat a missing agent as "no longer alive").
     selected_agent: Option<u64>,
+    /// Accumulated time-series history of aggregate metrics, sampled once per
+    /// applied step. Owned by the app (the sim stays history-free per ADR 0001)
+    /// and rendered as `egui_plot` charts in the debug window.
+    history: History,
 }
 
 impl ExplorersApp {
     fn new(world: World, tick_count: u64) -> Self {
-        Self { world, tick_count, clock: RunClock::new(), selected_agent: None }
+        Self {
+            world,
+            tick_count,
+            clock: RunClock::new(),
+            selected_agent: None,
+            history: History::new(DEFAULT_HISTORY_CAPACITY),
+        }
     }
 
     /// Advance the simulation by `steps` whole ticks, keeping the tick readout
-    /// in sync.
+    /// in sync and sampling one history point per applied step so the plots
+    /// reflect pause/step/speed.
     fn apply_steps(&mut self, steps: u32) {
         for _ in 0..steps {
             self.world.step();
             self.tick_count += 1;
+            self.history.sample(&self.world);
         }
     }
 }
@@ -568,6 +700,8 @@ impl ExplorersApp {
                     ui.separator();
                     self.debug_energy_budget(ui);
                     ui.separator();
+                    self.debug_history_plots(ui);
+                    ui.separator();
                     self.debug_world_parameters(ui);
                     ui.separator();
                     self.debug_selected_agent(ui);
@@ -623,6 +757,48 @@ impl ExplorersApp {
                 ui.label(format!("  Available pool: {:.1}", budget.nutrient_available));
                 ui.label(format!("  Living agents: {:.1}", budget.nutrient_living));
                 ui.label(format!("  Carcasses: {:.1}", budget.nutrient_carcasses));
+            });
+    }
+
+    /// Time-series history plots: population by dominant role, energy by pool,
+    /// and nutrient by pool, each rendered from its ring buffer via `egui_plot`.
+    /// Updates live as the simulation advances because the buffers are sampled
+    /// once per applied step. Thin rendering glue over the unit-tested buffers.
+    fn debug_history_plots(&self, ui: &mut egui::Ui) {
+        use egui_plot::{Legend, Plot};
+
+        egui::CollapsingHeader::new("History")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.label("Population by role");
+                Plot::new("history_population")
+                    .height(140.0)
+                    .legend(Legend::default())
+                    .show(ui, |plot_ui| {
+                        plot_ui.line(series_line("producers", &self.history.producers));
+                        plot_ui.line(series_line("consumers", &self.history.consumers));
+                        plot_ui.line(series_line("decomposers", &self.history.decomposers));
+                    });
+
+                ui.label("Energy by pool");
+                Plot::new("history_energy")
+                    .height(140.0)
+                    .legend(Legend::default())
+                    .show(ui, |plot_ui| {
+                        plot_ui.line(series_line("living", &self.history.living_energy));
+                        plot_ui.line(series_line("carcass", &self.history.carcass_energy));
+                        plot_ui.line(series_line("dissipated", &self.history.dissipated_energy));
+                    });
+
+                ui.label("Nutrient by pool");
+                Plot::new("history_nutrient")
+                    .height(140.0)
+                    .legend(Legend::default())
+                    .show(ui, |plot_ui| {
+                        plot_ui.line(series_line("available", &self.history.nutrient_available));
+                        plot_ui.line(series_line("living", &self.history.nutrient_living));
+                        plot_ui.line(series_line("carcasses", &self.history.nutrient_carcasses));
+                    });
             });
     }
 
@@ -754,6 +930,101 @@ impl WorldView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ring_buffer_evicts_oldest_past_capacity() {
+        let mut ring: RingBuffer<i32> = RingBuffer::new(3);
+        ring.push(1);
+        ring.push(2);
+        ring.push(3);
+        ring.push(4); // evicts 1
+        let samples: Vec<i32> = ring.iter().copied().collect();
+        assert_eq!(samples, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn ring_buffer_len_caps_at_capacity() {
+        let mut ring: RingBuffer<i32> = RingBuffer::new(2);
+        assert_eq!(ring.len(), 0);
+        ring.push(1);
+        assert_eq!(ring.len(), 1);
+        ring.push(2);
+        assert_eq!(ring.len(), 2);
+        // Pushing far past capacity must keep len pinned — memory stays bounded.
+        for n in 3..1000 {
+            ring.push(n);
+        }
+        assert_eq!(ring.len(), 2);
+    }
+
+    #[test]
+    fn history_sample_appends_one_point_per_metric() {
+        let world = World::from_recipe(&default_recipe(), 42);
+        let mut history = History::new(100);
+        assert_eq!(history.len(), 0);
+        history.sample(&world);
+        assert_eq!(history.len(), 1, "one sample call appends one point per series");
+        history.sample(&world);
+        assert_eq!(history.len(), 2);
+    }
+
+    #[test]
+    fn apply_steps_samples_history_once_per_applied_step() {
+        let world = World::from_recipe(&default_recipe(), 7);
+        let mut app = ExplorersApp::new(world, 0);
+        assert_eq!(app.history.len(), 0);
+
+        app.apply_steps(5);
+        assert_eq!(app.history.len(), 5, "five applied steps yield five samples");
+
+        // A single-step (as the paused Step button drives) adds exactly one.
+        app.apply_steps(1);
+        assert_eq!(app.history.len(), 6);
+
+        // Zero steps (the running clock between intervals) add nothing.
+        app.apply_steps(0);
+        assert_eq!(app.history.len(), 6);
+    }
+
+    #[test]
+    fn history_stays_bounded_over_a_long_run() {
+        let mut world = World::from_recipe(&default_recipe(), 7);
+        let capacity = 16;
+        let mut history = History::new(capacity);
+        // Sample far more often than the capacity: length must pin at capacity
+        // so memory stays bounded over an arbitrarily long run.
+        for _ in 0..1000 {
+            world.step();
+            history.sample(&world);
+        }
+        assert_eq!(history.len(), capacity);
+    }
+
+    #[test]
+    fn history_sample_records_world_aggregates() {
+        let world = World::from_recipe(&default_recipe(), 7);
+        let breakdown = RoleBreakdown::count(world.agents());
+        let budget = compute_energy_budget(&world);
+
+        let mut history = History::new(100);
+        history.sample(&world);
+
+        assert_eq!(
+            history.producers.iter().last().copied(),
+            Some(breakdown.producers as f64),
+            "producer series records the dominant-role count"
+        );
+        let recorded_living = history.living_energy.iter().last().copied().unwrap();
+        assert!(
+            (recorded_living - budget.living_energy as f64).abs() < 1e-3,
+            "living-energy series records the energy-budget pool"
+        );
+        let recorded_nutrient = history.nutrient_available.iter().last().copied().unwrap();
+        assert!(
+            (recorded_nutrient - budget.nutrient_available as f64).abs() < 1e-3,
+            "nutrient-available series records the nutrient pool"
+        );
+    }
 
     fn traits(photosynthetic_absorption: f32, heterotrophy: f32) -> TraitVector {
         TraitVector {

@@ -7,5 +7,6 @@ edition = "2024"
 explorers-sim = { path = "../explorers-sim" }
 eframe = { version = "0.33", default-features = false, features = ["glow", "default_fonts"] }
 egui = "0.33"
+egui_plot = "0.34"
 rand = "0.9"
 serde_json = "1"
