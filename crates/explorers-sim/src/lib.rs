@@ -474,10 +474,6 @@ pub struct World {
     next_seq: u64,
     ledger: energy_ledger::EnergyLedger,
     nutrient_ledger: nutrient_ledger::NutrientLedger,
-    /// Per-agent distance moved during the previous tick's movement phase
-    /// (keyed by agent id). Movement is the final phase, running after wear,
-    /// so a tick's mobility use is folded into the *next* tick's mobility wear.
-    last_move_distance: std::collections::HashMap<u64, f32>,
 }
 
 impl World {
@@ -568,7 +564,6 @@ impl World {
             next_seq: 0,
             ledger: energy_ledger::EnergyLedger::new(),
             nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
-            last_move_distance: std::collections::HashMap::new(),
         }
     }
 
@@ -620,7 +615,6 @@ impl World {
                 next_seq: 0,
                 ledger: energy_ledger::EnergyLedger::new(),
                 nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
-                last_move_distance: std::collections::HashMap::new(),
             }
         } else if let Some(ref distribution) = recipe.initial_distribution {
             Self::new(recipe.parameters.clone(), distribution.clone(), seed)
@@ -755,7 +749,33 @@ impl World {
             self.agents.push(child);
         }
 
-        // 7. Wear: collect per-agent usage from earlier phases
+        // 7. Move agents. Movement is the final repositioning phase: it runs
+        // after all energy-affecting phases (so movement energy is bounded by
+        // what remains) but before wear and the death check, so this tick's own
+        // movement is charged as mobility use-wear within the same tick. Wear and
+        // the death check are autonomous (they don't read the spatial grid), so
+        // positions staying stable across them is unaffected by moving first.
+        let mut move_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
+        for (i, a) in self.agents.iter().enumerate() {
+            move_grid.insert(i as u64, a.position);
+        }
+        let move_result = phase::move_agents(
+            &mut self.agents, &self.carcasses, &move_grid, &self.params, &mut self.rng,
+        );
+        self.dissipated_energy += move_result.dissipated;
+        // move_result.move_distance is aligned by index with self.agents at move
+        // time; no agents are added or removed between move and wear, so the
+        // index -> id mapping is stable.
+        let move_distance_by_id: std::collections::HashMap<u64, f32> = self.agents.iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                let dist = move_result.move_distance[i];
+                (dist > 0.0).then_some((a.id, dist))
+            })
+            .collect();
+        events.extend(move_result.events);
+
+        // 8. Wear: collect per-agent usage from earlier phases
         let mut usage_data: std::collections::HashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]> = std::collections::HashMap::new();
         // Autotrophy usage: energy captured via photosynthesis
         for ev in events.iter().filter(|e| e.kind == event::EventKind::Photosynthesized) {
@@ -767,22 +787,15 @@ impl World {
             let entry = usage_data.entry(ev.source).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
             entry[1] += ev.energy_delta;
         }
-        // Mobility usage: distance moved during the *previous* tick's movement
-        // phase. Movement is the final phase (runs after wear) so an agent's
-        // movement this tick cannot be folded in until the next tick. This keeps
-        // the phase contract clean: wear stays in its phase, movement stays last.
-        for agent in self.agents.iter() {
-            if let Some(&dist) = self.last_move_distance.get(&agent.id) {
-                if dist > 0.0 {
-                    let entry = usage_data.entry(agent.id).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
-                    entry[2] += dist;
-                }
-            }
+        // Mobility usage: distance moved during this tick's movement phase.
+        for (&id, &dist) in &move_distance_by_id {
+            let entry = usage_data.entry(id).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
+            entry[2] += dist;
         }
         let wear_events = phase::apply_wear(&mut self.agents, &self.params, &usage_data);
         events.extend(wear_events);
 
-        // 8. Check death thresholds
+        // 9. Check death thresholds
         let (death_events, threshold_carcasses, death_dissipated) = phase::check_death_thresholds(
             &mut self.agents, &self.params,
         );
@@ -795,29 +808,6 @@ impl World {
 
         // Remove dead agents (those with reserve <= 0 or structure below threshold)
         self.agents.retain(|a| a.reserve > 0.0);
-
-        // 9. Move agents (runs last: all phases resolve at stable positions,
-        // movement energy is bounded by what remains after all other costs)
-        let mut move_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
-        for (i, a) in self.agents.iter().enumerate() {
-            move_grid.insert(i as u64, a.position);
-        }
-        let move_result = phase::move_agents(
-            &mut self.agents, &self.carcasses, &move_grid, &self.params, &mut self.rng,
-        );
-        self.dissipated_energy += move_result.dissipated;
-
-        // Carry this tick's per-agent movement distance forward so it becomes
-        // next tick's mobility use-wear (movement runs after wear by design).
-        self.last_move_distance.clear();
-        for (i, agent) in self.agents.iter().enumerate() {
-            let dist = move_result.move_distance[i];
-            if dist > 0.0 {
-                self.last_move_distance.insert(agent.id, dist);
-            }
-        }
-
-        events.extend(move_result.events);
 
         // --- Energy ledger: record all flows for conservation verification ---
         // Built from event data and state snapshots, after all phases complete.
@@ -1456,8 +1446,8 @@ mod tests {
     #[test]
     fn use_dependent_wear_mobility_through_world_step() {
         // A mobile agent that moves should accumulate extra mobility wear beyond
-        // baseline. Movement is the final phase (after wear), so the distance
-        // moved on a given tick is folded into the *next* tick's mobility usage.
+        // baseline. Movement runs before wear within each tick, so the distance
+        // moved on a given tick is folded into THAT tick's mobility usage.
         let params = WorldParameters {
             solar_flux_magnitude: 0.0, // no photosynthesis
             base_metabolic_rate: 0.5, // small drain so reserve is retained, not dumped to repro
@@ -1493,11 +1483,9 @@ mod tests {
             repro_reserve: 0.0,
         });
 
-        // First tick: agent moves (movement is phase 9); wear in this tick is
-        // baseline-only because the move hasn't happened when wear is applied.
+        // Two ticks: each tick's move is charged as mobility use-wear that same
+        // tick (move runs before wear), so wear[2] exceeds two ticks of baseline.
         world.step();
-        // Second tick: last tick's movement distance is folded into mobility usage,
-        // so wear[2] exceeds two ticks of baseline.
         world.step();
 
         let agent = world.agents().iter().find(|a| a.id == 0)
@@ -1506,6 +1494,60 @@ mod tests {
         let baseline_only = 2.0 * 0.01 * 0.5;
         assert!(agent.wear[2] > baseline_only,
             "mobility wear ({}) should exceed two ticks of baseline ({baseline_only}) due to movement use-wear",
+            agent.wear[2]);
+    }
+
+    #[test]
+    fn movement_wear_charged_in_same_tick() {
+        // With the tick loop ordered move -> wear -> check death thresholds, an
+        // agent's movement on a given tick is folded into THAT tick's mobility
+        // use-wear (no one-tick lag). After a single step in which a mobile agent
+        // moves a nonzero distance, wear[2] exceeds one tick of baseline-only wear.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0, // no photosynthesis
+            base_metabolic_rate: 0.5,
+            growth_efficiency: 0.0,
+            wear_rate: 0.01,
+            use_wear_rate: 0.02,
+            wear_degradation_steepness: 1.0,
+            repair_decay: 0.0, // no repair
+            movement_cost_coefficient: 0.0, // free movement so the agent survives
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                mobility: 0.5,
+                ..zero_traits()
+            },
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        });
+
+        // A single tick: the agent moves and the move-wear is charged this tick.
+        world.step();
+
+        let agent = world.agents().iter().find(|a| a.id == 0)
+            .expect("mobile agent should survive one tick");
+        // One tick of baseline-only wear: wear_rate * mobility = 0.01 * 0.5.
+        // Under the old one-tick lag this is exactly what wear[2] would be after
+        // the first step; charging the move this tick pushes it strictly higher.
+        let baseline_only = 0.01 * 0.5;
+        assert!(agent.wear[2] > baseline_only,
+            "mobility wear ({}) should exceed one tick of baseline ({baseline_only}) because this tick's move is charged this tick",
             agent.wear[2]);
     }
 
@@ -2252,10 +2294,11 @@ mod tests {
     }
 
     #[test]
-    fn wear_applied_before_move_agent_dies_without_moving() {
-        // An agent with high mobility and pre-existing wear near the death
-        // threshold should die from wear accumulation + death check BEFORE
-        // movement runs. No Moved event should appear for this agent.
+    fn dying_agent_takes_final_step_before_death_check() {
+        // With the tick loop ordered move -> wear -> check death thresholds, a
+        // mobile agent destined to die from wear this tick takes one final step
+        // before the death check. The agent still dies; its final move only
+        // repositions a corpse no subsequent tick will read, so it is immaterial.
         let params = WorldParameters {
             solar_flux_magnitude: 0.0,  // no photosynthesis income
             base_metabolic_rate: 0.0,   // no metabolism drain
@@ -2311,7 +2354,7 @@ mod tests {
 
         world.step();
 
-        // The agent should have died (death check runs before move)
+        // The agent should still have died from structure below the threshold.
         let died_events: Vec<_> = world.event_log().by_kind(&event::EventKind::Died)
             .into_iter()
             .filter(|e| e.source == agent_id)
@@ -2319,13 +2362,19 @@ mod tests {
         assert!(!died_events.is_empty(),
             "agent should have died from structure below death threshold");
 
-        // No Moved event should exist for this agent — it died before movement
+        // The agent is removed from the living population after the death check.
+        assert!(world.agents().iter().all(|a| a.id != agent_id),
+            "dead agent should be removed from the living population");
+
+        // It took one final step before the death check: the move phase now runs
+        // ahead of wear/death, so a Moved event for the dying agent is expected
+        // (and immaterial — it only repositions a corpse).
         let moved_events: Vec<_> = world.event_log().by_kind(&event::EventKind::Moved)
             .into_iter()
             .filter(|e| e.source == agent_id)
             .collect();
-        assert!(moved_events.is_empty(),
-            "dead agent should not have a Moved event — wear and death check must run before move");
+        assert!(!moved_events.is_empty(),
+            "dying agent should take one final step before the death check (move runs before wear/death)");
     }
 }
 
