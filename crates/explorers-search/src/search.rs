@@ -175,6 +175,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         nutrient_grid_cell_size: 10.0,
         growth_retention_multiplier: v(29) as f32,
         offspring_structure_fraction: v(30) as f32,
+        asexual_propensity_maintenance_cost: 0.01,
     };
 
     let dist = InitialDistribution {

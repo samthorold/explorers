@@ -136,6 +136,7 @@ fn default_consumption_contact_half_saturation() -> f32 { 3.0 }
 fn default_nutrient_grid_cell_size() -> f32 { 10.0 }
 fn default_growth_retention_multiplier() -> f32 { 2.0 }
 fn default_offspring_structure_fraction() -> f32 { 0.2 }
+fn default_asexual_propensity_maintenance_cost() -> f32 { 0.01 }
 
 /// Split a per-agent initial energy budget into a (reserve, structure, heat)
 /// triple using the same reserve/structure provisioning that reproduction
@@ -254,6 +255,16 @@ pub struct WorldParameters {
     /// degenerately structure-zero at tick 0.
     #[serde(default = "default_offspring_structure_fraction")]
     pub offspring_structure_fraction: f32,
+    /// Per-tick energy cost of maintaining asexual-reproduction machinery, paid
+    /// in the metabolise phase whether or not the trait fires. Charged
+    /// superlinearly via `maintenance_cost_exponent`, like the other
+    /// maintenance costs. This is deliberately the only reproduction trait
+    /// with a standing maintenance cost: it realises "machinery, not fallback"
+    /// economically, keeping a directional selection gradient on
+    /// `asexual_propensity` alive even when the trait rarely fires — without
+    /// any threshold or gate.
+    #[serde(default = "default_asexual_propensity_maintenance_cost")]
+    pub asexual_propensity_maintenance_cost: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1067,6 +1078,7 @@ mod tests {
 
     fn test_params() -> WorldParameters {
         WorldParameters {
+            asexual_propensity_maintenance_cost: 0.0,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -1632,6 +1644,7 @@ mod tests {
     /// Helper: conservation params with all phases active.
     fn conservation_params() -> WorldParameters {
         WorldParameters {
+            asexual_propensity_maintenance_cost: 0.0,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,

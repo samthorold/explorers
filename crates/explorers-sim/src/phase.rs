@@ -158,6 +158,7 @@ pub fn metabolise(
             + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
             + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
             + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
+            + agent.traits.asexual_propensity.powf(exp) * params.asexual_propensity_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
 
         agent.reserve -= cost;
@@ -195,6 +196,7 @@ pub fn grow(
             + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
             + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
             + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
+            + agent.traits.asexual_propensity.powf(exp) * params.asexual_propensity_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
         let retention = metabolic_cost * params.growth_retention_multiplier;
         let surplus = (agent.reserve - retention).max(0.0);
@@ -1307,6 +1309,7 @@ mod tests {
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
             offspring_structure_fraction: 0.2,
+            asexual_propensity_maintenance_cost: 0.0,
         }
     }
 
@@ -1653,6 +1656,111 @@ mod tests {
     }
 
     #[test]
+    fn metabolise_charges_asexual_propensity_maintenance() {
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            asexual_propensity_maintenance_cost: 2.0,
+            maintenance_cost_exponent: 1.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            asexual_propensity: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+
+        let (events, dissipated) = metabolise(&mut agents, &params);
+
+        // cost = 0.5^1 * 2.0 = 1.0
+        assert!((events[0].energy_delta - 1.0).abs() < 1e-6);
+        assert!((agents[0].reserve - 9.0).abs() < 1e-6);
+        assert!((dissipated - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn metabolise_asexual_propensity_maintenance_is_superlinear() {
+        // The cost is raised to maintenance_cost_exponent before scaling,
+        // matching the other maintenance terms.
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            asexual_propensity_maintenance_cost: 2.0,
+            maintenance_cost_exponent: 2.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            asexual_propensity: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+
+        let (events, _) = metabolise(&mut agents, &params);
+
+        // cost = 0.5^2 * 2.0 = 0.5  (vs 1.0 if it were linear)
+        assert!((events[0].energy_delta - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn metabolise_higher_asexual_propensity_costs_strictly_more() {
+        // Selection gradient: more machinery, more standing cost.
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            asexual_propensity_maintenance_cost: 1.0,
+            maintenance_cost_exponent: 2.0,
+            ..test_params()
+        };
+        let mut low = vec![make_agent(
+            1,
+            (0.0, 0.0),
+            10.0,
+            TraitVector {
+                asexual_propensity: 0.2,
+                ..zero_traits()
+            },
+        )];
+        let mut high = vec![make_agent(
+            2,
+            (0.0, 0.0),
+            10.0,
+            TraitVector {
+                asexual_propensity: 0.8,
+                ..zero_traits()
+            },
+        )];
+
+        let (low_events, _) = metabolise(&mut low, &params);
+        let (high_events, _) = metabolise(&mut high, &params);
+
+        assert!(high_events[0].energy_delta > low_events[0].energy_delta);
+        assert!(high[0].reserve < low[0].reserve);
+    }
+
+    #[test]
+    fn metabolise_charges_no_asexual_maintenance_when_cost_zero() {
+        // Zero cost must leave behaviour unchanged: propensity is free.
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            asexual_propensity_maintenance_cost: 0.0,
+            maintenance_cost_exponent: 2.0,
+            ..test_params()
+        };
+        let mut agents = vec![make_agent(
+            1,
+            (0.0, 0.0),
+            10.0,
+            TraitVector {
+                asexual_propensity: 0.9,
+                ..zero_traits()
+            },
+        )];
+
+        let (events, dissipated) = metabolise(&mut agents, &params);
+
+        assert!((events[0].energy_delta - 0.0).abs() < 1e-6);
+        assert!((agents[0].reserve - 10.0).abs() < 1e-6);
+        assert!((dissipated - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn metabolise_charges_structure_maintenance() {
         let params = WorldParameters {
             base_metabolic_rate: 0.0,
@@ -1717,6 +1825,33 @@ mod tests {
         // and surplus would be 0, so no growth would occur and reserve stays at 10.0.
         // With mobility_maintenance_cost (1.0), retention is 2.0, surplus is 8.0,
         // and with kappa=1.0 and growth_efficiency=1.0, all goes to structure.
+        assert!((agents[0].reserve - 2.0).abs() < 1e-6, "reserve should equal retention");
+        assert!((agents[0].structure - 8.0).abs() < 1e-6, "surplus should become structure");
+    }
+
+    #[test]
+    fn grow_retention_reflects_asexual_propensity_maintenance() {
+        // Grow's retention buffer must account for the asexual_propensity
+        // maintenance the next metabolise tick will charge, mirroring the
+        // metabolise cost exactly so growth never over-allocates surplus.
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            asexual_propensity_maintenance_cost: 1.0,
+            maintenance_cost_exponent: 1.0,
+            growth_efficiency: 1.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            asexual_propensity: 1.0,
+            kappa: 1.0,
+            ..zero_traits()
+        };
+        // metabolic_cost = 1.0^1 * 1.0 = 1.0; retention = 1.0 * 2 = 2.0
+        // surplus = 10.0 - 2.0 = 8.0
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+
+        let (_events, _dissipated) = grow(&mut agents, &params);
+
         assert!((agents[0].reserve - 2.0).abs() < 1e-6, "reserve should equal retention");
         assert!((agents[0].structure - 8.0).abs() < 1e-6, "surplus should become structure");
     }

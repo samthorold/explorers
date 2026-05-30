@@ -131,6 +131,7 @@ mod tests {
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
             offspring_structure_fraction: 0.2,
+            asexual_propensity_maintenance_cost: 0.0,
         }
     }
 
