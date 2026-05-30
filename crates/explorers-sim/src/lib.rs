@@ -485,6 +485,19 @@ impl Agent {
         self.nutrient + self.repro_nutrient + self.bound_nutrient(params)
     }
 
+    /// Credit acquired nutrient, split by kappa, mirroring the energy allocation.
+    /// The kappa share feeds the free store; the (1 - kappa) share feeds the
+    /// reproductive-nutrient earmark. The split is route-agnostic (ADR-0004): it
+    /// applies to every unit of nutrient acquired — autotrophic pool uptake
+    /// (flow 2) and the nutrient ingested by consumption (flow 3) alike — so a
+    /// heterotroph funds reproduction from ingested biomass exactly as a producer
+    /// funds it from absorbed nutrient.
+    pub fn credit_nutrient(&mut self, amount: f32) {
+        let kappa = self.traits.kappa.clamp(0.0, 1.0);
+        self.nutrient += amount * kappa;
+        self.repro_nutrient += amount * (1.0 - kappa);
+    }
+
     /// Returns the nominal trait value for a given functional trait index (0–5).
     pub fn nominal_functional_trait(&self, ft_index: usize) -> f32 {
         self.traits.get(FUNCTIONAL_TRAIT_INDICES[ft_index])
