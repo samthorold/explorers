@@ -937,6 +937,17 @@ pub fn resolve_reproduction(
         let tick_dissipated = investment - offspring_total_energy;
         dissipated += tick_dissipated;
 
+        // Per-offspring reserve/structure split. The structure share of the
+        // per-offspring energy is converted via growth_efficiency (same lossy
+        // conversion as in-life growth); the unconverted remainder dissipates
+        // as heat. Reserve share is the complement of the structure share.
+        let struct_fraction = params.offspring_structure_fraction.clamp(0.0, 1.0);
+        let structure_energy_share = energy_per_offspring * struct_fraction;
+        let offspring_structure = structure_energy_share * params.growth_efficiency;
+        let structure_heat_per = structure_energy_share - offspring_structure;
+        let offspring_reserve = energy_per_offspring - structure_energy_share;
+        dissipated += structure_heat_per * offspring_count as f32;
+
         // Nutrient donation from single parent
         let nutrient_donated = parent_nutrient
             * (investment / (parent_reserve + parent_repro).max(1e-10)).min(0.5);
@@ -982,8 +993,8 @@ pub fn resolve_reproduction(
             let child = Agent {
                 id: next_id,
                 position: pos,
-                reserve: energy_per_offspring,
-                structure: 0.0,
+                reserve: offspring_reserve,
+                structure: offspring_structure,
                 nutrient: nutrient_per_offspring,
                 traits: child_traits,
                 contact_time: 0,
@@ -1140,6 +1151,15 @@ pub fn resolve_reproduction(
         let tick_dissipated = total_investment - offspring_total_energy;
         dissipated += tick_dissipated;
 
+        // Per-offspring reserve/structure split (same lossy-growth conversion
+        // as asexual reproduction and in-life growth).
+        let struct_fraction = params.offspring_structure_fraction.clamp(0.0, 1.0);
+        let structure_energy_share = energy_per_offspring * struct_fraction;
+        let offspring_structure = structure_energy_share * params.growth_efficiency;
+        let structure_heat_per = structure_energy_share - offspring_structure;
+        let offspring_reserve = energy_per_offspring - structure_energy_share;
+        dissipated += structure_heat_per * offspring_count as f32;
+
         // Nutrient donation: each parent donates proportional to investment fraction
         let nutrient_a = a_nutrient * (invest_a / (a_reserve + a_repro).max(1e-10)).min(0.5);
         let nutrient_b = b_nutrient * (invest_b / (b_reserve + b_repro).max(1e-10)).min(0.5);
@@ -1204,8 +1224,8 @@ pub fn resolve_reproduction(
             let child = Agent {
                 id: next_id,
                 position: pos,
-                reserve: energy_per_offspring,
-                structure: 0.0,
+                reserve: offspring_reserve,
+                structure: offspring_structure,
                 nutrient: nutrient_per_offspring,
                 traits: child_traits,
                 contact_time: 0,
@@ -1286,6 +1306,7 @@ mod tests {
             consumption_contact_half_saturation: 0.0,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
+            offspring_structure_fraction: 0.2,
         }
     }
 
@@ -1745,6 +1766,7 @@ mod tests {
             movement_cost_coefficient: 0.0,
             growth_efficiency: 1.0,
             growth_retention_multiplier: 5.0,
+            offspring_structure_fraction: 0.2,
             ..test_params()
         };
         let traits = TraitVector {
@@ -3023,11 +3045,14 @@ mod tests {
     #[test]
     fn reproduction_two_compatible_agents_produce_offspring_with_correct_energy() {
         use rand::SeedableRng;
+        // This test focuses on the reproduction_efficiency loss only;
+        // structure provisioning is exercised by the conservation tests.
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
+            offspring_structure_fraction: 0.0,
             ..test_params()
         };
         let traits = TraitVector {
@@ -3205,6 +3230,7 @@ mod tests {
             reproduction_energy_threshold: 10.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
+            offspring_structure_fraction: 0.0,
             ..test_params()
         };
         let traits = TraitVector {
@@ -3376,6 +3402,7 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
+            offspring_structure_fraction: 0.0,
             ..test_params()
         };
         // High fecundity -> more offspring
@@ -3581,6 +3608,7 @@ mod tests {
             reproduction_efficiency: 0.5, // 50% efficient
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
+            offspring_structure_fraction: 0.0,
             ..test_params()
         };
         let traits = TraitVector {
@@ -5173,5 +5201,201 @@ mod tests {
         assert!((total_drained - total_out).abs() < 1e-5,
             "energy conservation: drained {total_drained} != gained {total_gained} + dissipated {}",
             result.dissipated);
+    }
+
+    /// Conservation equation for asexual reproduction with structure provisioning:
+    ///
+    ///   parent_committed_investment
+    ///     = sum(offspring.reserve)
+    ///     + sum(offspring.structure)
+    ///     + result.dissipated
+    ///
+    /// where `result.dissipated` accounts for both the reproduction-efficiency
+    /// loss (parents → offspring transfer) and the growth-efficiency loss
+    /// (offspring energy → offspring structure conversion).
+    #[test]
+    fn asexual_reproduction_conserves_energy_with_structure_provisioning() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.7,
+            growth_efficiency: 0.8,
+            offspring_structure_fraction: 0.25,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 3.0,
+            asexual_propensity: 1.0,
+            ..zero_traits()
+        };
+        let initial_repro_reserve = 20.0_f32;
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: initial_repro_reserve,
+        }];
+        let dead_ids = std::collections::HashSet::new();
+        let grid = SpatialGrid::new(100.0, 10.0);
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty(), "should produce offspring");
+
+        let offspring_reserve_sum: f32 = result.offspring.iter().map(|c| c.reserve).sum();
+        let offspring_structure_sum: f32 = result.offspring.iter().map(|c| c.structure).sum();
+
+        // Every offspring must be born with strictly positive structure.
+        for child in &result.offspring {
+            assert!(child.structure > 0.0,
+                "newborn structure must be > 0, got {}", child.structure);
+            assert!(child.reserve > 0.0,
+                "newborn reserve must be > 0, got {}", child.reserve);
+        }
+
+        let committed = initial_repro_reserve;
+        let accounted = offspring_reserve_sum + offspring_structure_sum + result.dissipated;
+        assert!((committed - accounted).abs() < 1e-4,
+            "energy conservation: committed {committed} != reserve {offspring_reserve_sum} + structure {offspring_structure_sum} + dissipated {} (sum {accounted})",
+            result.dissipated);
+    }
+
+    /// Sexual reproduction must observe the same conservation equation:
+    ///
+    ///   invest_a + invest_b
+    ///     = sum(offspring.reserve)
+    ///     + sum(offspring.structure)
+    ///     + result.dissipated
+    #[test]
+    fn sexual_reproduction_conserves_energy_with_structure_provisioning() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_efficiency: 0.6,
+            growth_efficiency: 0.5,
+            offspring_structure_fraction: 0.3,
+            reproductive_compatibility_distance: 5.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            sensing_range_coefficient: 50.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 0.5,
+            kappa: 0.5,
+            fecundity: 4.0,
+            asexual_propensity: 0.0, // force sexual
+            ..zero_traits()
+        };
+        let invest_a = 30.0_f32;
+        let invest_b = 25.0_f32;
+        let mut agents = vec![
+            Agent {
+                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
+                nutrient: 100.0, traits, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: invest_a,
+            },
+            Agent {
+                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
+                nutrient: 100.0, traits, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: invest_b,
+            },
+        ];
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(1, (0.0, 0.0));
+        grid.insert(2, (1.0, 0.0));
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty(), "should produce offspring");
+        for child in &result.offspring {
+            assert!(child.structure > 0.0, "newborn structure > 0");
+            assert!(child.reserve > 0.0, "newborn reserve > 0");
+        }
+
+        let offspring_reserve_sum: f32 = result.offspring.iter().map(|c| c.reserve).sum();
+        let offspring_structure_sum: f32 = result.offspring.iter().map(|c| c.structure).sum();
+        let committed = invest_a + invest_b;
+        let accounted = offspring_reserve_sum + offspring_structure_sum + result.dissipated;
+        assert!((committed - accounted).abs() < 1e-3,
+            "sexual conservation: committed {committed} != reserve {offspring_reserve_sum} + structure {offspring_structure_sum} + dissipated {} (sum {accounted})",
+            result.dissipated);
+    }
+
+    /// Per-offspring structure must scale inversely with fecundity: doubling
+    /// the offspring count from the same parental investment must roughly
+    /// halve per-offspring structure.
+    #[test]
+    fn per_offspring_structure_scales_inversely_with_offspring_count() {
+        use rand::SeedableRng;
+        // Use mutation-free, deterministic setup. We fix the offspring count
+        // by setting fecundity high enough that Poisson rounding is the same
+        // across runs — easier: assert ratio across two configurations.
+        fn run(fecundity: f32, seed: u64) -> (usize, f32) {
+            let params = WorldParameters {
+                reproduction_energy_threshold: 10.0,
+                reproduction_efficiency: 1.0,
+                growth_efficiency: 1.0,
+                offspring_structure_fraction: 0.5,
+                mutation_rate: 0.0,
+                mutation_magnitude: 0.0,
+                ..test_params()
+            };
+            let traits = TraitVector {
+                photosynthetic_absorption: 0.5,
+                kappa: 0.5,
+                fecundity,
+                asexual_propensity: 1.0,
+                ..zero_traits()
+            };
+            let mut agents = vec![Agent {
+                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
+                nutrient: 1000.0, traits, contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 100.0,
+            }];
+            let dead_ids = std::collections::HashSet::new();
+            let grid = SpatialGrid::new(100.0, 10.0);
+            let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
+            let result = resolve_reproduction(
+                &mut agents, &dead_ids, &grid, &params, &mut rng,
+            );
+            let n = result.offspring.len();
+            let per = if n > 0 { result.offspring[0].structure } else { 0.0 };
+            (n, per)
+        }
+
+        let (n_low, per_low) = run(2.0, 1);
+        let (n_high, per_high) = run(20.0, 1);
+
+        assert!(n_low > 0 && n_high > 0, "both runs should yield offspring");
+        assert!(n_high > n_low, "higher fecundity should yield more offspring (got {n_low} vs {n_high})");
+
+        // Total structure across offspring should be roughly equal between
+        // the two configs (same investment, same efficiencies). Therefore
+        // per-offspring structure ratio ~= offspring-count inverse ratio.
+        let total_low = per_low * n_low as f32;
+        let total_high = per_high * n_high as f32;
+        // Identical investment and efficiencies → totals equal up to f32 noise.
+        assert!((total_low - total_high).abs() < 1e-3,
+            "totals should match: {total_low} vs {total_high}");
+        assert!(per_high < per_low,
+            "per-offspring structure should fall with fecundity (got {per_low} -> {per_high})");
     }
 }

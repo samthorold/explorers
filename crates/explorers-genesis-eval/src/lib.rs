@@ -591,6 +591,7 @@ mod tests {
             consumption_contact_half_saturation: 0.001,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
+            offspring_structure_fraction: 0.2,
         }
     }
 
@@ -810,6 +811,7 @@ mod tests {
             consumption_contact_half_saturation: 0.001,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
+            offspring_structure_fraction: 0.2,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {

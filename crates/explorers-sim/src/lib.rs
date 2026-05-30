@@ -135,6 +135,25 @@ fn default_maintenance_cost_exponent() -> f32 { 2.0 }
 fn default_consumption_contact_half_saturation() -> f32 { 3.0 }
 fn default_nutrient_grid_cell_size() -> f32 { 10.0 }
 fn default_growth_retention_multiplier() -> f32 { 2.0 }
+fn default_offspring_structure_fraction() -> f32 { 0.2 }
+
+/// Split a per-agent initial energy budget into a (reserve, structure, heat)
+/// triple using the same reserve/structure provisioning that reproduction
+/// applies to newborns: a fraction `offspring_structure_fraction` of the
+/// budget is committed to structure via a lossy `growth_efficiency`
+/// conversion; the rest becomes reserve. Heat is the unconverted remainder.
+/// Conservation: reserve + structure + heat = budget.
+pub fn provision_initial_reserve_structure(
+    budget: f32,
+    params: &WorldParameters,
+) -> (f32, f32, f32) {
+    let frac = params.offspring_structure_fraction.clamp(0.0, 1.0);
+    let structure_share = budget * frac;
+    let structure = structure_share * params.growth_efficiency;
+    let heat = structure_share - structure;
+    let reserve = budget - structure_share;
+    (reserve, structure, heat)
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldParameters {
@@ -224,6 +243,17 @@ pub struct WorldParameters {
     /// Default 2.0 preserves historical behaviour.
     #[serde(default = "default_growth_retention_multiplier")]
     pub growth_retention_multiplier: f32,
+    /// Fraction of each offspring's per-offspring energy share (after
+    /// reproduction_efficiency loss) that is committed to structure rather
+    /// than reserve at birth. The structure commitment is converted from
+    /// energy via `growth_efficiency` (same lossy conversion as in-life
+    /// growth), with the unconverted remainder dissipated as heat. The
+    /// remaining `(1 - offspring_structure_fraction)` share becomes the
+    /// newborn's starting reserve. Default 0.2 leaves most of the
+    /// investment as metabolic fuel while ensuring newborns are not
+    /// degenerately structure-zero at tick 0.
+    #[serde(default = "default_offspring_structure_fraction")]
+    pub offspring_structure_fraction: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -474,6 +504,8 @@ impl World {
             })
             .collect();
 
+        let (seed_reserve, seed_structure, seed_heat) =
+            provision_initial_reserve_structure(distribution.initial_energy_per_agent, &params);
         let agents = (0..pop_size)
             .map(|id| {
                 let x = pos_dist.sample(&mut rng);
@@ -482,8 +514,8 @@ impl World {
                 Agent {
                     id: id as u64,
                     position: (x, y),
-                    reserve: distribution.initial_energy_per_agent,
-                    structure: 0.0,
+                    reserve: seed_reserve,
+                    structure: seed_structure,
                     nutrient: 0.0,
                     traits: TraitVector {
                         photosynthetic_absorption: centroid.photosynthetic_absorption
@@ -507,11 +539,12 @@ impl World {
             params.nutrient_grid_cell_size,
             params.initial_nutrient_pool,
         );
+        let initial_dissipation = seed_heat * pop_size as f32;
         Self {
             params,
             agents,
             carcasses: Vec::new(),
-            dissipated_energy: 0.0,
+            dissipated_energy: initial_dissipation,
             total_solar_input: 0.0,
             nutrient_grid,
             seed,
@@ -533,19 +566,25 @@ impl World {
             let params = recipe.parameters.clone();
             let rng = ChaCha8Rng::seed_from_u64(seed);
             let pop_size = agents.len();
+            let mut initial_dissipation = 0.0_f32;
             let sim_agents: Vec<Agent> = agents
                 .iter()
                 .enumerate()
-                .map(|(i, spec)| Agent {
-                    id: i as u64,
-                    position: spec.position,
-                    reserve: spec.reserve,
-                    structure: 0.0,
-                    nutrient: spec.nutrient,
-                    traits: spec.traits,
-                    contact_time: 0,
-                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                    repro_reserve: 0.0,
+                .map(|(i, spec)| {
+                    let (reserve, structure, heat) =
+                        provision_initial_reserve_structure(spec.reserve, &params);
+                    initial_dissipation += heat;
+                    Agent {
+                        id: i as u64,
+                        position: spec.position,
+                        reserve,
+                        structure,
+                        nutrient: spec.nutrient,
+                        traits: spec.traits,
+                        contact_time: 0,
+                        wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                        repro_reserve: 0.0,
+                    }
                 })
                 .collect();
             let nutrient_grid = spatial::NutrientGrid::new(
@@ -557,7 +596,7 @@ impl World {
                 params,
                 agents: sim_agents,
                 carcasses: Vec::new(),
-                dissipated_energy: 0.0,
+                dissipated_energy: initial_dissipation,
                 total_solar_input: 0.0,
                 nutrient_grid,
                 seed,
@@ -1060,6 +1099,7 @@ mod tests {
             consumption_contact_half_saturation: 0.0,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
+            offspring_structure_fraction: 0.2,
         }
     }
 
@@ -1584,6 +1624,7 @@ mod tests {
             consumption_contact_half_saturation: 0.0,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
+            offspring_structure_fraction: 0.2,
         }
     }
 
@@ -1922,10 +1963,10 @@ mod tests {
             repro_reserve: 50.0,
         });
 
-        let agents_before = world.agents().len();
         world.step();
 
-        assert!(world.agents().len() > agents_before, "reproduction should add offspring");
+        assert!(world.last_tick_births() > 0,
+            "reproduction should produce births this tick");
         world.nutrient_ledger().assert_balanced();
     }
 

@@ -117,6 +117,7 @@ fn main() {
                 consumption_contact_half_saturation: 0.001,
                 nutrient_grid_cell_size: 10.0,
                 growth_retention_multiplier: 2.0,
+            offspring_structure_fraction: 0.2,
             },
             initial_distribution: Some(InitialDistribution {
                 mean_traits: TraitVector {
@@ -427,6 +428,7 @@ mod tests {
                 consumption_contact_half_saturation: 0.001,
                 nutrient_grid_cell_size: 10.0,
                 growth_retention_multiplier: 2.0,
+            offspring_structure_fraction: 0.2,
             },
             InitialDistribution {
                 mean_traits: TraitVector {

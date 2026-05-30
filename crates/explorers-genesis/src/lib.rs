@@ -130,6 +130,7 @@ mod tests {
             consumption_contact_half_saturation: 0.001,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
+            offspring_structure_fraction: 0.2,
         }
     }
 
@@ -174,6 +175,10 @@ mod tests {
             world_extent: 20.0,
             solar_flux_magnitude: 10.0,
             growth_efficiency: 0.5,
+            // Seed agents with all-reserve, no structure, so the small
+            // populations explored here don't collapse identically against
+            // the structural death threshold.
+            offspring_structure_fraction: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {
