@@ -86,6 +86,12 @@ Sessile organisms cannot flee herbivores. Plants have evolved two broad response
 
 From a flows perspective, defense reduces outflow to herbivores at the cost of reduced growth rate. Tolerance maintains growth rate despite higher outflow. Both strategies modify the same flow — biomass to herbivores — but through different mechanisms.
 
+### Pollination
+
+For a sessile organism, finding a mate is the same problem as dispersing offspring: it cannot travel to a partner, so it must move reproductive material through space instead. Pollen is the solution — gametes packaged for transport by wind (anemophily), water (hydrophily), or animal vectors (zoophily), carrying a gamete to a stationary partner that may be metres or kilometres away. Roughly 87% of flowering-plant species rely on animal pollinators (Ollerton et al. 2011); the rest broadcast pollen into wind or water. The mate-finding problem that mobile organisms solve with locomotion, plants solve by investing in the spatial flow of gametes.
+
+This makes mate-finding a *dispersal* problem for the sessile. The reach over which a plant can outcross is set by how far its pollen travels: a wind-pollinated grass exchanges genes across a wide neighbourhood, while a plant with heavy, vector-dependent pollen is reproductively connected only to the near neighbours its pollinators visit. Pollen reach therefore governs gene flow, and with it the spatial scale of reproductive isolation — populations whose pollen cannot bridge the distance between them diverge (the spatial counterpart to genetic divergence; see [Spatial Ecology](spatial-ecology.md), gene flow). Self-pollination and apomixis (asexual seed set) are the fallbacks when no mate is reachable: reproduction without outcrossing, at the cost of recombinational variation.
+
 ### Dispersal
 
 Seeds are the spatial flow mechanism for sessile organisms. Dispersal kernels — the probability distribution of dispersal distance — determine how plant populations spread, colonize gaps, and maintain metapopulation connectivity. Key modes:
@@ -118,7 +124,7 @@ Sessility is the defining systemic feature of plants. A plant cannot relocate in
 
 **Defense must be passive.** Without flight, plants must either deter herbivores (chemical/physical defense), tolerate damage, or rely on neighbors for associational resistance. This creates strong selection for investment in defense — a cost that mobile organisms can partially avoid through escape behavior.
 
-**Reproduction must include dispersal.** A sessile organism that merely buds offspring at its own location condemns them to compete with itself. Seeds, spores, and vegetative runners are solutions to the problem of dispersing progeny away from the parent, where resources may be less depleted and enemy pressure (Janzen-Connell effect) less intense (Janzen 1970, Connell 1971).
+**Reproduction is dispersal — in both directions.** A sessile organism can neither travel to a mate nor escort its offspring to better ground. It solves both by moving reproductive material through space instead: pollen outward to fertilise a stationary partner, and seeds, spores, or vegetative runners outward so progeny do not compete with the parent, where resources may be less depleted and enemy pressure (Janzen-Connell effect) less intense (Janzen 1970, Connell 1971). Mate-finding and offspring placement — distinct problems for a mobile animal, which moves itself for the first and its young for the second — are the same broadcast problem for a plant.
 
 **Environmental modification compounds over time.** Because plants cannot leave, they are subject to — and benefit from — the environmental changes they create. Soil modification, microclimate creation, and litter accumulation all feed back onto the plant that caused them. This makes plants potent ecosystem engineers. A mobile organism moves through environments; a sessile organism transforms its environment.
 
@@ -225,6 +231,7 @@ This is the fundamental reason primary producers are non-negotiable. They are th
 - MacArthur, R.H. & Wilson, E.O. (1967) *The Theory of Island Biogeography*. Princeton University Press.
 - Monteith, J.L. (1972) Solar radiation and productivity in tropical ecosystems. *Journal of Applied Ecology*, 9, 747-766.
 - Nathan, R. & Muller-Landau, H.C. (2000) Spatial patterns of seed dispersal, their determinants and consequences for recruitment. *Trends in Ecology & Evolution*, 15, 278-285.
+- Ollerton, J., Winfree, R. & Tarrant, S. (2011) How many flowering plants are pollinated by animals? *Oikos*, 120, 321-326.
 - Pacala, S.W., Canham, C.D., Saponara, J., Silander, J.A., Kobe, R.K. & Ribbens, E. (1996) Forest models defined by field measurements: estimation, error analysis and dynamics. *Ecological Monographs*, 66, 1-43.
 - Pianka, E.R. (1970) On r- and K-selection. *American Naturalist*, 104, 592-597.
 - Salati, E. & Vose, P.B. (1984) Amazon basin: a system in equilibrium. *Science*, 225, 129-138.
