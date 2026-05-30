@@ -20,6 +20,12 @@ pub struct Event {
     pub target: Option<u64>,
     pub energy_delta: f32,
     pub position: Option<(f32, f32)>,
+    /// Raw interaction fact set only on `Consumed` events: whether the target
+    /// was a carcass (detrital pathway) rather than a living agent. Lets an
+    /// observer-side projection separate the brown (decomposition) food web from
+    /// the green (predation) one without re-deriving carcass state. Always
+    /// `false` for non-`Consumed` events.
+    pub target_was_carcass: bool,
 }
 
 pub struct EventLog {
@@ -89,6 +95,7 @@ mod tests {
             target: None,
             energy_delta: 10.0,
             position: None,
+            target_was_carcass: false,
         }
     }
 
@@ -149,15 +156,15 @@ mod tests {
         let mut log = EventLog::new();
         log.append(Event {
             tick: 1, seq: 0, kind: EventKind::Consumed,
-            source: 10, target: Some(20), energy_delta: 5.0, position: None,
+            source: 10, target: Some(20), energy_delta: 5.0, position: None, target_was_carcass: false,
         }).unwrap();
         log.append(Event {
             tick: 1, seq: 1, kind: EventKind::Reproduced,
-            source: 30, target: None, energy_delta: 8.0, position: None,
+            source: 30, target: None, energy_delta: 8.0, position: None, target_was_carcass: false,
         }).unwrap();
         log.append(Event {
             tick: 2, seq: 2, kind: EventKind::Consumed,
-            source: 40, target: Some(10), energy_delta: 3.0, position: None,
+            source: 40, target: Some(10), energy_delta: 3.0, position: None, target_was_carcass: false,
         }).unwrap();
 
         let for_10: Vec<_> = log.by_agent(10);

@@ -717,6 +717,7 @@ impl World {
                     target: None,
                     energy_delta: 0.0,
                     position: Some(agent.position),
+                    target_was_carcass: false,
                 });
                 agent.reserve = 0.0; // mark for removal
                 agent.repro_reserve = 0.0;
@@ -1046,6 +1047,7 @@ impl World {
             target,
             energy_delta,
             position,
+            target_was_carcass: false,
         });
     }
 }
@@ -2139,7 +2141,7 @@ mod tests {
 
         // Should have processed events without panic
         // Verify trophic_roles() returns a map (may be empty if all initial agents died)
-        let _roles = topo.trophic_roles();
+        let _roles = topo.trophic_roles(world.agents());
         // Computing roles without panic is the key test
 
         // Died events should remove agents from active set
