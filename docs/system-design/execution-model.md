@@ -53,9 +53,9 @@ for each tick:
     resolve drains (coordinated — living and carcass targets)
     mark deaths
     resolve reproduction (coordinated — excluding dead agents)
+    move (all agents)
     wear (all agents)
     check death thresholds (all agents)
-    move (all agents)
     append events to log
     verify energy conservation
 ```
@@ -66,7 +66,7 @@ for each tick:
 
 **Acquire before spend, spend before convert.** The first two phases acquire energy and nutrient. Metabolism spends. Growth converts surplus. This follows the energy flow direction established in the world rules.
 
-**Positions are stable within a tick.** The spatial grid is built once at the start of the tick. All phases — autonomous and coordinated — resolve at the positions agents have held since last tick's movement. Movement is the final phase, repositioning agents for the next tick.
+**Positions are stable within a tick.** The spatial grid is built once at the start of the tick. All position-dependent phases — autonomous and coordinated — resolve at the positions agents have held since last tick's movement. Movement is the final position-determining phase, repositioning agents for the next tick. The two phases that follow it, wear and the death check, read only per-agent state and never the grid, so position stability holds for everything that depends on it.
 
 **Deaths are immediately reflected.** An agent killed by consumption is excluded from reproduction resolution in the same tick. No stale-read problem.
 
@@ -82,15 +82,15 @@ Autonomous phases, in the order they run:
 
 1. **Photosynthesise** — agents with photosynthetic absorption absorb energy from local solar flux into reserve. Light is shared proportionally among co-located producers (spatial grid query). Photosynthesis is unconditional — it is not exclusive with consumption or any other activity. The trait budget makes dual investment expensive, but the physics do not forbid it.
 2. **Absorb nutrients** — agents with autotrophy investment extract nutrient from the local available pool. Uptake depends on the agent's autotrophy trait — the same infrastructure that captures light also extracts nutrients.
-3. **Metabolise** — agents pay fixed energy costs from reserve to heat: base rate, per-trait maintenance (superlinear in each specification trait), structure maintenance. These costs are independent of activity — they are the price of existing with a given trait vector. Somatic maintenance is *not* charged here — it is funded from the kappa-allocated soma share in `grow` (phase 4), where it competes directly with growth and reproduction.
+3. **Metabolise** — agents pay fixed energy costs from reserve to heat: base rate, per-trait maintenance (superlinear in each specification trait), structure maintenance. These costs are independent of activity — they are the price of existing with a given trait vector. Asexual propensity also carries a small superlinear maintenance cost here — the only reproduction trait that does, so that unused asexual machinery is under directional selection toward zero rather than drifting (see [trait space](trait-space.md), *Asexual propensity*). Somatic maintenance is *not* charged here — it is funded from the kappa-allocated soma share in `grow` (phase 4), where it competes directly with growth and reproduction.
 4. **Grow** — agents split reserve surplus by kappa (DEB-style flow allocation). The kappa share funds soma — somatic repair first, then growth (reserve → structure, lossy). The (1 − kappa) share is committed to the agent's reproductive allocation, an earmarked sub-account of reserve that accumulates across ticks until a reproductive event draws it down. The allocation happens to the *flow* of surplus, not to the *stock* of reserve at spend time — once earmarked, the reproductive share is not available to fund subsequent metabolism. Growth itself is automatic — a consequence of being well-fed, not a decision.
-5. **Wear** — agents' functional traits degrade from baseline accumulation and use-dependent wear. Somatic repair — funded earlier in the tick from the kappa-allocated soma share in `grow` (phase 4) — reduces accumulated wear as a whole-organism investment, not a per-trait selective repair. There is no separate "somatic maintenance trait"; the soma-vs-reproduction allocation is governed by the heritable kappa trait. (Runs after coordinated phases so the full tick's activity is accounted for.)
-6. **Check death thresholds** — agents whose reserve has reached zero (starvation) or whose structure has dropped below their complexity-dependent death threshold die, producing carcasses. (Runs after wear.)
-7. **Move** — agents reposition on the physical surface. Movement direction is derived from the agent's traits and current spatial context (nearby agents and carcasses, sensed via the spatial grid). Movement distance is scaled by effective mobility. Movement costs energy from reserve. (Runs last — movement is an investment in next tick's positioning.)
+5. **Move** — agents reposition on the physical surface. Movement direction is derived from the agent's traits and current spatial context (nearby agents and carcasses, sensed via the spatial grid). Movement distance is scaled by effective mobility. Movement costs energy from reserve. (Runs after all position-dependent phases, so they resolve at stable positions; runs *before* wear so that this tick's movement is charged as mobility use-wear within the same tick.)
+6. **Wear** — agents' functional traits degrade from baseline accumulation and use-dependent wear, including the distance moved in this tick's `move` phase. Somatic repair — funded earlier in the tick from the kappa-allocated soma share in `grow` (phase 4) — reduces accumulated wear as a whole-organism investment, not a per-trait selective repair. There is no separate "somatic maintenance trait"; the soma-vs-reproduction allocation is governed by the heritable kappa trait. (Runs after move so the full tick's activity — movement included — is accounted for. Wear reads only per-agent state, never the spatial grid, so running it after move does not disturb position stability.)
+7. **Check death thresholds** — agents whose reserve has reached zero (starvation) or whose structure has dropped below their complexity-dependent death threshold die, producing carcasses. (Runs last, after wear, so that a tick's own movement-wear can carry an agent over its death threshold within the same tick.)
 
-The ordering of phases 1–4 follows energy flow direction: acquire before spend, spend before convert. Wear and death checks run after coordinated phases so that the full tick's activity is accounted for before evaluating degradation and survival. Movement runs last so that all phases in the current tick resolve at stable positions, and the energy spent on movement is bounded by what remains after all other costs.
+The ordering of phases 1–4 follows energy flow direction: acquire before spend, spend before convert. Movement runs after all position-dependent phases so they resolve at stable positions, and so the energy spent on movement is bounded by what remains after all other costs. Wear and the death check run after movement so that the full tick's activity — including the distance just moved — is accounted for before evaluating degradation and survival. Because wear and the death check are autonomous (they read per-agent state, not the grid), placing them after move costs nothing in position stability and removes the need to carry movement distance across ticks.
 
-### Movement as the final phase
+### Movement as the final repositioning phase
 
 Movement at the end of the tick creates a unified pattern for all strategies:
 

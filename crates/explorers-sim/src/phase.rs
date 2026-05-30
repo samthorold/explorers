@@ -662,12 +662,13 @@ pub struct MoveResult {
     /// Indexed by position in the agents slice.
     pub sensing_throughput: Vec<f32>,
     /// Per-agent distance actually moved this tick (mobility use). Indexed by
-    /// position in the agents slice. Movement is the final phase, so this is
-    /// folded into the *next* tick's mobility use-wear.
+    /// position in the agents slice. Movement runs before wear, so this is
+    /// folded into the same tick's mobility use-wear.
     pub move_distance: Vec<f32>,
 }
 
-/// Move agents: the final phase of the tick loop. Agents reposition based on
+/// Move agents: the final repositioning phase of the tick loop, running after
+/// all energy-affecting phases but before wear and the death check. Agents reposition based on
 /// spatial context (nearby agents and carcasses), traits (chemotaxis, consumption,
 /// scavenging, mobility), and a random walk component. Movement costs energy
 /// proportional to distance. Contact time resets on movement, increments when
