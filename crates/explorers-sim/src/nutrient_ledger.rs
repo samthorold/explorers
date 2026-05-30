@@ -137,9 +137,14 @@ impl NutrientLedger {
         let total_endowed = self.net_sent(&NutrientEndpoint::Endowment);
         let total_retained = self.net_received(&NutrientEndpoint::Retained);
         let diff = (total_endowed - total_retained).abs();
-        // Scale tolerance with magnitude — f32 has ~7 digits of precision.
+        // Scale tolerance with magnitude — f32 has ~7 digits of precision. Since
+        // embodiment (ADR-0003) makes the bound portion of each agent's nutrient
+        // a *recomputed* quantity (`structure × demand`), the per-tick totals now
+        // carry the same f32 accumulation error as `structure` itself. We match
+        // the energy ledger's 1e-3 relative tolerance, which sums structure the
+        // same way; the absolute drift remains a vanishing fraction of the total.
         let scale = total_endowed.abs().max(1.0);
-        let tolerance = scale * 1e-4;
+        let tolerance = scale * 1e-3;
         assert!(
             diff < tolerance,
             "nutrient ledger imbalanced: endowed={total_endowed}, \

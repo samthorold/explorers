@@ -157,6 +157,70 @@ pub fn provision_initial_reserve_structure(
     (reserve, structure, heat)
 }
 
+/// How a newborn (offspring or tick-0 seeded agent) is provisioned across both
+/// currencies, with birth structure co-limited by the agent's donated nutrient
+/// (ADR-0003 embodiment).
+pub struct OffspringProvision {
+    pub structure: f32,
+    pub reserve: f32,
+    /// Free nutrient store after the bound birth nutrient is deducted.
+    pub free_nutrient: f32,
+    /// Energy dissipated to heat by the lossy reserve-to-structure conversion.
+    pub heat: f32,
+}
+
+/// Provision a newborn's structure, reserve, and nutrient from its energy and
+/// nutrient budgets. Birth structure binds nutrient (`structure × demand`), so
+/// it is co-limited (Liebig's law of the minimum): the structure built is the
+/// smaller of what the structure-energy share affords and what the nutrient
+/// budget supports. Unmatched structure-energy stays in the newborn's reserve
+/// rather than burning, mirroring in-life growth.
+///
+/// Conservation: `reserve + structure + heat = energy_budget` (energy) and
+/// `free_nutrient + structure × demand = nutrient_budget` (nutrient).
+pub fn provision_offspring(
+    traits: &TraitVector,
+    structure_energy_share: f32,
+    energy_budget: f32,
+    nutrient_budget: f32,
+    params: &WorldParameters,
+) -> OffspringProvision {
+    let efficiency = params.growth_efficiency;
+    let energy_limited = (structure_energy_share * efficiency).max(0.0);
+    let ratio = stoichiometric_demand(traits, 1.0, params); // demand per unit structure
+    let nutrient_limited = if ratio > 0.0 {
+        (nutrient_budget / ratio).max(0.0)
+    } else {
+        f32::INFINITY
+    };
+    let structure = energy_limited.min(nutrient_limited);
+    // Energy actually spent building that structure; unmatched energy stays in
+    // reserve. Guard efficiency == 0 (no structure built).
+    let energy_spent = if efficiency > 0.0 { structure / efficiency } else { 0.0 };
+    let heat = energy_spent - structure;
+    let reserve = energy_budget - energy_spent;
+    let free_nutrient = (nutrient_budget - structure * ratio).max(0.0);
+    OffspringProvision { structure, reserve, free_nutrient, heat }
+}
+
+/// Draw the nutrient bound in each seeded agent's birth structure from the
+/// available pool at the agent's location (ADR-0003 embodiment). Seeded agents
+/// are born with structure, which binds `structure × demand`; sourcing it from
+/// the pool keeps total system nutrient at world creation equal to the initial
+/// pool (nutrient is conserved, never conjured into the living system).
+fn bind_seed_structure_nutrient(
+    agents: &[Agent],
+    nutrient_grid: &mut spatial::NutrientGrid,
+    params: &WorldParameters,
+) {
+    for agent in agents {
+        let bound = agent.bound_nutrient(params);
+        if bound > 0.0 {
+            *nutrient_grid.at_position(agent.position) -= bound;
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldParameters {
     pub solar_flux_magnitude: f32,
@@ -359,11 +423,18 @@ impl Agent {
         self.reserve + self.structure + self.repro_reserve
     }
 
-    /// Total nutrient held by this agent: the free store plus the
-    /// reproductive-nutrient earmark. The conserved nutrient quantity for the
-    /// ledger and every death path.
-    pub fn nutrient_total(&self) -> f32 {
-        self.nutrient + self.repro_nutrient
+    /// Nutrient bound in this agent's structure: matter locked into the body at
+    /// the stoichiometric demand (`structure × demand`), released only when the
+    /// structure is grazed or returned to a carcass at death (ADR-0003).
+    pub fn bound_nutrient(&self, params: &WorldParameters) -> f32 {
+        stoichiometric_demand(&self.traits, self.structure, params)
+    }
+
+    /// Total nutrient held by this agent: the free store, the
+    /// reproductive-nutrient earmark, and the nutrient bound in its structure.
+    /// The conserved nutrient quantity for the ledger and every death path.
+    pub fn nutrient_total(&self, params: &WorldParameters) -> f32 {
+        self.nutrient + self.repro_nutrient + self.bound_nutrient(params)
     }
 
     /// Returns the nominal trait value for a given functional trait index (0–5).
@@ -531,7 +602,7 @@ impl World {
 
         let (seed_reserve, seed_structure, seed_heat) =
             provision_initial_reserve_structure(distribution.initial_energy_per_agent, &params);
-        let agents = (0..pop_size)
+        let agents: Vec<Agent> = (0..pop_size)
             .map(|id| {
                 let x = pos_dist.sample(&mut rng);
                 let y = pos_dist.sample(&mut rng);
@@ -560,11 +631,16 @@ impl World {
             })
             .collect();
 
-        let nutrient_grid = spatial::NutrientGrid::new(
+        let mut nutrient_grid = spatial::NutrientGrid::new(
             params.world_extent,
             params.nutrient_grid_cell_size,
             params.initial_nutrient_pool,
         );
+        // Seeded structure binds nutrient (ADR-0003 embodiment): draw each
+        // agent's bound birth nutrient from the available pool at its location so
+        // total system nutrient at creation equals the initial pool — nutrient is
+        // not conjured into the living system.
+        bind_seed_structure_nutrient(&agents, &mut nutrient_grid, &params);
         let initial_dissipation = seed_heat * pop_size as f32;
         Self {
             params,
@@ -613,11 +689,14 @@ impl World {
                     }
                 })
                 .collect();
-            let nutrient_grid = spatial::NutrientGrid::new(
+            let mut nutrient_grid = spatial::NutrientGrid::new(
                 params.world_extent,
                 params.nutrient_grid_cell_size,
                 params.initial_nutrient_pool,
             );
+            // Seeded structure binds nutrient (ADR-0003): draw it from the pool so
+            // total system nutrient at creation equals the initial pool.
+            bind_seed_structure_nutrient(&sim_agents, &mut nutrient_grid, &params);
             Self {
                 params,
                 agents: sim_agents,
@@ -671,7 +750,7 @@ impl World {
         // across all pools (grid cells + living agents + carcasses) at tick
         // end equals the total at tick start.
         let pre_grid_nutrient: f32 = self.nutrient_grid.total();
-        let pre_agent_nutrient: f32 = self.agents.iter().map(|a| a.nutrient_total()).sum();
+        let pre_agent_nutrient: f32 = self.agents.iter().map(|a| a.nutrient_total(&self.params)).sum();
         let pre_carcass_nutrient: f32 = self.carcasses.iter().map(|c| c.nutrient).sum();
 
         // Snapshot trait vectors for ledger efficiency calculations
@@ -971,7 +1050,7 @@ impl World {
         };
         let post_pools = nutrient_ledger::PoolTotals {
             grid: self.nutrient_grid.total(),
-            agents: self.agents.iter().map(|a| a.nutrient_total()).sum(),
+            agents: self.agents.iter().map(|a| a.nutrient_total(&self.params)).sum(),
             carcasses: self.carcasses.iter().map(|c| c.nutrient).sum(),
         };
         self.nutrient_ledger.build_from_pool_totals(pre_pools, post_pools);
@@ -1238,6 +1317,25 @@ mod tests {
             repro_nutrient: 7.0,
         };
         assert_eq!(agent.repro_nutrient, 7.0);
+    }
+
+    #[test]
+    fn nutrient_total_counts_free_earmark_and_bound() {
+        // Embodiment (ADR-0003): an agent's conserved nutrient total is its free
+        // store + reproductive earmark + the nutrient bound in its structure
+        // (structure * demand). The bound portion is matter locked into the body.
+        let params = conservation_params();
+        let agent = Agent {
+            id: 0, position: (0.0, 0.0), reserve: 0.0, structure: 4.0,
+            nutrient: 5.0, traits: zero_traits(), contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 0.0,
+            repro_nutrient: 7.0,
+        };
+        // zero traits -> ratio = base_nutrient_ratio = 0.1; bound = 4.0 * 0.1 = 0.4
+        let bound = stoichiometric_demand(&agent.traits, agent.structure, &params);
+        assert!((bound - 0.4).abs() < 1e-6, "bound = structure * ratio");
+        assert!((agent.nutrient_total(&params) - (5.0 + 7.0 + 0.4)).abs() < 1e-6,
+            "nutrient_total = free + earmark + bound, got {}", agent.nutrient_total(&params));
     }
 
     #[test]
@@ -1937,6 +2035,39 @@ mod tests {
     }
 
     #[test]
+    fn world_creation_binds_seed_structure_nutrient_from_the_pool() {
+        // At world creation, seeded agents are born with structure, which binds
+        // nutrient (structure * demand). That bound nutrient must be drawn from
+        // the available pool so total system nutrient at tick 0 equals the
+        // initial pool — nutrient is not conjured into the living system.
+        let mut params = conservation_params();
+        params.initial_population_size = 8;
+        params.initial_nutrient_pool = 500.0;
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                ..zero_traits()
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let world = World::new(params.clone(), dist, 42);
+
+        // Some agents must actually carry bound nutrient for this to be a real
+        // test (seeded structure > 0 and positive demand).
+        let total_bound: f32 = world.agents().iter().map(|a| a.bound_nutrient(&params)).sum();
+        assert!(total_bound > 0.0, "seeded agents should carry bound nutrient");
+
+        let total_system_nutrient: f32 = world.nutrient_pool()
+            + world.agents().iter().map(|a| a.nutrient_total(&params)).sum::<f32>()
+            + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
+        assert!((total_system_nutrient - params.initial_nutrient_pool).abs() < 1e-2,
+            "total system nutrient at creation must equal the initial pool: got {}, expected {}",
+            total_system_nutrient, params.initial_nutrient_pool);
+    }
+
+    #[test]
     fn nutrient_conservation_across_ticks() {
         // Total nutrient (available pool + living agents + carcasses) must be
         // constant across all ticks.
@@ -1952,14 +2083,14 @@ mod tests {
 
         // Compute initial total nutrient
         let initial_nutrient: f32 = world.nutrient_pool()
-            + world.agents().iter().map(|a| a.nutrient_total()).sum::<f32>()
+            + world.agents().iter().map(|a| a.nutrient_total(world.params())).sum::<f32>()
             + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
 
         for t in 0..200 {
             world.step();
 
             let current_nutrient: f32 = world.nutrient_pool()
-                + world.agents().iter().map(|a| a.nutrient_total()).sum::<f32>()
+                + world.agents().iter().map(|a| a.nutrient_total(world.params())).sum::<f32>()
                 + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
 
             let diff = (current_nutrient - initial_nutrient).abs();
@@ -2524,4 +2655,3 @@ mod tests {
             "dying agent should take one final step before the death check (move runs before wear/death)");
     }
 }
-
