@@ -134,6 +134,7 @@ fn default_reproductive_compatibility_distance() -> f32 { 2.0 }
 fn default_maintenance_cost_exponent() -> f32 { 2.0 }
 fn default_consumption_contact_half_saturation() -> f32 { 0.001 }
 fn default_nutrient_grid_cell_size() -> f32 { 10.0 }
+fn default_growth_retention_multiplier() -> f32 { 2.0 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldParameters {
@@ -212,6 +213,12 @@ pub struct WorldParameters {
     /// a grid of cells; co-located agents share their cell's pool proportionally.
     #[serde(default = "default_nutrient_grid_cell_size")]
     pub nutrient_grid_cell_size: f32,
+    /// Multiplier applied to per-tick metabolic cost to compute the retention
+    /// buffer in the grow phase. Surplus available for kappa-allocation is
+    /// `reserve - retention`, where `retention = metabolic_cost * multiplier`.
+    /// Default 2.0 preserves historical behaviour.
+    #[serde(default = "default_growth_retention_multiplier")]
+    pub growth_retention_multiplier: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1047,6 +1054,7 @@ mod tests {
             maintenance_cost_exponent: 1.0,
             consumption_contact_half_saturation: 0.0,
             nutrient_grid_cell_size: 10.0,
+            growth_retention_multiplier: 2.0,
         }
     }
 
@@ -1570,6 +1578,7 @@ mod tests {
             maintenance_cost_exponent: 1.0,
             consumption_contact_half_saturation: 0.0,
             nutrient_grid_cell_size: 10.0,
+            growth_retention_multiplier: 2.0,
         }
     }
 

@@ -181,6 +181,10 @@ Energy cost per unit distance moved per tick. Makes mobility expensive — creat
 **Sensing cost coefficient**:
 Energy cost per tick for sensing, derived from mobility investment. Makes wide awareness expensive — but since sensing is subordinate to mobility, this cost is part of the mobility maintenance cost, not a separate parameter.
 
+**Growth retention multiplier**:
+The size of the retention buffer in the grow phase, expressed as a multiple of an agent's per-tick metabolic cost. Surplus eligible for kappa-allocation is `reserve − (metabolic_cost × multiplier)`. A higher multiplier makes agents hoard more reserve against future metabolism before committing any to soma or reproductive allocation, slowing both growth and reproductive accumulation. A world parameter searched by genesis. Default 2.0.
+_Avoid_: retention factor (too generic), metabolic safety margin (implies a hard floor — this is a smooth flow-allocation buffer, not a starvation guard)
+
 **Reproduction efficiency**:
 Fraction of energy invested by the parent that the offspring actually receives. The remainder is dissipated. Reproduction is lossy like all energy transfers.
 

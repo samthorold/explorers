@@ -590,6 +590,7 @@ mod tests {
             maintenance_cost_exponent: 1.0,
             consumption_contact_half_saturation: 0.001,
             nutrient_grid_cell_size: 10.0,
+            growth_retention_multiplier: 2.0,
         }
     }
 
@@ -808,6 +809,7 @@ mod tests {
             maintenance_cost_exponent: 1.0,
             consumption_contact_half_saturation: 0.001,
             nutrient_grid_cell_size: 10.0,
+            growth_retention_multiplier: 2.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
