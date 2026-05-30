@@ -3371,6 +3371,67 @@ mod tests {
     }
 
     #[test]
+    fn non_lethal_graze_leaves_victim_free_store_and_repro_earmark_intact() {
+        // Issue #274: grazing a living target transfers only the nutrient *bound
+        // in the structure removed*. The victim's free nutrient store AND its
+        // reproductive-nutrient earmark must survive a non-lethal graze; the
+        // consumer keeps up to its stoichiometric demand and the excess is
+        // excreted to the local pool. This locks in the embodiment behaviour
+        // (#273) against regressions that would touch the free store/earmark or
+        // stop excreting.
+        let params = test_params();
+        // Low-demand consumer (tiny structure) so the released bound exceeds the
+        // consumer's stoichiometric need, forcing a non-zero excretion.
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 4.0, // ratio = 0.1 + 0.2 * 4.0 = 0.9 per structure
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
+            make_agent(2, (1.0, 0.0), 10.0, target_traits),
+        ];
+        agents[0].structure = 0.1; // demand = 0.1 * 0.5 = 0.05
+        agents[1].structure = 10.0; // graze removes 2.0 -> 8.0, well above death threshold
+        agents[1].nutrient = 20.0; // free store — must be left untouched
+        agents[1].repro_nutrient = 7.0; // reproductive earmark — must be left untouched
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+        );
+
+        // The graze is non-lethal: nothing died this tick.
+        assert!(result.dead_agents.is_empty(),
+            "graze should be non-lethal, but agents died: {:?}", result.dead_agents);
+
+        // bound released = actual_drain(2.0) * target_ratio(0.9) = 1.8
+        // consumer need = demand(0.05) * energy_gained(1.0) = 0.05
+        // retained = 0.05; excreted = 1.75
+        assert!((agents[0].nutrient - 0.05).abs() < 1e-3,
+            "consumer retains its stoichiometric demand 0.05, got {}", agents[0].nutrient);
+        assert!(nutrient_grid.total() > 0.0,
+            "excess bound nutrient must be excreted to the pool, got {}", nutrient_grid.total());
+        assert!((nutrient_grid.total() - 1.75).abs() < 1e-3,
+            "excess bound nutrient 1.75 is excreted, got {}", nutrient_grid.total());
+
+        // The victim keeps BOTH its free store and its reproductive earmark.
+        assert!((agents[1].nutrient - 20.0).abs() < 1e-3,
+            "grazing never touches the victim's free store, got {}", agents[1].nutrient);
+        assert!((agents[1].repro_nutrient - 7.0).abs() < 1e-3,
+            "grazing never touches the victim's reproductive earmark, got {}",
+            agents[1].repro_nutrient);
+    }
+
+    #[test]
     fn drain_nutrient_excretion_returns_to_local_cell() {
         // Nutrient excreted during consumption goes to the nutrient grid cell
         // at the target's position, not to a global pool.
