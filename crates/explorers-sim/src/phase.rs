@@ -252,30 +252,31 @@ pub fn grow(
         if efficiency > 0.0 && growth_budget > 0.0 {
             // Energy alone would build this much structure...
             let energy_limited = growth_budget * efficiency;
-            // ...but structure is co-limited by the free nutrient store (Liebig's
-            // law of the minimum): the body can only hold as much structure as
-            // the agent's free nutrient store stoichiometrically supports
-            // (structure * ratio <= nutrient). Growth throttles smoothly to zero
-            // as nutrient binds up. This is the ADR-0002 build permit: the free
-            // store gates structure but is not consumed (embodiment is slice 2,
-            // ADR-0003). Crucially, growth touches only the free store; the
-            // reproductive-nutrient earmark (fed the (1 - kappa) uptake share in
-            // absorb_nutrients) is off-limits to growth, and the reproduction
-            // gate reads that earmark — so growth can never pin the agent on the
-            // reproduction nutrient gate (#269).
+            // ...but structure is matter, so building it binds free nutrient into
+            // the body at the stoichiometric demand (ADR-0003 embodiment). Growth
+            // is co-limited (Liebig's law of the minimum): the structure built is
+            // the smaller of what the energy affords and what the *unearmarked*
+            // free store supports (free / ratio). Growth never touches the
+            // reproductive-nutrient earmark, so it cannot starve reproduction
+            // (#269). Energy that cannot be matched with nutrient stays in reserve
+            // rather than burning, and the matched nutrient is consumed into the
+            // body, released only when the structure is grazed or returned to a
+            // carcass at death.
             let ratio = crate::stoichiometric_demand(&agent.traits, 1.0, params);
-            let nutrient_headroom = if ratio > 0.0 {
-                (agent.nutrient / ratio - agent.structure).max(0.0)
+            let nutrient_limited = if ratio > 0.0 {
+                (agent.nutrient / ratio).max(0.0)
             } else {
                 f32::INFINITY
             };
-            let to_structure = energy_limited.min(nutrient_headroom);
+            let to_structure = energy_limited.min(nutrient_limited);
             // Energy actually spent on that structure; the rest could not be
             // matched by nutrient, so it stays in reserve rather than burning.
             let energy_spent = to_structure / efficiency;
             let dissipated = energy_spent - to_structure;
             agent.structure += to_structure;
             agent.reserve += growth_budget - energy_spent;
+            // Bind the matched free nutrient into the new structure.
+            agent.nutrient -= to_structure * ratio;
             total_dissipated += dissipated;
 
             if to_structure > 0.0 {
@@ -476,13 +477,16 @@ pub fn resolve_drains(
             agents[consumer_idx].reserve += energy_gained;
             dissipated += energy_lost;
 
-            // Nutrient transfer: proportional to structure drained
-            let target_nutrient = agents[drain.target_idx].nutrient;
-            let target_structure_before = available; // use pre-drain available
-            if target_structure_before > 0.0 {
-                let nutrient_fraction = actual_drain / target_structure_before;
-                let nutrient_transferred = target_nutrient * nutrient_fraction;
-
+            // Nutrient transfer: grazing releases only the nutrient *bound in the
+            // structure removed* (ADR-0003 embodiment). The structure decrement
+            // above already lowered the target's bound nutrient; that released
+            // matter (actual_drain * target_ratio) is what transfers. The target's
+            // free store and reproductive-nutrient earmark are never touched —
+            // they stay with it until death.
+            let target_ratio =
+                crate::stoichiometric_demand(&agents[drain.target_idx].traits, 1.0, params);
+            let nutrient_released = actual_drain * target_ratio;
+            if nutrient_released > 0.0 {
                 // Consumer retains up to stoichiometric demand
                 let consumer_demand = crate::stoichiometric_demand(
                     &agents[consumer_idx].traits,
@@ -490,10 +494,9 @@ pub fn resolve_drains(
                     params,
                 );
                 let consumer_nutrient_need = consumer_demand * energy_gained;
-                let retained = nutrient_transferred.min(consumer_nutrient_need);
-                let excreted = nutrient_transferred - retained;
+                let retained = nutrient_released.min(consumer_nutrient_need);
+                let excreted = nutrient_released - retained;
 
-                agents[drain.target_idx].nutrient -= nutrient_transferred;
                 agents[consumer_idx].nutrient += retained;
                 // Excrete excess nutrient to the local cell at the target's position
                 *nutrient_grid.at_position(agents[drain.target_idx].position) += excreted;
@@ -526,7 +529,7 @@ pub fn resolve_drains(
                 id: agent.id,
                 position: agent.position,
                 energy: agent.structure.max(0.0),
-                nutrient: agent.nutrient_total(),
+                nutrient: agent.nutrient_total(params),
                 traits: agent.traits,
             });
         }
@@ -653,7 +656,7 @@ pub fn resolve_drains(
 /// repro_reserve energy that doesn't transfer to the carcass.
 pub fn check_death_thresholds(
     agents: &mut [Agent],
-    _params: &WorldParameters,
+    params: &WorldParameters,
 ) -> (Vec<Event>, Vec<Carcass>, f32) {
     let mut events = Vec::new();
     let mut carcasses = Vec::new();
@@ -683,7 +686,7 @@ pub fn check_death_thresholds(
                 id: agent.id,
                 position: agent.position,
                 energy: carcass_energy,
-                nutrient: agent.nutrient_total(),
+                nutrient: agent.nutrient_total(params),
                 traits: agent.traits,
             });
             // Mark for removal by setting reserve to 0. Nutrient (free store and
@@ -988,22 +991,21 @@ pub fn resolve_reproduction(
         let tick_dissipated = investment - offspring_total_energy;
         dissipated += tick_dissipated;
 
-        // Per-offspring reserve/structure split. The structure share of the
-        // per-offspring energy is converted via growth_efficiency (same lossy
-        // conversion as in-life growth); the unconverted remainder dissipates
-        // as heat. Reserve share is the complement of the structure share.
+        // Per-offspring reserve/structure split is computed per child below: the
+        // structure share of the per-offspring energy is converted via
+        // growth_efficiency (same lossy conversion as in-life growth), but the
+        // structure built is co-limited by the offspring's donated nutrient
+        // (ADR-0003 embodiment) — birth structure binds `structure * demand`, so
+        // a nutrient-starved offspring is born smaller, with the unmatched
+        // structure-energy staying in its reserve rather than burning.
         let struct_fraction = params.offspring_structure_fraction.clamp(0.0, 1.0);
         let structure_energy_share = energy_per_offspring * struct_fraction;
-        let offspring_structure = structure_energy_share * params.growth_efficiency;
-        let structure_heat_per = structure_energy_share - offspring_structure;
-        let offspring_reserve = energy_per_offspring - structure_energy_share;
-        dissipated += structure_heat_per * offspring_count as f32;
 
         // Nutrient donation: the parent donates its entire reproductive-nutrient
         // earmark to the offspring, divided by the realised offspring count
         // (mirroring how repro_reserve energy is divided). The free store is
-        // never touched. Offspring receive the donation as their starting free
-        // nutrient store so they can grow.
+        // never touched. The donation provisions both the offspring's bound
+        // birth nutrient and its starting free store.
         let nutrient_donated = parent_repro_nutrient;
         let nutrient_per_offspring = nutrient_donated / offspring_count as f32;
 
@@ -1044,12 +1046,23 @@ pub fn resolve_reproduction(
                 extent,
             );
 
+            // Provision the offspring's structure, reserve, and nutrient, with
+            // birth structure co-limited by the donated nutrient (ADR-0003).
+            let prov = crate::provision_offspring(
+                &child_traits,
+                structure_energy_share,
+                energy_per_offspring,
+                nutrient_per_offspring,
+                params,
+            );
+            dissipated += prov.heat;
+
             let child = Agent {
                 id: next_id,
                 position: pos,
-                reserve: offspring_reserve,
-                structure: offspring_structure,
-                nutrient: nutrient_per_offspring,
+                reserve: prov.reserve,
+                structure: prov.structure,
+                nutrient: prov.free_nutrient,
                 traits: child_traits,
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
@@ -1206,14 +1219,12 @@ pub fn resolve_reproduction(
         let tick_dissipated = total_investment - offspring_total_energy;
         dissipated += tick_dissipated;
 
-        // Per-offspring reserve/structure split (same lossy-growth conversion
-        // as asexual reproduction and in-life growth).
+        // Per-offspring reserve/structure split is computed per child below
+        // (same lossy-growth conversion as asexual reproduction and in-life
+        // growth), with birth structure co-limited by the offspring's donated
+        // nutrient (ADR-0003 embodiment).
         let struct_fraction = params.offspring_structure_fraction.clamp(0.0, 1.0);
         let structure_energy_share = energy_per_offspring * struct_fraction;
-        let offspring_structure = structure_energy_share * params.growth_efficiency;
-        let structure_heat_per = structure_energy_share - offspring_structure;
-        let offspring_reserve = energy_per_offspring - structure_energy_share;
-        dissipated += structure_heat_per * offspring_count as f32;
 
         // Nutrient donation: each parent donates its entire reproductive-nutrient
         // earmark; the combined donation is split equally among offspring
@@ -1280,12 +1291,23 @@ pub fn resolve_reproduction(
                 extent,
             );
 
+            // Provision the offspring's structure, reserve, and nutrient, with
+            // birth structure co-limited by the donated nutrient (ADR-0003).
+            let prov = crate::provision_offspring(
+                &child_traits,
+                structure_energy_share,
+                energy_per_offspring,
+                nutrient_per_offspring,
+                params,
+            );
+            dissipated += prov.heat;
+
             let child = Agent {
                 id: next_id,
                 position: pos,
-                reserve: offspring_reserve,
-                structure: offspring_structure,
-                nutrient: nutrient_per_offspring,
+                reserve: prov.reserve,
+                structure: prov.structure,
+                nutrient: prov.free_nutrient,
                 traits: child_traits,
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
@@ -1575,8 +1597,8 @@ mod tests {
         assert_eq!(events[0].kind, EventKind::NutrientAbsorbed);
         // demand = eff_autotrophy = 0.5 (no wear degradation on fresh agent)
         let expected = 0.5;
-        assert!((agents[0].nutrient_total() - expected).abs() < 1e-3,
-            "uptake should equal effective autotrophy, got {}", agents[0].nutrient_total());
+        assert!((agents[0].nutrient_total(&params) - expected).abs() < 1e-3,
+            "uptake should equal effective autotrophy, got {}", agents[0].nutrient_total(&params));
         assert!((grid.total() - (100.0 - expected)).abs() < 1e-3);
     }
 
@@ -1599,9 +1621,9 @@ mod tests {
 
         assert_eq!(events.len(), 2);
         // Both have same demand, so each gets half
-        let total_uptake = agents[0].nutrient_total() + agents[1].nutrient_total();
+        let total_uptake = agents[0].nutrient_total(&params) + agents[1].nutrient_total(&params);
         assert!((total_uptake - 0.1).abs() < 1e-3);
-        assert!((agents[0].nutrient_total() - agents[1].nutrient_total()).abs() < 1e-3);
+        assert!((agents[0].nutrient_total(&params) - agents[1].nutrient_total(&params)).abs() < 1e-3);
     }
 
     #[test]
@@ -1620,7 +1642,7 @@ mod tests {
 
         let events = absorb_nutrients(&mut agents, &mut grid, &params);
         assert_eq!(events.len(), 1, "agent with autotrophy should get nutrients regardless of contact_time");
-        assert!(agents[0].nutrient_total() > 0.0, "nutrient uptake should be positive");
+        assert!(agents[0].nutrient_total(&params) > 0.0, "nutrient uptake should be positive");
     }
 
     #[test]
@@ -1641,8 +1663,8 @@ mod tests {
         assert_eq!(events[0].kind, EventKind::NutrientAbsorbed);
         // demand = effective_autotrophy = 0.5
         let expected = 0.5;
-        assert!((agents[0].nutrient_total() - expected).abs() < 1e-3,
-            "autotrophy-derived uptake expected {expected}, got {}", agents[0].nutrient_total());
+        assert!((agents[0].nutrient_total(&params) - expected).abs() < 1e-3,
+            "autotrophy-derived uptake expected {expected}, got {}", agents[0].nutrient_total(&params));
     }
 
     #[test]
@@ -1662,7 +1684,7 @@ mod tests {
 
         assert!(events.is_empty(),
             "zero-autotrophy agent should get no nutrient uptake events");
-        assert!((agents[0].nutrient_total()).abs() < 1e-6,
+        assert!((agents[0].nutrient_total(&params)).abs() < 1e-6,
             "zero-autotrophy agent should have zero nutrient");
         assert!((grid.total() - 100.0).abs() < 1e-6,
             "pool should be unchanged when no uptake occurs");
@@ -1690,13 +1712,13 @@ mod tests {
         let _events = absorb_nutrients(&mut agents, &mut grid, &params);
 
         // Agent A should have absorbed nutrient
-        assert!(agents[0].nutrient_total() > 0.0,
-            "agent in nutrient-rich cell should absorb, got {}", agents[0].nutrient_total());
+        assert!(agents[0].nutrient_total(&params) > 0.0,
+            "agent in nutrient-rich cell should absorb, got {}", agents[0].nutrient_total(&params));
         // Agent B should have absorbed nothing
-        assert!((agents[1].nutrient_total()).abs() < 1e-6,
-            "agent in nutrient-poor cell should absorb nothing, got {}", agents[1].nutrient_total());
+        assert!((agents[1].nutrient_total(&params)).abs() < 1e-6,
+            "agent in nutrient-poor cell should absorb nothing, got {}", agents[1].nutrient_total(&params));
         // Total nutrient conserved
-        let total = grid.total() + agents[0].nutrient_total() + agents[1].nutrient_total();
+        let total = grid.total() + agents[0].nutrient_total(&params) + agents[1].nutrient_total(&params);
         assert!((total - 5.0).abs() < 1e-3,
             "total nutrient should be conserved, got {}", total);
     }
@@ -1947,11 +1969,12 @@ mod tests {
     // --- Grow ---
 
     #[test]
-    fn grow_caps_structure_at_nutrient_supply() {
-        // Building structure is co-limited by nutrient: an agent can only lay down
-        // as much structure as its nutrient store stoichiometrically supports
-        // (structure <= nutrient / ratio). Energy it cannot match with nutrient
-        // stays in reserve rather than being burned.
+    fn grow_consumes_free_nutrient_into_structure() {
+        // Embodiment (ADR-0003): growth binds free nutrient into the body. The
+        // structure built this tick is co-limited — min(what energy affords,
+        // what the free store supports, free / ratio) — and building it spends
+        // `built * ratio` from the free store. Energy that cannot be matched
+        // with nutrient stays in reserve rather than being burned.
         let params = WorldParameters {
             base_metabolic_rate: 1.0,
             growth_efficiency: 1.0,
@@ -1965,23 +1988,20 @@ mod tests {
         let (events, dissipated) = grow(&mut agents, &params);
 
         // retention = 1.0 * 2.0 = 2.0; surplus = 98.0; efficiency 1.0 would give
-        // 98.0 structure, but nutrient caps it at 1.0 / 0.1 = 10.0.
+        // 98.0 structure, but the free store (1.0 / 0.1 = 10.0) is the binding
+        // constraint, so only 10.0 structure is built.
         assert_eq!(events.len(), 1);
         assert!((agents[0].structure - 10.0).abs() < 1e-3,
-            "structure capped at nutrient supply, got {}", agents[0].structure);
+            "structure co-limited by free nutrient supply, got {}", agents[0].structure);
+        // Building 10.0 structure binds 10.0 * 0.1 = 1.0 free nutrient — the whole
+        // free store is consumed into the body.
+        assert!(agents[0].nutrient.abs() < 1e-3,
+            "growth consumes the free store into structure, got {}", agents[0].nutrient);
         // Unspent growth energy (88.0) returns to reserve on top of retention.
         assert!((agents[0].reserve - 90.0).abs() < 1e-3,
             "leftover growth energy stays in reserve, got {}", agents[0].reserve);
-        // Nutrient is not moved (conservation-safe build permit).
-        assert!((agents[0].nutrient - 1.0).abs() < 1e-6,
-            "growth does not consume nutrient, got {}", agents[0].nutrient);
         // No energy dissipated at efficiency 1.0.
         assert!(dissipated.abs() < 1e-3, "no dissipation at efficiency 1.0, got {dissipated}");
-        // The repro nutrient gate (nutrient >= structure * ratio) now holds.
-        assert!(
-            agents[0].nutrient >= crate::stoichiometric_demand(&agents[0].traits, agents[0].structure, &params),
-            "agent stays reproduction-eligible on the nutrient axis"
-        );
     }
 
     #[test]
@@ -2006,6 +2026,31 @@ mod tests {
         assert!((agents[0].reserve - 100.0).abs() < 1e-3,
             "growth energy stays in reserve, got {}", agents[0].reserve);
         assert!(dissipated.abs() < 1e-6, "nothing dissipated, got {dissipated}");
+    }
+
+    #[test]
+    fn grow_never_draws_the_repro_nutrient_earmark() {
+        // The reproductive-nutrient earmark is off-limits to growth (ADR-0003).
+        // An agent with an empty free store but a full earmark builds no
+        // structure and the earmark is left untouched — growth can never starve
+        // reproduction of nutrient.
+        let params = WorldParameters {
+            base_metabolic_rate: 1.0,
+            growth_efficiency: 1.0,
+            ..test_params()
+        };
+        let traits = TraitVector { kappa: 1.0, ..zero_traits() };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
+        agents[0].nutrient = 0.0; // empty free store
+        agents[0].repro_nutrient = 50.0; // ample earmark
+
+        let (events, _dissipated) = grow(&mut agents, &params);
+
+        assert!(events.is_empty(), "no growth when the free store is empty");
+        assert!(agents[0].structure.abs() < 1e-6,
+            "growth cannot bind the earmark, so no structure is built");
+        assert!((agents[0].repro_nutrient - 50.0).abs() < 1e-6,
+            "the reproductive-nutrient earmark is untouched, got {}", agents[0].repro_nutrient);
     }
 
     #[test]
@@ -2629,17 +2674,49 @@ mod tests {
     }
 
     #[test]
-    fn check_death_carcass_inherits_nutrient() {
+    fn check_death_carcass_inherits_free_earmark_and_bound_nutrient() {
+        // Death converts the whole agent into a carcass: carcass.nutrient =
+        // free store + reproductive earmark + nutrient bound in structure
+        // (structure * demand). (ADR-0003 embodiment.)
         let params = test_params();
         let mut agents = vec![make_agent(1, (0.0, 0.0), 0.0, zero_traits())];
-        agents[0].nutrient = 5.0;
-        agents[0].structure = 10.0;
+        agents[0].nutrient = 5.0; // free store
+        agents[0].repro_nutrient = 2.0; // earmark
+        agents[0].structure = 10.0; // bound = 10.0 * 0.1 = 1.0 (zero traits)
 
         let (_, carcasses, _) = check_death_thresholds(&mut agents, &params);
 
         assert_eq!(carcasses.len(), 1);
-        assert!((carcasses[0].nutrient - 5.0).abs() < 1e-6);
+        // free(5.0) + earmark(2.0) + bound(1.0) = 8.0
+        assert!((carcasses[0].nutrient - 8.0).abs() < 1e-6,
+            "carcass inherits free + earmark + bound, got {}", carcasses[0].nutrient);
         assert!((carcasses[0].energy - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn carcass_nutrient_scales_with_body_size_at_death() {
+        // A larger body binds more nutrient, so it leaves a more nutrient-rich
+        // carcass — even with identical free store and earmark.
+        let params = test_params();
+        let make = |structure: f32| {
+            let mut a = make_agent(1, (0.0, 0.0), 0.0, zero_traits());
+            a.nutrient = 1.0;
+            a.structure = structure;
+            a
+        };
+        let mut small = vec![make(2.0)];
+        let mut large = vec![make(20.0)];
+
+        let (_, small_carcasses, _) = check_death_thresholds(&mut small, &params);
+        let (_, large_carcasses, _) = check_death_thresholds(&mut large, &params);
+
+        assert!(large_carcasses[0].nutrient > small_carcasses[0].nutrient,
+            "bigger body -> more bound nutrient -> richer carcass: small={}, large={}",
+            small_carcasses[0].nutrient, large_carcasses[0].nutrient);
+        // small: free(1.0) + bound(2.0 * 0.1 = 0.2) = 1.2
+        // large: free(1.0) + bound(20.0 * 0.1 = 2.0) = 3.0
+        assert!((small_carcasses[0].nutrient - 1.2).abs() < 1e-6);
+        assert!((large_carcasses[0].nutrient - 3.0).abs() < 1e-6);
     }
 
     // --- Resolve drains ---
@@ -3200,28 +3277,31 @@ mod tests {
     }
 
     #[test]
-    fn drain_nutrient_transfer_retains_up_to_stoichiometric_demand() {
-        // Consumer drains target that has nutrient. Consumer retains up to
-        // stoichiometric demand; excess goes to available pool.
+    fn drain_releases_bound_nutrient_retaining_up_to_stoichiometric_demand() {
+        // Embodiment (ADR-0003): grazing releases only the nutrient *bound in the
+        // structure removed* (actual_drain * target_ratio). The target's free
+        // store is never touched. The consumer retains up to its stoichiometric
+        // demand; the excess is excreted to the available pool.
         let params = test_params();
         let consumer_traits = TraitVector {
             heterotrophy: 2.0,
             ..zero_traits()
         };
+        // High-demand target so the bound released exceeds the consumer's need,
+        // forcing excretion: target_ratio = 0.1 + 0.2 * 4.0 = 0.9 per structure.
         let target_traits = TraitVector {
-            photosynthetic_absorption: 0.5,
+            photosynthetic_absorption: 4.0,
             ..zero_traits()
         };
         let mut agents = vec![
             make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
             make_agent(2, (1.0, 0.0), 10.0, target_traits),
         ];
-        // Consumer needs structure for stoichiometric demand
-        // demand = structure * (base_ratio + spec_coeff * spec_sum)
-        //        = 5.0 * (0.1 + 0.2 * 2.0) = 5.0 * 0.5 = 2.5
+        // Consumer demand = structure * (base_ratio + spec_coeff * spec_sum)
+        //                 = 5.0 * (0.1 + 0.2 * 2.0) = 5.0 * 0.5 = 2.5
         agents[0].structure = 5.0;
         agents[1].structure = 10.0;
-        agents[1].nutrient = 20.0; // nutrient-rich target
+        agents[1].nutrient = 20.0; // free store — must be left untouched
 
         let mut carcasses: Vec<Carcass> = Vec::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -3234,19 +3314,60 @@ mod tests {
         );
 
         // Drain = 2.0 (demand <= supply of 10.0)
-        // nutrient_fraction = 2.0 / 10.0 = 0.2
-        // nutrient_transferred = 20.0 * 0.2 = 4.0
+        // target_ratio = 0.1 + 0.2 * 4.0 = 0.9
+        // bound released = actual_drain * target_ratio = 2.0 * 0.9 = 1.8
         // energy_gained = 2.0 * 0.5 = 1.0
-        // stoichiometric_demand = 5.0 * (0.1 + 0.2 * 2.0) = 2.5
-        // consumer_nutrient_need = 2.5 * 1.0 = 2.5
-        // retained = min(4.0, 2.5) = 2.5
-        // excreted = 4.0 - 2.5 = 1.5
-        assert!((agents[0].nutrient - 2.5).abs() < 1e-3,
-            "consumer should retain 2.5 nutrient, got {}", agents[0].nutrient);
-        assert!((nutrient_grid.total() - 1.5).abs() < 1e-3,
-            "nutrient pool should receive 1.5 excess, got {}", nutrient_grid.total());
-        assert!((agents[1].nutrient - 16.0).abs() < 1e-3,
-            "target nutrient should be 16.0 (20 - 4), got {}", agents[1].nutrient);
+        // consumer_nutrient_need = demand(2.5) * energy_gained(1.0) = 2.5
+        // retained = min(1.8, 2.5) = 1.8; excreted = 0.0
+        assert!((agents[0].nutrient - 1.8).abs() < 1e-3,
+            "consumer should retain the 1.8 bound nutrient released, got {}", agents[0].nutrient);
+        assert!((nutrient_grid.total()).abs() < 1e-3,
+            "consumer need exceeds release, so nothing is excreted, got {}", nutrient_grid.total());
+        assert!((agents[1].nutrient - 20.0).abs() < 1e-3,
+            "grazing never touches the target's free store, got {}", agents[1].nutrient);
+    }
+
+    #[test]
+    fn drain_excretes_bound_nutrient_excess_to_available_pool() {
+        // When the bound nutrient released by grazing exceeds the consumer's
+        // stoichiometric demand, the excess is excreted to the available pool —
+        // the target's free store still stays untouched.
+        let params = test_params();
+        // Low-demand consumer (tiny structure) so the released bound exceeds need.
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 4.0, // ratio = 0.9 per structure
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
+            make_agent(2, (1.0, 0.0), 10.0, target_traits),
+        ];
+        agents[0].structure = 0.1; // demand = 0.1 * 0.5 = 0.05
+        agents[1].structure = 10.0;
+        agents[1].nutrient = 20.0;
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let _result = resolve_drains(
+            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+        );
+
+        // bound released = 2.0 * 0.9 = 1.8; consumer need = 0.05 * 1.0 = 0.05
+        // retained = 0.05; excreted = 1.75
+        assert!((agents[0].nutrient - 0.05).abs() < 1e-3,
+            "consumer retains its demand 0.05, got {}", agents[0].nutrient);
+        assert!((nutrient_grid.total() - 1.75).abs() < 1e-3,
+            "excess bound nutrient 1.75 is excreted, got {}", nutrient_grid.total());
+        assert!((agents[1].nutrient - 20.0).abs() < 1e-3,
+            "target's free store untouched, got {}", agents[1].nutrient);
     }
 
     #[test]
@@ -3259,7 +3380,7 @@ mod tests {
             ..zero_traits()
         };
         let target_traits = TraitVector {
-            photosynthetic_absorption: 0.5,
+            photosynthetic_absorption: 4.0, // high demand -> released bound exceeds need
             ..zero_traits()
         };
         // Place consumer and target far apart but within contact range
@@ -3270,7 +3391,7 @@ mod tests {
             make_agent(1, consumer_pos, 10.0, consumer_traits),
             make_agent(2, target_pos, 10.0, target_traits),
         ];
-        agents[0].structure = 5.0;
+        agents[0].structure = 0.1; // low demand so the released bound is excreted
         agents[1].structure = 10.0;
         agents[1].nutrient = 20.0;
 

@@ -337,7 +337,7 @@ fn compute_energy_budget(world: &World) -> EnergyBudget {
         carcass_energy: world.carcasses().iter().map(|c| c.energy).sum(),
         dissipated_energy: world.dissipated_energy(),
         nutrient_available: world.nutrient_pool(),
-        nutrient_living: world.agents().iter().map(|a| a.nutrient_total()).sum(),
+        nutrient_living: world.agents().iter().map(|a| a.nutrient_total(world.params())).sum(),
         nutrient_carcasses: world.carcasses().iter().map(|c| c.nutrient).sum(),
     }
 }
@@ -1125,7 +1125,7 @@ mod tests {
 
         // Nutrient pools are reported.
         assert!((budget.nutrient_available - world.nutrient_pool()).abs() < 1e-3);
-        let expected_living_nutrient: f32 = world.agents().iter().map(|a| a.nutrient_total()).sum();
+        let expected_living_nutrient: f32 = world.agents().iter().map(|a| a.nutrient_total(world.params())).sum();
         assert!((budget.nutrient_living - expected_living_nutrient).abs() < 1e-3);
     }
 
