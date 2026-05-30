@@ -391,7 +391,9 @@ pub fn resolve_drains(
                 {
                     continue;
                 }
-                // Sustained contact scaling: demand = eff * ct / (ct + K)
+                // Sustained contact scaling: demand = eff * ct / (ct + K),
+                // where K is the half-saturation contact duration (in ticks).
+                // K = 0 disables the ramp and uses raw eff_heterotrophy.
                 let half_sat = params.consumption_contact_half_saturation;
                 let demand = if half_sat > 0.0 {
                     let ct = agents[consumer_idx].contact_time as f32;
@@ -523,7 +525,9 @@ pub fn resolve_drains(
                 {
                     continue;
                 }
-                // Sustained contact scaling: demand = eff * ct / (ct + K)
+                // Sustained contact scaling: demand = eff * ct / (ct + K),
+                // where K is the half-saturation contact duration (in ticks).
+                // K = 0 disables the ramp and uses raw eff_heterotrophy.
                 let half_sat = params.consumption_contact_half_saturation;
                 let demand = if half_sat > 0.0 {
                     let ct = agents[consumer_idx].contact_time as f32;
@@ -4998,6 +5002,64 @@ mod tests {
         // Should be very close to eff_heterotrophy (0.8) but not exceed it
         assert!(gained < 0.8, "demand must not exceed eff_heterotrophy");
         assert!(gained > 0.799, "demand should be within 0.1% of eff_heterotrophy at ct=10000");
+    }
+
+    #[test]
+    fn sustained_contact_default_produces_visible_ramp() {
+        // The shipped default for consumption_contact_half_saturation should
+        // produce a multi-tick Michaelis-Menten ramp, not a step at ct=1.
+        // Using the default value (parsed from JSON via serde), demand at ct=1
+        // should be meaningfully less than at ct=10, and both should asymptote
+        // toward eff_heterotrophy as ct grows large.
+        let default_params: WorldParameters = serde_json::from_str(
+            r#"{
+                "solar_flux_magnitude": 10.0,
+                "base_trophic_efficiency": 1.0,
+                "reproduction_efficiency": 0.7,
+                "base_metabolic_rate": 0.0,
+                "movement_cost_coefficient": 0.0,
+                "reproduction_energy_threshold": 50.0,
+                "mutation_rate": 0.0,
+                "mutation_magnitude": 0.0,
+                "contact_range_coefficient": 5.0,
+                "world_extent": 100.0,
+                "initial_population_size": 0,
+                "light_competition_radius": 1000.0,
+                "photo_maintenance_cost": 0.0,
+                "heterotrophy_maintenance_cost": 0.0
+            }"#,
+        )
+        .expect("default params should deserialise");
+        let half_sat = default_params.consumption_contact_half_saturation;
+        assert!(
+            half_sat >= 1.0,
+            "default half-saturation must be large enough to give a visible ramp, \
+             got K={half_sat}"
+        );
+
+        let eff_heterotrophy = 1.0_f32;
+        let demand_at_ct = |ct: f32| eff_heterotrophy * ct / (ct + half_sat);
+
+        let d1 = demand_at_ct(1.0);
+        let d10 = demand_at_ct(10.0);
+        let d1000 = demand_at_ct(1000.0);
+
+        // ct=1 should be meaningfully less than eff_heterotrophy (not a step).
+        assert!(
+            d1 < 0.8 * eff_heterotrophy,
+            "demand at ct=1 should be well below eff_heterotrophy, got {d1}"
+        );
+        // ct=10 should be meaningfully larger than ct=1 (multi-tick ramp).
+        assert!(
+            d10 > d1 + 0.1,
+            "demand at ct=10 ({d10}) should be meaningfully larger than at ct=1 ({d1})"
+        );
+        // Monotonic and asymptoting toward eff_heterotrophy.
+        assert!(d10 < d1000, "demand should keep rising past ct=10");
+        assert!(
+            d1000 > 0.99 * eff_heterotrophy,
+            "demand should approach eff_heterotrophy at high ct, got {d1000}"
+        );
     }
 
     #[test]
