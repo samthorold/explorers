@@ -1,5 +1,7 @@
 # Nutrient is embodied matter, with a reproductive-nutrient earmark mirroring energy
 
+_Extended by [ADR-0004](0004-reproductive-nutrient-from-all-income.md)._ The embodiment and the reproductive-nutrient earmark established here stand. ADR-0004 clarifies that "each tick's uptake" means **all** nutrient income — autotrophic pool uptake *and* the nutrient ingested by consumption — so the earmark is route-agnostic and heterotrophs can fund reproduction from prey. The wiring here fed the earmark only from pool uptake.
+
 Nutrient is treated as **matter embodied in biomass**: growth consumes free nutrient and binds it into structure (`bound nutrient = structure × demand`), released only when that structure is grazed or returned to a carcass at death. Within a living agent, nutrient takes the same shape as energy — a free store mirrors reserve, and a **reproductive-nutrient earmark** (fed the `(1 − kappa)` share of each tick's uptake, off-limits to growth) mirrors the reproductive allocation. Reproduction is gated on that earmark via a `reproduction_nutrient_threshold` and donates it to offspring; the former body-support gate (`nutrient ≥ structure × demand`) is dropped. This supersedes the build-permit mechanism of [ADR-0002](0002-growth-co-limited-by-nutrient.md).
 
 ## Problem
