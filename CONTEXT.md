@@ -188,6 +188,10 @@ _Avoid_: retention factor (too generic), metabolic safety margin (implies a hard
 **Reproduction efficiency**:
 Fraction of energy invested by the parent that the offspring actually receives. The remainder is dissipated. Reproduction is lossy like all energy transfers.
 
+**Offspring structure fraction**:
+Fraction of each offspring's per-offspring energy share (after reproduction-efficiency loss) that is committed to **structure** at birth rather than to **reserve**. The structure commitment goes through the same lossy reserve-to-structure conversion as in-life growth (`growth_efficiency`); the unconverted remainder is dissipated to heat. The remaining `(1 − offspring_structure_fraction)` becomes the newborn's starting reserve. The same provisioning is applied to seeded agents at world creation, so tick-0 agents are not degenerately disadvantaged against the structural death threshold. Conservation across reproduction: parents' committed investment = sum of offspring reserve + sum of offspring structure + heat. A world parameter searched by genesis. Default 0.2 — most of the per-offspring share is reserve (metabolic fuel for the first ticks of life), with enough committed to structure that newborns are not born structure-zero.
+_Avoid_: birth weight (too phenotypic), structure share (ambiguous between birth-time and growth-time allocation)
+
 **Reproduction energy threshold**:
 Minimum energy an agent must have to attempt reproduction. Below this, agents prioritise survival.
 

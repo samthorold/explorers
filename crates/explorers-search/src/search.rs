@@ -131,6 +131,7 @@ pub fn default_ranges() -> Vec<ParameterRange> {
         ParameterRange { name: "mean_dispersal".into(), min: 0.0, max: 2.0 },                 // 27
         ParameterRange { name: "maintenance_cost_exponent".into(), min: 1.5, max: 3.0 },     // 28
         ParameterRange { name: "growth_retention_multiplier".into(), min: 1.0, max: 5.0 },   // 29
+        ParameterRange { name: "offspring_structure_fraction".into(), min: 0.05, max: 0.5 }, // 30
     ]
 }
 
@@ -173,6 +174,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         consumption_contact_half_saturation: 0.001,
         nutrient_grid_cell_size: 10.0,
         growth_retention_multiplier: v(29) as f32,
+        offspring_structure_fraction: v(30) as f32,
     };
 
     let dist = InitialDistribution {
