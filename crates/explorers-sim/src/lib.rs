@@ -131,6 +131,7 @@ fn default_base_nutrient_ratio() -> f32 { 0.1 }
 fn default_specification_nutrient_coefficient() -> f32 { 0.2 }
 fn default_sensing_range_coefficient() -> f32 { 10.0 }
 fn default_reproductive_compatibility_distance() -> f32 { 2.0 }
+fn default_reproduction_nutrient_threshold() -> f32 { 1.0 }
 fn default_maintenance_cost_exponent() -> f32 { 2.0 }
 fn default_consumption_contact_half_saturation() -> f32 { 3.0 }
 fn default_nutrient_grid_cell_size() -> f32 { 10.0 }
@@ -176,6 +177,12 @@ pub struct WorldParameters {
     #[serde(default = "default_sensing_range_coefficient")]
     pub sensing_range_coefficient: f32,
     pub reproduction_energy_threshold: f32,
+    /// Minimum reproductive-nutrient earmark an agent must hold to reproduce.
+    /// Mirrors `reproduction_energy_threshold` for the nutrient currency: the
+    /// reproduction gate reads `repro_nutrient`, never the free store, so growth
+    /// can never pin an agent on this gate.
+    #[serde(default = "default_reproduction_nutrient_threshold")]
+    pub reproduction_nutrient_threshold: f32,
     pub mutation_rate: f32,
     pub mutation_magnitude: f32,
     #[serde(alias = "contact_radius")]
@@ -336,6 +343,10 @@ pub struct Agent {
     /// Reproduction reserve: accumulates (1-kappa) fraction of surplus each tick.
     /// Reproduction draws from this, not from reserve.
     pub repro_reserve: f32,
+    /// Reproductive-nutrient earmark: accumulates the (1-kappa) share of each
+    /// tick's nutrient uptake. Off-limits to growth. Reproduction gates on and
+    /// donates from this, mirroring `repro_reserve` for energy.
+    pub repro_nutrient: f32,
 }
 
 /// Maps a functional trait index (0–2) to its position in the TraitVector.
@@ -346,6 +357,13 @@ impl Agent {
     /// Total energy held by this agent (reserve + structure + repro_reserve).
     pub fn energy(&self) -> f32 {
         self.reserve + self.structure + self.repro_reserve
+    }
+
+    /// Total nutrient held by this agent: the free store plus the
+    /// reproductive-nutrient earmark. The conserved nutrient quantity for the
+    /// ledger and every death path.
+    pub fn nutrient_total(&self) -> f32 {
+        self.nutrient + self.repro_nutrient
     }
 
     /// Returns the nominal trait value for a given functional trait index (0–5).
@@ -537,6 +555,7 @@ impl World {
                     contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                     repro_reserve: 0.0,
+                    repro_nutrient: 0.0,
                 }
             })
             .collect();
@@ -590,6 +609,7 @@ impl World {
                         contact_time: 0,
                         wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                         repro_reserve: 0.0,
+                        repro_nutrient: 0.0,
                     }
                 })
                 .collect();
@@ -651,7 +671,7 @@ impl World {
         // across all pools (grid cells + living agents + carcasses) at tick
         // end equals the total at tick start.
         let pre_grid_nutrient: f32 = self.nutrient_grid.total();
-        let pre_agent_nutrient: f32 = self.agents.iter().map(|a| a.nutrient).sum();
+        let pre_agent_nutrient: f32 = self.agents.iter().map(|a| a.nutrient_total()).sum();
         let pre_carcass_nutrient: f32 = self.carcasses.iter().map(|c| c.nutrient).sum();
 
         // Snapshot trait vectors for ledger efficiency calculations
@@ -951,7 +971,7 @@ impl World {
         };
         let post_pools = nutrient_ledger::PoolTotals {
             grid: self.nutrient_grid.total(),
-            agents: self.agents.iter().map(|a| a.nutrient).sum(),
+            agents: self.agents.iter().map(|a| a.nutrient_total()).sum(),
             carcasses: self.carcasses.iter().map(|c| c.nutrient).sum(),
         };
         self.nutrient_ledger.build_from_pool_totals(pre_pools, post_pools);
@@ -1079,6 +1099,7 @@ mod tests {
             movement_cost_coefficient: 0.05,
             sensing_range_coefficient: 10.0,
             reproduction_energy_threshold: 50.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             contact_range_coefficient: 5.0,
@@ -1175,10 +1196,48 @@ mod tests {
             id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
             nutrient: 5.0, traits: zero_traits(), contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         };
         assert_eq!(agent.nutrient, 5.0);
         let carcass = Carcass { id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 3.0, traits: zero_traits() };
         assert_eq!(carcass.nutrient, 3.0);
+    }
+
+    #[test]
+    fn reproduction_nutrient_threshold_has_serde_default() {
+        // The reproduction nutrient gate's threshold is a new world parameter
+        // with a serde default, so older recipes that omit it still parse.
+        let params: WorldParameters = serde_json::from_str(
+            r#"{
+                "solar_flux_magnitude": 10.0,
+                "base_trophic_efficiency": 1.0,
+                "reproduction_efficiency": 0.7,
+                "base_metabolic_rate": 0.0,
+                "movement_cost_coefficient": 0.0,
+                "reproduction_energy_threshold": 50.0,
+                "mutation_rate": 0.0,
+                "mutation_magnitude": 0.0,
+                "contact_range_coefficient": 5.0,
+                "world_extent": 100.0,
+                "initial_population_size": 0,
+                "light_competition_radius": 1000.0,
+                "photo_maintenance_cost": 0.0,
+                "heterotrophy_maintenance_cost": 0.0
+            }"#,
+        )
+        .expect("params omitting reproduction_nutrient_threshold should deserialise");
+        assert_eq!(params.reproduction_nutrient_threshold, default_reproduction_nutrient_threshold());
+    }
+
+    #[test]
+    fn agent_carries_repro_nutrient_earmark() {
+        let agent = Agent {
+            id: 0, position: (0.0, 0.0), reserve: 0.0, structure: 0.0,
+            nutrient: 5.0, traits: zero_traits(), contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 0.0,
+            repro_nutrient: 7.0,
+        };
+        assert_eq!(agent.repro_nutrient, 7.0);
     }
 
     #[test]
@@ -1299,6 +1358,7 @@ mod tests {
                 contact_time: 10,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 0.0,
+                repro_nutrient: 0.0,
             });
         }
 
@@ -1360,6 +1420,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
 
         world.step();
@@ -1419,6 +1480,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
         // Target with structure to drain
         world.add_agent(Agent {
@@ -1434,6 +1496,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
 
         world.step();
@@ -1487,6 +1550,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
 
         // Two ticks: each tick's move is charged as mobility use-wear that same
@@ -1541,6 +1605,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
 
         // A single tick: the agent moves and the move-wear is charged this tick.
@@ -1585,6 +1650,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         };
         let nominal = agent.effective_trait_with_steepness(0, 1.0);
         assert!((nominal - 1.0).abs() < 1e-6);
@@ -1704,6 +1770,7 @@ mod tests {
             movement_cost_coefficient: 0.1,
             sensing_range_coefficient: 10.0,
             reproduction_energy_threshold: 20.0,
+            reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.1,
             mutation_magnitude: 0.05,
@@ -1748,6 +1815,7 @@ mod tests {
                 contact_time: 50,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 5.0,
+                repro_nutrient: 0.0,
             });
         }
         // Heterotrophs (mobile, consume living and dead)
@@ -1768,6 +1836,7 @@ mod tests {
                 contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 5.0,
+                repro_nutrient: 0.0,
             });
         }
     }
@@ -1805,6 +1874,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
 
         world.step();
@@ -1882,14 +1952,14 @@ mod tests {
 
         // Compute initial total nutrient
         let initial_nutrient: f32 = world.nutrient_pool()
-            + world.agents().iter().map(|a| a.nutrient).sum::<f32>()
+            + world.agents().iter().map(|a| a.nutrient_total()).sum::<f32>()
             + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
 
         for t in 0..200 {
             world.step();
 
             let current_nutrient: f32 = world.nutrient_pool()
-                + world.agents().iter().map(|a| a.nutrient).sum::<f32>()
+                + world.agents().iter().map(|a| a.nutrient_total()).sum::<f32>()
                 + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
 
             let diff = (current_nutrient - initial_nutrient).abs();
@@ -1931,6 +2001,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
 
         world.step();
@@ -1966,6 +2037,7 @@ mod tests {
             contact_time: 50,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
         // Nutrient-rich target.
         world.add_agent(Agent {
@@ -1982,6 +2054,7 @@ mod tests {
             contact_time: 50,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
 
         world.step();
@@ -2019,6 +2092,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
 
         world.step();
@@ -2037,6 +2111,7 @@ mod tests {
         let params = WorldParameters {
             base_metabolic_rate: 0.0, // preserve repro_reserve through metabolism
             reproduction_energy_threshold: 5.0,
+            reproduction_nutrient_threshold: 1.0,
             ..conservation_params()
         };
         let dist = InitialDistribution {
@@ -2062,6 +2137,7 @@ mod tests {
             contact_time: 50,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 50.0,
+            repro_nutrient: 10.0, // earmark above threshold so reproduction fires
         });
 
         world.step();
@@ -2069,6 +2145,70 @@ mod tests {
         assert!(world.last_tick_births() > 0,
             "reproduction should produce births this tick");
         world.nutrient_ledger().assert_balanced();
+    }
+
+    #[test]
+    fn fed_producer_reproduces_and_is_not_pinned_on_nutrient_gate() {
+        // Regression for #269. Under the build-permit model, the per-tick order
+        // absorb -> grow -> reproduce let growth greedily convert each tick's
+        // nutrient up to the permit ceiling, leaving a well-fed agent pinned
+        // *exactly* on the old reproduction gate (nutrient == structure * demand)
+        // — never above it, never with free nutrient to donate. So a fed
+        // population never reproduced. With nutrient uptake split by kappa, the
+        // (1 - kappa) share lands in the repro_nutrient earmark that growth
+        // cannot touch, so the earmark accumulates past the threshold and
+        // reproduction fires.
+        let params = WorldParameters {
+            // Abundant light and nutrient: a genuinely fed steady state.
+            solar_flux_magnitude: 50.0,
+            initial_nutrient_pool: 1000.0,
+            base_metabolic_rate: 0.1,
+            growth_efficiency: 0.5, // growth is active and would consume the permit
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            mutation_rate: 0.0,
+            ..conservation_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 7);
+        // A single sessile autotroph with kappa < 1 (so some uptake is
+        // earmarked), positive fecundity and a guaranteed-asexual draw.
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.8,
+                kappa: 0.6,
+                fecundity: 2.0,
+                asexual_propensity: 1.0,
+                ..zero_traits()
+            },
+            contact_time: 50,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+            repro_nutrient: 0.0,
+        });
+
+        let mut total_births = 0;
+        for _ in 0..200 {
+            world.step();
+            total_births += world.last_tick_births();
+            world.nutrient_ledger().assert_balanced();
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+
+        assert!(total_births > 0,
+            "a fed producer must reproduce — the #269 nutrient-gate pinning is resolved");
     }
 
     #[test]
@@ -2354,6 +2494,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         });
 
         let agent_id = world.agents().last().unwrap().id;

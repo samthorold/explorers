@@ -282,6 +282,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         }
     }
 

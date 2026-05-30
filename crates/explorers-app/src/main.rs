@@ -337,7 +337,7 @@ fn compute_energy_budget(world: &World) -> EnergyBudget {
         carcass_energy: world.carcasses().iter().map(|c| c.energy).sum(),
         dissipated_energy: world.dissipated_energy(),
         nutrient_available: world.nutrient_pool(),
-        nutrient_living: world.agents().iter().map(|a| a.nutrient).sum(),
+        nutrient_living: world.agents().iter().map(|a| a.nutrient_total()).sum(),
         nutrient_carcasses: world.carcasses().iter().map(|c| c.nutrient).sum(),
     }
 }
@@ -431,6 +431,7 @@ fn default_recipe() -> WorldRecipe {
             movement_cost_coefficient: 0.05,
             sensing_range_coefficient: 10.0,
             reproduction_energy_threshold: 50.0,
+            reproduction_nutrient_threshold: 1.0,
             mutation_rate: 0.1,
             mutation_magnitude: 0.05,
             contact_range_coefficient: 5.0,
@@ -867,6 +868,7 @@ impl ExplorersApp {
                             ui.label(format!("Structure: {:.1}", agent.structure));
                             ui.label(format!("Nutrient: {:.1}", agent.nutrient));
                             ui.label(format!("Repro reserve: {:.1}", agent.repro_reserve));
+                            ui.label(format!("Repro nutrient: {:.1}", agent.repro_nutrient));
                             ui.label(format!("Contact time: {}", agent.contact_time));
                             ui.label(format!("Dominant role: {}", dominant_role(&agent.traits)));
                             let threshold =
@@ -1123,7 +1125,7 @@ mod tests {
 
         // Nutrient pools are reported.
         assert!((budget.nutrient_available - world.nutrient_pool()).abs() < 1e-3);
-        let expected_living_nutrient: f32 = world.agents().iter().map(|a| a.nutrient).sum();
+        let expected_living_nutrient: f32 = world.agents().iter().map(|a| a.nutrient_total()).sum();
         assert!((budget.nutrient_living - expected_living_nutrient).abs() < 1e-3);
     }
 
@@ -1416,6 +1418,7 @@ mod tests {
             contact_time: 0,
             wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
+            repro_nutrient: 0.0,
         }
     }
 
