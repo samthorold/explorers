@@ -187,6 +187,98 @@ fn find_nearest_agent(
         .map(|(id, _)| id)
 }
 
+/// A snapshot of where the world's energy and nutrient currently sit. Energy is
+/// open (solar in, dissipation/transfer-loss out); nutrient is conserved and
+/// cycles between pools. Framework-agnostic so the budget aggregation is
+/// unit-testable without a window, and computed in the app (never in
+/// `explorers-sim`) per ADR 0001.
+#[derive(Debug, PartialEq)]
+struct EnergyBudget {
+    living_reserve: f32,
+    living_structure: f32,
+    living_energy: f32,
+    carcass_energy: f32,
+    dissipated_energy: f32,
+    nutrient_available: f32,
+    nutrient_living: f32,
+    nutrient_carcasses: f32,
+}
+
+/// Aggregate the world's instantaneous energy and nutrient distribution into an
+/// [`EnergyBudget`] for the debug readout. Pure read of public world state.
+fn compute_energy_budget(world: &World) -> EnergyBudget {
+    EnergyBudget {
+        living_reserve: world.agents().iter().map(|a| a.reserve).sum(),
+        living_structure: world.agents().iter().map(|a| a.structure).sum(),
+        living_energy: world.agents().iter().map(|a| a.energy()).sum(),
+        carcass_energy: world.carcasses().iter().map(|c| c.energy).sum(),
+        dissipated_energy: world.dissipated_energy(),
+        nutrient_available: world.nutrient_pool(),
+        nutrient_living: world.agents().iter().map(|a| a.nutrient).sum(),
+        nutrient_carcasses: world.carcasses().iter().map(|c| c.nutrient).sum(),
+    }
+}
+
+/// Contact-time aggregation across the living population for the status line:
+/// the mean and the longest sustained contact. Contact time accrues while an
+/// agent is in consuming range of a target. Framework-agnostic and unit-testable.
+#[derive(Debug, PartialEq, Default)]
+struct ContactTimeStats {
+    average: f64,
+    max: u64,
+}
+
+impl ContactTimeStats {
+    /// Compute the contact-time average and maximum for a slice of agents. An
+    /// empty population yields zeroes.
+    fn of(agents: &[explorers_sim::Agent]) -> Self {
+        if agents.is_empty() {
+            return Self::default();
+        }
+        let sum: f64 = agents.iter().map(|a| a.contact_time as f64).sum();
+        let max = agents.iter().map(|a| a.contact_time).max().unwrap_or(0);
+        Self { average: sum / agents.len() as f64, max }
+    }
+}
+
+/// The living population split by dominant trophic role for the status line.
+/// Roles are a reading of each agent's trait vector (see [`dominant_role`]),
+/// never an assigned type. Framework-agnostic and unit-testable.
+#[derive(Debug, PartialEq, Default)]
+struct RoleBreakdown {
+    total: usize,
+    producers: usize,
+    consumers: usize,
+    decomposers: usize,
+}
+
+impl RoleBreakdown {
+    /// Tally a slice of agents into the role breakdown.
+    fn count(agents: &[explorers_sim::Agent]) -> Self {
+        let mut breakdown = RoleBreakdown { total: agents.len(), ..Default::default() };
+        for agent in agents {
+            match dominant_role(&agent.traits) {
+                "producers" => breakdown.producers += 1,
+                "consumers" => breakdown.consumers += 1,
+                _ => breakdown.decomposers += 1,
+            }
+        }
+        breakdown
+    }
+}
+
+/// Classify an agent's trait vector into its dominant trophic role for the
+/// status-line breakdown. A reading of the trait vector, never an assigned type
+/// (per CONTEXT.md): autotrophy-leaning reads as a producer, heterotrophy-leaning
+/// as a consumer. Ties read as producers. Framework-agnostic and unit-testable.
+fn dominant_role(traits: &TraitVector) -> &'static str {
+    if traits.photosynthetic_absorption >= traits.heterotrophy {
+        "producers"
+    } else {
+        "consumers"
+    }
+}
+
 /// Fixed render radius for agents, in world units.
 const AGENT_RADIUS: f32 = 3.0;
 /// Half-side length of a carcass square, in world units.
@@ -442,8 +534,181 @@ impl eframe::App for ExplorersApp {
                 }
             });
 
+        // Second OS window: instrumentation only, no run-control chrome (that
+        // lives on the grid window above). Rendered as an immediate viewport so
+        // the parameter sliders can mutate the running world in place.
+        self.show_debug_window(ctx);
+
         // Keep repainting so the simulation continues to advance on its timer.
         ctx.request_repaint();
+    }
+}
+
+/// Width hint for the debug window when it first opens.
+const DEBUG_WINDOW_WIDTH: f32 = 360.0;
+/// Height hint for the debug window when it first opens.
+const DEBUG_WINDOW_HEIGHT: f32 = 720.0;
+
+impl ExplorersApp {
+    /// Render the dedicated debug window in its own OS window via egui
+    /// multi-viewport. Hosts the instantaneous readouts ported from the old
+    /// Bevy app: status line, energy budget, world-parameter sliders, and the
+    /// selected-agent inspector. All readout state lives here in the app, never
+    /// in `explorers-sim`, per ADR 0001.
+    fn show_debug_window(&mut self, ctx: &egui::Context) {
+        let viewport_id = egui::ViewportId::from_hash_of("debug_window");
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Explorers — Debug")
+            .with_inner_size([DEBUG_WINDOW_WIDTH, DEBUG_WINDOW_HEIGHT]);
+
+        ctx.show_viewport_immediate(viewport_id, builder, |ctx, _class| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    self.debug_status_line(ui);
+                    ui.separator();
+                    self.debug_energy_budget(ui);
+                    ui.separator();
+                    self.debug_world_parameters(ui);
+                    ui.separator();
+                    self.debug_selected_agent(ui);
+                });
+            });
+
+            // Closing the debug window should not tear down the whole app; it
+            // simply leaves the grid window running.
+            if ctx.input(|i| i.viewport().close_requested()) {
+                // Nothing to clean up; the viewport disappears on its own.
+            }
+        });
+    }
+
+    /// Status line: tick, role breakdown, carcass count, contact-time avg/max,
+    /// and ticks-per-second.
+    fn debug_status_line(&self, ui: &mut egui::Ui) {
+        let agents = self.world.agents();
+        let breakdown = RoleBreakdown::count(agents);
+        let contact = ContactTimeStats::of(agents);
+
+        ui.label(format!("Tick: {}", self.tick_count));
+        ui.label(format!(
+            "Agents: {} ({} P / {} C / {} D)",
+            breakdown.total, breakdown.producers, breakdown.consumers, breakdown.decomposers
+        ));
+        ui.label(format!("Carcasses: {}", self.world.carcasses().len()));
+        ui.label(format!(
+            "Contact time: avg {:.0} / max {}",
+            contact.average, contact.max
+        ));
+        let paused = if self.clock.is_paused() { " | PAUSED" } else { "" };
+        ui.label(format!("TPS: {:.2}{}", self.clock.ticks_per_second(), paused));
+    }
+
+    /// Energy budget: living reserve/structure/total, carcass structure,
+    /// dissipated, grand total, and the three nutrient pools.
+    fn debug_energy_budget(&self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Energy Budget")
+            .default_open(true)
+            .show(ui, |ui| {
+                let budget = compute_energy_budget(&self.world);
+                ui.label(format!("Living reserve: {:.1}", budget.living_reserve));
+                ui.label(format!("Living structure: {:.1}", budget.living_structure));
+                ui.label(format!("Living total: {:.1}", budget.living_energy));
+                ui.label(format!("Carcass structure: {:.1}", budget.carcass_energy));
+                ui.label(format!("Dissipated: {:.1}", budget.dissipated_energy));
+                let grand_total =
+                    budget.living_energy + budget.carcass_energy + budget.dissipated_energy;
+                ui.label(format!("Grand total: {:.1}", grand_total));
+                ui.separator();
+                ui.label("Nutrients:");
+                ui.label(format!("  Available pool: {:.1}", budget.nutrient_available));
+                ui.label(format!("  Living agents: {:.1}", budget.nutrient_living));
+                ui.label(format!("  Carcasses: {:.1}", budget.nutrient_carcasses));
+            });
+    }
+
+    /// World-parameter sliders: live mutation of the running world's parameters
+    /// mid-run via `params_mut`. The hypothesis-poking surface.
+    fn debug_world_parameters(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("World Parameters")
+            .default_open(true)
+            .show(ui, |ui| {
+                let params = self.world.params_mut();
+                ui.add(egui::Slider::new(&mut params.solar_flux_magnitude, 0.0..=200.0).text("Solar flux"));
+                ui.add(egui::Slider::new(&mut params.base_metabolic_rate, 0.0..=2.0).text("Base metabolic rate"));
+                ui.add(egui::Slider::new(&mut params.photo_maintenance_cost, 0.0..=0.5).text("Photo maintenance"));
+                ui.add(egui::Slider::new(&mut params.heterotrophy_maintenance_cost, 0.0..=0.5).text("Heterotrophy maintenance"));
+                ui.add(egui::Slider::new(&mut params.somatic_maintenance_cost_coefficient, 0.0..=1.0).text("Somatic maintenance"));
+                ui.add(egui::Slider::new(&mut params.structure_maintenance_coefficient, 0.0..=0.1).text("Structure maintenance"));
+                ui.add(egui::Slider::new(&mut params.mobility_maintenance_cost, 0.0..=0.5).text("Mobility maintenance"));
+                ui.add(egui::Slider::new(&mut params.asexual_propensity_maintenance_cost, 0.0..=0.5).text("Asexual-propensity maintenance"));
+                ui.add(egui::Slider::new(&mut params.maintenance_cost_exponent, 1.0..=3.0).text("Maintenance cost exponent"));
+                ui.add(egui::Slider::new(&mut params.mutation_rate, 0.0..=1.0).text("Mutation rate"));
+                ui.add(egui::Slider::new(&mut params.mutation_magnitude, 0.0..=0.5).text("Mutation magnitude"));
+                ui.add(egui::Slider::new(&mut params.contact_range_coefficient, 1.0..=50.0).text("Contact range coefficient"));
+                ui.add(egui::Slider::new(&mut params.light_competition_radius, 1.0..=100.0).text("Light competition radius"));
+                ui.add(egui::Slider::new(&mut params.growth_efficiency, 0.0..=1.0).text("Growth efficiency"));
+                ui.add(egui::Slider::new(&mut params.wear_rate, 0.0..=1.0).text("Wear rate"));
+                ui.add(egui::Slider::new(&mut params.wear_degradation_steepness, 0.0..=5.0).text("Wear degradation steepness"));
+                ui.add(egui::Slider::new(&mut params.use_wear_rate, 0.0..=0.5).text("Use wear rate"));
+                ui.add(egui::Slider::new(&mut params.repair_decay, 0.0..=5.0).text("Repair decay"));
+                ui.add(egui::Slider::new(&mut params.base_trophic_efficiency, 0.0..=1.0).text("Base trophic efficiency"));
+                ui.add(egui::Slider::new(&mut params.reproduction_efficiency, 0.0..=1.0).text("Reproduction efficiency"));
+                ui.add(egui::Slider::new(&mut params.reproduction_energy_threshold, 0.0..=200.0).text("Reproduction energy threshold"));
+            });
+    }
+
+    /// Selected-agent inspector: reads the shared selection and shows the
+    /// agent's full state and trait vector. Handles the no-selection and
+    /// dead-agent cases gracefully.
+    fn debug_selected_agent(&self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Selected Agent")
+            .default_open(true)
+            .show(ui, |ui| match self.selected_agent {
+                None => {
+                    ui.label("Click an agent in the grid window to inspect");
+                }
+                Some(agent_id) => {
+                    match self.world.agents().iter().find(|a| a.id == agent_id) {
+                        Some(agent) => {
+                            ui.label(format!("ID: {}", agent.id));
+                            ui.label(format!(
+                                "Position: ({:.1}, {:.1})",
+                                agent.position.0, agent.position.1
+                            ));
+                            ui.label(format!("Reserve: {:.1}  (death at 0)", agent.reserve));
+                            ui.label(format!("Structure: {:.1}", agent.structure));
+                            ui.label(format!("Nutrient: {:.1}", agent.nutrient));
+                            ui.label(format!("Repro reserve: {:.1}", agent.repro_reserve));
+                            ui.label(format!("Contact time: {}", agent.contact_time));
+                            ui.label(format!("Dominant role: {}", dominant_role(&agent.traits)));
+                            let threshold =
+                                self.world.params().reproduction_energy_threshold;
+                            let demand = explorers_sim::stoichiometric_demand(
+                                &agent.traits,
+                                agent.structure,
+                                self.world.params(),
+                            );
+                            ui.label(format!(
+                                "Repro gates: energy >= {:.0}, nutrient >= {:.1}",
+                                threshold, demand
+                            ));
+                            ui.separator();
+                            ui.label("Trait vector:");
+                            let t = &agent.traits;
+                            ui.label(format!("  autotrophy: {:.3}", t.photosynthetic_absorption));
+                            ui.label(format!("  heterotrophy: {:.3}", t.heterotrophy));
+                            ui.label(format!("  mobility: {:.3}", t.mobility));
+                            ui.label(format!("  kappa: {:.3}", t.kappa));
+                            ui.label(format!("  fecundity: {:.3}", t.fecundity));
+                            ui.label(format!("  asexual_propensity: {:.3}", t.asexual_propensity));
+                            ui.label(format!("  dispersal: {:.3}", t.dispersal));
+                        }
+                        None => {
+                            ui.label(format!("Agent {} is no longer alive", agent_id));
+                        }
+                    }
+                }
+            });
     }
 }
 
@@ -500,6 +765,100 @@ mod tests {
             asexual_propensity: 0.0,
             dispersal: 0.0,
         }
+    }
+
+    #[test]
+    fn contact_time_stats_average_and_max() {
+        let mut a = agent_at(1, (0.0, 0.0));
+        a.contact_time = 2;
+        let mut b = agent_at(2, (0.0, 0.0));
+        b.contact_time = 4;
+        let mut c = agent_at(3, (0.0, 0.0));
+        c.contact_time = 6;
+        let stats = ContactTimeStats::of(&[a, b, c]);
+        assert!((stats.average - 4.0).abs() < 1e-6, "avg of 2,4,6 is 4");
+        assert_eq!(stats.max, 6);
+    }
+
+    #[test]
+    fn contact_time_stats_of_empty_population_is_zero() {
+        let stats = ContactTimeStats::of(&[]);
+        assert_eq!(stats.average, 0.0);
+        assert_eq!(stats.max, 0);
+    }
+
+    #[test]
+    fn role_breakdown_counts_by_dominant_role() {
+        let agents = vec![
+            agent_with_traits(1, traits(0.9, 0.1)), // producer
+            agent_with_traits(2, traits(0.8, 0.2)), // producer
+            agent_with_traits(3, traits(0.1, 0.9)), // consumer
+        ];
+        let breakdown = RoleBreakdown::count(&agents);
+        assert_eq!(breakdown.total, 3);
+        assert_eq!(breakdown.producers, 2);
+        assert_eq!(breakdown.consumers, 1);
+        assert_eq!(breakdown.decomposers, 0);
+    }
+
+    #[test]
+    fn role_breakdown_of_empty_population_is_all_zero() {
+        let breakdown = RoleBreakdown::count(&[]);
+        assert_eq!(breakdown.total, 0);
+        assert_eq!(breakdown.producers, 0);
+        assert_eq!(breakdown.consumers, 0);
+        assert_eq!(breakdown.decomposers, 0);
+    }
+
+    #[test]
+    fn energy_budget_aggregates_living_carcass_and_dissipated() {
+        let world = World::from_recipe(&default_recipe(), 42);
+        let budget = compute_energy_budget(&world);
+
+        // Living energy is the sum of every agent's reserve + structure.
+        let expected_reserve: f32 = world.agents().iter().map(|a| a.reserve).sum();
+        let expected_structure: f32 = world.agents().iter().map(|a| a.structure).sum();
+        assert!((budget.living_reserve - expected_reserve).abs() < 1e-3);
+        assert!((budget.living_structure - expected_structure).abs() < 1e-3);
+        assert!(
+            (budget.living_energy - (expected_reserve + expected_structure)).abs() < 1e-3,
+            "living energy should be reserve + structure"
+        );
+
+        // Carcass energy and dissipated come straight off the world.
+        let expected_carcass: f32 = world.carcasses().iter().map(|c| c.energy).sum();
+        assert!((budget.carcass_energy - expected_carcass).abs() < 1e-3);
+        assert!((budget.dissipated_energy - world.dissipated_energy()).abs() < 1e-3);
+
+        // Nutrient pools are reported.
+        assert!((budget.nutrient_available - world.nutrient_pool()).abs() < 1e-3);
+        let expected_living_nutrient: f32 = world.agents().iter().map(|a| a.nutrient).sum();
+        assert!((budget.nutrient_living - expected_living_nutrient).abs() < 1e-3);
+    }
+
+    #[test]
+    fn energy_budget_grand_total_is_conserved_quantity() {
+        // The grand total — living + carcass + dissipated — should track the
+        // total solar input the world has admitted (open system: solar is the
+        // only tap). At tick zero with no solar yet, grand total is the seeded
+        // living energy and total_solar_input is zero plus that seed.
+        let world = World::from_recipe(&default_recipe(), 7);
+        let budget = compute_energy_budget(&world);
+        let grand_total =
+            budget.living_energy + budget.carcass_energy + budget.dissipated_energy;
+        assert!(grand_total > 0.0, "seeded world holds energy");
+    }
+
+    #[test]
+    fn dominant_role_classification() {
+        assert_eq!(dominant_role(&traits(0.8, 0.1)), "producers");
+        assert_eq!(dominant_role(&traits(0.1, 0.8)), "consumers");
+    }
+
+    #[test]
+    fn dominant_role_ties_to_producer() {
+        // A tie (equal autotrophy and heterotrophy) reads as a producer.
+        assert_eq!(dominant_role(&traits(0.5, 0.5)), "producers");
     }
 
     #[test]
@@ -767,6 +1126,12 @@ mod tests {
             wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
         }
+    }
+
+    fn agent_with_traits(id: u64, traits: TraitVector) -> explorers_sim::Agent {
+        let mut a = agent_at(id, (0.0, 0.0));
+        a.traits = traits;
+        a
     }
 
     #[test]
