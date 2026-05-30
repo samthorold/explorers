@@ -1958,6 +1958,111 @@ mod tests {
         }
     }
 
+    // WR-16: "Offspring are born with zero wear." Parents accumulate wear over
+    // their lifetime; a newborn must start its own wear accumulator at zero on
+    // every functional trait, regardless of how worn the parent(s) are.
+
+    #[test]
+    fn asexual_offspring_born_with_zero_wear() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            mobility: 1.0,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 1.0, // force asexual path
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 50.0, traits),
+            make_agent(2, (1.0, 0.0), 50.0, traits),
+        ];
+        // Both parents are heavily worn on every functional trait.
+        for agent in agents.iter_mut() {
+            agent.wear = [0.9; FUNCTIONAL_TRAIT_COUNT];
+            agent.repro_reserve = 15.0;
+            agent.nutrient = 10.0;
+        }
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+
+        assert!(!result.offspring.is_empty(), "asexual parents should reproduce");
+        for child in &result.offspring {
+            for ft in 0..FUNCTIONAL_TRAIT_COUNT {
+                assert_eq!(
+                    child.wear[ft], 0.0,
+                    "asexual offspring must be born with zero wear on trait {ft}, got {}",
+                    child.wear[ft]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sexual_offspring_born_with_zero_wear() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 10.0,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            mobility: 1.0,
+            kappa: 0.5,
+            fecundity: 4.0, // high mean so the Poisson draw yields offspring
+            asexual_propensity: 0.0, // force sexual path
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 50.0, traits),
+            make_agent(2, (1.0, 0.0), 50.0, traits),
+        ];
+        // Both parents are heavily worn on every functional trait.
+        for agent in agents.iter_mut() {
+            agent.wear = [0.9; FUNCTIONAL_TRAIT_COUNT];
+            agent.repro_reserve = 15.0;
+            agent.nutrient = 10.0;
+        }
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+
+        // Confirm we actually exercised the sexual path (target = mate id).
+        assert!(
+            result.events.iter().any(|e| e.kind == EventKind::Reproduced && e.target.is_some()),
+            "expected a sexual reproduction event with a mate target"
+        );
+        assert!(!result.offspring.is_empty(), "sexual pair should produce offspring");
+        for child in &result.offspring {
+            for ft in 0..FUNCTIONAL_TRAIT_COUNT {
+                assert_eq!(
+                    child.wear[ft], 0.0,
+                    "sexual offspring must be born with zero wear on trait {ft}, got {}",
+                    child.wear[ft]
+                );
+            }
+        }
+    }
+
     // --- Apply wear ---
 
     #[test]
