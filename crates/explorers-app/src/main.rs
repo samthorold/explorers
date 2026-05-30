@@ -169,6 +169,24 @@ fn parse_args(args: &[String]) -> CliOutcome {
     CliOutcome::Run(CliConfig { recipe_path, fast_forward })
 }
 
+/// Select the agent nearest a click position, respecting the toroidal wrap of
+/// the world. Returns the agent id, or `None` if there are no agents.
+///
+/// Framework-agnostic so selection resolution is unit-testable without a
+/// window. Lives in the app (never in `explorers-sim`) per ADR 0001: the sim
+/// has no opinion about selection.
+fn find_nearest_agent(
+    agents: &[explorers_sim::Agent],
+    click_pos: (f32, f32),
+    world_extent: f32,
+) -> Option<u64> {
+    agents
+        .iter()
+        .map(|a| (a.id, explorers_sim::toroidal_distance(click_pos, a.position, world_extent)))
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+        .map(|(id, _)| id)
+}
+
 /// Fixed render radius for agents, in world units.
 const AGENT_RADIUS: f32 = 3.0;
 /// Half-side length of a carcass square, in world units.
@@ -298,11 +316,17 @@ struct ExplorersApp {
     world: World,
     tick_count: u64,
     clock: RunClock,
+    /// Shared selection state: the id of the agent the user clicked, if any.
+    /// Lives on the app (never in `explorers-sim`) per ADR 0001 so future debug
+    /// views can read it. `None` when nothing is selected; a stale id whose
+    /// agent has died is handled gracefully at lookup time (the painter and any
+    /// reader treat a missing agent as "no longer alive").
+    selected_agent: Option<u64>,
 }
 
 impl ExplorersApp {
     fn new(world: World, tick_count: u64) -> Self {
-        Self { world, tick_count, clock: RunClock::new() }
+        Self { world, tick_count, clock: RunClock::new(), selected_agent: None }
     }
 
     /// Advance the simulation by `steps` whole ticks, keeping the tick readout
@@ -359,9 +383,22 @@ impl eframe::App for ExplorersApp {
             .frame(egui::Frame::default().fill(Color32::BLACK))
             .show(ctx, |ui| {
                 let extent = self.world.params().world_extent;
-                let painter = ui.painter();
                 let viewport = ui.available_rect_before_wrap();
                 let view = WorldView::fit(extent, viewport);
+
+                // Make the whole spatial view clickable so a left-click selects
+                // the nearest agent. Mapping cursor -> world is a pure helper;
+                // nearest-agent resolution respects the toroidal wrap.
+                let response = ui.allocate_rect(viewport, egui::Sense::click());
+                if response.clicked()
+                    && let Some(screen_pos) = response.interact_pointer_pos()
+                {
+                    let click_world = view.to_world(screen_pos);
+                    self.selected_agent =
+                        find_nearest_agent(self.world.agents(), click_world, extent);
+                }
+
+                let painter = ui.painter();
 
                 // Toroidal world bounds.
                 painter.rect_stroke(
@@ -386,6 +423,21 @@ impl eframe::App for ExplorersApp {
                         center,
                         view.scale * AGENT_RADIUS,
                         trophic_color(&agent.traits, agent.reserve),
+                    );
+                }
+
+                // Selection highlight: a ring around the selected agent. Looked
+                // up by id; if the agent has died the lookup yields nothing and
+                // nothing is drawn (selection handled gracefully).
+                if let Some(selected) = self.selected_agent
+                    && let Some(agent) =
+                        self.world.agents().iter().find(|a| a.id == selected)
+                {
+                    let center = view.to_screen(agent.position);
+                    painter.circle_stroke(
+                        center,
+                        view.scale * AGENT_RADIUS + 3.0,
+                        Stroke::new(2.0, Color32::WHITE),
                     );
                 }
             });
@@ -415,6 +467,16 @@ impl WorldView {
         Pos2::new(
             self.center.x + pos.0 * self.scale,
             self.center.y - pos.1 * self.scale,
+        )
+    }
+
+    /// Inverse of [`to_screen`]: map a screen position back to world
+    /// coordinates. Used to resolve a click position into the world so the
+    /// nearest agent can be selected.
+    fn to_world(&self, screen: Pos2) -> (f32, f32) {
+        (
+            (screen.x - self.center.x) / self.scale,
+            (self.center.y - screen.y) / self.scale,
         )
     }
 
@@ -683,6 +745,69 @@ mod tests {
             parse_args(&args(&["--fast-forward", "lots"])),
             CliOutcome::Error(_)
         ));
+    }
+
+    fn agent_at(id: u64, position: (f32, f32)) -> explorers_sim::Agent {
+        explorers_sim::Agent {
+            id,
+            position,
+            reserve: 50.0,
+            structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 1.0,
+                heterotrophy: 0.0,
+                mobility: 0.0,
+                kappa: 0.0,
+                fecundity: 0.0,
+                asexual_propensity: 0.0,
+                dispersal: 0.0,
+            },
+            contact_time: 0,
+            wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+        }
+    }
+
+    #[test]
+    fn to_world_is_the_inverse_of_to_screen() {
+        let viewport = Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(400.0, 400.0));
+        let view = WorldView::fit(200.0, viewport);
+        for world_pos in [(0.0, 0.0), (50.0, -30.0), (-80.0, 90.0)] {
+            let screen = view.to_screen(world_pos);
+            let back = view.to_world(screen);
+            assert!(
+                (back.0 - world_pos.0).abs() < 1e-3 && (back.1 - world_pos.1).abs() < 1e-3,
+                "round-trip {world_pos:?} -> {screen:?} -> {back:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_nearest_agent_returns_closest() {
+        let agents = vec![agent_at(1, (10.0, 10.0)), agent_at(2, (20.0, 20.0))];
+        let result = find_nearest_agent(&agents, (12.0, 12.0), 100.0);
+        assert_eq!(result, Some(1));
+    }
+
+    #[test]
+    fn find_nearest_agent_returns_none_when_empty() {
+        let agents: Vec<explorers_sim::Agent> = vec![];
+        let result = find_nearest_agent(&agents, (0.0, 0.0), 100.0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn find_nearest_agent_handles_toroidal_wrapping() {
+        let agents = vec![agent_at(1, (5.0, 5.0)), agent_at(2, (95.0, 95.0))];
+        // Click at (97,97) — toroidally closest to agent 2 at (95,95).
+        let result = find_nearest_agent(&agents, (97.0, 97.0), 100.0);
+        assert_eq!(result, Some(2));
+
+        // Click at (99,99) — still closest to agent 2 at (95,95) (dist ~5.7)
+        // versus agent 1 at (5,5) reached by wrapping (dist ~8.5).
+        let result2 = find_nearest_agent(&agents, (99.0, 99.0), 100.0);
+        assert_eq!(result2, Some(2));
     }
 
     #[test]
