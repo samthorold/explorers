@@ -135,6 +135,7 @@ mod tests {
             asexual_propensity_maintenance_cost: 0.0,
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
+            dispersal_reach_coefficient: 0.0,
             }
     }
 

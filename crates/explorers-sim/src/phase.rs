@@ -927,6 +927,8 @@ pub fn resolve_reproduction(
     let mut next_id = agents.iter().map(|a| a.id).max().unwrap_or(0) + 1;
 
     let sensing_coeff = params.sensing_range_coefficient;
+    let dispersal_reach_coeff = params.dispersal_reach_coefficient;
+    let wear_steepness = params.wear_degradation_steepness;
 
     // ---------- Phase A: Asexual reproduction attempts ----------
     // Each eligible agent rolls against its asexual_propensity. On success it
@@ -1109,9 +1111,21 @@ pub fn resolve_reproduction(
 
     for &i in &sexual_eligible {
         let agent_i = &agents[i];
-        let sensing = agent_i.traits.mobility * sensing_coeff;
+        // Mate-finding reach is the spatial eligibility axis of mating. The
+        // mobility term uses effective (wear-adjusted) mobility, matching how
+        // perception/movement derive their range, so a worn mobile agent's reach
+        // shrinks with age. The dispersal term lets a sessile broadcaster (or any
+        // agent) extend reach by scattering gametes; dispersal does not wear, so
+        // this contribution is age-stable. A pair forms when *either* agent's
+        // reach spans the gap (the OR-style search below), so a wide-broadcasting
+        // producer can pollinate a near-sessile compatible neighbour. Reach gates
+        // eligibility only — it does not move offspring (placement is governed
+        // independently by the dispersal trait at the birth step).
+        let eff_mobility = agent_i.effective_trait_with_steepness(2, wear_steepness);
+        let reach = eff_mobility * sensing_coeff
+            + agent_i.traits.dispersal * dispersal_reach_coeff;
 
-        let nearby = grid.query_radius(agent_i.position, sensing);
+        let nearby = grid.query_radius(agent_i.position, reach);
         let mut best: Option<(usize, f32)> = None;
         let mut seen = std::collections::HashSet::new();
         seen.insert(i); // exclude self
@@ -1129,7 +1143,7 @@ pub fn resolve_reproduction(
                 agents[j].position,
                 extent,
             );
-            if dist_spatial > sensing {
+            if dist_spatial > reach {
                 continue;
             }
             let trait_dist = agent_i.traits.distance(&agents[j].traits);
@@ -1412,6 +1426,7 @@ mod tests {
             asexual_propensity_maintenance_cost: 0.0,
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
+            dispersal_reach_coefficient: 0.0,
             }
     }
 
@@ -4722,6 +4737,231 @@ mod tests {
 
         assert!(!result.offspring.is_empty(),
             "agents within compatibility distance should reproduce");
+    }
+
+    // --- Reproductive reach (dispersal contributes to mate-finding) ---
+
+    #[test]
+    fn sessile_agent_with_dispersal_finds_mate() {
+        // A mobility-0 (sessile) agent has zero mobility-derived reach, but a
+        // sufficient dispersal trait extends its mate-search radius so it can
+        // pair with a compatible neighbour. Reach = dispersal * coefficient.
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            reproductive_compatibility_distance: 5.0,
+            sensing_range_coefficient: 10.0,
+            dispersal_reach_coefficient: 10.0, // dispersal 0.5 -> reach 5.0
+            ..test_params()
+        };
+        // Both sessile (mobility 0) but with dispersal that gives reach 5.0.
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 1.0,
+            dispersal: 0.5,
+            ..zero_traits() // mobility = 0
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, traits),
+            make_agent(2, (3.0, 0.0), 100.0, traits), // gap 3.0 < reach 5.0
+        ];
+        for a in agents.iter_mut() {
+            a.nutrient = 10.0;
+            a.repro_reserve = 15.0;
+            a.repro_nutrient = 15.0;
+        }
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (3.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+
+        assert!(!result.offspring.is_empty(),
+            "sessile agents with sufficient dispersal reach should reproduce sexually");
+    }
+
+    #[test]
+    fn mate_reach_uses_effective_mobility_not_nominal() {
+        // The mobility term of mate-finding reach is wear-adjusted. Two mobile,
+        // zero-dispersal agents sit at a gap that falls inside their *nominal*
+        // reach but outside their *effective* reach once mobility wear is applied.
+        // With wear, they must fail to pair — proving reach uses effective mobility.
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            reproductive_compatibility_distance: 5.0,
+            sensing_range_coefficient: 10.0,
+            wear_degradation_steepness: 1.0,
+            ..test_params()
+        };
+        // Nominal reach = 1.0 * 10 = 10.0. Gap is 8.0 (inside nominal).
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 1.0,
+            kappa: 0.5,
+            fecundity: 1.0,
+            ..zero_traits() // dispersal = 0
+        };
+
+        let run = |mobility_wear: f32| -> bool {
+            let mut agents = vec![
+                make_agent(1, (0.0, 0.0), 100.0, traits),
+                make_agent(2, (8.0, 0.0), 100.0, traits),
+            ];
+            for a in agents.iter_mut() {
+                a.nutrient = 10.0;
+                a.repro_reserve = 15.0;
+                a.repro_nutrient = 15.0;
+                a.wear[2] = mobility_wear; // index 2 = mobility
+            }
+            let dead_ids = std::collections::HashSet::new();
+            let mut grid = SpatialGrid::new(100.0, 10.0);
+            grid.insert(0, (0.0, 0.0));
+            grid.insert(1, (8.0, 0.0));
+            let mut rng = ChaCha8Rng::seed_from_u64(42);
+            let result = resolve_reproduction(
+                &mut agents, &dead_ids, &grid, &params, &mut rng,
+            );
+            !result.offspring.is_empty()
+        };
+
+        // No wear: effective reach = nominal 10.0 > gap 8.0 -> pair.
+        assert!(run(0.0),
+            "unworn mobile agents within nominal reach should pair");
+        // Heavy wear: effective mobility = 1.0 * exp(-1.0 * 1.0) ~ 0.368,
+        // reach ~ 3.68 < gap 8.0 -> no pair.
+        assert!(!run(1.0),
+            "worn mobile agents should fail to pair as effective reach shrinks below the gap");
+    }
+
+    #[test]
+    fn mate_reach_asymmetric_wide_reach_pairs_zero_reach_neighbour() {
+        // OR-style pairing: a wide-reach agent pairs with a compatible neighbour
+        // that has zero reach of its own (mobility 0, dispersal 0), as long as the
+        // neighbour falls within the wide agent's reach.
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            reproductive_compatibility_distance: 5.0,
+            sensing_range_coefficient: 10.0,
+            dispersal_reach_coefficient: 10.0,
+            ..test_params()
+        };
+        // Broadcaster: dispersal 1.0 -> reach 10.0. Neighbour: sessile, no dispersal.
+        let broadcaster = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 1.0,
+            dispersal: 1.0,
+            ..zero_traits()
+        };
+        let neighbour = TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa: 0.5,
+            fecundity: 1.0,
+            ..zero_traits() // mobility 0, dispersal 0 -> reach 0
+        };
+        // Gap 6.0: outside the neighbour's reach (0) but inside the broadcaster's (10).
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, broadcaster),
+            make_agent(2, (6.0, 0.0), 100.0, neighbour),
+        ];
+        for a in agents.iter_mut() {
+            a.nutrient = 10.0;
+            a.repro_reserve = 15.0;
+            a.repro_nutrient = 15.0;
+        }
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (6.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let result = resolve_reproduction(
+            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        );
+        assert!(!result.offspring.is_empty(),
+            "a wide-reach broadcaster should pair with a zero-reach neighbour inside its reach");
+    }
+
+    #[test]
+    fn mate_reach_does_not_move_offspring() {
+        // Reach is the eligibility axis only: it decides whether a pair forms,
+        // not where offspring land. Offspring placement is governed independently
+        // by the dispersal trait around the parent midpoint. Running the same
+        // scenario with different dispersal_reach_coefficient values must yield
+        // identical offspring positions.
+        use rand::SeedableRng;
+        let base = WorldParameters {
+            reproduction_energy_threshold: 10.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproduction_efficiency: 0.7,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            reproductive_compatibility_distance: 5.0,
+            sensing_range_coefficient: 10.0,
+            ..test_params()
+        };
+        // Mobile (reach via mobility, so the pair forms regardless of the
+        // dispersal-reach coefficient) but dispersal trait 0 -> offspring land
+        // exactly at the parent midpoint.
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            mobility: 1.0,
+            kappa: 0.5,
+            fecundity: 5.0, // high mean so the Poisson draw is reliably nonzero
+            ..zero_traits() // dispersal = 0 -> no offspring scatter
+        };
+
+        let run = |reach_coeff: f32| -> Vec<(f32, f32)> {
+            let params = WorldParameters { dispersal_reach_coefficient: reach_coeff, ..base };
+            let mut agents = vec![
+                make_agent(1, (10.0, 10.0), 100.0, traits),
+                make_agent(2, (14.0, 10.0), 100.0, traits),
+            ];
+            for a in agents.iter_mut() {
+                a.nutrient = 10.0;
+                a.repro_reserve = 15.0;
+                a.repro_nutrient = 15.0;
+            }
+            let dead_ids = std::collections::HashSet::new();
+            let mut grid = SpatialGrid::new(100.0, 10.0);
+            grid.insert(0, (10.0, 10.0));
+            grid.insert(1, (14.0, 10.0));
+            let mut rng = ChaCha8Rng::seed_from_u64(7);
+            let result = resolve_reproduction(
+                &mut agents, &dead_ids, &grid, &params, &mut rng,
+            );
+            result.offspring.iter().map(|o| o.position).collect()
+        };
+
+        let no_reach = run(0.0);
+        let wide_reach = run(50.0);
+        assert!(!no_reach.is_empty(), "scenario should produce offspring");
+        assert_eq!(no_reach, wide_reach,
+            "offspring positions must be unaffected by the mate-reach coefficient");
+        // With dispersal trait 0, offspring land at the parent midpoint (12,10).
+        for pos in &no_reach {
+            assert!((pos.0 - 12.0).abs() < 1e-4 && (pos.1 - 10.0).abs() < 1e-4,
+                "offspring should land at parent midpoint, got {:?}", pos);
+        }
     }
 
     // --- Chemotaxis derived from mobility ---
