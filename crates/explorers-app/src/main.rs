@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::fs;
 
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use explorers_sim::{
+    topology::{TopologyProjection, TrophicRole},
     InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe,
 };
 
@@ -162,7 +164,7 @@ const DEFAULT_HISTORY_CAPACITY: usize = 2048;
 
 /// Accumulated time-series history of aggregate world metrics, owned entirely by
 /// the app (the sim stays history-free per ADR 0001). One fixed-capacity ring
-/// buffer per series: population by dominant role, energy by pool, and nutrient
+/// buffer per series: population by behavioural role, energy by pool, and nutrient
 /// by pool. Sampled once per applied `world.step()` so the plots reflect
 /// pause/step/speed. Framework-agnostic and unit-testable.
 struct History {
@@ -196,10 +198,11 @@ impl History {
 
     /// Append one sample per series from the world's current aggregate state.
     /// Reuses the existing aggregations ([`RoleBreakdown`],
-    /// [`compute_energy_budget`]) rather than recomputing from scratch. Called
-    /// once per applied step.
-    fn sample(&mut self, world: &World) {
-        let breakdown = RoleBreakdown::count(world.agents());
+    /// [`compute_energy_budget`]) rather than recomputing from scratch. The role
+    /// split is read from `topology` (behavioural roles), not the trait vector.
+    /// Called once per applied step.
+    fn sample(&mut self, world: &World, topology: &TopologyProjection) {
+        let breakdown = RoleBreakdown::from_roles(&topology.trophic_roles(world.agents()));
         let budget = compute_energy_budget(world);
 
         self.producers.push(breakdown.producers as f64);
@@ -361,8 +364,9 @@ impl ContactTimeStats {
     }
 }
 
-/// The living population split by dominant trophic role for the status line.
-/// Roles are a reading of each agent's trait vector (see [`dominant_role`]),
+/// The living population split by behavioural trophic role for the status line.
+/// Roles come from the topology projection's [`TopologyProjection::trophic_roles`]
+/// — a reading of what each agent eats (green predation vs brown decomposition),
 /// never an assigned type. Framework-agnostic and unit-testable.
 #[derive(Debug, PartialEq, Default)]
 struct RoleBreakdown {
@@ -373,14 +377,14 @@ struct RoleBreakdown {
 }
 
 impl RoleBreakdown {
-    /// Tally a slice of agents into the role breakdown.
-    fn count(agents: &[explorers_sim::Agent]) -> Self {
-        let mut breakdown = RoleBreakdown { total: agents.len(), ..Default::default() };
-        for agent in agents {
-            match dominant_role(&agent.traits) {
-                "producers" => breakdown.producers += 1,
-                "consumers" => breakdown.consumers += 1,
-                _ => breakdown.decomposers += 1,
+    /// Tally a behavioural roles map (from the projection) into the breakdown.
+    fn from_roles(roles: &HashMap<u64, TrophicRole>) -> Self {
+        let mut breakdown = RoleBreakdown { total: roles.len(), ..Default::default() };
+        for role in roles.values() {
+            match role {
+                TrophicRole::Producer => breakdown.producers += 1,
+                TrophicRole::Consumer => breakdown.consumers += 1,
+                TrophicRole::Decomposer => breakdown.decomposers += 1,
             }
         }
         breakdown
@@ -538,6 +542,11 @@ struct ExplorersApp {
     /// applied step. Owned by the app (the sim stays history-free per ADR 0001)
     /// and rendered as `egui_plot` charts in the debug window.
     history: History,
+    /// Observer-side projection of the event log, accumulated as the world steps.
+    /// Supplies the behavioural trophic roles (green predation vs brown
+    /// decomposition) that drive the role readout. Lives on the app (the sim stays
+    /// projection-free per ADR 0001).
+    topology: TopologyProjection,
 }
 
 impl ExplorersApp {
@@ -548,17 +557,20 @@ impl ExplorersApp {
             clock: RunClock::new(),
             selected_agent: None,
             history: History::new(DEFAULT_HISTORY_CAPACITY),
+            topology: TopologyProjection::new(),
         }
     }
 
     /// Advance the simulation by `steps` whole ticks, keeping the tick readout
-    /// in sync and sampling one history point per applied step so the plots
-    /// reflect pause/step/speed.
+    /// in sync, folding each step's events into the topology projection, and
+    /// sampling one history point per applied step so the plots reflect
+    /// pause/step/speed.
     fn apply_steps(&mut self, steps: u32) {
         for _ in 0..steps {
             self.world.step();
             self.tick_count += 1;
-            self.history.sample(&self.world);
+            self.topology.update(self.world.event_log());
+            self.history.sample(&self.world, &self.topology);
         }
     }
 }
@@ -720,7 +732,7 @@ impl ExplorersApp {
     /// and ticks-per-second.
     fn debug_status_line(&self, ui: &mut egui::Ui) {
         let agents = self.world.agents();
-        let breakdown = RoleBreakdown::count(agents);
+        let breakdown = RoleBreakdown::from_roles(&self.topology.trophic_roles(agents));
         let contact = ContactTimeStats::of(agents);
 
         ui.label(format!("Tick: {}", self.tick_count));
@@ -760,7 +772,7 @@ impl ExplorersApp {
             });
     }
 
-    /// Time-series history plots: population by dominant role, energy by pool,
+    /// Time-series history plots: population by behavioural role, energy by pool,
     /// and nutrient by pool, each rendered from its ring buffer via `egui_plot`.
     /// Updates live as the simulation advances because the buffers are sampled
     /// once per applied step. Thin rendering glue over the unit-tested buffers.
@@ -960,11 +972,12 @@ mod tests {
     #[test]
     fn history_sample_appends_one_point_per_metric() {
         let world = World::from_recipe(&default_recipe(), 42);
+        let topology = TopologyProjection::new();
         let mut history = History::new(100);
         assert_eq!(history.len(), 0);
-        history.sample(&world);
+        history.sample(&world, &topology);
         assert_eq!(history.len(), 1, "one sample call appends one point per series");
-        history.sample(&world);
+        history.sample(&world, &topology);
         assert_eq!(history.len(), 2);
     }
 
@@ -989,13 +1002,15 @@ mod tests {
     #[test]
     fn history_stays_bounded_over_a_long_run() {
         let mut world = World::from_recipe(&default_recipe(), 7);
+        let mut topology = TopologyProjection::new();
         let capacity = 16;
         let mut history = History::new(capacity);
         // Sample far more often than the capacity: length must pin at capacity
         // so memory stays bounded over an arbitrarily long run.
         for _ in 0..1000 {
             world.step();
-            history.sample(&world);
+            topology.update(world.event_log());
+            history.sample(&world, &topology);
         }
         assert_eq!(history.len(), capacity);
     }
@@ -1003,16 +1018,17 @@ mod tests {
     #[test]
     fn history_sample_records_world_aggregates() {
         let world = World::from_recipe(&default_recipe(), 7);
-        let breakdown = RoleBreakdown::count(world.agents());
+        let topology = TopologyProjection::new();
+        let breakdown = RoleBreakdown::from_roles(&topology.trophic_roles(world.agents()));
         let budget = compute_energy_budget(&world);
 
         let mut history = History::new(100);
-        history.sample(&world);
+        history.sample(&world, &topology);
 
         assert_eq!(
             history.producers.iter().last().copied(),
             Some(breakdown.producers as f64),
-            "producer series records the dominant-role count"
+            "producer series records the behavioural-role count"
         );
         let recorded_living = history.living_energy.iter().last().copied().unwrap();
         assert!(
@@ -1059,22 +1075,26 @@ mod tests {
     }
 
     #[test]
-    fn role_breakdown_counts_by_dominant_role() {
-        let agents = vec![
-            agent_with_traits(1, traits(0.9, 0.1)), // producer
-            agent_with_traits(2, traits(0.8, 0.2)), // producer
-            agent_with_traits(3, traits(0.1, 0.9)), // consumer
-        ];
-        let breakdown = RoleBreakdown::count(&agents);
-        assert_eq!(breakdown.total, 3);
+    fn role_breakdown_tallies_behavioural_roles() {
+        // The breakdown tallies a behavioural roles map from the projection, so a
+        // Decomposer can actually appear (the old trait-only path never produced
+        // one).
+        let roles = HashMap::from([
+            (1u64, TrophicRole::Producer),
+            (2u64, TrophicRole::Producer),
+            (3u64, TrophicRole::Consumer),
+            (4u64, TrophicRole::Decomposer),
+        ]);
+        let breakdown = RoleBreakdown::from_roles(&roles);
+        assert_eq!(breakdown.total, 4);
         assert_eq!(breakdown.producers, 2);
         assert_eq!(breakdown.consumers, 1);
-        assert_eq!(breakdown.decomposers, 0);
+        assert_eq!(breakdown.decomposers, 1);
     }
 
     #[test]
     fn role_breakdown_of_empty_population_is_all_zero() {
-        let breakdown = RoleBreakdown::count(&[]);
+        let breakdown = RoleBreakdown::from_roles(&HashMap::new());
         assert_eq!(breakdown.total, 0);
         assert_eq!(breakdown.producers, 0);
         assert_eq!(breakdown.consumers, 0);
@@ -1397,12 +1417,6 @@ mod tests {
             wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
         }
-    }
-
-    fn agent_with_traits(id: u64, traits: TraitVector) -> explorers_sim::Agent {
-        let mut a = agent_at(id, (0.0, 0.0));
-        a.traits = traits;
-        a
     }
 
     #[test]

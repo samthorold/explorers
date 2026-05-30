@@ -77,6 +77,7 @@ pub fn photosynthesise(
             target: None,
             energy_delta: income,
             position: Some(agents[i].position),
+            target_was_carcass: false,
         });
     }
     events
@@ -135,6 +136,7 @@ pub fn absorb_nutrients(
                 target: None,
                 energy_delta: uptake,
                 position: Some(agents[i].position),
+                target_was_carcass: false,
             });
         }
     }
@@ -171,6 +173,7 @@ pub fn metabolise(
             target: None,
             energy_delta: cost,
             position: Some(agent.position),
+            target_was_carcass: false,
         });
     }
     (events, total_dissipated)
@@ -253,6 +256,7 @@ pub fn grow(
                 target: None,
                 energy_delta: to_structure,
                 position: Some(agent.position),
+                target_was_carcass: false,
             });
         } else if growth_budget > 0.0 {
             // No growth efficiency: remaining soma is dissipated
@@ -303,6 +307,7 @@ pub fn apply_wear(
                 target: None,
                 energy_delta: total_wear_delta,
                 position: Some(agent.position),
+                target_was_carcass: false,
             });
         }
     }
@@ -470,6 +475,7 @@ pub fn resolve_drains(
                 target: Some(agents[drain.target_idx].id),
                 energy_delta: actual_drain,
                 position: Some(agents[drain.target_idx].position),
+                target_was_carcass: false,
             });
         }
     }
@@ -596,6 +602,7 @@ pub fn resolve_drains(
                 target: Some(carcasses[carcass_idx].id),
                 energy_delta: actual_drain,
                 position: Some(carcass_pos),
+                target_was_carcass: true,
             });
         }
     }
@@ -638,6 +645,7 @@ pub fn check_death_thresholds(
                 target: None,
                 energy_delta: 0.0,
                 position: Some(agent.position),
+                target_was_carcass: false,
             });
             carcasses.push(Carcass {
                 id: agent.id,
@@ -817,6 +825,7 @@ pub fn move_agents(
             target: None,
             energy_delta: cost,
             position: Some(new_pos),
+            target_was_carcass: false,
         });
     }
 
@@ -931,6 +940,7 @@ pub fn resolve_reproduction(
                 target: None,
                 energy_delta: investment,
                 position: Some(parent_pos),
+                target_was_carcass: false,
             });
             continue;
         }
@@ -1017,6 +1027,7 @@ pub fn resolve_reproduction(
             target: None,
             energy_delta: investment,
             position: Some(parent_pos),
+            target_was_carcass: false,
         });
     }
 
@@ -1145,6 +1156,7 @@ pub fn resolve_reproduction(
                 target: Some(b_id),
                 energy_delta: total_investment,
                 position: Some(mid_pos),
+                target_was_carcass: false,
             });
             continue;
         }
@@ -1248,6 +1260,7 @@ pub fn resolve_reproduction(
             target: Some(b_id),
             energy_delta: total_investment,
             position: Some(mid_pos),
+            target_was_carcass: false,
         });
     }
 
@@ -2727,6 +2740,17 @@ mod tests {
         // Events should include both living and carcass consumption
         assert!(result.events.len() >= 2,
             "should have events for both consumption types");
+        // The raw interaction fact: which Consumed events drained a carcass.
+        let living = result.events.iter()
+            .find(|e| e.kind == EventKind::Consumed && e.target == Some(2))
+            .expect("a Consumed event targeting the living agent");
+        assert!(!living.target_was_carcass,
+            "draining a living agent is not decomposition");
+        let carcass = result.events.iter()
+            .find(|e| e.kind == EventKind::Consumed && e.target == Some(99))
+            .expect("a Consumed event targeting the carcass");
+        assert!(carcass.target_was_carcass,
+            "draining a carcass is decomposition");
     }
 
     // --- Move agents ---
