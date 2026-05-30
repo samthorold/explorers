@@ -1178,6 +1178,46 @@ mod tests {
     }
 
     #[test]
+    fn carcass_has_no_passive_decay() {
+        // System design WR-3: carcasses are inert entities that hold the dead
+        // agent's structure and nutrient at the death location indefinitely —
+        // energy and nutrient leave a carcass ONLY via consumption (Flow 3).
+        // With no living consumers in the world, a carcass's structure (energy)
+        // and nutrient must be unchanged after stepping the world.
+        let params = WorldParameters {
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let mut world = World::new(params, test_distribution(), 42);
+        assert!(world.agents().is_empty(), "world should have no living agents");
+
+        let initial_energy = 50.0_f32;
+        let initial_nutrient = 3.0_f32;
+        world.add_carcass(Carcass {
+            id: 1,
+            position: (50.0, 50.0),
+            energy: initial_energy,
+            nutrient: initial_nutrient,
+            traits: zero_traits(),
+        });
+
+        for _tick in 0..100 {
+            world.step();
+        }
+
+        assert_eq!(world.carcasses().len(), 1, "carcass should persist");
+        let carcass = &world.carcasses()[0];
+        assert_eq!(
+            carcass.energy, initial_energy,
+            "carcass structure must not decay without consumption"
+        );
+        assert_eq!(
+            carcass.nutrient, initial_nutrient,
+            "carcass nutrient must not decay without consumption"
+        );
+    }
+
+    #[test]
     fn world_has_nutrient_pool() {
         let mut params = test_params();
         params.initial_nutrient_pool = 100.0;
