@@ -1,0 +1,146 @@
+[
+  {
+    "failure_mode": "none",
+    "final_population": 1,
+    "max_ticks": 0,
+    "scenario": "example1.json",
+    "scores": {
+      "clustering_strength": 0.0,
+      "coexistence_duration": 0.0,
+      "fitness": 0.0,
+      "oscillation_strength": 0.0,
+      "trophic_balance_score": 0.0,
+      "turnover_score": 0.0
+    },
+    "seed": 1,
+    "ticks_survived": 0,
+    "total_births": 0,
+    "total_deaths": 0
+  },
+  {
+    "failure_mode": "extinction",
+    "final_population": 0,
+    "max_ticks": 500,
+    "scenario": "example2.json",
+    "scores": {
+      "clustering_strength": 0.0,
+      "coexistence_duration": 0.0,
+      "fitness": 0.0,
+      "oscillation_strength": 0.0,
+      "trophic_balance_score": 0.0,
+      "turnover_score": 0.0
+    },
+    "seed": 1,
+    "ticks_survived": 4,
+    "total_births": 0,
+    "total_deaths": 20
+  },
+  {
+    "failure_mode": "extinction",
+    "final_population": 0,
+    "max_ticks": 500,
+    "scenario": "example3.json",
+    "scores": {
+      "clustering_strength": 0.0,
+      "coexistence_duration": 0.0,
+      "fitness": 0.0,
+      "oscillation_strength": 0.0,
+      "trophic_balance_score": 0.0,
+      "turnover_score": 0.0
+    },
+    "seed": 1,
+    "ticks_survived": 4,
+    "total_births": 0,
+    "total_deaths": 3
+  },
+  {
+    "failure_mode": "energy_death",
+    "final_population": 7,
+    "max_ticks": 1000,
+    "scenario": "example4_consumer_tuning.json",
+    "scores": {
+      "clustering_strength": 0.0,
+      "coexistence_duration": 0.0,
+      "fitness": 0.0,
+      "oscillation_strength": 0.0,
+      "trophic_balance_score": 0.0,
+      "turnover_score": 0.0
+    },
+    "seed": 1,
+    "ticks_survived": 1000,
+    "total_births": 36,
+    "total_deaths": 51
+  },
+  {
+    "failure_mode": "energy_death",
+    "final_population": 4,
+    "max_ticks": 1000,
+    "scenario": "example4.json",
+    "scores": {
+      "clustering_strength": 0.0,
+      "coexistence_duration": 0.0,
+      "fitness": 0.0,
+      "oscillation_strength": 0.0,
+      "trophic_balance_score": 0.0,
+      "turnover_score": 0.0
+    },
+    "seed": 1,
+    "ticks_survived": 1000,
+    "total_births": 0,
+    "total_deaths": 17
+  },
+  {
+    "failure_mode": "energy_death",
+    "final_population": 3,
+    "max_ticks": 1500,
+    "scenario": "example5.json",
+    "scores": {
+      "clustering_strength": 0.0,
+      "coexistence_duration": 0.0,
+      "fitness": 0.0,
+      "oscillation_strength": 0.0,
+      "trophic_balance_score": 0.0,
+      "turnover_score": 0.0
+    },
+    "seed": 1,
+    "ticks_survived": 1500,
+    "total_births": 0,
+    "total_deaths": 19
+  },
+  {
+    "failure_mode": "energy_death",
+    "final_population": 4,
+    "max_ticks": 1000,
+    "scenario": "example7.json",
+    "scores": {
+      "clustering_strength": 0.0,
+      "coexistence_duration": 0.0,
+      "fitness": 0.0,
+      "oscillation_strength": 0.0,
+      "trophic_balance_score": 0.0,
+      "turnover_score": 0.0
+    },
+    "seed": 1,
+    "ticks_survived": 1000,
+    "total_births": 0,
+    "total_deaths": 19
+  },
+  {
+    "failure_mode": "energy_death",
+    "final_population": 3,
+    "max_ticks": 2000,
+    "scenario": "example8.json",
+    "scores": {
+      "clustering_strength": 0.0,
+      "coexistence_duration": 0.0,
+      "fitness": 0.0,
+      "oscillation_strength": 0.0,
+      "trophic_balance_score": 0.0,
+      "turnover_score": 0.0
+    },
+    "seed": 1,
+    "ticks_survived": 2000,
+    "total_births": 0,
+    "total_deaths": 21
+  }
+]

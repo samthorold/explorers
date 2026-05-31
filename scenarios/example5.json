@@ -3,10 +3,9 @@
     "intent": "Twenty producers plus two consumers. Exercises predator-prey oscillation, consumer sexual reproduction, overshoot risk, and boom-bust cycles.",
     "source_issue": 126,
     "roster": "20 producers + 2 consumers",
-    "probes": "population explosion / extinction — do two consumers drive oscillatory boom-bust without collapsing the base?",
-    "viability_prediction": "live with oscillation — two consumers on 20 producers should sustain a cycle.",
-    "expected_outcome": "Oscillatory or boom-bust dynamics over 1000+ ticks; consumers reproduce sexually; neither level goes permanently extinct.",
-    "observed": "2026-05-31, seed 1: 22 -> 3 (consumers die out), 0 births. No oscillation.",
+    "probes": "population_explosion",
+    "prediction": "live",
+    "rationale": "Two consumers on 20 producers should sustain a predator-prey cycle (boom-bust) without permanently collapsing either level.",
     "status": "stale-params — partial subset only; relies on code defaults; retired vocabulary."
   },
   "parameters": {

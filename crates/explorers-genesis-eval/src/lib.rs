@@ -74,7 +74,9 @@ pub fn evaluate_from_log(
     }
 
     let log = world.event_log();
-    let total_births = log.by_kind(&explorers_sim::event::EventKind::Reproduced).len();
+    let total_births = log
+        .by_kind(&explorers_sim::event::EventKind::Reproduced)
+        .len();
     let total_deaths = log.by_kind(&explorers_sim::event::EventKind::Died).len();
     let ts = turnover_score(total_births, total_deaths, max_ticks);
 
@@ -322,8 +324,7 @@ pub fn is_generalist_dominant(
         avg_hetero /= n;
 
         // A generalist has significant investment in both autotrophy and heterotrophy
-        let is_generalist = avg_photo > generalist_threshold
-            && avg_hetero > generalist_threshold;
+        let is_generalist = avg_photo > generalist_threshold && avg_hetero > generalist_threshold;
 
         if is_generalist {
             for &i in &members {
@@ -493,7 +494,11 @@ pub fn coexistence_duration(cluster_counts_per_tick: &[usize]) -> f32 {
     coexisting as f32 / cluster_counts_per_tick.len() as f32
 }
 
-pub fn dbscan(trait_vectors: &[explorers_sim::TraitVector], eps: f32, min_points: usize) -> Vec<Option<usize>> {
+pub fn dbscan(
+    trait_vectors: &[explorers_sim::TraitVector],
+    eps: f32,
+    min_points: usize,
+) -> Vec<Option<usize>> {
     let n = trait_vectors.len();
     let mut labels: Vec<Option<usize>> = vec![None; n];
     let mut visited = vec![false; n];
@@ -597,7 +602,7 @@ mod tests {
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
-            }
+        }
     }
 
     fn test_distribution() -> explorers_sim::InitialDistribution {
@@ -634,8 +639,14 @@ mod tests {
             }
         }
         let result = evaluate_from_log(&world, &config, max_ticks);
-        let born_count = world.event_log().by_kind(&explorers_sim::event::EventKind::Reproduced).len();
-        let died_count = world.event_log().by_kind(&explorers_sim::event::EventKind::Died).len();
+        let born_count = world
+            .event_log()
+            .by_kind(&explorers_sim::event::EventKind::Reproduced)
+            .len();
+        let died_count = world
+            .event_log()
+            .by_kind(&explorers_sim::event::EventKind::Died)
+            .len();
         let expected_ts = turnover_score(born_count, died_count, max_ticks);
         // With reproduction not yet implemented, births may be zero.
         // Turnover score computation should still be consistent.
@@ -695,9 +706,13 @@ mod tests {
             return; // can't test monoculture with too few agents
         }
         let result = evaluate_from_log(&world, &config, max_ticks);
-        assert_eq!(result.failure, Some(FailureMode::Monoculture),
+        assert_eq!(
+            result.failure,
+            Some(FailureMode::Monoculture),
             "identical traits from single cluster should be monoculture, \
-             clustering_strength={}", result.clustering_strength);
+             clustering_strength={}",
+            result.clustering_strength
+        );
         assert_eq!(result.fitness, 0.0);
     }
 
@@ -743,8 +758,14 @@ mod tests {
             + 0.2 * result.coexistence_duration
             + 0.2 * result.turnover_score
             + 0.2 * result.trophic_balance_score;
-        assert_eq!(result.fitness, fitness, "fitness should be weighted sum of components");
-        assert!(result.fitness > 0.0, "non-degenerate run should have positive fitness");
+        assert_eq!(
+            result.fitness, fitness,
+            "fitness should be weighted sum of components"
+        );
+        assert!(
+            result.fitness > 0.0,
+            "non-degenerate run should have positive fitness"
+        );
     }
 
     #[test]
@@ -823,7 +844,7 @@ mod tests {
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
-            };
+        };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
                 photosynthetic_absorption: 0.0,
@@ -895,7 +916,10 @@ mod tests {
             traits.push(make_trait_vector([5.0 + i as f32 * 0.01, 0.0, 0.0, 0.0]));
         }
         let strength = clustering_strength(&traits);
-        assert!(strength > 0.5, "bimodal traits should have high clustering strength: {strength}");
+        assert!(
+            strength > 0.5,
+            "bimodal traits should have high clustering strength: {strength}"
+        );
     }
 
     #[test]
@@ -908,7 +932,10 @@ mod tests {
             .map(|_| make_trait_vector([dist.sample(&mut rng), dist.sample(&mut rng), 0.0, 0.0]))
             .collect();
         let strength = clustering_strength(&traits);
-        assert!(strength < 0.5, "unimodal traits should have low clustering strength: {strength}");
+        assert!(
+            strength < 0.5,
+            "unimodal traits should have low clustering strength: {strength}"
+        );
     }
 
     #[test]
@@ -934,7 +961,11 @@ mod tests {
         }
         let labels = dbscan(&traits, 0.5, 3);
         let cluster_ids: std::collections::HashSet<_> = labels.iter().filter_map(|l| *l).collect();
-        assert_eq!(cluster_ids.len(), 2, "should find 2 clusters, got {cluster_ids:?}");
+        assert_eq!(
+            cluster_ids.len(),
+            2,
+            "should find 2 clusters, got {cluster_ids:?}"
+        );
     }
 
     #[test]
@@ -943,8 +974,15 @@ mod tests {
             .map(|i| make_trait_vector([i as f32 * 10.0, 0.0, 0.0, 0.0]))
             .collect();
         let labels = dbscan(&traits, 0.5, 3);
-        let cluster_count = labels.iter().filter_map(|l| *l).collect::<std::collections::HashSet<_>>().len();
-        assert!(cluster_count <= 1, "widely scattered points should have 0-1 clusters, got {cluster_count}");
+        let cluster_count = labels
+            .iter()
+            .filter_map(|l| *l)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        assert!(
+            cluster_count <= 1,
+            "widely scattered points should have 0-1 clusters, got {cluster_count}"
+        );
     }
 
     #[test]
@@ -1034,14 +1072,20 @@ mod tests {
             .map(|i| (2.0 * std::f32::consts::PI * i as f32 / period).sin())
             .collect();
         let ac = autocorrelation(&series, 20);
-        assert!(ac > 0.8, "sinusoidal series at lag=period should have high autocorrelation: {ac}");
+        assert!(
+            ac > 0.8,
+            "sinusoidal series at lag=period should have high autocorrelation: {ac}"
+        );
     }
 
     #[test]
     fn autocorrelation_near_zero_for_flat_series() {
         let series = vec![5.0; 100];
         let ac = autocorrelation(&series, 10);
-        assert!(ac.abs() < 0.01, "flat series should have ~0 autocorrelation: {ac}");
+        assert!(
+            ac.abs() < 0.01,
+            "flat series should have ~0 autocorrelation: {ac}"
+        );
     }
 
     #[test]
@@ -1050,13 +1094,25 @@ mod tests {
         let n = 200;
         // Two clusters oscillating out of phase
         let cluster_0: Vec<usize> = (0..n)
-            .map(|i| (50.0 + 30.0 * (2.0 * std::f32::consts::PI * i as f32 / period as f32).sin()) as usize)
+            .map(|i| {
+                (50.0 + 30.0 * (2.0 * std::f32::consts::PI * i as f32 / period as f32).sin())
+                    as usize
+            })
             .collect();
         let cluster_1: Vec<usize> = (0..n)
-            .map(|i| (50.0 + 30.0 * (2.0 * std::f32::consts::PI * i as f32 / period as f32 + std::f32::consts::PI).sin()) as usize)
+            .map(|i| {
+                (50.0
+                    + 30.0
+                        * (2.0 * std::f32::consts::PI * i as f32 / period as f32
+                            + std::f32::consts::PI)
+                            .sin()) as usize
+            })
             .collect();
         let strength = oscillation_strength(&[cluster_0, cluster_1]);
-        assert!(strength > 0.5, "oscillating populations should have high oscillation strength: {strength}");
+        assert!(
+            strength > 0.5,
+            "oscillating populations should have high oscillation strength: {strength}"
+        );
     }
 
     #[test]
@@ -1064,7 +1120,10 @@ mod tests {
         let cluster_0 = vec![50; 100];
         let cluster_1 = vec![30; 100];
         let strength = oscillation_strength(&[cluster_0, cluster_1]);
-        assert!(strength < 0.1, "flat populations should have low oscillation strength: {strength}");
+        assert!(
+            strength < 0.1,
+            "flat populations should have low oscillation strength: {strength}"
+        );
     }
 
     #[test]
@@ -1088,7 +1147,10 @@ mod tests {
     fn trophic_coordinates_zero_energy_traits() {
         let traits = make_trait_vector([0.0, 0.0, 1.0, 0.0]);
         let (photo, _hetero) = trophic_coordinates(&traits);
-        assert!((photo - 0.5).abs() < 0.01, "should default to equal: {photo}");
+        assert!(
+            (photo - 0.5).abs() < 0.01,
+            "should default to equal: {photo}"
+        );
     }
 
     #[test]
@@ -1108,7 +1170,9 @@ mod tests {
             labels.push(Some(1));
             energies.push(50.0);
         }
-        assert!(is_generalist_dominant(&traits, &labels, &energies, 0.3, 0.5));
+        assert!(is_generalist_dominant(
+            &traits, &labels, &energies, 0.3, 0.5
+        ));
     }
 
     #[test]
@@ -1128,7 +1192,9 @@ mod tests {
             labels.push(Some(1));
             energies.push(50.0);
         }
-        assert!(!is_generalist_dominant(&traits, &labels, &energies, 0.3, 0.5));
+        assert!(!is_generalist_dominant(
+            &traits, &labels, &energies, 0.3, 0.5
+        ));
     }
 
     #[test]
@@ -1211,7 +1277,10 @@ mod tests {
             energies.push(50.0);
         }
         let score = trophic_balance_score(&traits, &labels, &energies);
-        assert!(score > 0.5, "producers dominating should score > 0.5: {score}");
+        assert!(
+            score > 0.5,
+            "producers dominating should score > 0.5: {score}"
+        );
     }
 
     #[test]
@@ -1230,7 +1299,10 @@ mod tests {
             energies.push(100.0);
         }
         let score = trophic_balance_score(&traits, &labels, &energies);
-        assert!(score < 0.5, "consumers dominating should score < 0.5: {score}");
+        assert!(
+            score < 0.5,
+            "consumers dominating should score < 0.5: {score}"
+        );
     }
 
     #[test]
@@ -1282,5 +1354,4 @@ mod tests {
         let config = EvalConfig::default();
         assert!((config.grace_period_fraction - 0.2).abs() < 1e-5);
     }
-
 }

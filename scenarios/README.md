@@ -36,43 +36,58 @@ seed is logged to stderr either way:
 cargo run -p explorers-app -- --scenario scenarios/example4_consumer_tuning.json --trace --seed 1
 ```
 
-This is how the `observed` rows below are produced.
+`--trace` is per-tick and fine-grained (for debugging *why* a run behaves as it does).
+For the coarse per-scenario *outcome*, see the validation triad below.
 
-## Metadata header
+## Metadata header — the scenario's declarations
 
-Every file carries a top-level `metadata` object documenting what it is *for*
-(per issue #293). The loader ignores it — `WorldRecipe` does not declare these fields
-and serde drops unknown keys — so it is descriptive only, not consumed by the sim.
-Promoting it into the struct so the harness can read predictions and assert outcomes
-is tracked in **#293**.
+Every file carries a top-level `metadata` object: what the author **declares** about the
+scenario. The loader ignores it (`WorldRecipe` doesn't declare these fields and serde drops
+unknown keys), so it never changes how the scenario runs — it is the a priori half of the
+cross-validation.
 
 | field | meaning |
 |---|---|
 | `intent` | what mechanism/pattern the scenario is meant to exercise |
-| `source_issue` | the GitHub issue that defined it (intent used to live only here) |
+| `source_issue` | the GitHub issue that defined it |
 | `roster` | the agents it seeds, by trophic role |
-| `probes` | the [failure mode](../docs/system-design/expected-properties.md) it stresses (extinction / energy death / monoculture / population explosion / frozen dynamics / generalist dominance) |
-| `viability_prediction` | a priori call — `live` / `dead` / `undecided`, and why |
-| `expected_outcome` | what a *passing* run looks like |
-| `observed` | what the headless harness actually produced (dated, with seed) |
-| `status` | health of the file itself — `current` or `stale-params` |
+| `probes` | the [failure mode](../docs/system-design/expected-properties.md) it is designed to stress — one of `extinction` / `energy_death` / `monoculture` / `population_explosion` / `generalist_dominance`, or `none` |
+| `prediction` | a priori call — `live` / `dead` / `undecided` |
+| `rationale` | why that prediction |
+| `status` | health of the *file* — `current` or `stale-params` |
 
-## Current status (2026-05-31, seed 1)
+## The validation triad
 
-> **The suite is trophically stale.** Only `example4_consumer_tuning.json` reproduces;
-> every other scenario ends with **zero consumers and zero births**, and no scenario
-> exercises a decomposer. See the two root causes below.
+A scenario is one leg of the triad in [`viability.md`](../docs/system-design/viability.md):
+the same initial condition is **predicted** a priori (the `metadata` above), **observed** by
+a run, and **located** by genesis. Three artifacts make that concrete:
 
-| file | intent | roster | observed | status |
-|---|---|---|---|---|
-| `example1.json` | one moss: photosynthesis, dispersal, patch formation | 1 P | seed-only (`max_ticks` 0) | stale-params |
-| `example2.json` | twenty moss: light competition, self-thinning | 20 P | 20→0, 0 births, 0 structure | stale-params |
-| `example3.json` | three moss far apart: isolation, drift | 3 P | 3→0, 0 births | stale-params |
-| `example4.json` | moss + 1 consumer: grazing, top-down control | 20 P + 1 C | 21→4, 0 births | stale-params |
-| `example4_consumer_tuning.json` | fully-specified diagnostic variant of ex4 | 20 P + 2 C | 22→7, **36 births** | **current** |
-| `example5.json` | moss + 2 consumers: predator-prey oscillation | 20 P + 2 C | 22→3, 0 births | stale-params |
-| `example7.json` | three trophic roles, dual recycling | 20 P + 3 C | 23→4, 0 births | stale-params |
-| `example8.json` | full cascade + population oscillation | 20 P + 4 C | 24→3, 0 births | stale-params |
+1. **Declarations** — `metadata` in each `*.json` (above).
+2. **Observed evidence** — [`observed.json`](observed.json), *computed*, never hand-typed.
+   Produced by running every scenario through the **same evaluator genesis uses**
+   (`evaluate_from_log`), so "sensible" means the same thing to the example lens and the
+   search lens. Regenerate (deterministic, seed 1):
+   ```
+   cargo run -p explorers-genesis-eval --bin eval_scenarios -- scenarios/example*.json > scenarios/observed.json
+   ```
+   Each row carries the `failure_mode` (against the six), the five sensible-world scores,
+   `ticks_survived`, final population, and true birth/death counts.
+3. **Judged verdict** — [`verdicts.md`](verdicts.md): the *read* of the evidence against the
+   declarations, grounded in `expected-properties.md`. A reading (by a human or a
+   fresh-perspective agent), **not** a pass/fail test — precise numbers are evidence for the
+   judgment, not the gate. Drift shows up as a diff in `observed.json`, prompting a re-judge.
+
+Agreement across the three raises confidence; **disagreement localises the fault** — and
+already has: the verdict synthesis traces the suite's near-universal `energy_death` verdict to
+a detector that measures predation flow rather than free-energy throughput (a genesis-evaluator
+issue, surfaced by the example lens).
+
+## Current status (seed 1)
+
+> **The suite is stale and trophically incomplete** — `status: stale-params` on 7 of 8 files.
+> Only `example4_consumer_tuning.json` reproduces (36 births); no scenario seeds a decomposer.
+> Per-scenario verdicts in [`verdicts.md`](verdicts.md); raw numbers in
+> [`observed.json`](observed.json). Two root causes:
 
 ### Root cause 1 — partial recipes drift under code defaults
 
@@ -100,13 +115,10 @@ which survive only on serde aliases.
 
 ## Adding or repairing a scenario
 
-1. **Specify every `WorldParameter`** (copy `example4_consumer_tuning.json` as the
-   template) so the file fully determines its world.
-2. **Fill in the `metadata` header** — at minimum `intent`, `probes`,
-   `viability_prediction`, and `expected_outcome`.
-3. **Run it headless, record `observed`** (date + seed) honestly, even when failing.
-4. Use current vocabulary in new work; `photosynthetic_absorption` / `contact_radius`
-   remain only for backward-compatible loading.
-
-Related: **#279** (headless scenario runner emitting per-tick telemetry) would turn the
-ad-hoc sweep behind the `observed` rows into a checked-in regression harness.
+1. **Specify every `WorldParameter`** (copy `example4_consumer_tuning.json`) so the file
+   fully determines its world.
+2. **Fill in the `metadata` declarations** — `intent`, `probes`, `prediction`, `rationale`.
+3. **Regenerate `observed.json`** (`eval_scenarios`, above) — never hand-type the outcome.
+4. **Re-judge** into `verdicts.md` if the outcome changed.
+5. Use current vocabulary; `photosynthetic_absorption` / `contact_radius` remain only for
+   backward-compatible loading.

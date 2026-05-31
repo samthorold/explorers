@@ -3,10 +3,9 @@
     "intent": "Three trophic roles with dual recycling pathways (producer, consumer, decomposer; both grazing and detrital nutrient return).",
     "source_issue": 137,
     "roster": "20 producers + 3 mobile heterotrophs (no role-differentiated decomposer present)",
-    "probes": "extinction across a three-level chain — do all three roles coexist?",
-    "viability_prediction": "undecided — the suite has no agent positioned as a carcass-specialist decomposer, so the third pathway is not actually seeded.",
-    "expected_outcome": "Producers, consumers, and decomposers coexist for an extended period; energy decreases up the levels; both recycling pathways carry flux.",
-    "observed": "2026-05-31, seed 1: 23 -> 4 (all producers), 0 births. Heterotrophs die out; carcasses accumulate unconsumed.",
+    "probes": "extinction",
+    "prediction": "undecided",
+    "rationale": "Three trophic roles should coexist with energy decreasing up the levels — but the suite seeds no carcass-specialist decomposer, so the third pathway is not actually present.",
     "status": "stale-params + under-specified roster — partial params, retired vocabulary, and the three heterotrophs are undifferentiated mobile consumers, not distinct trophic roles."
   },
   "parameters": {
