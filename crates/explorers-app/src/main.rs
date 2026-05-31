@@ -4,8 +4,8 @@ use std::fs;
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use explorers_sim::{
-    topology::{TopologyProjection, TrophicRole},
     InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe,
+    topology::{TopologyProjection, TrophicRole},
 };
 
 /// Map an agent's trophic traits and reserve to a render colour.
@@ -94,11 +94,7 @@ impl RunClock {
     /// signal one step is due, or 0 when running (where time already drives the
     /// clock). Does not touch the carried-over accumulator.
     fn step_once(&mut self) -> u32 {
-        if self.paused {
-            1
-        } else {
-            0
-        }
+        if self.paused { 1 } else { 0 }
     }
 
     /// Add `dt` seconds of elapsed wall-clock time and return how many sim steps
@@ -130,7 +126,10 @@ struct RingBuffer<T> {
 impl<T> RingBuffer<T> {
     /// Create an empty ring buffer holding at most `capacity` samples.
     fn new(capacity: usize) -> Self {
-        Self { samples: std::collections::VecDeque::with_capacity(capacity), capacity }
+        Self {
+            samples: std::collections::VecDeque::with_capacity(capacity),
+            capacity,
+        }
     }
 
     /// Append a sample. If already at capacity, the oldest sample is dropped
@@ -213,9 +212,11 @@ impl History {
         self.carcass_energy.push(budget.carcass_energy as f64);
         self.dissipated_energy.push(budget.dissipated_energy as f64);
 
-        self.nutrient_available.push(budget.nutrient_available as f64);
+        self.nutrient_available
+            .push(budget.nutrient_available as f64);
         self.nutrient_living.push(budget.nutrient_living as f64);
-        self.nutrient_carcasses.push(budget.nutrient_carcasses as f64);
+        self.nutrient_carcasses
+            .push(budget.nutrient_carcasses as f64);
     }
 
     /// Number of samples retained per series (every series shares one length,
@@ -240,10 +241,16 @@ fn series_line(name: &str, series: &RingBuffer<f64>) -> egui_plot::Line<'static>
 }
 
 /// Parsed command-line configuration.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 struct CliConfig {
     recipe_path: Option<String>,
     fast_forward: u64,
+    /// Run headless: step the scenario to `max_ticks` (or extinction) and write
+    /// per-tick telemetry as JSON-lines to stdout, opening no window.
+    trace: bool,
+    /// Fixed RNG seed for a reproducible run. `None` draws a random seed (the
+    /// chosen seed is always logged to stderr so any run can be replayed).
+    seed: Option<u64>,
 }
 
 /// The outcome of parsing argv (excluding the program name).
@@ -259,6 +266,8 @@ enum CliOutcome {
 fn parse_args(args: &[String]) -> CliOutcome {
     let mut recipe_path: Option<String> = None;
     let mut fast_forward: u64 = 0;
+    let mut trace = false;
+    let mut seed: Option<u64> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -268,6 +277,20 @@ fn parse_args(args: &[String]) -> CliOutcome {
                 match args.get(i) {
                     Some(path) => recipe_path = Some(path.clone()),
                     None => return CliOutcome::Error(format!("{} requires a path", args[i - 1])),
+                }
+            }
+            "--trace" => trace = true,
+            "--seed" => {
+                i += 1;
+                match args.get(i).map(|s| s.parse::<u64>()) {
+                    Some(Ok(n)) => seed = Some(n),
+                    Some(Err(_)) => {
+                        return CliOutcome::Error(format!(
+                            "--seed requires a number, got {}",
+                            args[i]
+                        ));
+                    }
+                    None => return CliOutcome::Error("--seed requires a number".into()),
                 }
             }
             "--fast-forward" => {
@@ -289,7 +312,12 @@ fn parse_args(args: &[String]) -> CliOutcome {
         i += 1;
     }
 
-    CliOutcome::Run(CliConfig { recipe_path, fast_forward })
+    CliOutcome::Run(CliConfig {
+        recipe_path,
+        fast_forward,
+        trace,
+        seed,
+    })
 }
 
 /// Select the agent nearest a click position, respecting the toroidal wrap of
@@ -305,7 +333,12 @@ fn find_nearest_agent(
 ) -> Option<u64> {
     agents
         .iter()
-        .map(|a| (a.id, explorers_sim::toroidal_distance(click_pos, a.position, world_extent)))
+        .map(|a| {
+            (
+                a.id,
+                explorers_sim::toroidal_distance(click_pos, a.position, world_extent),
+            )
+        })
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
         .map(|(id, _)| id)
 }
@@ -337,7 +370,11 @@ fn compute_energy_budget(world: &World) -> EnergyBudget {
         carcass_energy: world.carcasses().iter().map(|c| c.energy).sum(),
         dissipated_energy: world.dissipated_energy(),
         nutrient_available: world.nutrient_pool(),
-        nutrient_living: world.agents().iter().map(|a| a.nutrient_total(world.params())).sum(),
+        nutrient_living: world
+            .agents()
+            .iter()
+            .map(|a| a.nutrient_total(world.params()))
+            .sum(),
         nutrient_carcasses: world.carcasses().iter().map(|c| c.nutrient).sum(),
     }
 }
@@ -360,7 +397,10 @@ impl ContactTimeStats {
         }
         let sum: f64 = agents.iter().map(|a| a.contact_time as f64).sum();
         let max = agents.iter().map(|a| a.contact_time).max().unwrap_or(0);
-        Self { average: sum / agents.len() as f64, max }
+        Self {
+            average: sum / agents.len() as f64,
+            max,
+        }
     }
 }
 
@@ -379,7 +419,10 @@ struct RoleBreakdown {
 impl RoleBreakdown {
     /// Tally a behavioural roles map (from the projection) into the breakdown.
     fn from_roles(roles: &HashMap<u64, TrophicRole>) -> Self {
-        let mut breakdown = RoleBreakdown { total: roles.len(), ..Default::default() };
+        let mut breakdown = RoleBreakdown {
+            total: roles.len(),
+            ..Default::default()
+        };
         for role in roles.values() {
             match role {
                 TrophicRole::Producer => breakdown.producers += 1,
@@ -416,6 +459,10 @@ fn print_help() {
     eprintln!("  --scenario PATH      Load scenario from JSON file (same format as recipe,");
     eprintln!("                       but may include explicit agents list)");
     eprintln!("  --fast-forward N     Advance simulation N ticks before rendering");
+    eprintln!("  --trace              Run headless: step the scenario to max_ticks (or");
+    eprintln!("                       extinction) and write per-tick JSON-lines telemetry to");
+    eprintln!("                       stdout, opening no window");
+    eprintln!("  --seed N             Use a fixed RNG seed (reproducible run); default random");
     eprintln!("  --help, -h           Show this help");
 }
 
@@ -461,7 +508,7 @@ fn default_recipe() -> WorldRecipe {
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
-            },
+        },
         initial_distribution: Some(InitialDistribution {
             mean_traits: TraitVector {
                 photosynthetic_absorption: 0.5,
@@ -495,6 +542,62 @@ fn load_recipe(config: &CliConfig) -> WorldRecipe {
     }
 }
 
+/// Build one tick's telemetry as a JSON object — a single JSON-lines row. Reuses
+/// the app's existing aggregations ([`RoleBreakdown`] over the topology
+/// projection's behavioural roles, and [`compute_energy_budget`]) so the headless
+/// trace and the GUI report identical numbers. Pure read of public world state;
+/// the projection must already be updated for the current tick.
+fn telemetry_row(world: &World, topology: &TopologyProjection) -> serde_json::Value {
+    let breakdown = RoleBreakdown::from_roles(&topology.trophic_roles(world.agents()));
+    let budget = compute_energy_budget(world);
+    serde_json::json!({
+        "tick": world.tick(),
+        "population": world.agents().len(),
+        "births": world.last_tick_births(),
+        "deaths": world.last_tick_deaths(),
+        "producers": breakdown.producers,
+        "consumers": breakdown.consumers,
+        "decomposers": breakdown.decomposers,
+        "carcasses": world.carcasses().len(),
+        "living_reserve": budget.living_reserve,
+        "living_structure": budget.living_structure,
+        "living_energy": budget.living_energy,
+        "carcass_energy": budget.carcass_energy,
+        "dissipated_energy": budget.dissipated_energy,
+        "nutrient_available": budget.nutrient_available,
+        "nutrient_living": budget.nutrient_living,
+        "nutrient_carcasses": budget.nutrient_carcasses,
+    })
+}
+
+/// Run a loaded world headlessly to `max_ticks`, or until the population goes
+/// extinct, writing one JSON-lines [`telemetry_row`] per applied tick to `out`.
+/// Returns the number of rows written. Drives the topology projection each tick
+/// so the behavioural role split (producer/consumer/decomposer) is accurate.
+/// Writes to any [`Write`](std::io::Write), so it is unit-testable without a
+/// window. The extinction tick is itself emitted (so the final row shows the
+/// population reaching zero) before the loop stops.
+fn run_trace<W: std::io::Write>(
+    mut world: World,
+    max_ticks: u64,
+    out: &mut W,
+) -> std::io::Result<u64> {
+    let mut topology = TopologyProjection::new();
+    let mut rows = 0u64;
+    for _ in 0..max_ticks {
+        world.step();
+        topology.update(world.event_log());
+        let row = telemetry_row(&world, &topology);
+        serde_json::to_writer(&mut *out, &row)?;
+        out.write_all(b"\n")?;
+        rows += 1;
+        if world.agents().is_empty() {
+            break;
+        }
+    }
+    Ok(rows)
+}
+
 fn main() -> eframe::Result {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let config = match parse_args(&argv) {
@@ -511,15 +614,28 @@ fn main() -> eframe::Result {
 
     let recipe = load_recipe(&config);
 
-    let seed: u64 = rand::random();
+    let seed: u64 = config.seed.unwrap_or_else(rand::random);
     let mut world = World::from_recipe(&recipe, seed);
+
+    if config.trace {
+        eprintln!("Tracing {} ticks (seed {seed})...", recipe.max_ticks);
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let rows = run_trace(world, recipe.max_ticks, &mut out)
+            .unwrap_or_else(|e| panic!("Failed writing telemetry: {e}"));
+        eprintln!("Trace complete: {rows} rows written.");
+        return Ok(());
+    }
 
     if config.fast_forward > 0 {
         eprintln!("Fast-forwarding {} ticks...", config.fast_forward);
         for _ in 0..config.fast_forward {
             world.step();
         }
-        eprintln!("Fast-forward complete. {} agents alive.", world.agents().len());
+        eprintln!(
+            "Fast-forward complete. {} agents alive.",
+            world.agents().len()
+        );
     }
 
     let app = ExplorersApp::new(world, config.fast_forward);
@@ -591,7 +707,11 @@ impl eframe::App for ExplorersApp {
         // single-step, speed, and a live tick + agent-count readout.
         egui::TopBottomPanel::top("run_control").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let pause_label = if self.clock.is_paused() { "Play" } else { "Pause" };
+                let pause_label = if self.clock.is_paused() {
+                    "Play"
+                } else {
+                    "Pause"
+                };
                 if ui.button(pause_label).clicked() {
                     self.clock.toggle_pause();
                 }
@@ -670,8 +790,7 @@ impl eframe::App for ExplorersApp {
                 // up by id; if the agent has died the lookup yields nothing and
                 // nothing is drawn (selection handled gracefully).
                 if let Some(selected) = self.selected_agent
-                    && let Some(agent) =
-                        self.world.agents().iter().find(|a| a.id == selected)
+                    && let Some(agent) = self.world.agents().iter().find(|a| a.id == selected)
                 {
                     let center = view.to_screen(agent.position);
                     painter.circle_stroke(
@@ -749,8 +868,16 @@ impl ExplorersApp {
             "Contact time: avg {:.0} / max {}",
             contact.average, contact.max
         ));
-        let paused = if self.clock.is_paused() { " | PAUSED" } else { "" };
-        ui.label(format!("TPS: {:.2}{}", self.clock.ticks_per_second(), paused));
+        let paused = if self.clock.is_paused() {
+            " | PAUSED"
+        } else {
+            ""
+        };
+        ui.label(format!(
+            "TPS: {:.2}{}",
+            self.clock.ticks_per_second(),
+            paused
+        ));
     }
 
     /// Energy budget: living reserve/structure/total, carcass structure,
@@ -770,7 +897,10 @@ impl ExplorersApp {
                 ui.label(format!("Grand total: {:.1}", grand_total));
                 ui.separator();
                 ui.label("Nutrients:");
-                ui.label(format!("  Available pool: {:.1}", budget.nutrient_available));
+                ui.label(format!(
+                    "  Available pool: {:.1}",
+                    budget.nutrient_available
+                ));
                 ui.label(format!("  Living agents: {:.1}", budget.nutrient_living));
                 ui.label(format!("  Carcasses: {:.1}", budget.nutrient_carcasses));
             });
@@ -825,27 +955,82 @@ impl ExplorersApp {
             .default_open(true)
             .show(ui, |ui| {
                 let params = self.world.params_mut();
-                ui.add(egui::Slider::new(&mut params.solar_flux_magnitude, 0.0..=200.0).text("Solar flux"));
-                ui.add(egui::Slider::new(&mut params.base_metabolic_rate, 0.0..=2.0).text("Base metabolic rate"));
-                ui.add(egui::Slider::new(&mut params.photo_maintenance_cost, 0.0..=0.5).text("Photo maintenance"));
-                ui.add(egui::Slider::new(&mut params.heterotrophy_maintenance_cost, 0.0..=0.5).text("Heterotrophy maintenance"));
-                ui.add(egui::Slider::new(&mut params.somatic_maintenance_cost_coefficient, 0.0..=1.0).text("Somatic maintenance"));
-                ui.add(egui::Slider::new(&mut params.structure_maintenance_coefficient, 0.0..=0.1).text("Structure maintenance"));
-                ui.add(egui::Slider::new(&mut params.mobility_maintenance_cost, 0.0..=0.5).text("Mobility maintenance"));
-                ui.add(egui::Slider::new(&mut params.asexual_propensity_maintenance_cost, 0.0..=0.5).text("Asexual-propensity maintenance"));
-                ui.add(egui::Slider::new(&mut params.maintenance_cost_exponent, 1.0..=3.0).text("Maintenance cost exponent"));
-                ui.add(egui::Slider::new(&mut params.mutation_rate, 0.0..=1.0).text("Mutation rate"));
-                ui.add(egui::Slider::new(&mut params.mutation_magnitude, 0.0..=0.5).text("Mutation magnitude"));
-                ui.add(egui::Slider::new(&mut params.contact_range_coefficient, 1.0..=50.0).text("Contact range coefficient"));
-                ui.add(egui::Slider::new(&mut params.light_competition_radius, 1.0..=100.0).text("Light competition radius"));
-                ui.add(egui::Slider::new(&mut params.growth_efficiency, 0.0..=1.0).text("Growth efficiency"));
+                ui.add(
+                    egui::Slider::new(&mut params.solar_flux_magnitude, 0.0..=200.0)
+                        .text("Solar flux"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.base_metabolic_rate, 0.0..=2.0)
+                        .text("Base metabolic rate"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.photo_maintenance_cost, 0.0..=0.5)
+                        .text("Photo maintenance"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.heterotrophy_maintenance_cost, 0.0..=0.5)
+                        .text("Heterotrophy maintenance"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.somatic_maintenance_cost_coefficient, 0.0..=1.0)
+                        .text("Somatic maintenance"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.structure_maintenance_coefficient, 0.0..=0.1)
+                        .text("Structure maintenance"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.mobility_maintenance_cost, 0.0..=0.5)
+                        .text("Mobility maintenance"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.asexual_propensity_maintenance_cost, 0.0..=0.5)
+                        .text("Asexual-propensity maintenance"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.maintenance_cost_exponent, 1.0..=3.0)
+                        .text("Maintenance cost exponent"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.mutation_rate, 0.0..=1.0).text("Mutation rate"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.mutation_magnitude, 0.0..=0.5)
+                        .text("Mutation magnitude"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.contact_range_coefficient, 1.0..=50.0)
+                        .text("Contact range coefficient"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.light_competition_radius, 1.0..=100.0)
+                        .text("Light competition radius"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.growth_efficiency, 0.0..=1.0)
+                        .text("Growth efficiency"),
+                );
                 ui.add(egui::Slider::new(&mut params.wear_rate, 0.0..=1.0).text("Wear rate"));
-                ui.add(egui::Slider::new(&mut params.wear_degradation_steepness, 0.0..=5.0).text("Wear degradation steepness"));
-                ui.add(egui::Slider::new(&mut params.use_wear_rate, 0.0..=0.5).text("Use wear rate"));
+                ui.add(
+                    egui::Slider::new(&mut params.wear_degradation_steepness, 0.0..=5.0)
+                        .text("Wear degradation steepness"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.use_wear_rate, 0.0..=0.5).text("Use wear rate"),
+                );
                 ui.add(egui::Slider::new(&mut params.repair_decay, 0.0..=5.0).text("Repair decay"));
-                ui.add(egui::Slider::new(&mut params.base_trophic_efficiency, 0.0..=1.0).text("Base trophic efficiency"));
-                ui.add(egui::Slider::new(&mut params.reproduction_efficiency, 0.0..=1.0).text("Reproduction efficiency"));
-                ui.add(egui::Slider::new(&mut params.reproduction_energy_threshold, 0.0..=200.0).text("Reproduction energy threshold"));
+                ui.add(
+                    egui::Slider::new(&mut params.base_trophic_efficiency, 0.0..=1.0)
+                        .text("Base trophic efficiency"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.reproduction_efficiency, 0.0..=1.0)
+                        .text("Reproduction efficiency"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.reproduction_energy_threshold, 0.0..=200.0)
+                        .text("Reproduction energy threshold"),
+                );
             });
     }
 
@@ -859,48 +1044,45 @@ impl ExplorersApp {
                 None => {
                     ui.label("Click an agent in the grid window to inspect");
                 }
-                Some(agent_id) => {
-                    match self.world.agents().iter().find(|a| a.id == agent_id) {
-                        Some(agent) => {
-                            ui.label(format!("ID: {}", agent.id));
-                            ui.label(format!(
-                                "Position: ({:.1}, {:.1})",
-                                agent.position.0, agent.position.1
-                            ));
-                            ui.label(format!("Reserve: {:.1}  (death at 0)", agent.reserve));
-                            ui.label(format!("Structure: {:.1}", agent.structure));
-                            ui.label(format!("Nutrient: {:.1}", agent.nutrient));
-                            ui.label(format!("Repro reserve: {:.1}", agent.repro_reserve));
-                            ui.label(format!("Repro nutrient: {:.1}", agent.repro_nutrient));
-                            ui.label(format!("Contact time: {}", agent.contact_time));
-                            ui.label(format!("Dominant role: {}", dominant_role(&agent.traits)));
-                            let threshold =
-                                self.world.params().reproduction_energy_threshold;
-                            let demand = explorers_sim::stoichiometric_demand(
-                                &agent.traits,
-                                agent.structure,
-                                self.world.params(),
-                            );
-                            ui.label(format!(
-                                "Repro gates: energy >= {:.0}, nutrient >= {:.1}",
-                                threshold, demand
-                            ));
-                            ui.separator();
-                            ui.label("Trait vector:");
-                            let t = &agent.traits;
-                            ui.label(format!("  autotrophy: {:.3}", t.photosynthetic_absorption));
-                            ui.label(format!("  heterotrophy: {:.3}", t.heterotrophy));
-                            ui.label(format!("  mobility: {:.3}", t.mobility));
-                            ui.label(format!("  kappa: {:.3}", t.kappa));
-                            ui.label(format!("  fecundity: {:.3}", t.fecundity));
-                            ui.label(format!("  asexual_propensity: {:.3}", t.asexual_propensity));
-                            ui.label(format!("  dispersal: {:.3}", t.dispersal));
-                        }
-                        None => {
-                            ui.label(format!("Agent {} is no longer alive", agent_id));
-                        }
+                Some(agent_id) => match self.world.agents().iter().find(|a| a.id == agent_id) {
+                    Some(agent) => {
+                        ui.label(format!("ID: {}", agent.id));
+                        ui.label(format!(
+                            "Position: ({:.1}, {:.1})",
+                            agent.position.0, agent.position.1
+                        ));
+                        ui.label(format!("Reserve: {:.1}  (death at 0)", agent.reserve));
+                        ui.label(format!("Structure: {:.1}", agent.structure));
+                        ui.label(format!("Nutrient: {:.1}", agent.nutrient));
+                        ui.label(format!("Repro reserve: {:.1}", agent.repro_reserve));
+                        ui.label(format!("Repro nutrient: {:.1}", agent.repro_nutrient));
+                        ui.label(format!("Contact time: {}", agent.contact_time));
+                        ui.label(format!("Dominant role: {}", dominant_role(&agent.traits)));
+                        let threshold = self.world.params().reproduction_energy_threshold;
+                        let demand = explorers_sim::stoichiometric_demand(
+                            &agent.traits,
+                            agent.structure,
+                            self.world.params(),
+                        );
+                        ui.label(format!(
+                            "Repro gates: energy >= {:.0}, nutrient >= {:.1}",
+                            threshold, demand
+                        ));
+                        ui.separator();
+                        ui.label("Trait vector:");
+                        let t = &agent.traits;
+                        ui.label(format!("  autotrophy: {:.3}", t.photosynthetic_absorption));
+                        ui.label(format!("  heterotrophy: {:.3}", t.heterotrophy));
+                        ui.label(format!("  mobility: {:.3}", t.mobility));
+                        ui.label(format!("  kappa: {:.3}", t.kappa));
+                        ui.label(format!("  fecundity: {:.3}", t.fecundity));
+                        ui.label(format!("  asexual_propensity: {:.3}", t.asexual_propensity));
+                        ui.label(format!("  dispersal: {:.3}", t.dispersal));
                     }
-                }
+                    None => {
+                        ui.label(format!("Agent {} is no longer alive", agent_id));
+                    }
+                },
             });
     }
 }
@@ -917,7 +1099,11 @@ impl WorldView {
     fn fit(extent: f32, viewport: Rect) -> Self {
         let side = viewport.width().min(viewport.height());
         let scale = if extent > 0.0 { side / extent } else { 1.0 };
-        Self { extent, scale, center: viewport.center() }
+        Self {
+            extent,
+            scale,
+            center: viewport.center(),
+        }
     }
 
     fn to_screen(&self, pos: (f32, f32)) -> Pos2 {
@@ -981,7 +1167,11 @@ mod tests {
         let mut history = History::new(100);
         assert_eq!(history.len(), 0);
         history.sample(&world, &topology);
-        assert_eq!(history.len(), 1, "one sample call appends one point per series");
+        assert_eq!(
+            history.len(),
+            1,
+            "one sample call appends one point per series"
+        );
         history.sample(&world, &topology);
         assert_eq!(history.len(), 2);
     }
@@ -993,7 +1183,11 @@ mod tests {
         assert_eq!(app.history.len(), 0);
 
         app.apply_steps(5);
-        assert_eq!(app.history.len(), 5, "five applied steps yield five samples");
+        assert_eq!(
+            app.history.len(),
+            5,
+            "five applied steps yield five samples"
+        );
 
         // A single-step (as the paused Step button drives) adds exactly one.
         app.apply_steps(1);
@@ -1128,7 +1322,11 @@ mod tests {
 
         // Nutrient pools are reported.
         assert!((budget.nutrient_available - world.nutrient_pool()).abs() < 1e-3);
-        let expected_living_nutrient: f32 = world.agents().iter().map(|a| a.nutrient_total(world.params())).sum();
+        let expected_living_nutrient: f32 = world
+            .agents()
+            .iter()
+            .map(|a| a.nutrient_total(world.params()))
+            .sum();
         assert!((budget.nutrient_living - expected_living_nutrient).abs() < 1e-3);
     }
 
@@ -1140,8 +1338,7 @@ mod tests {
         // living energy and total_solar_input is zero plus that seed.
         let world = World::from_recipe(&default_recipe(), 7);
         let budget = compute_energy_budget(&world);
-        let grand_total =
-            budget.living_energy + budget.carcass_energy + budget.dissipated_energy;
+        let grand_total = budget.living_energy + budget.carcass_energy + budget.dissipated_energy;
         assert!(grand_total > 0.0, "seeded world holds energy");
     }
 
@@ -1160,24 +1357,53 @@ mod tests {
     #[test]
     fn pure_producer_maps_to_green() {
         let color = trophic_color(&traits(1.0, 0.0), 100.0);
-        assert!(color.g() > 230, "green channel should be high, got {}", color.g());
-        assert!(color.r() < 50, "red channel should be low, got {}", color.r());
-        assert!(color.b() < 50, "blue channel should be low, got {}", color.b());
+        assert!(
+            color.g() > 230,
+            "green channel should be high, got {}",
+            color.g()
+        );
+        assert!(
+            color.r() < 50,
+            "red channel should be low, got {}",
+            color.r()
+        );
+        assert!(
+            color.b() < 50,
+            "blue channel should be low, got {}",
+            color.b()
+        );
     }
 
     #[test]
     fn pure_consumer_maps_to_red() {
         let color = trophic_color(&traits(0.0, 1.0), 100.0);
-        assert!(color.r() > 230, "red channel should be high, got {}", color.r());
-        assert!(color.g() < 50, "green channel should be low, got {}", color.g());
-        assert!(color.b() < 50, "blue channel should be low, got {}", color.b());
+        assert!(
+            color.r() > 230,
+            "red channel should be high, got {}",
+            color.r()
+        );
+        assert!(
+            color.g() < 50,
+            "green channel should be low, got {}",
+            color.g()
+        );
+        assert!(
+            color.b() < 50,
+            "blue channel should be low, got {}",
+            color.b()
+        );
     }
 
     #[test]
     fn low_reserve_dims_color() {
         let bright = trophic_color(&traits(1.0, 0.0), 100.0);
         let dim = trophic_color(&traits(1.0, 0.0), 10.0);
-        assert!(dim.g() < bright.g(), "low energy should dim: {} vs {}", dim.g(), bright.g());
+        assert!(
+            dim.g() < bright.g(),
+            "low energy should dim: {} vs {}",
+            dim.g(),
+            bright.g()
+        );
         assert!(dim.g() > 0, "should still be visible at low energy");
     }
 
@@ -1205,7 +1431,10 @@ mod tests {
     #[test]
     fn carcass_brightness_has_a_visible_floor() {
         let empty = carcass_color(0.0);
-        assert!(empty.r() > 0, "even an empty carcass should be faintly visible");
+        assert!(
+            empty.r() > 0,
+            "even an empty carcass should be faintly visible"
+        );
     }
 
     #[test]
@@ -1346,7 +1575,7 @@ mod tests {
             out,
             CliOutcome::Run(CliConfig {
                 recipe_path: Some("world.json".into()),
-                fast_forward: 0,
+                ..Default::default()
             })
         );
     }
@@ -1358,7 +1587,7 @@ mod tests {
             out,
             CliOutcome::Run(CliConfig {
                 recipe_path: Some("scn.json".into()),
-                fast_forward: 0,
+                ..Default::default()
             })
         );
     }
@@ -1371,8 +1600,47 @@ mod tests {
             CliOutcome::Run(CliConfig {
                 recipe_path: Some("w.json".into()),
                 fast_forward: 50,
+                ..Default::default()
             })
         );
+    }
+
+    #[test]
+    fn parses_trace_flag() {
+        let out = parse_args(&args(&["--scenario", "s.json", "--trace"]));
+        assert_eq!(
+            out,
+            CliOutcome::Run(CliConfig {
+                recipe_path: Some("s.json".into()),
+                trace: true,
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_seed() {
+        let out = parse_args(&args(&["--trace", "--seed", "42"]));
+        assert_eq!(
+            out,
+            CliOutcome::Run(CliConfig {
+                trace: true,
+                seed: Some(42),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[test]
+    fn seed_requires_a_number() {
+        assert!(matches!(
+            parse_args(&args(&["--seed", "x"])),
+            CliOutcome::Error(_)
+        ));
+        assert!(matches!(
+            parse_args(&args(&["--seed"])),
+            CliOutcome::Error(_)
+        ));
     }
 
     #[test]
@@ -1381,17 +1649,103 @@ mod tests {
         assert_eq!(parse_args(&args(&["-h"])), CliOutcome::Help);
     }
 
+    /// A scenario that survives emits exactly one telemetry row per applied tick,
+    /// and each row is valid JSON carrying the documented fields.
     #[test]
-    fn no_args_runs_with_defaults() {
+    fn run_trace_emits_one_valid_row_per_tick() {
+        let world = World::from_recipe(&default_recipe(), 7);
+        let mut out: Vec<u8> = Vec::new();
+        let rows = run_trace(world, 3, &mut out).expect("trace writes");
+        assert_eq!(rows, 3, "three surviving ticks -> three rows");
+
+        let lines: Vec<&str> = std::str::from_utf8(&out).unwrap().lines().collect();
+        assert_eq!(lines.len(), 3, "one JSON-lines row per tick");
+        for (i, line) in lines.iter().enumerate() {
+            let v: serde_json::Value = serde_json::from_str(line).expect("each row is valid JSON");
+            assert_eq!(v["tick"], (i as u64) + 1, "tick index increments from 1");
+            // Documented fields are present.
+            for key in [
+                "population",
+                "births",
+                "deaths",
+                "producers",
+                "consumers",
+                "decomposers",
+                "carcasses",
+                "living_energy",
+                "dissipated_energy",
+                "nutrient_available",
+            ] {
+                assert!(v.get(key).is_some(), "row is missing field `{key}`");
+            }
+        }
+    }
+
+    /// The role split and energy/nutrient aggregates in a row match the same
+    /// helpers the GUI uses — the row is a thin re-emission, not a reimplementation.
+    #[test]
+    fn telemetry_row_matches_the_shared_aggregations() {
+        let mut world = World::from_recipe(&default_recipe(), 7);
+        let mut topology = TopologyProjection::new();
+        world.step();
+        topology.update(world.event_log());
+
+        let row = telemetry_row(&world, &topology);
+        let breakdown = RoleBreakdown::from_roles(&topology.trophic_roles(world.agents()));
+        let budget = compute_energy_budget(&world);
+
+        assert_eq!(row["population"], world.agents().len());
+        assert_eq!(row["producers"], breakdown.producers);
+        assert_eq!(row["consumers"], breakdown.consumers);
+        assert_eq!(row["decomposers"], breakdown.decomposers);
         assert_eq!(
-            parse_args(&[]),
-            CliOutcome::Run(CliConfig { recipe_path: None, fast_forward: 0 })
+            row["nutrient_available"].as_f64().unwrap() as f32,
+            budget.nutrient_available
+        );
+    }
+
+    /// On extinction the trace stops early, and the final emitted row records the
+    /// population reaching zero (with the deaths that drove it there).
+    #[test]
+    fn run_trace_stops_at_extinction() {
+        // Crank base metabolism far above any agent's starting reserve so the
+        // seeded population starves on the first step.
+        let mut recipe = default_recipe();
+        recipe.parameters.base_metabolic_rate = 1.0e6;
+        let world = World::from_recipe(&recipe, 7);
+
+        let mut out: Vec<u8> = Vec::new();
+        let rows = run_trace(world, 100, &mut out).expect("trace writes");
+        assert!(
+            rows < 100,
+            "extinction stops the run before max_ticks (got {rows})"
+        );
+
+        let last = std::str::from_utf8(&out)
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap()
+            .to_owned();
+        let v: serde_json::Value = serde_json::from_str(&last).unwrap();
+        assert_eq!(v["population"], 0, "final row shows an extinct population");
+        assert!(
+            v["deaths"].as_u64().unwrap() > 0,
+            "final row records the deaths"
         );
     }
 
     #[test]
+    fn no_args_runs_with_defaults() {
+        assert_eq!(parse_args(&[]), CliOutcome::Run(CliConfig::default()));
+    }
+
+    #[test]
     fn unknown_argument_is_an_error() {
-        assert!(matches!(parse_args(&args(&["--nope"])), CliOutcome::Error(_)));
+        assert!(matches!(
+            parse_args(&args(&["--nope"])),
+            CliOutcome::Error(_)
+        ));
     }
 
     #[test]
