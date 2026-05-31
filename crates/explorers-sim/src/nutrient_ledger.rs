@@ -95,11 +95,20 @@ impl NutrientLedger {
             (NutrientEndpoint::Agent(0), pre.agents, post.agents),
             (NutrientEndpoint::Carcass(0), pre.carcasses, post.carcasses),
         ];
+        // Record every category's pre as endowment and post as retained, whatever
+        // the sign. Gating on `> 0.0` (as an earlier version did) silently dropped
+        // a pool whenever it crossed zero within the tick — counting its pre in
+        // `endowed` but not its post in `retained` (or vice versa) — which
+        // manufactured a phantom imbalance equal to the crossing pool's magnitude.
+        // That artifact was invisible until the detrital pathway began emptying
+        // carcass/grid pools to ~0 (issue #303). The conservation check must read
+        // the true signed pool totals so it reflects physics, not the sign of an
+        // f32-noisy near-zero pool.
         for (endpoint, pre_amount, post_amount) in categories {
-            if pre_amount > 0.0 {
+            if pre_amount != 0.0 {
                 self.record(NutrientEndpoint::Endowment, endpoint.clone(), pre_amount);
             }
-            if post_amount > 0.0 {
+            if post_amount != 0.0 {
                 self.record(endpoint, NutrientEndpoint::Retained, post_amount);
             }
         }

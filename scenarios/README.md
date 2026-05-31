@@ -84,10 +84,12 @@ issue, surfaced by the example lens).
 
 ## Current status (seed 1)
 
-> **The suite is stale and trophically incomplete** — `status: stale-params` on 7 of 8 files.
-> Only `example4_consumer_tuning.json` reproduces (36 births); no scenario seeds a decomposer.
-> Per-scenario verdicts in [`verdicts.md`](verdicts.md); raw numbers in
-> [`observed.json`](observed.json). Two root causes:
+> **The legacy suite is stale and trophically incomplete** — `status: stale-params` on most of
+> the older files. `example4_consumer_tuning.json` reproduces (36 births), and
+> `example6_decomposer_viability.json` (#303) is the first scenario to seed a working decomposer:
+> it reads behaviourally as a `Decomposer` and sustains on a self-thinning producer stand's
+> carcasses through 2000 ticks. Per-scenario verdicts in [`verdicts.md`](verdicts.md); raw numbers
+> in [`observed.json`](observed.json). Two root causes shaped the legacy set:
 
 ### Root cause 1 — partial recipes drift under code defaults
 
@@ -105,9 +107,12 @@ design is **#294**.
 ### Root cause 2 — roster/intent drift
 
 `example7`/`example8` seed undifferentiated mobile consumers rather than the distinct
-trophic roles their intent calls for. **No scenario in the suite exercises a
-decomposer**, and carcasses accumulate unconsumed in every run. The decomposer-viability
-scenario #136 specifies — *20 moss + 1 decomposer* — remains unbuilt.
+trophic roles their intent calls for, so they exercise no decomposer and carcasses accumulate
+unconsumed. `example6_decomposer_viability.json` (#303) now fills the gap the closed-but-unbuilt
+#136 left — a self-thinning producer stand feeding a seeded decomposer — and building it exposed
+why carcasses had always accumulated: a drain-phase index/id bug stopped any decomposer from
+consuming a carcass once a death had reindexed the living population. That is fixed; the legacy
+roster gap in `example7`/`example8` remains.
 
 The files also still use retired vocabulary — `photosynthetic_absorption` (now
 [`autotrophy`](../CONTEXT.md)) and `contact_radius` (now `contact_range_coefficient`) —
