@@ -381,14 +381,9 @@ pub fn resolve_drains(
         .fold(0.0_f32, f32::max);
 
     // --- Pass over living targets ---
-    // For each agent that has structure, find consumers in range.
-    // We need to iterate targets and for each, find consumers.
-    // Build index: agent id -> slice index
-    let id_to_idx: std::collections::HashMap<u64, usize> = agents
-        .iter()
-        .enumerate()
-        .map(|(i, a)| (a.id, i))
-        .collect();
+    // For each agent that has structure, find consumers in range. The spatial
+    // grid is keyed by slice index (see `World::step`), so query results are
+    // indices into `agents`, used directly below.
 
     // Collect per-target drain info before mutating
     struct TargetDrain {
@@ -412,7 +407,11 @@ pub fn resolve_drains(
             if !seen.insert(neighbor_id) {
                 continue;
             }
-            if let Some(&consumer_idx) = id_to_idx.get(&neighbor_id) {
+            // The spatial grid is keyed by slice index (see `World::step`), not by
+            // agent id — index and id diverge as soon as any agent dies. Treat the
+            // query result as the index it is.
+            let consumer_idx = neighbor_id as usize;
+            if consumer_idx < agents.len() {
                 if consumer_idx == target_idx {
                     continue; // can't consume yourself
                 }
@@ -551,7 +550,12 @@ pub fn resolve_drains(
             if !seen.insert(neighbor_id) {
                 continue;
             }
-            if let Some(&consumer_idx) = id_to_idx.get(&neighbor_id) {
+            // Grid results are slice indices, not agent ids (see the living-target
+            // pass above and `World::step`). Conflating the two made this pass find
+            // no consumers once any death had reindexed `agents` — which is exactly
+            // when carcasses exist, so carcasses accumulated unconsumed forever.
+            let consumer_idx = neighbor_id as usize;
+            if consumer_idx < agents.len() {
                 // Must not be dead this tick
                 if dead_agents.contains(&agents[consumer_idx].id) {
                     continue;
@@ -3684,7 +3688,7 @@ mod tests {
         }];
 
         let mut grid = SpatialGrid::new(100.0, 10.0);
-        grid.insert(1, consumer_pos); // grid id must match agent id for lookup
+        grid.insert(0, consumer_pos); // grid key is the consumer's slice index
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
 
@@ -3749,7 +3753,7 @@ mod tests {
         }];
 
         let mut grid = SpatialGrid::new(100.0, 10.0);
-        grid.insert(1, consumer_pos);
+        grid.insert(0, consumer_pos); // grid key is the consumer's slice index
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
@@ -3851,7 +3855,7 @@ mod tests {
         };
 
         let run_carcass_drain = |carcass_traits: TraitVector| -> f32 {
-            // Agent id must match grid key (slice index) for id_to_idx lookup
+            // Grid key is the slice index; here agent id 0 sits at index 0.
             let mut agents = vec![
                 make_agent(0, (0.0, 0.0), 0.0, consumer_traits),
             ];

@@ -7,8 +7,10 @@ the validation triad (#293): the [observed evidence](observed.json) (computed by
 [`expected-properties.md`](../docs/system-design/expected-properties.md). It is a
 *reading*, not a pass/fail test — precise numbers are evidence for the read, not the
 gate. Regenerate by re-running `eval_scenarios` and re-judging (a human or a
-fresh-perspective agent); the verdict below was rendered by an agent on 2026-05-31
-(re-judged after #302 replaced the energy-death detector with a free-energy-stock-trend test).
+fresh-perspective agent); the verdict below was re-judged by an agent on 2026-05-31
+(after #302 replaced the energy-death detector with a free-energy-stock-trend test, and
+after #303 added `example6_decomposer_viability` and fixed the drain-phase index/id bug
+that had stopped any decomposer from ever consuming a carcass).
 
 | scenario | verdict | agrees with prediction? | primary fault |
 |---|---|---|---|
@@ -18,6 +20,7 @@ fresh-perspective agent); the verdict below was rendered by an agent on 2026-05-
 | example4 | not-sensible | disagree | stale params + no turnover (0 births) |
 | example4_consumer_tuning | partially-sensible | partial | incomplete roster (no decomposer), low turnover |
 | example5 | not-sensible | disagree | roster/probe mismatch, then stale params |
+| example6_decomposer_viability | partially-sensible | agree (predicted live → lives) | detrital pathway works, but a single-cohort carcass pulse — no sustained multi-cluster ecology |
 | example7 | not-sensible | n/a (undecided) | roster mismatch (no decomposer), then stale params |
 | example8 | not-sensible | disagree | roster mismatch (no decomposer), then stale params |
 
@@ -50,6 +53,20 @@ fresh-perspective agent); the verdict below was rendered by an agent on 2026-05-
   `probes=population_explosion` yet seeds only 2 consumers on stale params and collapses toward
   a final pop of 3 — the opposite regime — so it can't exercise the negative feedbacks it claims.
   0 births fails turnover. No longer flagged `energy_death`.
+- **example6_decomposer_viability** — Partially-sensible; agrees with "live", and the first scenario
+  in the suite to actually exercise the detrital pathway. A dense producer stand self-thins under
+  light competition into a carcass field, and a sessile, low-reach, heterotrophy-dominant decomposer
+  embedded in it feeds on those carcasses: it reads behaviourally as a `Decomposer` for 1991 of 2000
+  ticks (the headless `--trace` brown/green split), majority of its consumed energy is detrital
+  (~62% across the run), and it never starves out — it survives to `max_ticks` (17 births / 40 deaths,
+  `failure=none`). This is what #303 set out to prove possible and what #136 only claimed. Building it
+  surfaced a latent bug: the drain phase keyed the spatial grid by slice index but looked consumers up
+  by agent id, so once any death reindexed the living slice — i.e. exactly when carcasses first exist —
+  the carcass pass found zero consumers and carcasses accumulated unconsumed forever. With that fixed,
+  the pathway runs. It is still not a *complete* sensible world: the producers self-thin in essentially
+  one early cohort, so the decomposer lives off a finite carcass pulse plus its own sparse offspring
+  rather than a renewed producer→carcass supply; clustering, coexistence, and oscillation all score 0
+  (final pop 1), and fitness is low. It proves decomposer *viability*, not a full multi-trophic ecology.
 - **example7** — Not-sensible (prediction `undecided`). Roster mismatch is primary: intent is
   "three trophic roles incl. a decomposer", but the roster is 3 *undifferentiated* mobile consumers —
   no decomposer exists, so the detrital pathway it means to probe is absent and carcasses accumulate.
@@ -62,10 +79,16 @@ fresh-perspective agent); the verdict below was rendered by an agent on 2026-05-
 ## Synthesis
 
 This is a **stale, trophically-incomplete validation set, not a fleet of broken ecologies** — the
-files say so themselves (`status: stale-params` on 7 of 8). Two structural defects swamp everything:
-partial recipes drifting under code defaults (most damningly `growth_efficiency`→0.0 in
-example1/2/3, guaranteeing collapse before any ecology runs), and roster/intent drift (**no scenario
-in the suite contains a decomposer**, so carcasses accumulate unconsumed in every run).
+older files say so themselves (`status: stale-params` on most of the legacy set). Two structural
+defects swamp the legacy scenarios: partial recipes drifting under code defaults (most damningly
+`growth_efficiency`→0.0 in example1/2/3, guaranteeing collapse before any ecology runs), and
+roster/intent drift — until #303, **no scenario in the suite contained a working decomposer**, so
+carcasses accumulated unconsumed in every run. `example6_decomposer_viability` now closes that gap:
+it is the first scenario to seed a decomposer that reads behaviourally as one and to drive the
+producer→carcass→decomposer detrital loop end to end. Closing it also turned up *why* carcasses had
+always accumulated — a drain-phase index/id bug (now fixed) meant no decomposer could consume a
+carcass once any agent had died — so the "carcasses accumulate unconsumed" symptom was partly a code
+defect, not only a roster gap.
 
 The previously near-universal `energy_death` verdict was **mostly artifact, not signal**, and #302
 has now removed it. The old detector summed only `Consumed` (predation) energy per tick — both
