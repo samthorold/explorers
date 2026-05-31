@@ -4,6 +4,12 @@ How the world rules are realised through time. The [world rules](world-rules.md)
 
 The execution model is a monolithic tick loop. Agents are plain data structures — they have no behaviour methods. The tick loop reads agent state, computes physics, and mutates state in place. An immutable event log records what happened — it is an observation record, not the execution substrate.
 
+## The simulation core is renderer-agnostic
+
+The simulation is a self-contained core that advances world state and nothing else. It exposes a single stepping operation — conceptually `step(world)` — that applies one tick of physics to the state, and it holds no opinion about timing, rendering, input, or presentation. Everything that drives or observes the simulation is a *client* of this core: a renderer reads world state each frame and draws it; the genesis search runs the core headless, thousands of worlds in parallel, with no renderer at all. The core never reaches up to its clients.
+
+This boundary is load-bearing, not incidental. World genesis — running long sequences of headless ticks to find parameterizations that produce the expected properties, discarding degenerate ones — is only tractable if the world can step without a render loop, a window, or an engine attached. Folding the simulation into whatever engine renders it would drag that engine into every genesis run and into every ecology test, coupling the physics to presentation concerns it must stay free of. Keeping the core a pure state-advancing library is what lets the same physics run under an interactive frontend and under a batch search unchanged. Which engine or framework renders the world is an implementation choice and may change; that the simulation core stays renderer-agnostic is a design constraint that does not.
+
 ## Core concepts
 
 ### Tick

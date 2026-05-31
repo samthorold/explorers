@@ -1,6 +1,6 @@
 # Ecology Reference
 
-Reference documentation on Earth's ecology, written from a systems perspective — stocks, flows, feedback loops, and residence times. This is descriptive: how Earth works, observed and documented. It is not prescriptive and contains no design decisions about the game or simulation. For the simulation's own language, see [CONTEXT.md](../../CONTEXT.md). For design decisions, see [docs/system-design/](../system-design/). For implementation choices, see [docs/adr/](../adr/).
+Reference documentation on Earth's ecology, written from a systems perspective — stocks, flows, feedback loops, and residence times. This is descriptive: how Earth works, observed and documented. It is not prescriptive and contains no design decisions about the game or simulation. For the simulation's own language, see [CONTEXT.md](../../CONTEXT.md). For the design — what we want the world to look like, and why — see [docs/system-design/](../system-design/). The implementation (the code) encodes that design.
 
 ## Reading order
 
