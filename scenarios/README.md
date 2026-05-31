@@ -26,8 +26,11 @@ cargo run -p explorers-app -- --scenario scenarios/example4_consumer_tuning.json
 
 Or run it **headless** (no window) and emit per-tick telemetry as JSON-lines to
 stdout — population, births/deaths, the producer/consumer/decomposer split, the
-energy budget, and the nutrient pools — for grepping or plotting (#279). Pass
-`--seed N` for a reproducible run; the chosen seed is logged to stderr either way:
+energy budget, the nutrient pools, and a `reproduction` block summarising both
+reproductive earmarks against their gates (overall and per role, so a birthless
+tick reads as energy-gated, nutrient-gated, mate-limited, or dying — #280) — for
+grepping or plotting (#279). Pass `--seed N` for a reproducible run; the chosen
+seed is logged to stderr either way:
 
 ```
 cargo run -p explorers-app -- --scenario scenarios/example4_consumer_tuning.json --trace --seed 1
