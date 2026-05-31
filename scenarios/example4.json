@@ -1,4 +1,14 @@
 {
+  "metadata": {
+    "intent": "Twenty producers plus one consumer. Exercises grazing (structure drain), stoichiometric excretion, consumer viability, and top-down control. One consumer should not collapse 20 producers under non-lethal grazing.",
+    "source_issue": 126,
+    "roster": "20 producers + 1 mobile consumer",
+    "probes": "extinction of the consumer level — is a single grazer energy-positive on a producer base?",
+    "viability_prediction": "live — net primary production from 20 producers should support one consumer.",
+    "expected_outcome": "Consumer survives by grazing; producers tolerate partial grazing and regrow; nutrient recycles via excretion; both levels persist with births.",
+    "observed": "2026-05-31, seed 1: 21 -> 4 (all producers; consumer dies out), 0 births, 17 carcasses left unconsumed.",
+    "status": "stale-params — only a partial parameter subset is specified; the rest inherit code defaults, so the recorded params are not the world that runs. Uses retired vocabulary (photosynthetic_absorption, contact_radius). See example4_consumer_tuning.json for the fully-specified variant."
+  },
   "parameters": {
     "solar_flux_magnitude": 5.0,
     "reproduction_efficiency": 0.7,
