@@ -213,7 +213,7 @@ Probability of each trait dimension mutating per reproduction event.
 Standard deviation of the Gaussian perturbation applied to a mutated trait dimension.
 
 **World extent**:
-Spatial dimensions of the world. Interacts with population size to determine density. Toroidal topology during genesis (no edges, no boundary effects). Play-time topology — where the player can move beyond the genesis world — is a separate design problem (see future ADR).
+Spatial dimensions of the world. Interacts with population size to determine density. Toroidal topology during genesis (no edges, no boundary effects). Play-time topology — where the player can move beyond the genesis world — is a separate design problem, not yet addressed in the system design.
 
 **Initial population size**:
 Number of agents at tick zero.

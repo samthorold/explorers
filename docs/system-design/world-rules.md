@@ -2,7 +2,7 @@
 
 The immutable physics of the simulation. These define what the world is made of and how it behaves before any agent strategy, population dynamic, or emergent pattern is considered. An agent dropped into this world faces these constraints unconditionally.
 
-This document is built on the ecological ground truths in [docs/ecology/](../ecology/) — observable properties of real ecosystems that we take as given. It informs but does not prescribe the architectural decisions in [docs/adr/](../adr/).
+This document is built on the ecological ground truths in [docs/ecology/](../ecology/) — observable properties of real ecosystems that we take as given. It informs but does not prescribe how the implementation encodes these rules in code.
 
 ## Stocks
 

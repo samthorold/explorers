@@ -1,8 +1,8 @@
 # Trait Space
 
-The heritable dimensions that define an agent. These are the axes of variation that evolution operates on — the properties that make one lineage different from another. This document describes what the dimensions are and why they exist. It does not prescribe data structures, algorithms, or parameter values — those belong in the [ADR layer](../adr/). It does not describe the underlying ecological principles — those are in [docs/ecology/](../ecology/).
+The heritable dimensions that define an agent. These are the axes of variation that evolution operates on — the properties that make one lineage different from another. This document describes what the dimensions are and why they exist. It does not prescribe data structures, algorithms, or parameter values — those are implementation concerns that live with the code. It does not describe the underlying ecological principles — those are in [docs/ecology/](../ecology/).
 
-This document is built on the ecological ground truths in [docs/ecology/](../ecology/) and the world rules in [world-rules.md](world-rules.md). It informs but does not prescribe the architectural decisions in [docs/adr/](../adr/).
+This document is built on the ecological ground truths in [docs/ecology/](../ecology/) and the world rules in [world-rules.md](world-rules.md). It informs but does not prescribe how the implementation encodes these dimensions in code.
 
 ## Framework: physics vs. trait vs. derived
 
@@ -81,6 +81,6 @@ The r/K spectrum for producers emerges from this feedback. Grow big and dominate
 
 This document describes the trait dimensions and their ecological motivation. It does not prescribe:
 
-- **Data structures or algorithms.** How traits are stored, how maintenance costs are computed, how mutations are applied — those decisions belong in the [ADR layer](../adr/).
+- **Data structures or algorithms.** How traits are stored, how maintenance costs are computed, how mutations are applied — those are implementation concerns that live with the code.
 - **Parameter values.** The exponent of superlinear scaling, the Poisson mean for fecundity, the specific maintenance cost per trait unit — those are genesis search parameters.
 - **Ecological principles.** The underlying biology that motivates these design choices is documented in [docs/ecology/](../ecology/). This document is our opinion about how to use that biology, not a restatement of it.

@@ -100,7 +100,7 @@ The **example file is the connective tissue**: it is the one concrete object the
 
 ## What this document does not prescribe
 
-This document describes *what* a working world looks like, not *how* to achieve it. The mechanisms that produce these properties are described in the world rules. The specific parameter values that calibrate the rules correctly are an implementation concern — they belong in the ADR layer, not here.
+This document describes *what* a working world looks like, not *how* to achieve it. The mechanisms that produce these properties are described in the world rules. The specific parameter values that calibrate the rules correctly are an implementation concern — they live with the code and the genesis search that tunes them, not here.
 
 Disturbance, succession, spatial refugia, patch dynamics — these are patterns that ecologists observe in well-functioning ecosystems. They are not separate mechanisms to design. They arise from the same stocks, flows, and trade-offs described in the world rules, playing out across different timescales and spatial scales. If the world rules are right, these patterns should emerge. If they don't, the problem is in the rules, not in the absence of a disturbance mechanism.
 

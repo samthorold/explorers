@@ -1,10 +1,10 @@
 # System Design
 
-Design documentation for the simulation — our opinion about what stocks, flows, and feedback loops should be present in the game, and why. This layer is built on the ecological ground truths documented in [docs/ecology/](../ecology/) and informs the architectural decisions in [docs/adr/](../adr/), but is distinct from both.
+Design documentation for the simulation — our opinion about what stocks, flows, and feedback loops should be present in the game, and why. This layer is built on the ecological ground truths documented in [docs/ecology/](../ecology/) and is encoded by the implementation, but is distinct from both.
 
-The ecology docs describe observable Earth. This layer describes what we want our world to look like — which ecological principles we carry forward, which we simplify, which feedback mechanisms we consider load-bearing, and what dynamic properties the simulation must exhibit. It is opinionated and detailed.
+The ecology docs describe observable Earth. This layer describes what we want our world to look like — which ecological principles we carry forward, which we simplify, which feedback mechanisms we consider load-bearing, and what dynamic properties the simulation must exhibit. It is opinionated and detailed, and it is **self-justifying**: each mechanism is described together with the reason it has that shape, including why tempting alternatives fail. A reader should understand why the design looks the way it does today from these documents alone — no separate record of past decisions is needed.
 
-The ADRs describe how the system design gets implemented in code. They are close to the codebase, specific to data structures and algorithms, and should trace their motivation back to a system design property described here.
+The implementation (the code) encodes this design. It is close to the codebase — specific to data structures, algorithms, and parameter values — and traces its motivation back to a system design property described here without restating it.
 
 ## Documents
 
@@ -33,13 +33,16 @@ docs/ecology/          Ground truth. Observable Earth ecology.
                        Taxa illustrate agents within those systems.
         │
         ▼
-docs/system-design/    Our opinion. What the game world looks like.
+docs/system-design/    Our opinion. What the game world looks like, and why.
                        World rules (immutable physics).
                        Expected properties (what a working world exhibits).
+                       Self-justifying: rationale lives here, in the present tense.
         │
         ▼
-docs/adr/              Implementation choices. Close to code.
-                       Data structures, algorithms, protocols.
+the code               Implementation. The encoding of the design.
+                       Data structures, algorithms, parameter values.
 ```
 
-Each layer references the one below it as foundation. No layer reaches up — ecology docs never reference the game, system design docs never prescribe data structures, ADRs trace motivation to system design but don't restate it.
+There are three layers — the domain (observable Earth ecology), the system design (our opinion, encoded by any implementation), and the implementation itself (the code). There is no separate decision-record layer: the reasons a design has its shape are written into the system-design documents in the present tense, so understanding the present never requires reconstructing a history of choices.
+
+Each layer references the one below it as foundation. No layer reaches up — ecology docs never reference the game, and system design docs never prescribe data structures. The implementation traces its motivation to the system design but doesn't restate it.
