@@ -3,10 +3,9 @@
     "intent": "Fully-specified diagnostic variant of example4 with heterogeneous agent traits. Companion to the headless diagnostic harness (tests/headless_example4.rs); the reference for how a self-contained scenario should look — every world parameter explicit.",
     "source_issue": 291,
     "roster": "20 producers + 2 consumers (heterogeneous traits)",
-    "probes": "extinction of the consumer level + reproduction gates — do consumers clear both the energy and the nutrient reproduction thresholds?",
-    "viability_prediction": "live — calibrated so consumers reproduce.",
-    "expected_outcome": "Both levels persist; consumers reproduce; carcasses are produced and partly recycled.",
-    "observed": "2026-05-31, seed 1: 22 -> 7, 36 births, 51 carcasses. The only scenario in the suite that currently reproduces.",
+    "probes": "extinction",
+    "prediction": "live",
+    "rationale": "Fully-specified variant calibrated so consumers clear both reproduction gates; both levels should persist and consumers reproduce.",
     "status": "current — every WorldParameter is specified explicitly; this is the template the other files should be migrated to."
   },
   "parameters": {

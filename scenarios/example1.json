@@ -3,10 +3,9 @@
     "intent": "One producer on homogeneous substrate. Exercises photosynthesis, metabolic cost, asexual reproduction, offspring dispersal, and patch formation around a single founder.",
     "source_issue": 104,
     "roster": "1 producer",
-    "probes": "frozen dynamics / extinction — can a lone founder persist and seed a patch?",
-    "viability_prediction": "undecided — max_ticks is 0, so this never steps; it is a load/seed smoke test, not a dynamics probe.",
-    "expected_outcome": "Loads and seeds one structurally-provisioned producer without panic.",
-    "observed": "2026-05-31, seed 1: seed-only (max_ticks=0), never steps. OK as a load smoke test.",
+    "probes": "none",
+    "prediction": "undecided",
+    "rationale": "max_ticks is 0, so this never steps — a load/seed smoke test, not a dynamics probe.",
     "status": "stale-params — growth_efficiency unset, defaults to 0.0 (no structure would be built if it stepped)."
   },
   "parameters": {

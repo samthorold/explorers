@@ -3,10 +3,9 @@
     "intent": "Three producers far apart in a large world (extent 200). Exercises spatial isolation, independent evolutionary drift, and reproductive isolation.",
     "source_issue": 104,
     "roster": "3 producers (isolated)",
-    "probes": "extinction / frozen dynamics — can isolated founders each establish a lineage without a nearby mate?",
-    "viability_prediction": "undecided — asexual_propensity is 0.0, so without a mate in range these founders cannot reproduce at all.",
-    "expected_outcome": "Each founder grows and seeds a local patch (via asexual_propensity or dispersed offspring meeting); lineages drift apart in trait space.",
-    "observed": "2026-05-31, seed 1: 3 -> 0 (extinction), 0 births.",
+    "probes": "extinction",
+    "prediction": "undecided",
+    "rationale": "Isolated founders should each establish a lineage — but asexual_propensity is 0.0, so with no mate in range they cannot reproduce at all.",
     "status": "stale-params — growth_efficiency unset (0.0); asexual_propensity 0.0 also precludes lone reproduction."
   },
   "parameters": {

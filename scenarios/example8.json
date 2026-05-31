@@ -3,10 +3,9 @@
     "intent": "Full trophic cascade with endogenous population oscillations across producer, consumer, and decomposer levels.",
     "source_issue": 138,
     "roster": "20 producers + 4 mobile heterotrophs",
-    "probes": "population oscillation + trophic balance — does a full cascade sustain Lotka-Volterra-style cycles?",
-    "viability_prediction": "live with oscillation if calibrated — the hardest target in the suite.",
-    "expected_outcome": "Multi-level coexistence over 2000 ticks; population oscillations between levels; energy decreasing at higher levels.",
-    "observed": "2026-05-31, seed 1: 24 -> 3 (all producers), 0 births. No cascade, no oscillation.",
+    "probes": "extinction",
+    "prediction": "live",
+    "rationale": "A full producer/consumer/decomposer cascade should sustain endogenous population oscillations over 2000 ticks with energy decreasing up the levels — the hardest target in the suite.",
     "status": "stale-params — partial subset, retired vocabulary; heterotrophs undifferentiated; cascade not realised."
   },
   "parameters": {
