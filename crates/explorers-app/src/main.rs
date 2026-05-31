@@ -4,7 +4,7 @@ use std::fs;
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use explorers_sim::{
-    InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe,
+    Agent, InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe,
     topology::{TopologyProjection, TrophicRole},
 };
 
@@ -542,14 +542,102 @@ fn load_recipe(config: &CliConfig) -> WorldRecipe {
     }
 }
 
+/// How a set of living agents' reproductive earmarks sit against the two
+/// reproduction gates — the reproductive-earmark diagnostic (#280). Eligibility
+/// uses the exact condition the reproduction phase applies: both earmarks at or
+/// above their thresholds (`repro_reserve >= reproduction_energy_threshold` and
+/// `repro_nutrient >= reproduction_nutrient_threshold`). Counting agents over
+/// each gate individually localises which gate is binding; `eligible` is the
+/// count meeting both, so `eligible > 0` with zero births that tick points past
+/// the gates (mate/spatial-limited). Framework-agnostic and unit-testable.
+#[derive(Debug, PartialEq, Default)]
+struct ReproGateSummary {
+    population: usize,
+    over_energy_gate: usize,
+    over_nutrient_gate: usize,
+    eligible: usize,
+    mean_repro_reserve: f32,
+    max_repro_reserve: f32,
+    mean_repro_nutrient: f32,
+    max_repro_nutrient: f32,
+}
+
+impl ReproGateSummary {
+    /// Summarise the earmarks of the given agents against the two thresholds in
+    /// a single pass. An empty set yields all-zero (the [`Default`]).
+    fn of<'a>(
+        agents: impl IntoIterator<Item = &'a Agent>,
+        energy_threshold: f32,
+        nutrient_threshold: f32,
+    ) -> Self {
+        let mut s = Self::default();
+        let (mut sum_e, mut sum_n) = (0.0_f32, 0.0_f32);
+        for a in agents {
+            s.population += 1;
+            let over_energy = a.repro_reserve >= energy_threshold;
+            let over_nutrient = a.repro_nutrient >= nutrient_threshold;
+            if over_energy {
+                s.over_energy_gate += 1;
+            }
+            if over_nutrient {
+                s.over_nutrient_gate += 1;
+            }
+            if over_energy && over_nutrient {
+                s.eligible += 1;
+            }
+            sum_e += a.repro_reserve;
+            sum_n += a.repro_nutrient;
+            s.max_repro_reserve = s.max_repro_reserve.max(a.repro_reserve);
+            s.max_repro_nutrient = s.max_repro_nutrient.max(a.repro_nutrient);
+        }
+        if s.population > 0 {
+            s.mean_repro_reserve = sum_e / s.population as f32;
+            s.mean_repro_nutrient = sum_n / s.population as f32;
+        }
+        s
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "population": self.population,
+            "over_energy_gate": self.over_energy_gate,
+            "over_nutrient_gate": self.over_nutrient_gate,
+            "eligible": self.eligible,
+            "mean_repro_reserve": self.mean_repro_reserve,
+            "max_repro_reserve": self.max_repro_reserve,
+            "mean_repro_nutrient": self.mean_repro_nutrient,
+            "max_repro_nutrient": self.max_repro_nutrient,
+        })
+    }
+}
+
 /// Build one tick's telemetry as a JSON object — a single JSON-lines row. Reuses
 /// the app's existing aggregations ([`RoleBreakdown`] over the topology
 /// projection's behavioural roles, and [`compute_energy_budget`]) so the headless
-/// trace and the GUI report identical numbers. Pure read of public world state;
-/// the projection must already be updated for the current tick.
+/// trace and the GUI report identical numbers. Embeds a `reproduction` block
+/// (#280) summarising both reproductive earmarks against their gates, overall and
+/// split by behavioural role, so a birthless tick can be read as energy-gated,
+/// nutrient-gated, mate-limited, or dying. Pure read of public world state; the
+/// projection must already be updated for the current tick.
 fn telemetry_row(world: &World, topology: &TopologyProjection) -> serde_json::Value {
-    let breakdown = RoleBreakdown::from_roles(&topology.trophic_roles(world.agents()));
+    let roles = topology.trophic_roles(world.agents());
+    let breakdown = RoleBreakdown::from_roles(&roles);
     let budget = compute_energy_budget(world);
+
+    let e_thr = world.params().reproduction_energy_threshold;
+    let n_thr = world.params().reproduction_nutrient_threshold;
+    let role_summary = |want: TrophicRole| {
+        ReproGateSummary::of(
+            world
+                .agents()
+                .iter()
+                .filter(|a| roles.get(&a.id) == Some(&want)),
+            e_thr,
+            n_thr,
+        )
+        .to_json()
+    };
+
     serde_json::json!({
         "tick": world.tick(),
         "population": world.agents().len(),
@@ -567,6 +655,14 @@ fn telemetry_row(world: &World, topology: &TopologyProjection) -> serde_json::Va
         "nutrient_available": budget.nutrient_available,
         "nutrient_living": budget.nutrient_living,
         "nutrient_carcasses": budget.nutrient_carcasses,
+        "reproduction": {
+            "energy_threshold": e_thr,
+            "nutrient_threshold": n_thr,
+            "overall": ReproGateSummary::of(world.agents().iter(), e_thr, n_thr).to_json(),
+            "producers": role_summary(TrophicRole::Producer),
+            "consumers": role_summary(TrophicRole::Consumer),
+            "decomposers": role_summary(TrophicRole::Decomposer),
+        },
     })
 }
 
@@ -1733,6 +1829,111 @@ mod tests {
             v["deaths"].as_u64().unwrap() > 0,
             "final row records the deaths"
         );
+    }
+
+    /// Build a living agent carrying given reproductive earmarks and an
+    /// autotrophy/heterotrophy pair (to fix its trait-read role); everything else
+    /// is zeroed. Used to assert the gate counting against known inputs.
+    fn earmark_agent(
+        id: u64,
+        repro_reserve: f32,
+        repro_nutrient: f32,
+        autotrophy: f32,
+        heterotrophy: f32,
+    ) -> Agent {
+        Agent {
+            id,
+            position: (0.0, 0.0),
+            reserve: 0.0,
+            structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: autotrophy,
+                heterotrophy,
+                mobility: 0.0,
+                kappa: 0.5,
+                fecundity: 0.0,
+                asexual_propensity: 0.0,
+                dispersal: 0.0,
+            },
+            contact_time: 0,
+            wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve,
+            repro_nutrient,
+        }
+    }
+
+    /// The summary counts each gate independently and `eligible` only for agents
+    /// meeting both — and the gates are `>=` (an earmark exactly at threshold
+    /// counts), matching the reproduction phase's eligibility filter.
+    #[test]
+    fn repro_gate_summary_distinguishes_each_gate() {
+        let (e_thr, n_thr) = (10.0, 1.0);
+        let agents = [
+            earmark_agent(1, 10.0, 1.0, 1.0, 0.0), // exactly at both gates -> eligible
+            earmark_agent(2, 50.0, 0.0, 1.0, 0.0), // over energy only
+            earmark_agent(3, 0.0, 5.0, 1.0, 0.0),  // over nutrient only
+            earmark_agent(4, 0.0, 0.0, 1.0, 0.0),  // under both
+        ];
+        let s = ReproGateSummary::of(agents.iter(), e_thr, n_thr);
+        assert_eq!(s.population, 4);
+        assert_eq!(
+            s.over_energy_gate, 2,
+            "agents 1 and 2 clear the energy gate"
+        );
+        assert_eq!(
+            s.over_nutrient_gate, 2,
+            "agents 1 and 3 clear the nutrient gate"
+        );
+        assert_eq!(s.eligible, 1, "only agent 1 clears both");
+        assert_eq!(s.max_repro_reserve, 50.0);
+        assert_eq!(s.max_repro_nutrient, 5.0);
+        assert!((s.mean_repro_reserve - 15.0).abs() < 1e-6);
+        assert!((s.mean_repro_nutrient - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn repro_gate_summary_of_empty_is_zero() {
+        let s = ReproGateSummary::of(std::iter::empty::<&Agent>(), 10.0, 1.0);
+        assert_eq!(s, ReproGateSummary::default());
+    }
+
+    /// A telemetry row carries the `reproduction` block with the gates, an overall
+    /// summary, and a per-role split whose populations partition the living set.
+    #[test]
+    fn telemetry_row_includes_reproduction_block_split_by_role() {
+        let mut world = World::from_recipe(&default_recipe(), 7);
+        let mut topology = TopologyProjection::new();
+        world.step();
+        topology.update(world.event_log());
+        let row = telemetry_row(&world, &topology);
+        let repro = &row["reproduction"];
+
+        assert_eq!(
+            repro["energy_threshold"].as_f64().unwrap() as f32,
+            default_recipe().parameters.reproduction_energy_threshold
+        );
+        assert_eq!(
+            repro["nutrient_threshold"].as_f64().unwrap() as f32,
+            default_recipe().parameters.reproduction_nutrient_threshold
+        );
+        for key in ["overall", "producers", "consumers", "decomposers"] {
+            assert!(
+                repro[key]["population"].is_u64(),
+                "{key} missing population"
+            );
+            assert!(repro[key]["eligible"].is_u64(), "{key} missing eligible");
+        }
+        let overall = repro["overall"]["population"].as_u64().unwrap();
+        let by_role: u64 = ["producers", "consumers", "decomposers"]
+            .iter()
+            .map(|k| repro[*k]["population"].as_u64().unwrap())
+            .sum();
+        assert_eq!(
+            overall, by_role,
+            "role populations partition the living set"
+        );
+        assert_eq!(overall, world.agents().len() as u64);
     }
 
     #[test]
