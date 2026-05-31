@@ -1,4 +1,14 @@
 {
+  "metadata": {
+    "intent": "Twenty producers in a small area. Exercises light competition, self-thinning, sexual reproduction, and nutrient depletion.",
+    "source_issue": 104,
+    "roster": "20 producers",
+    "probes": "energy/nutrient death and frozen dynamics — does a crowded producer stand self-thin to a persisting density, or collapse?",
+    "viability_prediction": "live (a producer stand on ample nutrient should persist) — but unverifiable as written because growth_efficiency defaults to 0.0.",
+    "expected_outcome": "Population self-thins then stabilises; some births; producers persist to max_ticks; nutrient draws down but does not zero out.",
+    "observed": "2026-05-31, seed 1: 20 -> 0 (extinction), 0 births, zero structure ever built.",
+    "status": "stale-params — growth_efficiency unset (0.0) => no structure => guaranteed collapse; the outcome reflects the missing param, not the ecology."
+  },
   "parameters": {
     "solar_flux_magnitude": 5.0,
     "reproduction_efficiency": 0.7,
