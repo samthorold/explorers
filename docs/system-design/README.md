@@ -12,6 +12,7 @@ The ADRs describe how the system design gets implemented in code. They are close
 - [Trait Space](trait-space.md) — the seven heritable dimensions that define an agent: allocation (kappa), specification (autotrophy, heterotrophy, mobility), and reproduction (fecundity, asexual propensity, dispersal)
 - [Execution Model](execution-model.md) — how the world rules are realised through time: monolithic tick loop, phase ordering, interaction coordination, event recording
 - [Expected Properties](expected-properties.md) — the emergent properties we expect from those rules, the failure modes that indicate miscalibration, and the initial conditions that enable or prevent healthy ecology
+- [Viability](viability.md) — the *a priori* lens: closed-form gates on the world parameters that decide which parameterizations cannot produce the expected properties at all, before any simulation runs
 
 ## How the ecology layer maps here
 
