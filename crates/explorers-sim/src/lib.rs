@@ -1166,6 +1166,16 @@ impl World {
         self.dissipated_energy
     }
 
+    /// Free (non-carcass-locked) energy: the living system's instantaneous
+    /// energy stock — every living agent's reserve + structure + repro_reserve
+    /// summed across the population. Energy locked in carcasses is excluded;
+    /// it re-enters this stock only when a decomposer consumes the carcass.
+    /// Instantaneous read of public state — the world stays history-free; the
+    /// per-tick trend an evaluator needs is built by sampling this each tick.
+    pub fn free_energy(&self) -> f32 {
+        self.agents.iter().map(|a| a.energy()).sum()
+    }
+
     pub fn total_solar_input(&self) -> f32 {
         self.total_solar_input
     }
@@ -1352,6 +1362,21 @@ mod tests {
     fn world_created_with_params_has_correct_population_size() {
         let world = World::new(test_params(), test_distribution(), 42);
         assert_eq!(world.agents().len(), 10);
+    }
+
+    #[test]
+    fn free_energy_is_living_stock_excluding_carcasses() {
+        let world = World::new(test_params(), test_distribution(), 42);
+        let expected: f32 = world.agents().iter().map(|a| a.energy()).sum();
+        assert_eq!(world.free_energy(), expected);
+        // Adding a carcass must not change free energy — carcass energy is locked.
+        let mut world = world;
+        let before = world.free_energy();
+        world.add_carcass(Carcass {
+            id: 9999, position: (0.0, 0.0), energy: 500.0, nutrient: 0.0,
+            traits: zero_traits(),
+        });
+        assert_eq!(world.free_energy(), before, "carcass energy is not free energy");
     }
 
     #[test]

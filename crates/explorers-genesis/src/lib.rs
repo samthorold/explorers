@@ -32,8 +32,12 @@ pub fn run_single(
     let mut world =
         explorers_sim::World::new(params.clone(), distribution.clone(), seed);
 
+    // Sample free (non-carcass-locked) energy each tick for the energy-death
+    // detector's stock-trend signal (issue #302); the world stays history-free.
+    let mut free_energy_per_tick: Vec<f32> = Vec::with_capacity(run_config.max_ticks as usize);
     for _ in 0..run_config.max_ticks {
         world.step();
+        free_energy_per_tick.push(world.free_energy());
         if world.agents().is_empty() {
             break;
         }
@@ -44,6 +48,7 @@ pub fn run_single(
 
     let breakdown = explorers_genesis_eval::evaluate_from_log(
         &world,
+        &free_energy_per_tick,
         &run_config.eval_config,
         run_config.max_ticks,
     );

@@ -74,16 +74,21 @@ fn eval_one(path: &str, seed: u64, config: &EvalConfig) -> serde_json::Value {
     // per-offspring events), so it is not a usable birth count on its own.
     let mut total_births = 0usize;
     let mut total_deaths = 0usize;
+    // Sample the free (non-carcass-locked) energy stock each tick so the
+    // evaluator can read its trend — energy death is this stock collapsing into
+    // carcasses (issue #302). The world stays history-free; the series lives here.
+    let mut free_energy_per_tick: Vec<f32> = Vec::with_capacity(recipe.max_ticks as usize);
     for _ in 0..recipe.max_ticks {
         world.step();
         total_births += world.last_tick_births();
         total_deaths += world.last_tick_deaths();
+        free_energy_per_tick.push(world.free_energy());
         if world.agents().is_empty() || world.agents().len() > config.max_population {
             break;
         }
     }
 
-    let breakdown = evaluate_from_log(&world, config, recipe.max_ticks);
+    let breakdown = evaluate_from_log(&world, &free_energy_per_tick, config, recipe.max_ticks);
     let name = std::path::Path::new(path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
