@@ -211,6 +211,8 @@ Solar ──photosynthesis──▶ Reserve ──growth──▶ Structure ─�
 
 The flows above describe what can happen. Viability constraints describe what the flows must be capable of producing for the ecology to function. These are not parameter values — they are design requirements on the physics. If any constraint cannot be satisfied by some agent configuration under the maintenance cost landscape, that trophic role is structurally impossible and the ecology is broken.
 
+The constraints here are stated qualitatively. Their *a priori* counterpart — closed-form conditions on the world parameters that decide when a constraint cannot be met for *any* agent configuration — is developed in [viability.md](viability.md), which analyses when these requirements are satisfiable before any simulation is run.
+
 ### Individual balance
 
 Every agent has two currencies — energy and nutrient — each with its own income and cost structure per tick.

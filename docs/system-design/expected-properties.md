@@ -88,6 +88,16 @@ Agents that invest in all acquisition strategies simultaneously outcompete speci
 | Energy throughput | Energy death or frozen dynamics |
 | Energy conservation | Implementation bug (not a calibration issue) |
 
+## How we test for these properties
+
+The properties and failure modes above are claims about a calibrated world. Three complementary lenses test whether a given system design actually meets them, ordered from cheapest to most expensive:
+
+1. **A priori viability** ([viability.md](viability.md)) — nearly free closed-form analysis of the tick-loop map. It rules out parameterizations that *cannot* produce these properties (e.g. the nutrient floor below which no agent can both exist and reproduce) before any simulation runs, and so pre-filters the genesis search.
+2. **Diagnostic examples** (`scenarios/`) — a hand-built initial condition that probes a specific failure mode, run headless to observe whether the mode occurs or the system recovers.
+3. **Genesis search** — the broad, expensive empirical sweep across parameter space (ensembles of replicate runs).
+
+The **example file is the connective tissue**: it is the one concrete object the three lenses share. The same initial condition can be *predicted* by viability, *observed* by a simulation run, and *located* relative to the search — so each example is a unit of cross-validation where an a priori prediction meets an empirical outcome on identical ground. Agreement raises confidence; disagreement localises the fault (a wrong gate, an incomplete gate set, or a miscalibrated rule). For the loop to close, an example should carry the failure mode it probes, viability's prediction, and the observed outcome — not only its initial condition.
+
 ## What this document does not prescribe
 
 This document describes *what* a working world looks like, not *how* to achieve it. The mechanisms that produce these properties are described in the world rules. The specific parameter values that calibrate the rules correctly are an implementation concern — they belong in the ADR layer, not here.
