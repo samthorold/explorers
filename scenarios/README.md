@@ -18,11 +18,22 @@ block (`WorldParameters`), an optional `agents` list (fixed roster; omit for a r
 seeded population), and `max_ticks`. Loaded via `--scenario PATH` / `--recipe PATH`
 in `explorers-app`, or `serde_json::from_str` in tests.
 
-Run one headless and watch it:
+Open one in the GUI:
 
 ```
 cargo run -p explorers-app -- --scenario scenarios/example4_consumer_tuning.json
 ```
+
+Or run it **headless** (no window) and emit per-tick telemetry as JSON-lines to
+stdout — population, births/deaths, the producer/consumer/decomposer split, the
+energy budget, and the nutrient pools — for grepping or plotting (#279). Pass
+`--seed N` for a reproducible run; the chosen seed is logged to stderr either way:
+
+```
+cargo run -p explorers-app -- --scenario scenarios/example4_consumer_tuning.json --trace --seed 1
+```
+
+This is how the `observed` rows below are produced.
 
 ## Metadata header
 
