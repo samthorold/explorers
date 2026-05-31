@@ -48,6 +48,7 @@ impl Default for EvalConfig {
 
 pub fn evaluate_from_log(
     world: &explorers_sim::World,
+    free_energy_per_tick: &[f32],
     config: &EvalConfig,
     max_ticks: u64,
 ) -> FitnessBreakdown {
@@ -94,24 +95,17 @@ pub fn evaluate_from_log(
 
     let grace_ticks = (max_ticks as f32 * config.grace_period_fraction) as u64;
     if ticks_survived > grace_ticks {
-        let mut energy_per_tick: Vec<f32> = Vec::new();
-        for tick in 0..ticks_survived {
-            let tick_energy: f32 = log
-                .by_tick_range(tick, tick + 1)
-                .iter()
-                .filter(|e| {
-                    e.kind == explorers_sim::event::EventKind::Consumed
-                        || e.kind == explorers_sim::event::EventKind::Consumed
-                })
-                .map(|e| e.energy_delta)
-                .sum();
-            energy_per_tick.push(tick_energy);
-        }
-        let post_grace: Vec<f32> = energy_per_tick
-            .into_iter()
+        // Free (non-carcass-locked) energy stock, sampled once per tick by the
+        // caller. Energy death is this living-system stock trending irreversibly
+        // toward zero as energy locks into carcasses — a stock trend, not the
+        // predation flow the old detector summed (issue #302). The grace prefix
+        // is dropped so early transients before the world settles don't count.
+        let post_grace: Vec<f32> = free_energy_per_tick
+            .iter()
+            .copied()
             .skip(grace_ticks as usize)
             .collect();
-        if is_energy_flow_dead(&post_grace, config.energy_death_window) {
+        if is_free_energy_dead(&post_grace, config.energy_death_window) {
             return zero_breakdown(FailureMode::EnergyDeath);
         }
     }
@@ -550,12 +544,41 @@ fn region_query(trait_vectors: &[explorers_sim::TraitVector], idx: usize, eps: f
     neighbors
 }
 
-pub fn is_energy_flow_dead(energy_flow_per_tick: &[f32], window: usize) -> bool {
-    if energy_flow_per_tick.len() < window {
+/// Energy death: free (non-carcass-locked) energy trends irreversibly toward
+/// zero (expected-properties.md). `free_energy_per_tick` is the living-system
+/// energy stock sampled once per tick — agent reserve + structure summed across
+/// the population, i.e. energy NOT locked in carcasses.
+///
+/// The signal is a *stock trend*, not a flow: energy death is the living pool
+/// collapsing as energy locks into carcasses faster than decomposition returns
+/// it. We flag it when, over the trailing `window`, the free-energy stock has
+/// collapsed to a small fraction of its earlier peak and does not recover — the
+/// best the window manages stays far below the peak the system once held.
+///
+/// A living, reproducing or producer-fed world keeps regenerating free energy,
+/// so its trailing window holds a substantial fraction of its peak and is not
+/// flagged. A world whose living pool drains into carcasses sees the trailing
+/// window sit near zero relative to the peak.
+pub fn is_free_energy_dead(free_energy_per_tick: &[f32], window: usize) -> bool {
+    if free_energy_per_tick.len() < window || window == 0 {
         return false;
     }
-    let tail = &energy_flow_per_tick[energy_flow_per_tick.len() - window..];
-    tail.iter().all(|&e| e <= 0.0)
+    let split = free_energy_per_tick.len() - window;
+    let peak = free_energy_per_tick[..split]
+        .iter()
+        .copied()
+        .fold(0.0_f32, f32::max);
+    if peak <= 0.0 {
+        return false;
+    }
+    let window_peak = free_energy_per_tick[split..]
+        .iter()
+        .copied()
+        .fold(0.0_f32, f32::max);
+    // Collapsed and non-recovering: the best the trailing window achieves is a
+    // small fraction of the free energy the living system previously held.
+    const COLLAPSE_FRACTION: f32 = 0.1;
+    window_peak < peak * COLLAPSE_FRACTION
 }
 
 #[cfg(test)]
@@ -605,6 +628,20 @@ mod tests {
         }
     }
 
+    /// Step a world to `max_ticks` (terminating early on extinction), sampling
+    /// the free-energy stock each tick exactly as the real callers do.
+    fn run_collecting_free_energy(world: &mut explorers_sim::World, max_ticks: u64) -> Vec<f32> {
+        let mut free = Vec::with_capacity(max_ticks as usize);
+        for _ in 0..max_ticks {
+            world.step();
+            free.push(world.free_energy());
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+        free
+    }
+
     fn test_distribution() -> explorers_sim::InitialDistribution {
         explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
@@ -632,13 +669,8 @@ mod tests {
         };
         let max_ticks = 50;
         let mut world = explorers_sim::World::new(params, dist, 42);
-        for _ in 0..max_ticks {
-            world.step();
-            if world.agents().is_empty() {
-                break;
-            }
-        }
-        let result = evaluate_from_log(&world, &config, max_ticks);
+        let free = run_collecting_free_energy(&mut world, max_ticks);
+        let result = evaluate_from_log(&world, &free, &config, max_ticks);
         let born_count = world
             .event_log()
             .by_kind(&explorers_sim::event::EventKind::Reproduced)
@@ -654,21 +686,73 @@ mod tests {
     }
 
     #[test]
-    fn energy_flow_dead_when_zero_for_window() {
-        let flow = vec![5.0, 3.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-        assert!(is_energy_flow_dead(&flow, 5));
+    fn evaluate_from_log_flags_energy_death_only_when_free_energy_collapses() {
+        // A surviving world plus a free-energy series the evaluator inspects.
+        // Same world, two trajectories: a collapse into carcasses is energy
+        // death; a sustained living stock is not. Confirms the detector reads
+        // the free-energy stock trend, not predation flow (issue #302).
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 0.0,
+            energy_death_window: 5,
+            ..EvalConfig::default()
+        };
+        let max_ticks = 20;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let _ = run_collecting_free_energy(&mut world, max_ticks);
+        if world.agents().is_empty() {
+            return; // need a surviving world to reach the energy-death branch
+        }
+        let n = world.tick() as usize;
+
+        let collapsing: Vec<f32> = (0..n)
+            .map(|t| if t < n / 2 { 100.0 } else { 1.0 })
+            .collect();
+        let dead = evaluate_from_log(&world, &collapsing, &config, max_ticks);
+        assert_eq!(
+            dead.failure,
+            Some(FailureMode::EnergyDeath),
+            "free energy collapsing into carcasses is energy death"
+        );
+
+        let sustained: Vec<f32> = vec![100.0; n];
+        let alive = evaluate_from_log(&world, &sustained, &config, max_ticks);
+        assert_ne!(
+            alive.failure,
+            Some(FailureMode::EnergyDeath),
+            "a sustained free-energy stock is not energy death"
+        );
     }
 
     #[test]
-    fn energy_flow_not_dead_when_activity_in_window() {
-        let flow = vec![5.0, 3.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0];
-        assert!(!is_energy_flow_dead(&flow, 5));
+    fn free_energy_dead_when_stock_collapses_into_carcasses() {
+        // Living-energy stock peaks early, then drains to near zero and stays
+        // there: energy is locking in carcasses and not coming back.
+        let stock = vec![100.0, 95.0, 80.0, 50.0, 5.0, 3.0, 2.0, 1.0];
+        assert!(is_free_energy_dead(&stock, 4));
     }
 
     #[test]
-    fn energy_flow_not_dead_when_shorter_than_window() {
-        let flow = vec![0.0, 0.0];
-        assert!(!is_energy_flow_dead(&flow, 5));
+    fn free_energy_not_dead_when_stock_sustained() {
+        // A living, reproducing world keeps regenerating free energy: the
+        // trailing window holds a substantial fraction of the peak.
+        let stock = vec![100.0, 90.0, 110.0, 95.0, 105.0, 98.0, 102.0, 100.0];
+        assert!(!is_free_energy_dead(&stock, 5));
+    }
+
+    #[test]
+    fn free_energy_not_dead_when_window_recovers() {
+        // Stock dips but the living system recovers within the window — not an
+        // irreversible trend toward zero.
+        let stock = vec![100.0, 80.0, 10.0, 5.0, 2.0, 60.0, 90.0, 95.0];
+        assert!(!is_free_energy_dead(&stock, 5));
+    }
+
+    #[test]
+    fn free_energy_not_dead_when_shorter_than_window() {
+        let stock = vec![0.0, 0.0];
+        assert!(!is_free_energy_dead(&stock, 5));
     }
 
     #[test]
@@ -696,16 +780,11 @@ mod tests {
         };
         let max_ticks: u64 = 10;
         let mut world = explorers_sim::World::new(params, dist, 42);
-        for _ in 0..max_ticks {
-            world.step();
-            if world.agents().is_empty() {
-                break;
-            }
-        }
+        let free = run_collecting_free_energy(&mut world, max_ticks);
         if world.agents().len() < 20 {
             return; // can't test monoculture with too few agents
         }
-        let result = evaluate_from_log(&world, &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &config, max_ticks);
         assert_eq!(
             result.failure,
             Some(FailureMode::Monoculture),
@@ -726,7 +805,7 @@ mod tests {
         let config = EvalConfig::default();
         let max_ticks: u64 = 1;
         let world = explorers_sim::World::new(params, dist, 42);
-        let result = evaluate_from_log(&world, &config, max_ticks);
+        let result = evaluate_from_log(&world, &[], &config, max_ticks);
         assert_eq!(result.failure, Some(FailureMode::PopulationExplosion));
         assert_eq!(result.fitness, 0.0);
     }
@@ -741,16 +820,11 @@ mod tests {
         };
         let max_ticks: u64 = 50;
         let mut world = explorers_sim::World::new(params, dist, 42);
-        for _ in 0..max_ticks {
-            world.step();
-            if world.agents().is_empty() {
-                break;
-            }
-        }
+        let free = run_collecting_free_energy(&mut world, max_ticks);
         if world.agents().is_empty() {
             return;
         }
-        let result = evaluate_from_log(&world, &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &config, max_ticks);
         // With 30 initial agents from 2 clusters, there should be some coexistence
         // and the values should be computed (not left at 0.0 stub)
         let fitness = 0.2 * result.oscillation_strength
@@ -778,16 +852,11 @@ mod tests {
         };
         let max_ticks = 50;
         let mut world = explorers_sim::World::new(params, dist, 42);
-        for _ in 0..max_ticks {
-            world.step();
-            if world.agents().is_empty() {
-                break;
-            }
-        }
+        let free = run_collecting_free_energy(&mut world, max_ticks);
         if world.agents().is_empty() {
             return; // can't test final-state metrics on extinct world
         }
-        let result = evaluate_from_log(&world, &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &config, max_ticks);
 
         let trait_vectors: Vec<_> = world.agents().iter().map(|a| a.traits).collect();
         let energies: Vec<_> = world.agents().iter().map(|a| a.energy()).collect();
@@ -862,13 +931,8 @@ mod tests {
         let config = EvalConfig::default();
         let max_ticks = 100;
         let mut world = explorers_sim::World::new(params, dist, 42);
-        for _ in 0..10 {
-            world.step();
-            if world.agents().is_empty() {
-                break;
-            }
-        }
-        let result = evaluate_from_log(&world, &config, max_ticks);
+        let free = run_collecting_free_energy(&mut world, 10);
+        let result = evaluate_from_log(&world, &free, &config, max_ticks);
         assert_eq!(result.fitness, 0.0);
         assert_eq!(result.failure, Some(FailureMode::Extinction));
     }
