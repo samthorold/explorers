@@ -180,6 +180,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         dispersal_propagule_cost_coefficient: 0.0,
         dispersal_propagule_cost_exponent: 2.0,
         dispersal_reach_coefficient: 0.0,
+        body_reach_coefficient: 0.0,
         };
 
     let dist = InitialDistribution {

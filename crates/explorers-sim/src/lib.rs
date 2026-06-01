@@ -384,6 +384,21 @@ pub struct WorldParameters {
     /// pure-mobility reach).
     #[serde(default)]
     pub dispersal_reach_coefficient: f32,
+    /// Coefficient on the **structure** contribution to consumption (feeding)
+    /// reach. Consumption reach = `eff_heterotrophy * (contact_range_coefficient
+    /// + body_reach_coefficient * sqrt(structure))`. Feeding reach, like
+    /// reproductive reach, has two physical solutions — move the organism
+    /// (mobility/locomotion, folded into the contact-range term) or extend the
+    /// body through the substrate. A sessile heterotroph (a mycelium) forages by
+    /// growing its body *through* the medium: the body is the feeding organ, so a
+    /// larger body touches more. `sqrt(structure)` is used because a disc's
+    /// radius scales with the square root of its area/mass — sublinear, so reach
+    /// does not run away with body size. The whole reach is modulated by
+    /// `eff_heterotrophy`, so a large autotroph's bulk (heterotrophy ~ 0) gains
+    /// no foraging reach while a growing mycelium does. Default 0.0 disables it
+    /// (backward-compatible: existing recipes keep the pure contact-range reach).
+    #[serde(default)]
+    pub body_reach_coefficient: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1307,6 +1322,7 @@ mod tests {
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
+            body_reach_coefficient: 0.0,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -1506,6 +1522,34 @@ mod tests {
         )
         .expect("params omitting dispersal_reach_coefficient should deserialise");
         assert_eq!(params.dispersal_reach_coefficient, 0.0);
+    }
+
+    #[test]
+    fn body_reach_coefficient_has_serde_default() {
+        // The structure contribution to consumption (feeding) reach is a new
+        // world parameter with a serde default of 0.0, so existing
+        // recipes/scenarios that omit it deserialise unchanged and keep the
+        // pure contact-range feeding reach.
+        let params: WorldParameters = serde_json::from_str(
+            r#"{
+                "solar_flux_magnitude": 10.0,
+                "base_trophic_efficiency": 1.0,
+                "reproduction_efficiency": 0.7,
+                "base_metabolic_rate": 0.0,
+                "movement_cost_coefficient": 0.0,
+                "reproduction_energy_threshold": 50.0,
+                "mutation_rate": 0.0,
+                "mutation_magnitude": 0.0,
+                "contact_range_coefficient": 5.0,
+                "world_extent": 100.0,
+                "initial_population_size": 0,
+                "light_competition_radius": 1000.0,
+                "photo_maintenance_cost": 0.0,
+                "heterotrophy_maintenance_cost": 0.0
+            }"#,
+        )
+        .expect("params omitting body_reach_coefficient should deserialise");
+        assert_eq!(params.body_reach_coefficient, 0.0);
     }
 
     #[test]
@@ -2232,6 +2276,7 @@ mod tests {
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
+            body_reach_coefficient: 0.0,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,

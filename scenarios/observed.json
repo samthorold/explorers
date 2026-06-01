@@ -97,15 +97,15 @@
     "scores": {
       "clustering_strength": 0.0,
       "coexistence_duration": 0.0,
-      "fitness": 0.003900000127032399,
+      "fitness": 0.00430000014603138,
       "oscillation_strength": 0.0,
       "trophic_balance_score": 0.0,
-      "turnover_score": 0.019500000402331352
+      "turnover_score": 0.0215000007301569
     },
     "seed": 1,
     "ticks_survived": 2000,
-    "total_births": 16,
-    "total_deaths": 39
+    "total_births": 20,
+    "total_deaths": 43
   },
   {
     "failure_mode": "none",
