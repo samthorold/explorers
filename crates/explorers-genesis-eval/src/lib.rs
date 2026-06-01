@@ -1,3 +1,5 @@
+pub mod ensemble;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum FailureMode {
     Extinction,

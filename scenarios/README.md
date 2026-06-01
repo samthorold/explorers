@@ -66,26 +66,41 @@ a run, and **located** by genesis. Three artifacts make that concrete:
 2. **Observed evidence** — [`observed.json`](observed.json), *computed*, never hand-typed.
    Produced by running every scenario through the **same evaluator genesis uses**
    (`evaluate_from_log`), so "sensible" means the same thing to the example lens and the
-   search lens. Regenerate (deterministic, seed 1):
+   search lens. It is an **ensemble distribution, not a single seed (#314)**: each scenario
+   is run over a deterministic seed set (`base_seed=1 .. base_seed+8`, mirroring genesis's
+   `run_ensemble`), so the evidence is robust to regime-sensitive scenarios that flip between
+   regimes on a single draw (example6). Regenerate (deterministic — same args, same output):
    ```
    cargo run -p explorers-genesis-eval --bin eval_scenarios -- scenarios/example*.json > scenarios/observed.json
    ```
-   Each row carries the `failure_mode` (against the six), the five sensible-world scores,
-   `ticks_survived`, final population, and true birth/death counts.
+   `--seed N` sets the base seed (default 1); `--seeds N` the ensemble size (default 8, the
+   same set the headless harness sweeps). Each scenario's entry carries a **failure-mode
+   distribution** (count over the six + modal mode), the **median and min/max spread** of the
+   five sensible-world scores + `fitness`, the same spread for `ticks_survived` / final
+   population / true birth & death counts, the seed set used, and a `per_seed` array with each
+   seed's individual row. The binary stays **prediction-agnostic and verdict-free** — it does
+   not read `metadata.prediction` or apply a pass/fail threshold.
 3. **Judged verdict** — [`verdicts.md`](verdicts.md): the *read* of the evidence against the
    declarations, grounded in `expected-properties.md`. A reading (by a human or a
    fresh-perspective agent), **not** a pass/fail test — precise numbers are evidence for the
-   judgment, not the gate. Drift shows up as a diff in `observed.json`, prompting a re-judge.
+   judgment, not the gate. The verdict is a **majority/supermajority read of the distribution**
+   (modal failure mode + fraction of seeds matching the declared prediction); that read lives
+   here, deliberately *not* in the binary. Drift shows up as a diff in `observed.json`,
+   prompting a re-judge.
 
 Agreement across the three raises confidence; **disagreement localises the fault** — and
 already has: the verdict synthesis traces the suite's near-universal `energy_death` verdict to
 a detector that measures predation flow rather than free-energy throughput (a genesis-evaluator
 issue, surfaced by the example lens).
 
-## Current status (seed 1)
+## Current status (8-seed ensemble, base seed 1)
 
 > **The legacy suite is stale and trophically incomplete** — `status: stale-params` on most of
-> the older files. `example4.json` reproduces (36 births); `example6_decomposer_viability.json`
+> the older files. Numbers below are ensemble medians; `observed.json` carries the full spread.
+> Across the current suite all eight seeds agree on the modal failure mode for every scenario, so
+> the ensemble *confirms* the earlier single-seed reads were not lucky draws — but the demographic
+> and score spreads (example4 final pop 6–11, example6's seed-to-seed birth swing) are now legible.
+> `example4.json` reproduces (median 34 births); `example6_decomposer_viability.json`
 > (#303) is the first scenario to seed a working decomposer — it reads behaviourally as a
 > `Decomposer` and sustains on a self-thinning producer stand's carcasses through 2000 ticks, but
 > as a *mixed* feeder co-located with its producers it lands at a borderline ~0.47 detrital share;
@@ -93,7 +108,7 @@ issue, surfaced by the example lens).
 > decomposer seeded on a standing carcass deposit (a new `carcasses` recipe capability) with no
 > living agent inside its consumption reach, so `detrital_share > 0.5` holds *by geometry* on every
 > seed, while an out-of-reach producer ring rains carcasses to sustain a full living brown food web
-> (final pop 80, 2056 births / 1993 deaths). Per-scenario verdicts in [`verdicts.md`](verdicts.md);
+> (median final pop 90, 2062 births / 1998 deaths). Per-scenario verdicts in [`verdicts.md`](verdicts.md);
 > raw numbers in [`observed.json`](observed.json). Two root causes shaped the legacy set:
 
 ### Root cause 1 — partial recipes drift under code defaults
