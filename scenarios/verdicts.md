@@ -28,6 +28,7 @@ to carcass-fall it could not previously touch, set non-zero only in `example6`).
 | example6_decomposer_viability | partially-sensible | agree (predicted live → lives) | detrital pathway works, but a single-cohort carcass pulse — no sustained multi-cluster ecology |
 | example7 | not-sensible | n/a (undecided) | roster mismatch (no decomposer), then stale params |
 | example8 | not-sensible | disagree | roster mismatch (no decomposer), then stale params |
+| example9_detrital_pathway | sensible | agree (predicted live → lives) | none material — clean by-construction brown food web; detrital_share > 0.5 holds by geometry on every seed |
 
 ## Per-scenario fault localisation
 
@@ -80,6 +81,22 @@ to carcass-fall it could not previously touch, set non-zero only in `example6`).
   one early cohort, so the decomposer lives off a finite carcass pulse plus its own sparse offspring
   rather than a renewed producer→carcass supply; clustering, coexistence, and oscillation all score 0
   (final pop 1), and fitness is low. It proves decomposer *viability*, not a full multi-trophic ecology.
+- **example9_detrital_pathway** — Sensible; agrees with "live", and the clean companion to
+  example6's borderline showcase (#311). example6 reveals an embedded sessile decomposer as a
+  *mixed* feeder — co-located with the producers it self-thins, "carcasses in reach" and "living
+  producers in reach" are inseparable, so its detrital share sits at a parameter-luck ~0.47–0.62.
+  example9 removes the luck by *geometry*: the decomposer is seeded on a standing carcass deposit
+  (a new `carcasses` recipe capability, #311) with **no living agent inside its consumption reach**.
+  With `body_reach_coefficient=0.0` the reach is structure-independent and exact —
+  `heterotrophy × contact_range_coefficient = 0.5 × 1.0 = 0.5` world units — and the nearest living
+  agent (a producer ring at radius ~30 on a 100-extent torus) is far outside it, so every unit the
+  decomposer drains is detrital. `detrital_share > 0.5` therefore holds on every seed by
+  construction, not by tuning (verified across the seed sweep). It is also a *complete* living
+  ecology, not a sterile pile: the out-of-reach producer ring reproduces and self-thins
+  (2056 births / 1993 deaths, final pop 80, `failure=none`, fitness 0.81, trophic balance 1.0),
+  raining carcasses across the field, while a generously-sized seeded deposit (480 energy) backstops
+  the decomposer past `max_ticks`. This is the producer→carcass→decomposer brown web demonstrated
+  robustly — the property example6 only borderline reaches.
 - **example7** — Not-sensible (prediction `undecided`). Roster mismatch is primary: intent is
   "three trophic roles incl. a decomposer", but the roster is 3 *undifferentiated* mobile consumers —
   no decomposer exists, so the detrital pathway it means to probe is absent and carcasses accumulate.

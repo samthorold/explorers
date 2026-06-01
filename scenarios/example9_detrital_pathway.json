@@ -1,0 +1,177 @@
+{
+  "metadata": {
+    "intent": "Clean detrital-pathway demonstration (issue #311). A sessile decomposer is seeded on a standing carcass deposit with NO living agent inside its consumption reach, so its diet is detrital from tick 0 by construction. A producer source sits well outside that reach, sustaining a living producer->carcass ecology around the decomposer. Unlike example6 (borderline ~0.47 mixed feeder), this scenario makes detrital_share > 0.5 hold by geometry on every seed, not by parameter luck.",
+    "source_issue": 311,
+    "roster": "1 sessile decomposer (origin, heterotrophy-dominant) on a seeded 8-carcass deposit; 16 producers on a wide ring (radius ~30) well outside the decomposer's reach.",
+    "probes": "energy_death",
+    "prediction": "live",
+    "rationale": "The decomposer physically cannot predate: with body_reach_coefficient = 0 its reach is structure-independent at heterotrophy x contact_range_coefficient = 0.5 x 1.0 = 0.5 world units, and the nearest living agent (the producer ring at radius ~30, toroidal extent 100) is far outside it. So every unit of energy the decomposer drains comes from carcasses -> detrital_share is high by definition. The large seeded deposit (8 carcasses x 60 energy = 480) is sized to outlast max_ticks as the sustaining backstop, while the out-of-reach producer ring reproduces and self-thins, raining carcasses across the field to demonstrate the living producer->carcass->decomposer pathway rather than a sterile pile.",
+    "geometry": "Decomposer reach = eff_heterotrophy x (contact_range_coefficient + body_reach_coefficient x sqrt(structure)). body_reach_coefficient is set to 0.0 (NOT example6's 2.0) precisely so reach does not grow with the decomposer's structure: reach stays fixed at 0.5 units and the 'no living agent in reach' property is exact, not approximate. Producers sit at radius ~30 with modest dispersal (4.0), so offspring establish near the ring and toroidal distance to the origin (max 70.7 on a 100-extent torus) keeps them out of the 0.5-unit reach across the full seed sweep.",
+    "sustaining_supply": "Large seeded carcass deposit (480 energy) at the decomposer's position as the deterministic, seed-independent backstop that outlasts 2000 ticks; the out-of-reach producer ring supplies the living end of the pathway. The decomposer never depends on inward carcass-fall reaching it, so the detrital-share property is robust regardless of where producer offspring fall.",
+    "status": "current — every WorldParameter is specified explicitly (example4/example6 template, post-#309); body_reach_coefficient deliberately 0.0 for exact geometry."
+  },
+  "parameters": {
+    "solar_flux_magnitude": 10.0,
+    "base_trophic_efficiency": 0.8,
+    "trophic_distance_decay": 1.0,
+    "reproduction_efficiency": 0.7,
+    "base_metabolic_rate": 0.3,
+    "movement_cost_coefficient": 0.05,
+    "sensing_range_coefficient": 10.0,
+    "reproduction_energy_threshold": 15.0,
+    "reproduction_nutrient_threshold": 1.0,
+    "mutation_rate": 0.1,
+    "mutation_magnitude": 0.05,
+    "contact_range_coefficient": 1.0,
+    "world_extent": 100.0,
+    "initial_population_size": 0,
+    "light_competition_radius": 8.0,
+    "photo_maintenance_cost": 0.01,
+    "heterotrophy_maintenance_cost": 0.01,
+    "initial_nutrient_pool": 50000.0,
+    "growth_efficiency": 0.3,
+    "wear_rate": 0.0,
+    "wear_degradation_steepness": 1.0,
+    "somatic_maintenance_cost_coefficient": 0.1,
+    "use_wear_rate": 0.0,
+    "structure_maintenance_coefficient": 0.01,
+    "repair_decay": 1.0,
+    "base_nutrient_ratio": 0.1,
+    "specification_nutrient_coefficient": 0.2,
+    "reproductive_compatibility_distance": 2.0,
+    "mobility_maintenance_cost": 0.0,
+    "maintenance_cost_exponent": 2.0,
+    "consumption_contact_half_saturation": 3.0,
+    "nutrient_grid_cell_size": 10.0,
+    "growth_retention_multiplier": 2.0,
+    "offspring_structure_fraction": 0.2,
+    "asexual_propensity_maintenance_cost": 0.01,
+    "dispersal_propagule_cost_coefficient": 0.0,
+    "dispersal_propagule_cost_exponent": 2.0,
+    "dispersal_reach_coefficient": 10.0,
+    "body_reach_coefficient": 0.0
+  },
+  "agents": [
+    {
+      "position": [0.0, 0.0],
+      "reserve": 80.0,
+      "traits": {
+        "photosynthetic_absorption": 0.4,
+        "mobility": 0.0,
+        "fecundity": 0.2,
+        "asexual_propensity": 0.3,
+        "dispersal": 0.1,
+        "kappa": 0.6,
+        "heterotrophy": 0.5
+      },
+      "nutrient": 9.0
+    },
+    {
+      "position": [30.0, 0.0],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [27.7, 11.5],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [21.2, 21.2],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [11.5, 27.7],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [0.0, 30.0],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [-11.5, 27.7],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [-21.2, 21.2],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [-27.7, 11.5],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [-30.0, 0.0],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [-27.7, -11.5],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [-21.2, -21.2],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [-11.5, -27.7],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [0.0, -30.0],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [11.5, -27.7],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [21.2, -21.2],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    },
+    {
+      "position": [27.7, -11.5],
+      "reserve": 20.0,
+      "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 4.0, "kappa": 0.5, "heterotrophy": 0.0},
+      "nutrient": 8.0
+    }
+  ],
+  "carcasses": [
+    {"position": [0.0, 0.0], "energy": 60.0, "nutrient": 6.0, "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 0.2, "kappa": 0.5, "heterotrophy": 0.0}},
+    {"position": [0.1, 0.0], "energy": 60.0, "nutrient": 6.0, "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 0.2, "kappa": 0.5, "heterotrophy": 0.0}},
+    {"position": [0.0, 0.1], "energy": 60.0, "nutrient": 6.0, "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 0.2, "kappa": 0.5, "heterotrophy": 0.0}},
+    {"position": [0.1, 0.1], "energy": 60.0, "nutrient": 6.0, "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 0.2, "kappa": 0.5, "heterotrophy": 0.0}},
+    {"position": [-0.1, 0.0], "energy": 60.0, "nutrient": 6.0, "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 0.2, "kappa": 0.5, "heterotrophy": 0.0}},
+    {"position": [0.0, -0.1], "energy": 60.0, "nutrient": 6.0, "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 0.2, "kappa": 0.5, "heterotrophy": 0.0}},
+    {"position": [-0.1, -0.1], "energy": 60.0, "nutrient": 6.0, "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 0.2, "kappa": 0.5, "heterotrophy": 0.0}},
+    {"position": [0.1, -0.1], "energy": 60.0, "nutrient": 6.0, "traits": {"photosynthetic_absorption": 0.45, "mobility": 0.0, "fecundity": 0.35, "asexual_propensity": 0.3, "dispersal": 0.2, "kappa": 0.5, "heterotrophy": 0.0}}
+  ],
+  "max_ticks": 2000
+}

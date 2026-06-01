@@ -525,6 +525,7 @@ fn default_recipe() -> WorldRecipe {
             initial_energy_per_agent: 100.0,
         }),
         agents: None,
+        carcasses: None,
         max_ticks: 100,
     }
 }

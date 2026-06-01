@@ -85,11 +85,16 @@ issue, surfaced by the example lens).
 ## Current status (seed 1)
 
 > **The legacy suite is stale and trophically incomplete** — `status: stale-params` on most of
-> the older files. `example4.json` reproduces (36 births), and
-> `example6_decomposer_viability.json` (#303) is the first scenario to seed a working decomposer:
-> it reads behaviourally as a `Decomposer` and sustains on a self-thinning producer stand's
-> carcasses through 2000 ticks. Per-scenario verdicts in [`verdicts.md`](verdicts.md); raw numbers
-> in [`observed.json`](observed.json). Two root causes shaped the legacy set:
+> the older files. `example4.json` reproduces (36 births); `example6_decomposer_viability.json`
+> (#303) is the first scenario to seed a working decomposer — it reads behaviourally as a
+> `Decomposer` and sustains on a self-thinning producer stand's carcasses through 2000 ticks, but
+> as a *mixed* feeder co-located with its producers it lands at a borderline ~0.47 detrital share;
+> and `example9_detrital_pathway.json` (#311) is the **clean-by-construction** companion: a sessile
+> decomposer seeded on a standing carcass deposit (a new `carcasses` recipe capability) with no
+> living agent inside its consumption reach, so `detrital_share > 0.5` holds *by geometry* on every
+> seed, while an out-of-reach producer ring rains carcasses to sustain a full living brown food web
+> (final pop 80, 2056 births / 1993 deaths). Per-scenario verdicts in [`verdicts.md`](verdicts.md);
+> raw numbers in [`observed.json`](observed.json). Two root causes shaped the legacy set:
 
 ### Root cause 1 — partial recipes drift under code defaults
 

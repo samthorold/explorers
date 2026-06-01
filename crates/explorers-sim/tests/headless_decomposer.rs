@@ -55,7 +55,7 @@ fn decomposer_drains_carcass_after_a_death_reindexes_agents() {
     let recipe = load();
     let params = recipe.parameters.clone();
     let mut world = World::from_recipe(
-        &WorldRecipe { parameters: params, agents: Some(vec![]), max_ticks: 50, initial_distribution: None },
+        &WorldRecipe { parameters: params, agents: Some(vec![]), carcasses: None, max_ticks: 50, initial_distribution: None },
         1,
     );
     // A doomed agent (id 0) with zero reserve dies on the first step, shifting
@@ -164,6 +164,133 @@ fn decomposer_extends_feeding_reach_by_growing_structure() {
             decomposition > 0.0,
             "seed {seed}: the decomposer's extended reach must drain carcass energy \
              (decomposition = {decomposition})"
+        );
+    }
+}
+
+// ----------------------------------------------------------------------------
+// example9_detrital_pathway.json (issue #311): majority-detrital BY CONSTRUCTION.
+//
+// A sessile decomposer is seeded on a standing carcass deposit with no living
+// agent inside its consumption reach (body_reach_coefficient = 0 keeps reach
+// fixed and structure-independent, so the geometry is exact). Its diet is
+// detrital from tick 0 deterministically. These assertions verify the property
+// holds across the full seed sweep — robust by geometry, not by tuning.
+// ----------------------------------------------------------------------------
+
+const PATHWAY_SCENARIO: &str =
+    "/Users/sam/Projects/explorers/scenarios/example9_detrital_pathway.json";
+
+/// Seed sweep for the by-construction detrital-pathway assertions. The
+/// majority-detrital property holds *by geometry* (the decomposer physically
+/// cannot reach a living agent), so it is seed-independent — a sweep over a
+/// dozen seeds is ample to demonstrate it is not a single-seed artifact, and
+/// keeps each full-run test (90+ agents over 2000 ticks) under the suite's
+/// time budget. (Verified to also hold over 1..=20 during development.)
+const PATHWAY_SEEDS: std::ops::RangeInclusive<u64> = 1..=12;
+
+fn load_pathway() -> WorldRecipe {
+    let contents = std::fs::read_to_string(PATHWAY_SCENARIO).expect("read pathway scenario");
+    serde_json::from_str(&contents).expect("parse pathway scenario")
+}
+
+fn run_pathway_seed(seed: u64) -> (World, TopologyProjection) {
+    let recipe = load_pathway();
+    let mut world = World::from_recipe(&recipe, seed);
+    let mut topology = TopologyProjection::new();
+    for _ in 0..recipe.max_ticks {
+        world.step();
+        topology.update(world.event_log());
+        if world.agents().is_empty() {
+            break;
+        }
+    }
+    (world, topology)
+}
+
+fn pathway_predation_vs_decomposition(seed: u64) -> (f32, f32) {
+    let recipe = load_pathway();
+    let mut world = World::from_recipe(&recipe, seed);
+    let mut predation = 0.0f32;
+    let mut decomposition = 0.0f32;
+    let mut cursor = 0usize;
+    for _ in 0..recipe.max_ticks {
+        world.step();
+        for ev in world.event_log().since(cursor) {
+            if let explorers_sim::event::EventKind::Consumed = ev.kind {
+                if ev.target_was_carcass {
+                    decomposition += ev.energy_delta;
+                } else {
+                    predation += ev.energy_delta;
+                }
+            }
+        }
+        cursor = world.event_log().len();
+        if world.agents().is_empty() {
+            break;
+        }
+    }
+    (predation, decomposition)
+}
+
+/// The headline property: detrital intake is the MAJORITY of system consumption
+/// on EVERY seed — `detrital_share > 0.5` holds by construction (the decomposer
+/// physically cannot reach a living agent), not by parameter luck. Should
+/// comfortably clear 0.5; if it is borderline, the construction has failed.
+#[test]
+fn pathway_is_majority_detrital_on_every_seed() {
+    for seed in PATHWAY_SEEDS {
+        let (predation, decomposition) = pathway_predation_vs_decomposition(seed);
+        assert!(
+            decomposition > 0.0,
+            "seed {seed}: the detrital pathway must carry real energy \
+             (decomposition = {decomposition})"
+        );
+        let detrital_share = decomposition / (predation + decomposition);
+        assert!(
+            detrital_share > 0.5,
+            "seed {seed}: detrital intake must be the MAJORITY of system consumption \
+             by construction (predation {predation:.1}, decomposition {decomposition:.1}, \
+             detrital share {detrital_share:.3})"
+        );
+    }
+}
+
+/// The surviving decomposer reads as a `Decomposer` behavioural role on every
+/// seed — its own lifetime diet is majority detrital.
+#[test]
+fn pathway_decomposer_reads_as_decomposer_role() {
+    for seed in PATHWAY_SEEDS {
+        let (world, topology) = run_pathway_seed(seed);
+        let roles = topology.trophic_roles(world.agents());
+        let decomposers = roles
+            .values()
+            .filter(|&&r| r == TrophicRole::Decomposer)
+            .count();
+        assert!(
+            decomposers >= 1,
+            "seed {seed}: expected a surviving agent to read as Decomposer; roles = {:?}",
+            roles
+        );
+    }
+}
+
+/// The decomposer sustains to the end of the run on the seeded deposit + carcass
+/// supply, on every seed — it does not starve out.
+#[test]
+fn pathway_decomposer_sustains_itself_to_end_of_run() {
+    for seed in PATHWAY_SEEDS {
+        let (world, _topology) = run_pathway_seed(seed);
+        let surviving_heterotrophs = world
+            .agents()
+            .iter()
+            .filter(|a| a.traits.heterotrophy > a.traits.photosynthetic_absorption)
+            .count();
+        assert!(
+            surviving_heterotrophs >= 1,
+            "seed {seed}: decomposer lineage must survive to the end of the run, but no \
+             heterotroph-dominant agent remains (final population {})",
+            world.agents().len()
         );
     }
 }

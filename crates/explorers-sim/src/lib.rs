@@ -424,6 +424,33 @@ pub struct AgentSpec {
     pub nutrient: f32,
 }
 
+/// A standing carcass seeded directly into the world from a `WorldRecipe`
+/// (issue #311). Mirrors `AgentSpec` so the recipe format stays decoupled from
+/// the runtime `Carcass` type: it carries the carcass's position, embodied
+/// energy, nutrient, and the trait vector of the agent it "came from" (which
+/// governs distance-dependent trophic efficiency for whoever decomposes it).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CarcassSpec {
+    #[serde(
+        deserialize_with = "deserialize_position",
+        serialize_with = "serialize_position"
+    )]
+    pub position: (f32, f32),
+    /// Embodied biomass energy of the carcass (mirrors a dead agent's structure).
+    pub energy: f32,
+    pub traits: TraitVector,
+    #[serde(default)]
+    pub nutrient: f32,
+}
+
+/// First id assigned to seeded carcasses. Runtime carcasses reuse the dead
+/// agent's id (in the `0..next_agent_id` range, which only grows), and seeded
+/// agents take `0..pop_size`. Seeding carcass ids from the very top of the u64
+/// range keeps them permanently disjoint from any current or future agent id,
+/// so a seeded carcass can never be confused with a living agent or a
+/// runtime-generated carcass (issue #311).
+const SEEDED_CARCASS_ID_BASE: u64 = u64::MAX / 2;
+
 fn deserialize_position<'de, D>(deserializer: D) -> Result<(f32, f32), D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -450,6 +477,11 @@ pub struct WorldRecipe {
     pub initial_distribution: Option<InitialDistribution>,
     #[serde(default)]
     pub agents: Option<Vec<AgentSpec>>,
+    /// Standing carcasses seeded directly into the world (issue #311), so a
+    /// scenario can place a decomposer on a detrital deposit at tick 0 rather
+    /// than waiting for agents to die. Only honoured on the `agents` branch.
+    #[serde(default)]
+    pub carcasses: Option<Vec<CarcassSpec>>,
     pub max_ticks: u64,
 }
 
@@ -836,10 +868,26 @@ impl World {
             // Seeded structure binds nutrient (ADR-0003): draw it from the pool so
             // total system nutrient at creation equals the initial pool.
             bind_seed_structure_nutrient(&sim_agents, &mut nutrient_grid, &params);
+            // Materialise any seeded carcasses (issue #311). Their ids come from a
+            // high range disjoint from agent ids (current and future), so a seeded
+            // carcass can never collide with a living agent or a runtime carcass.
+            let seeded_carcasses: Vec<Carcass> = recipe
+                .carcasses
+                .iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, spec)| Carcass {
+                    id: SEEDED_CARCASS_ID_BASE + i as u64,
+                    position: spec.position,
+                    energy: spec.energy,
+                    nutrient: spec.nutrient,
+                    traits: spec.traits,
+                })
+                .collect();
             Self {
                 params,
                 agents: sim_agents,
-                carcasses: Vec::new(),
+                carcasses: seeded_carcasses,
                 dissipated_energy: initial_dissipation,
                 total_solar_input: 0.0,
                 nutrient_grid,
@@ -2191,10 +2239,92 @@ mod tests {
                     nutrient: 0.0,
                 },
             ]),
+            carcasses: None,
             max_ticks: 100,
         };
         let world = World::from_recipe(&recipe, 42);
         assert_eq!(world.agents().len(), 1);
+    }
+
+    #[test]
+    fn world_from_recipe_seeds_carcasses() {
+        // A WorldRecipe can seed standing carcasses directly (issue #311): the
+        // recipe carries a `carcasses` deposit and `from_recipe` materialises it
+        // into the world alongside the seeded agents.
+        let recipe = WorldRecipe {
+            parameters: test_params(),
+            initial_distribution: None,
+            agents: Some(vec![AgentSpec {
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                traits: zero_traits(),
+                nutrient: 0.0,
+            }]),
+            carcasses: Some(vec![CarcassSpec {
+                position: (1.0, 2.0),
+                energy: 40.0,
+                nutrient: 3.0,
+                traits: zero_traits(),
+            }]),
+            max_ticks: 100,
+        };
+        let world = World::from_recipe(&recipe, 42);
+        assert_eq!(world.carcasses().len(), 1, "seeded carcass must materialise");
+        let c = &world.carcasses()[0];
+        assert_eq!(c.position, (1.0, 2.0));
+        assert_eq!(c.energy, 40.0);
+        assert_eq!(c.nutrient, 3.0);
+    }
+
+    #[test]
+    fn seeded_carcass_ids_never_collide_with_agent_ids() {
+        // Correctness: runtime carcasses reuse the dead agent's id, and seeded
+        // agents take ids 0..pop_size with next_agent_id continuing from there.
+        // Seeded-carcass ids must sit in a disjoint range so they cannot collide
+        // with any current or future agent id (issue #311).
+        let recipe = WorldRecipe {
+            parameters: test_params(),
+            initial_distribution: None,
+            agents: Some(vec![
+                AgentSpec { position: (0.0, 0.0), reserve: 50.0, traits: zero_traits(), nutrient: 0.0 },
+                AgentSpec { position: (1.0, 1.0), reserve: 50.0, traits: zero_traits(), nutrient: 0.0 },
+            ]),
+            carcasses: Some(vec![
+                CarcassSpec { position: (2.0, 2.0), energy: 10.0, nutrient: 1.0, traits: zero_traits() },
+                CarcassSpec { position: (3.0, 3.0), energy: 10.0, nutrient: 1.0, traits: zero_traits() },
+            ]),
+            max_ticks: 100,
+        };
+        let mut world = World::from_recipe(&recipe, 7);
+        // Drive enough births/deaths that next_agent_id advances well past pop_size.
+        for _ in 0..50 {
+            world.step();
+        }
+        let carcass_ids: std::collections::HashSet<u64> =
+            world.carcasses().iter().map(|c| c.id).collect();
+        let agent_ids: std::collections::HashSet<u64> =
+            world.agents().iter().map(|a| a.id).collect();
+        assert!(
+            carcass_ids.is_disjoint(&agent_ids),
+            "seeded-carcass ids must never collide with agent ids: carcasses {carcass_ids:?}, agents {agent_ids:?}"
+        );
+    }
+
+    #[test]
+    fn carcass_spec_round_trips_through_serde() {
+        let spec = CarcassSpec {
+            position: (4.5, -2.5),
+            energy: 12.0,
+            nutrient: 0.5,
+            traits: zero_traits(),
+        };
+        let json = serde_json::to_string(&spec).expect("serialize");
+        let back: CarcassSpec = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(spec, back);
+        // `nutrient` defaults when omitted, mirroring AgentSpec.
+        let minimal = r#"{"position":[1.0,2.0],"energy":5.0,"traits":{"photosynthetic_absorption":0.0,"heterotrophy":0.0,"mobility":0.0,"kappa":0.5,"fecundity":0.0,"asexual_propensity":0.0,"dispersal":0.0}}"#;
+        let parsed: CarcassSpec = serde_json::from_str(minimal).expect("parse minimal");
+        assert_eq!(parsed.nutrient, 0.0);
     }
 
     #[test]
@@ -2246,6 +2376,7 @@ mod tests {
                 traits: generalist,
                 nutrient: 100.0,
             }]),
+            carcasses: None,
             max_ticks: 10,
         };
         let mut world = World::from_recipe(&recipe, 42);
