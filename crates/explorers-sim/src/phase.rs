@@ -922,8 +922,17 @@ pub fn resolve_reproduction(
         .iter()
         .enumerate()
         .filter(|(_, a)| {
+            // The energy gate is the larger of the flat floor and the
+            // investment the agent's offspring need to be born at or above their
+            // death threshold (#310). The flat floor governs specialists (whose
+            // viable investment is ~0); fragile generalists must bank more, so a
+            // birth clears the same structural floor a seeded agent does instead
+            // of dying the tick it is born.
+            let energy_gate = params
+                .reproduction_energy_threshold
+                .max(crate::minimum_viable_repro_investment(&a.traits, params));
             !dead_ids.contains(&a.id)
-                && a.repro_reserve >= params.reproduction_energy_threshold
+                && a.repro_reserve >= energy_gate
                 && a.repro_nutrient >= params.reproduction_nutrient_threshold
         })
         .map(|(i, _)| i)
@@ -2365,6 +2374,122 @@ mod tests {
             assert!((child.repro_reserve).abs() < 1e-6,
                 "offspring should have zero repro_reserve, got {}", child.repro_reserve);
         }
+    }
+
+    // #310: a generalist whose repro_reserve clears the flat energy floor but is
+    // below the investment its offspring need to be born above their death
+    // threshold must NOT reproduce — otherwise it spends the investment birthing
+    // offspring that die the same tick, pinning the population at 1.
+    #[test]
+    fn generalist_below_viable_gate_does_not_reproduce() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            growth_efficiency: 0.3,
+            reproduction_efficiency: 0.7,
+            reproduction_energy_threshold: 5.0,
+            reproduction_nutrient_threshold: 1.0,
+            offspring_structure_fraction: 0.2,
+            ..test_params()
+        };
+        let generalist = TraitVector {
+            photosynthetic_absorption: 0.3,
+            heterotrophy: 0.3,
+            mobility: 0.3,
+            kappa: 0.5,
+            fecundity: 2.0,
+            asexual_propensity: 1.0,
+            dispersal: 0.1,
+        };
+        let viable_gate = crate::minimum_viable_repro_investment(&generalist, &params);
+        assert!(viable_gate > params.reproduction_energy_threshold,
+            "test precondition: viable gate ({}) must exceed the flat floor ({})",
+            viable_gate, params.reproduction_energy_threshold);
+
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, generalist)];
+        // Above the flat floor (5.0) but below the viable gate.
+        agents[0].repro_reserve = viable_gate * 0.5;
+        agents[0].repro_nutrient = 100.0;
+        agents[0].nutrient = 100.0;
+
+        let dead_ids = std::collections::HashSet::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+
+        assert!(result.offspring.is_empty(),
+            "generalist below the viable gate should not reproduce, got {} offspring",
+            result.offspring.len());
+    }
+
+    // #310 end-to-end: the example6 decomposer (mobility variant) funded past its
+    // viability gate produces a brood that SURVIVES the same-tick death check —
+    // refuting "births=1, deaths=1, offspring dies the tick it is born". Wires
+    // resolve_reproduction -> check_death_thresholds exactly as World::step does.
+    #[test]
+    fn example6_decomposer_offspring_survives_its_birth_tick() {
+        use rand::SeedableRng;
+        let params = WorldParameters {
+            growth_efficiency: 0.3,
+            reproduction_efficiency: 0.7,
+            offspring_structure_fraction: 0.2,
+            reproduction_energy_threshold: 15.0,
+            reproduction_nutrient_threshold: 1.0,
+            base_nutrient_ratio: 0.1,
+            specification_nutrient_coefficient: 0.2,
+            ..test_params()
+        };
+        // The example6 decomposer with the issue's mobility=0.2 lift: a fragile,
+        // low-fecundity generalist (death threshold ~2.14).
+        let decomposer = TraitVector {
+            photosynthetic_absorption: 0.45,
+            heterotrophy: 0.5,
+            mobility: 0.2,
+            kappa: 0.5,
+            fecundity: 0.2,
+            asexual_propensity: 1.0,
+            dispersal: 0.1,
+        };
+        let gate = crate::minimum_viable_repro_investment(&decomposer, &params);
+
+        // Low fecundity means most reproduction draws are empty; iterate seeds to
+        // find the first realised brood, then assert every newborn survives. Fund
+        // at 3x the gate so even an above-expected brood (up to 3) clears.
+        let mut produced = false;
+        for seed in 0..200u64 {
+            let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, decomposer)];
+            agents[0].structure = 10.0; // an established, well-grown parent
+            agents[0].repro_reserve = gate * 3.0;
+            agents[0].repro_nutrient = 100.0;
+            agents[0].nutrient = 100.0;
+
+            let dead_ids = std::collections::HashSet::new();
+            let mut grid = SpatialGrid::new(100.0, 10.0);
+            grid.insert(0, (0.0, 0.0));
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+
+            let result =
+                resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+            if result.offspring.is_empty() {
+                continue;
+            }
+            produced = true;
+            let mut offspring = result.offspring;
+            let structures: Vec<f32> = offspring.iter().map(|o| o.structure).collect();
+            let (_events, carcasses, _diss) =
+                check_death_thresholds(&mut offspring, &params);
+            assert!(
+                carcasses.is_empty(),
+                "decomposer offspring must survive its birth tick (seed {seed}): \
+                 {} of {} died; structures {:?}",
+                carcasses.len(),
+                structures.len(),
+                structures
+            );
+            break;
+        }
+        assert!(produced, "decomposer should produce a brood within 200 seeds");
     }
 
     // WR-16: "Offspring are born with zero wear." Parents accumulate wear over
@@ -5466,7 +5591,10 @@ mod tests {
             traits,
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-            repro_reserve: 40.0,
+            // Funded above the #310 viability gate (fecundity 3 × generalist
+            // death threshold), identical across dispersal values so the
+            // propagule-cost comparison stays valid.
+            repro_reserve: 400.0,
             repro_nutrient: 40.0,
         }];
         let dead_ids = std::collections::HashSet::new();
@@ -5530,7 +5658,9 @@ mod tests {
             traits,
             contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-            repro_reserve: 40.0,
+            // Funded above the #310 viability gate, identical across dispersal
+            // values so the propagule-cost comparison stays valid.
+            repro_reserve: 400.0,
             repro_nutrient: 40.0,
         };
         let mut agents = vec![mk(1, (0.0, 0.0)), mk(2, (1.0, 0.0))];
@@ -6881,7 +7011,8 @@ mod tests {
             asexual_propensity: 1.0,
             ..zero_traits()
         };
-        let initial_repro_reserve = 20.0_f32;
+        // Funded above the #310 viability gate (fecundity 3 × death threshold).
+        let initial_repro_reserve = 120.0_f32;
         let mut agents = vec![Agent {
             id: 1,
             position: (0.0, 0.0),
@@ -6948,7 +7079,9 @@ mod tests {
             dispersal: 1.0, // active propagule cost
             ..zero_traits()
         };
-        let initial_repro_reserve = 30.0_f32;
+        // Funded above the #310 viability gate (fecundity 3, dispersal 1.0 with
+        // an active propagule cost, so the gate is high).
+        let initial_repro_reserve = 300.0_f32;
         let mut agents = vec![Agent {
             id: 1,
             position: (0.0, 0.0),
@@ -7015,8 +7148,9 @@ mod tests {
             asexual_propensity: 0.0, // force sexual
             ..zero_traits()
         };
-        let invest_a = 30.0_f32;
-        let invest_b = 25.0_f32;
+        // Funded above the #310 viability gate (fecundity 4 × death threshold).
+        let invest_a = 160.0_f32;
+        let invest_b = 140.0_f32;
         let mut agents = vec![
             Agent {
                 id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
@@ -7086,7 +7220,8 @@ mod tests {
             let mut agents = vec![Agent {
                 id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
                 nutrient: 1000.0, traits, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 100.0,
+                // Funded above the #310 viability gate for fecundity up to 20.
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 600.0,
                 repro_nutrient: 100.0,
             }];
             let dead_ids = std::collections::HashSet::new();

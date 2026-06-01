@@ -575,6 +575,51 @@ pub fn death_threshold(traits: &TraitVector) -> f32 {
     normalised_entropy * sum
 }
 
+/// Minimum reproductive-energy earmark (`repro_reserve`) an agent must hold for
+/// its offspring to be born at or above their own death threshold — so a birth
+/// clears the same structural floor a seeded agent does, rather than being
+/// killed by `check_death_thresholds` the tick it is born.
+///
+/// Inverts the birth-provisioning pipeline for the realised brood: the
+/// committed investment passes through `reproduction_efficiency`, loses the
+/// dispersal propagule share, is divided across the provisioned-for offspring
+/// count, and the structure share is converted via `growth_efficiency`. We solve
+/// for the investment at which the per-offspring structure equals the parent's
+/// `death_threshold` (the offspring's threshold, since offspring are the parent
+/// plus mutation).
+///
+/// The provisioned-for brood is `max(fecundity, 1.0)`: it banks for the full
+/// expected brood when fecundity exceeds one, but never for less than a single
+/// whole offspring — a realised brood, when positive, is always at least one
+/// offspring, so banking for the fractional Poisson mean would still birth a
+/// doomed singleton (the low-fecundity decomposer's failure mode in #310).
+///
+/// Returns 0 (no gating beyond the flat floor) for a pure specialist (zero
+/// threshold), and also when no positive structure can be built
+/// (`growth_efficiency == 0`, `offspring_structure_fraction == 0`, or a propagule
+/// fraction of 1): such offspring are born at structure 0, which the death check
+/// does not kill (it guards on `structure > 0`), so there is no viability gate to
+/// enforce.
+pub fn minimum_viable_repro_investment(
+    traits: &TraitVector,
+    params: &WorldParameters,
+) -> f32 {
+    let threshold = death_threshold(traits);
+    if threshold <= 0.0 {
+        return 0.0;
+    }
+    let propagule = dispersal_propagule_cost_fraction(traits.dispersal, params);
+    let conversion = params.reproduction_efficiency
+        * (1.0 - propagule)
+        * params.offspring_structure_fraction.clamp(0.0, 1.0)
+        * params.growth_efficiency;
+    if conversion <= 0.0 {
+        return 0.0;
+    }
+    let provisioned_for = traits.fecundity.max(1.0);
+    threshold * provisioned_for / conversion
+}
+
 /// Stoichiometric nutrient demand: structure × trait-derived ratio.
 ///
 /// `demand = structure × (base_nutrient_ratio + specification_nutrient_coefficient × specification_sum)`
@@ -1554,6 +1599,100 @@ mod tests {
     }
 
     #[test]
+    fn minimum_viable_repro_investment_provisions_offspring_at_death_threshold() {
+        // An agent investing exactly the minimum-viable amount should produce an
+        // offspring (in the expected-brood case) whose birth structure lands
+        // right at its death threshold — the floor below which a newborn would
+        // be killed at birth. This ties the reproduction gate to the structural
+        // floor a newborn must clear, so generalists no longer birth doomed
+        // offspring.
+        let params = WorldParameters {
+            growth_efficiency: 0.3,
+            ..test_params()
+        };
+        let generalist = TraitVector {
+            photosynthetic_absorption: 0.3,
+            heterotrophy: 0.3,
+            mobility: 0.3,
+            kappa: 0.5,
+            fecundity: 2.0,
+            asexual_propensity: 0.3,
+            dispersal: 0.1,
+        };
+        let investment = minimum_viable_repro_investment(&generalist, &params);
+
+        // Walk the same provisioning pipeline resolve_reproduction uses, for the
+        // expected offspring count. fecundity 2.0 exceeds the one-offspring floor,
+        // so the provisioned-for brood is exactly the fecundity.
+        let post_efficiency = investment * params.reproduction_efficiency;
+        let propagule = dispersal_propagule_cost_fraction(generalist.dispersal, &params);
+        let offspring_total = post_efficiency * (1.0 - propagule);
+        let expected_count = generalist.fecundity;
+        let energy_per_offspring = offspring_total / expected_count;
+        let structure_energy_share =
+            energy_per_offspring * params.offspring_structure_fraction;
+        // Ample nutrient so birth structure is energy-limited, not nutrient-limited.
+        let prov = provision_offspring(
+            &generalist,
+            structure_energy_share,
+            energy_per_offspring,
+            1e6,
+            &params,
+        );
+
+        let threshold = death_threshold(&generalist);
+        assert!(
+            (prov.structure - threshold).abs() < 1e-3,
+            "offspring structure ({}) should land at the death threshold ({})",
+            prov.structure,
+            threshold
+        );
+    }
+
+    #[test]
+    fn low_fecundity_generalist_single_birth_clears_threshold() {
+        // #310 core: fecundity < 1 means the realised brood, when positive, is
+        // still at least one whole offspring. The gate must bank enough for one
+        // offspring to clear its death threshold — not for the fractional
+        // Poisson-mean brood, which would bank a fifth of what a single realised
+        // birth needs and so still produce a doomed singleton (the decomposer's
+        // exact failure mode in example6).
+        let params = WorldParameters {
+            growth_efficiency: 0.3,
+            reproduction_efficiency: 0.7,
+            offspring_structure_fraction: 0.2,
+            ..test_params()
+        };
+        // The example6 decomposer (mobility variant): a generalist with low
+        // fecundity.
+        let decomposer = TraitVector {
+            photosynthetic_absorption: 0.45,
+            heterotrophy: 0.5,
+            mobility: 0.2,
+            kappa: 0.5,
+            fecundity: 0.2,
+            asexual_propensity: 0.3,
+            dispersal: 0.1,
+        };
+        let gate = minimum_viable_repro_investment(&decomposer, &params);
+
+        // A single realised offspring provisioned from exactly the gate.
+        let post = gate * params.reproduction_efficiency;
+        let propagule = dispersal_propagule_cost_fraction(decomposer.dispersal, &params);
+        let energy_per_offspring = post * (1.0 - propagule); // realised count = 1
+        let share = energy_per_offspring * params.offspring_structure_fraction;
+        let prov = provision_offspring(&decomposer, share, energy_per_offspring, 1e6, &params);
+
+        let threshold = death_threshold(&decomposer);
+        assert!(
+            prov.structure >= threshold - 1e-3,
+            "a single realised offspring ({}) must clear its death threshold ({})",
+            prov.structure,
+            threshold
+        );
+    }
+
+    #[test]
     fn pure_producer_simulation_runs_without_panic() {
         // A simulation of pure producers: photosynthesise, metabolise, grow, wear, die
         let params = WorldParameters {
@@ -2407,7 +2546,8 @@ mod tests {
             },
             contact_time: 50,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-            repro_reserve: 50.0,
+            // Funded above the #310 viability gate (fecundity 5 × death threshold).
+            repro_reserve: 350.0,
             repro_nutrient: 10.0, // earmark above threshold so reproduction fires
         });
 
