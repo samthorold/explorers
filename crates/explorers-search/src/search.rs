@@ -94,6 +94,7 @@ impl SearchResult {
             parameters,
             initial_distribution: Some(initial_distribution),
             agents: None,
+            carcasses: None,
             max_ticks,
         }
     }

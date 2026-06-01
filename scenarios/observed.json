@@ -142,5 +142,23 @@
     "ticks_survived": 2000,
     "total_births": 0,
     "total_deaths": 21
+  },
+  {
+    "failure_mode": "none",
+    "final_population": 80,
+    "max_ticks": 2000,
+    "scenario": "example9_detrital_pathway.json",
+    "scores": {
+      "clustering_strength": 1.0,
+      "coexistence_duration": 0.9810000061988831,
+      "fitness": 0.8059998750686646,
+      "oscillation_strength": 0.05249933525919914,
+      "trophic_balance_score": 1.0,
+      "turnover_score": 0.9965000152587891
+    },
+    "seed": 1,
+    "ticks_survived": 2000,
+    "total_births": 2056,
+    "total_deaths": 1993
   }
 ]
