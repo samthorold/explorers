@@ -1,19 +1,23 @@
 {
   "metadata": {
-    "intent": "Twenty producers plus one consumer. Exercises grazing (structure drain), stoichiometric excretion, consumer viability, and top-down control. One consumer should not collapse 20 producers under non-lethal grazing.",
-    "source_issue": 126,
-    "roster": "20 producers + 1 mobile consumer",
+    "intent": "Twenty producers plus two consumers with heterogeneous traits, calibrated so consumers clear both reproduction gates. Companion to the headless diagnostic harness (tests/headless_example4.rs); the reference for how a self-contained scenario should look — every world parameter explicit.",
+    "source_issue": 291,
+    "roster": "20 producers + 2 consumers (heterogeneous traits)",
     "probes": "extinction",
     "prediction": "live",
-    "rationale": "Net primary production from 20 producers should keep one grazing consumer energy-positive; the consumer should not collapse the producer base under non-lethal grazing.",
-    "status": "current — every WorldParameter specified explicitly (migrated from stale-params, #304)."
+    "rationale": "Fully-specified variant calibrated so consumers clear both reproduction gates; both levels should persist and consumers reproduce.",
+    "status": "current — every WorldParameter is specified explicitly; this is the template the other files should be migrated to."
   },
   "parameters": {
-    "solar_flux_magnitude": 5.0,
+    "solar_flux_magnitude": 10.0,
+    "base_trophic_efficiency": 0.8,
+    "trophic_distance_decay": 1.0,
     "reproduction_efficiency": 0.7,
     "base_metabolic_rate": 0.3,
     "movement_cost_coefficient": 0.05,
+    "sensing_range_coefficient": 10.0,
     "reproduction_energy_threshold": 15.0,
+    "reproduction_nutrient_threshold": 1.0,
     "mutation_rate": 0.1,
     "mutation_magnitude": 0.05,
     "contact_range_coefficient": 3.0,
@@ -21,17 +25,13 @@
     "initial_population_size": 0,
     "light_competition_radius": 8.0,
     "photo_maintenance_cost": 0.01,
+    "heterotrophy_maintenance_cost": 0.01,
     "initial_nutrient_pool": 50000.0,
     "growth_efficiency": 0.3,
-    "somatic_maintenance_cost_coefficient": 0.1,
-    "heterotrophy_maintenance_cost": 0.01,
-    "base_trophic_efficiency": 0.8,
-    "trophic_distance_decay": 1.0,
-    "sensing_range_coefficient": 10.0,
-    "reproduction_nutrient_threshold": 1.0,
-    "wear_rate": 0.1,
+    "wear_rate": 0.0,
     "wear_degradation_steepness": 1.0,
-    "use_wear_rate": 0.01,
+    "somatic_maintenance_cost_coefficient": 0.1,
+    "use_wear_rate": 0.0,
     "structure_maintenance_coefficient": 0.01,
     "repair_decay": 1.0,
     "base_nutrient_ratio": 0.1,
@@ -46,344 +46,140 @@
     "asexual_propensity_maintenance_cost": 0.01,
     "dispersal_propagule_cost_coefficient": 0.0,
     "dispersal_propagule_cost_exponent": 2.0,
-    "dispersal_reach_coefficient": 0.0
+    "dispersal_reach_coefficient": 10.0
   },
   "agents": [
     {
-      "position": [
-        6.0,
-        0.0
-      ],
+      "position": [-20.0, 0.0],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.5,
-        "mobility": 0.0,
-        "fecundity": 0.1,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.333, "mobility": 0.02, "fecundity": 0.154, "asexual_propensity": 0.03, "dispersal": 0.291, "kappa": 0.625, "heterotrophy": 0.008},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        4.9,
-        3.5
-      ],
+      "position": [-21.0, 2.9],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.35,
-        "mobility": 0.0,
-        "fecundity": 0.1,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.53, "mobility": 0.011, "fecundity": 0.288, "asexual_propensity": 0.125, "dispersal": 0.21, "kappa": 0.382, "heterotrophy": 0.061},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        1.9,
-        5.7
-      ],
+      "position": [-23.5, 4.8],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.45,
-        "mobility": 0.0,
-        "fecundity": 0.15,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.325, "mobility": 0.041, "fecundity": 0.382, "asexual_propensity": 0.36, "dispersal": 0.218, "kappa": 0.443, "heterotrophy": 0.074},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        -1.9,
-        5.7
-      ],
+      "position": [-26.5, 4.8],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.4,
-        "mobility": 0.0,
-        "fecundity": 0.08,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.469, "mobility": 0.043, "fecundity": 0.408, "asexual_propensity": 0.039, "dispersal": 0.362, "kappa": 0.552, "heterotrophy": 0.059},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        -4.9,
-        3.5
-      ],
+      "position": [-29.0, 2.9],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.5,
-        "mobility": 0.0,
-        "fecundity": 0.2,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.427, "mobility": 0.024, "fecundity": 0.131, "asexual_propensity": 0.421, "dispersal": 0.453, "kappa": 0.514, "heterotrophy": 0.014},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        -6.0,
-        0.0
-      ],
+      "position": [-30.0, 0.0],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.3,
-        "mobility": 0.0,
-        "fecundity": 0.1,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.355, "mobility": 0.029, "fecundity": 0.409, "asexual_propensity": 0.382, "dispersal": 0.328, "kappa": 0.474, "heterotrophy": 0.073},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        -4.9,
-        -3.5
-      ],
+      "position": [-29.0, -2.9],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.45,
-        "mobility": 0.0,
-        "fecundity": 0.12,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.46, "mobility": 0.008, "fecundity": 0.207, "asexual_propensity": 0.366, "dispersal": 0.165, "kappa": 0.364, "heterotrophy": 0.034},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        -1.9,
-        -5.7
-      ],
+      "position": [-26.5, -4.8],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.35,
-        "mobility": 0.0,
-        "fecundity": 0.1,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.469, "mobility": 0.027, "fecundity": 0.265, "asexual_propensity": 0.154, "dispersal": 0.499, "kappa": 0.409, "heterotrophy": 0.022},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        1.9,
-        -5.7
-      ],
+      "position": [-23.5, -4.8],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.5,
-        "mobility": 0.0,
-        "fecundity": 0.15,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.394, "mobility": 0.032, "fecundity": 0.197, "asexual_propensity": 0.16, "dispersal": 0.411, "kappa": 0.446, "heterotrophy": 0.016},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        4.9,
-        -3.5
-      ],
+      "position": [-21.0, -2.9],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.4,
-        "mobility": 0.0,
-        "fecundity": 0.08,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.445, "mobility": 0.005, "fecundity": 0.122, "asexual_propensity": 0.103, "dispersal": 0.418, "kappa": 0.535, "heterotrophy": 0.072},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        2.9,
-        0.9
-      ],
+      "position": [30.0, 0.0],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.45,
-        "mobility": 0.0,
-        "fecundity": 0.12,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.333, "mobility": 0.009, "fecundity": 0.261, "asexual_propensity": 0.019, "dispersal": 0.394, "kappa": 0.619, "heterotrophy": 0.026},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        1.8,
-        2.4
-      ],
+      "position": [29.0, 2.9],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.4,
-        "mobility": 0.0,
-        "fecundity": 0.1,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.584, "mobility": 0.048, "fecundity": 0.106, "asexual_propensity": 0.13, "dispersal": 0.488, "kappa": 0.583, "heterotrophy": 0.059},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        0.0,
-        3.0
-      ],
+      "position": [26.5, 4.8],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.5,
-        "mobility": 0.0,
-        "fecundity": 0.18,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.394, "mobility": 0.031, "fecundity": 0.386, "asexual_propensity": 0.132, "dispersal": 0.217, "kappa": 0.483, "heterotrophy": 0.075},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        -1.8,
-        2.4
-      ],
+      "position": [23.5, 4.8],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.35,
-        "mobility": 0.0,
-        "fecundity": 0.08,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.298, "mobility": 0.048, "fecundity": 0.216, "asexual_propensity": 0.004, "dispersal": 0.166, "kappa": 0.401, "heterotrophy": 0.031},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        -2.9,
-        0.9
-      ],
+      "position": [21.0, 2.9],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.45,
-        "mobility": 0.0,
-        "fecundity": 0.15,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.524, "mobility": 0.015, "fecundity": 0.134, "asexual_propensity": 0.442, "dispersal": 0.298, "kappa": 0.412, "heterotrophy": 0.029},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        -2.9,
-        -0.9
-      ],
+      "position": [20.0, 0.0],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.4,
-        "mobility": 0.0,
-        "fecundity": 0.1,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.271, "mobility": 0.008, "fecundity": 0.337, "asexual_propensity": 0.067, "dispersal": 0.164, "kappa": 0.497, "heterotrophy": 0.004},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        -1.8,
-        -2.4
-      ],
+      "position": [21.0, -2.9],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.5,
-        "mobility": 0.0,
-        "fecundity": 0.12,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.337, "mobility": 0.006, "fecundity": 0.285, "asexual_propensity": 0.348, "dispersal": 0.293, "kappa": 0.646, "heterotrophy": 0.08},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        0.0,
-        -3.0
-      ],
+      "position": [23.5, -4.8],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.35,
-        "mobility": 0.0,
-        "fecundity": 0.1,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.417, "mobility": 0.021, "fecundity": 0.113, "asexual_propensity": 0.19, "dispersal": 0.237, "kappa": 0.617, "heterotrophy": 0.019},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        1.8,
-        -2.4
-      ],
+      "position": [26.5, -4.8],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.45,
-        "mobility": 0.0,
-        "fecundity": 0.15,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.541, "mobility": 0.002, "fecundity": 0.189, "asexual_propensity": 0.109, "dispersal": 0.223, "kappa": 0.419, "heterotrophy": 0.04},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        2.9,
-        -0.9
-      ],
+      "position": [29.0, -2.9],
       "reserve": 20.0,
-      "traits": {
-        "photosynthetic_absorption": 0.4,
-        "mobility": 0.0,
-        "fecundity": 0.1,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.5,
-        "heterotrophy": 0.0
-      }
+      "traits": {"photosynthetic_absorption": 0.554, "mobility": 0.003, "fecundity": 0.425, "asexual_propensity": 0.254, "dispersal": 0.497, "kappa": 0.471, "heterotrophy": 0.011},
+      "nutrient": 8.0
     },
     {
-      "position": [
-        15.0,
-        0.0
-      ],
-      "reserve": 50.0,
-      "traits": {
-        "photosynthetic_absorption": 0.0,
-        "mobility": 0.3,
-        "fecundity": 0.1,
-        "asexual_propensity": 0.0,
-        "dispersal": 0.0,
-        "kappa": 0.2,
-        "heterotrophy": 0.4
-      }
+      "position": [-21.0, 0.0],
+      "reserve": 80.0,
+      "traits": {"photosynthetic_absorption": 0.0, "mobility": 0.52, "fecundity": 0.329, "asexual_propensity": 0.395, "dispersal": 0.298, "kappa": 0.373, "heterotrophy": 0.328},
+      "nutrient": 9.0
+    },
+    {
+      "position": [21.0, 0.0],
+      "reserve": 80.0,
+      "traits": {"photosynthetic_absorption": 0.0, "mobility": 0.313, "fecundity": 0.406, "asexual_propensity": 0.45, "dispersal": 0.37, "kappa": 0.318, "heterotrophy": 0.497},
+      "nutrient": 9.0
     }
   ],
   "max_ticks": 1000

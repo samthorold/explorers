@@ -55,27 +55,9 @@
   },
   {
     "failure_mode": "none",
-    "final_population": 4,
-    "max_ticks": 1000,
-    "scenario": "example4.json",
-    "scores": {
-      "clustering_strength": 1.0,
-      "coexistence_duration": 0.0,
-      "fitness": 0.20000000298023224,
-      "oscillation_strength": 0.0,
-      "trophic_balance_score": 0.0,
-      "turnover_score": 0.0
-    },
-    "seed": 1,
-    "ticks_survived": 1000,
-    "total_births": 0,
-    "total_deaths": 17
-  },
-  {
-    "failure_mode": "none",
     "final_population": 7,
     "max_ticks": 1000,
-    "scenario": "example4_consumer_tuning.json",
+    "scenario": "example4.json",
     "scores": {
       "clustering_strength": 1.0,
       "coexistence_duration": 0.9950000047683716,

@@ -6,7 +6,7 @@
     "probes": "energy_death",
     "prediction": "live",
     "rationale": "Producers reproduce and self-thin into a steady carcass supply; the decomposer reads as a Decomposer behavioural role (majority of consumed energy is detrital) and sustains on that supply, returning nutrient to the available pool rather than letting it lock in carcasses.",
-    "status": "current \u2014 every WorldParameter is specified explicitly (example4_consumer_tuning template, #304)."
+    "status": "current \u2014 every WorldParameter is specified explicitly (example4 template, #304)."
   },
   "parameters": {
     "solar_flux_magnitude": 10.0,
