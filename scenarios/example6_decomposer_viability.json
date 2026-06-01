@@ -7,7 +7,7 @@
     "prediction": "live",
     "rationale": "Producers reproduce and self-thin into a steady carcass supply; the decomposer reads as a Decomposer behavioural role (majority of consumed energy is detrital) and sustains on that supply, returning nutrient to the available pool rather than letting it lock in carcasses.",
     "status": "current \u2014 every WorldParameter is specified explicitly (example4 template, #304).",
-    "retune_310": "Producer dispersal raised 0.2->6.0 so living offspring scatter beyond the sessile decomposer reach; it feeds on local carcass-fall rather than predating co-located living neighbours. Restores detrital prominence after #310 removed the doomed-newborn carcass artifact."
+    "retune_310": "Producer dispersal raised 0.2->6.0 so living offspring scatter beyond the sessile decomposer reach; it feeds on local carcass-fall rather than predating co-located living neighbours. Restores detrital prominence after #310 removed the doomed-newborn carcass artifact. Retained under #313: the peak-relative death threshold now makes newborns viable at the root (no #310 gate), but the dispersal retune is an independent spatial design choice keeping the decomposer fed on carcass-fall, and example6's outcome is essentially unchanged by #313 (16 births / 39 deaths vs 17 / 40)."
   },
   "parameters": {
     "solar_flux_magnitude": 10.0,

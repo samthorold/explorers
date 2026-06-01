@@ -273,6 +273,9 @@ pub fn grow(
             let energy_spent = to_structure / efficiency;
             let dissipated = energy_spent - to_structure;
             agent.structure += to_structure;
+            // Growth is the only flow that increases structure: advance the
+            // peak high-water mark the death threshold is measured against.
+            agent.record_peak_structure();
             agent.reserve += growth_budget - energy_spent;
             // Bind the matched free nutrient into the new structure.
             agent.nutrient -= to_structure * ratio;
@@ -519,7 +522,7 @@ pub fn resolve_drains(
     // Check death thresholds on living agents that were drained
     for drain in &living_drains {
         let agent = &agents[drain.target_idx];
-        let threshold = crate::death_threshold(&agent.traits);
+        let threshold = crate::death_threshold(&agent.traits, agent.peak_structure);
         let dies = agent.reserve <= 0.0
             || (agent.structure > 0.0 && agent.structure < threshold)
             || agent.structure <= 0.0;
@@ -672,7 +675,7 @@ pub fn check_death_thresholds(
     let mut dissipated = 0.0_f32;
 
     for agent in agents.iter_mut() {
-        let threshold = crate::death_threshold(&agent.traits);
+        let threshold = crate::death_threshold(&agent.traits, agent.peak_structure);
         let dies = agent.reserve <= 0.0
             || (agent.structure > 0.0 && agent.structure < threshold);
 
@@ -922,17 +925,13 @@ pub fn resolve_reproduction(
         .iter()
         .enumerate()
         .filter(|(_, a)| {
-            // The energy gate is the larger of the flat floor and the
-            // investment the agent's offspring need to be born at or above their
-            // death threshold (#310). The flat floor governs specialists (whose
-            // viable investment is ~0); fragile generalists must bank more, so a
-            // birth clears the same structural floor a seeded agent does instead
-            // of dying the tick it is born.
-            let energy_gate = params
-                .reproduction_energy_threshold
-                .max(crate::minimum_viable_repro_investment(&a.traits, params));
+            // The energy gate is the flat reproduction floor. #310's extra
+            // "minimum viable investment" gate is gone: with the peak-relative
+            // death threshold (#313), offspring are born above their own
+            // threshold by construction (birth structure == peak structure), so
+            // there is no longer a doomed-on-arrival brood to gate against.
             !dead_ids.contains(&a.id)
-                && a.repro_reserve >= energy_gate
+                && a.repro_reserve >= params.reproduction_energy_threshold
                 && a.repro_nutrient >= params.reproduction_nutrient_threshold
         })
         .map(|(i, _)| i)
@@ -1091,6 +1090,9 @@ pub fn resolve_reproduction(
                 position: pos,
                 reserve: prov.reserve,
                 structure: prov.structure,
+                // Birth structure is the offspring's peak high-water mark, so it
+                // is born above its own peak-relative death threshold (#310).
+                peak_structure: prov.structure,
                 nutrient: prov.free_nutrient,
                 traits: child_traits,
                 contact_time: 0,
@@ -1371,6 +1373,9 @@ pub fn resolve_reproduction(
                 position: pos,
                 reserve: prov.reserve,
                 structure: prov.structure,
+                // Birth structure is the offspring's peak high-water mark, so it
+                // is born above its own peak-relative death threshold (#310).
+                peak_structure: prov.structure,
                 nutrient: prov.free_nutrient,
                 traits: child_traits,
                 contact_time: 0,
@@ -1465,18 +1470,7 @@ mod tests {
     }
 
     fn make_agent(id: u64, position: (f32, f32), reserve: f32, traits: TraitVector) -> Agent {
-        Agent {
-            id,
-            position,
-            reserve,
-            structure: 0.0,
-            nutrient: 0.0,
-            traits,
-            contact_time: 0,
-            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-            repro_reserve: 0.0,
-            repro_nutrient: 0.0,
-        }
+        Agent::new(id, position, reserve, 0.0, 0.0, traits)
     }
 
     // --- Photosynthesise ---
@@ -2376,57 +2370,13 @@ mod tests {
         }
     }
 
-    // #310: a generalist whose repro_reserve clears the flat energy floor but is
-    // below the investment its offspring need to be born above their death
-    // threshold must NOT reproduce — otherwise it spends the investment birthing
-    // offspring that die the same tick, pinning the population at 1.
-    #[test]
-    fn generalist_below_viable_gate_does_not_reproduce() {
-        use rand::SeedableRng;
-        let params = WorldParameters {
-            growth_efficiency: 0.3,
-            reproduction_efficiency: 0.7,
-            reproduction_energy_threshold: 5.0,
-            reproduction_nutrient_threshold: 1.0,
-            offspring_structure_fraction: 0.2,
-            ..test_params()
-        };
-        let generalist = TraitVector {
-            photosynthetic_absorption: 0.3,
-            heterotrophy: 0.3,
-            mobility: 0.3,
-            kappa: 0.5,
-            fecundity: 2.0,
-            asexual_propensity: 1.0,
-            dispersal: 0.1,
-        };
-        let viable_gate = crate::minimum_viable_repro_investment(&generalist, &params);
-        assert!(viable_gate > params.reproduction_energy_threshold,
-            "test precondition: viable gate ({}) must exceed the flat floor ({})",
-            viable_gate, params.reproduction_energy_threshold);
-
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, generalist)];
-        // Above the flat floor (5.0) but below the viable gate.
-        agents[0].repro_reserve = viable_gate * 0.5;
-        agents[0].repro_nutrient = 100.0;
-        agents[0].nutrient = 100.0;
-
-        let dead_ids = std::collections::HashSet::new();
-        let mut grid = SpatialGrid::new(100.0, 10.0);
-        grid.insert(0, (0.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
-
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
-
-        assert!(result.offspring.is_empty(),
-            "generalist below the viable gate should not reproduce, got {} offspring",
-            result.offspring.len());
-    }
-
-    // #310 end-to-end: the example6 decomposer (mobility variant) funded past its
-    // viability gate produces a brood that SURVIVES the same-tick death check —
-    // refuting "births=1, deaths=1, offspring dies the tick it is born". Wires
-    // resolve_reproduction -> check_death_thresholds exactly as World::step does.
+    // #310 end-to-end: the example6 decomposer (mobility variant) funded past the
+    // flat reproduction floor produces a brood that SURVIVES the same-tick death
+    // check — refuting "births=1, deaths=1, offspring dies the tick it is born".
+    // Wires resolve_reproduction -> check_death_thresholds exactly as
+    // World::step does. With the peak-relative death threshold (#313), offspring
+    // are born above their own threshold by construction (birth structure ==
+    // peak structure), so no extra investment gate is needed.
     #[test]
     fn example6_decomposer_offspring_survives_its_birth_tick() {
         use rand::SeedableRng;
@@ -2451,16 +2401,16 @@ mod tests {
             asexual_propensity: 1.0,
             dispersal: 0.1,
         };
-        let gate = crate::minimum_viable_repro_investment(&decomposer, &params);
-
         // Low fecundity means most reproduction draws are empty; iterate seeds to
         // find the first realised brood, then assert every newborn survives. Fund
-        // at 3x the gate so even an above-expected brood (up to 3) clears.
+        // generously past the flat floor so even an above-expected brood clears —
+        // the point under test is that newborns survive the death check, not the
+        // funding level.
         let mut produced = false;
         for seed in 0..200u64 {
             let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, decomposer)];
             agents[0].structure = 10.0; // an established, well-grown parent
-            agents[0].repro_reserve = gate * 3.0;
+            agents[0].repro_reserve = 100.0;
             agents[0].repro_nutrient = 100.0;
             agents[0].nutrient = 100.0;
 
@@ -2842,10 +2792,14 @@ mod tests {
             asexual_propensity: 0.1,
             dispersal: 0.1,
         };
-        let threshold = crate::death_threshold(&traits);
+        // The threshold is a fraction of *peak* structure: an agent that grew to
+        // a peak of 10.0 and was then worn below its peak-relative threshold dies.
+        let peak = 10.0;
+        let threshold = crate::death_threshold(&traits, peak);
         assert!(threshold > 0.0, "generalist should have nonzero threshold");
 
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
+        agents[0].peak_structure = peak;
         agents[0].structure = threshold * 0.5; // below threshold
 
         let (events, carcasses, _dissipated) = check_death_thresholds(&mut agents, &params);
@@ -3029,9 +2983,6 @@ mod tests {
             asexual_propensity: 0.1,
             dispersal: 0.1,
         };
-        let threshold = crate::death_threshold(&generalist_traits);
-        assert!(threshold > 0.0, "generalist should have nonzero threshold");
-
         let consumer_traits = TraitVector {
             heterotrophy: 5.0, // high demand to drain target
             ..zero_traits()
@@ -3040,7 +2991,13 @@ mod tests {
             make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
             make_agent(2, (1.0, 0.0), 10.0, generalist_traits),
         ];
-        // Give target structure just above threshold, so draining pushes below
+        // The target grew to a peak of 10.0; its peak-relative threshold is a
+        // fraction of that. Give it structure just above threshold, so draining
+        // pushes it below and it dies.
+        let peak = 10.0;
+        let threshold = crate::death_threshold(&generalist_traits, peak);
+        assert!(threshold > 0.0, "generalist should have nonzero threshold");
+        agents[1].peak_structure = peak;
         agents[1].structure = threshold * 1.5;
         agents[1].nutrient = 3.0;
         agents[0].repro_reserve = 15.0;
@@ -4773,6 +4730,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 50.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 100.0,
             traits,
             contact_time: 0,
@@ -5355,6 +5313,7 @@ mod tests {
                 position: (0.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
                 contact_time: 0,
@@ -5412,6 +5371,7 @@ mod tests {
                 position: (0.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
                 contact_time: 0,
@@ -5466,6 +5426,7 @@ mod tests {
                 position: (0.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
                 contact_time: 0,
@@ -5478,6 +5439,7 @@ mod tests {
                 position: (1.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
                 contact_time: 0,
@@ -5529,6 +5491,7 @@ mod tests {
                 position: (0.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
                 contact_time: 0,
@@ -5587,6 +5550,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 50.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 100.0,
             traits,
             contact_time: 0,
@@ -5654,6 +5618,7 @@ mod tests {
             position: pos,
             reserve: 50.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 100.0,
             traits,
             contact_time: 0,
@@ -5764,6 +5729,7 @@ mod tests {
                 position: (0.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
                 contact_time: 0,
@@ -5810,6 +5776,7 @@ mod tests {
                 position: (0.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
                 contact_time: 0,
@@ -5868,13 +5835,13 @@ mod tests {
         };
         let mut agents = vec![
             Agent {
-                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
+                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: 100.0, traits: traits_a, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
                 repro_nutrient: 20.0,
             },
             Agent {
-                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
+                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: 100.0, traits: traits_b, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
                 repro_nutrient: 20.0,
@@ -5934,6 +5901,7 @@ mod tests {
                 position: (0.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: initial_free,
                 traits,
                 contact_time: 0,
@@ -6002,13 +5970,13 @@ mod tests {
         let free_store = 50.0;
         let mut agents = vec![
             Agent {
-                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
+                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: free_store, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
                 repro_nutrient: earmark_a,
             },
             Agent {
-                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
+                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: free_store, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
                 repro_nutrient: earmark_b,
@@ -6068,6 +6036,7 @@ mod tests {
                     position: (0.0, 0.0),
                     reserve: 50.0,
                     structure: 5.0,
+                    peak_structure: 5.0,
                     nutrient: 100.0,
                     traits,
                     contact_time: 0,
@@ -6120,6 +6089,7 @@ mod tests {
                 position: (10.0, 10.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
                 contact_time: 0,
@@ -6184,13 +6154,13 @@ mod tests {
             };
             let mut agents = vec![
                 Agent {
-                    id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
+                    id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                     nutrient: 100.0, traits: traits_a, contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
                     repro_nutrient: 30.0,
                 },
                 Agent {
-                    id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
+                    id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                     nutrient: 100.0, traits: traits_b, contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
                     repro_nutrient: 30.0,
@@ -6263,13 +6233,13 @@ mod tests {
         let b_pos = (300.0, 0.0); // far apart; midpoint would be (150, 0)
         let mut agents = vec![
             Agent {
-                id: 1, position: a_pos, reserve: 50.0, structure: 5.0,
+                id: 1, position: a_pos, reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: 100.0, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
                 repro_nutrient: 30.0,
             },
             Agent {
-                id: 2, position: b_pos, reserve: 50.0, structure: 5.0,
+                id: 2, position: b_pos, reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: 100.0, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
                 repro_nutrient: 30.0,
@@ -6329,13 +6299,13 @@ mod tests {
         let shared = (20.0, 20.0);
         let mut agents = vec![
             Agent {
-                id: 1, position: shared, reserve: 50.0, structure: 5.0,
+                id: 1, position: shared, reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: 100.0, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
                 repro_nutrient: 30.0,
             },
             Agent {
-                id: 2, position: shared, reserve: 50.0, structure: 5.0,
+                id: 2, position: shared, reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: 100.0, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
                 repro_nutrient: 30.0,
@@ -6389,6 +6359,7 @@ mod tests {
                 position: (0.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
                 contact_time: 0,
@@ -6439,6 +6410,7 @@ mod tests {
                 position: (0.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
                 contact_time: 0,
@@ -7018,6 +6990,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 50.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 100.0,
             traits,
             contact_time: 0,
@@ -7087,6 +7060,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 50.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 100.0,
             traits,
             contact_time: 0,
@@ -7153,13 +7127,13 @@ mod tests {
         let invest_b = 140.0_f32;
         let mut agents = vec![
             Agent {
-                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
+                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: 100.0, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: invest_a,
                 repro_nutrient: 10.0,
             },
             Agent {
-                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0,
+                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: 100.0, traits, contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: invest_b,
                 repro_nutrient: 10.0,
@@ -7218,7 +7192,7 @@ mod tests {
                 ..zero_traits()
             };
             let mut agents = vec![Agent {
-                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0,
+                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
                 nutrient: 1000.0, traits, contact_time: 0,
                 // Funded above the #310 viability gate for fecundity up to 20.
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 600.0,
