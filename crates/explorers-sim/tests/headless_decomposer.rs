@@ -129,6 +129,45 @@ fn decomposer_sustains_itself_to_end_of_run() {
     }
 }
 
+/// Issue #309 — body as feeding reach. A sessile decomposer must not freeze
+/// beside carcasses it cannot touch: by growing structure (its mycelium through
+/// the substrate) it extends its consumption reach and drains carcass-fall that
+/// sits beyond its contact-only radius. The scenario sets a non-zero
+/// `body_reach_coefficient`, and the surviving decomposer should both carry
+/// real structure (it grew) and have driven a live detrital pathway — i.e. it
+/// reaches food rather than starving in place at population 1.
+#[test]
+fn decomposer_extends_feeding_reach_by_growing_structure() {
+    // The scenario must actually exercise body-as-reach.
+    let recipe = load();
+    assert!(
+        recipe.parameters.body_reach_coefficient > 0.0,
+        "example6 must enable body-as-feeding-reach (body_reach_coefficient > 0)"
+    );
+
+    for seed in SEEDS {
+        let (world, _topology) = run_seed(seed);
+        // A surviving heterotroph-dominant agent that has grown structure: it is
+        // not frozen at its birth size beside unreachable food.
+        let grown_decomposer = world.agents().iter().any(|a| {
+            a.traits.heterotrophy > a.traits.photosynthetic_absorption && a.structure > 0.0
+        });
+        assert!(
+            grown_decomposer,
+            "seed {seed}: a surviving decomposer must have grown structure (extending its \
+             feeding reach), not frozen beside unreachable carcass nutrient"
+        );
+        // And the detrital pathway must have carried real energy — the reach
+        // actually reached carcasses.
+        let (_predation, decomposition) = predation_vs_decomposition(seed);
+        assert!(
+            decomposition > 0.0,
+            "seed {seed}: the decomposer's extended reach must drain carcass energy \
+             (decomposition = {decomposition})"
+        );
+    }
+}
+
 /// Cumulative predation vs decomposition energy across the run, summed from the
 /// `Consumed` event stream (the same green/brown split `trophic_roles` reads).
 fn predation_vs_decomposition(seed: u64) -> (f32, f32) {

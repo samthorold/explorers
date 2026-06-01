@@ -357,6 +357,27 @@ pub struct DrainResult {
     pub new_carcasses: Vec<Carcass>,
 }
 
+/// Consumption (feeding) reach for a consumer with the given effective
+/// heterotrophy and structure. Feeding reach has two physical solutions, like
+/// reproductive reach: move the organism (the contact-range term) or extend the
+/// body through the substrate (the body-extent term — a mycelium foraging by
+/// growth). `sqrt(structure)` makes the body term sublinear (a disc's radius
+/// scales with the square root of its area), so reach grows with body size
+/// without running away. The whole reach is modulated by `eff_heterotrophy`, so
+/// the foraging body is the *heterotrophic* body: a large autotroph gains no
+/// carcass reach from its bulk, while a growing heterotroph (a mycelium) does.
+/// Both the living-target and carcass passes call this so they cannot drift
+/// apart (they diverged before — the #303/#293 index/id drain bug).
+pub(crate) fn consumption_reach(
+    eff_heterotrophy: f32,
+    structure: f32,
+    params: &WorldParameters,
+) -> f32 {
+    eff_heterotrophy
+        * (params.contact_range_coefficient
+            + params.body_reach_coefficient * structure.max(0.0).sqrt())
+}
+
 /// Resolve drains: coordinated pass 1. For each potential target (living agent
 /// or carcass), gather consumers within contact range, compute demand, apply
 /// proportional split when demand exceeds supply, transfer energy with trophic
@@ -375,12 +396,15 @@ pub fn resolve_drains(
     let mut dead_agents: Vec<u64> = Vec::new();
     let mut new_carcasses: Vec<Carcass> = Vec::new();
     let k = params.wear_degradation_steepness;
-    let contact_range_coeff = params.contact_range_coefficient;
     let extent = params.world_extent;
 
-    // Max query radius: largest consumer contact range across all agents
+    // Max query radius: largest consumer consumption reach across all agents.
+    // Reach now includes the structure-derived body-extent term, so the grid
+    // query must use the same `consumption_reach` helper as the per-consumer
+    // checks below — otherwise a large-bodied consumer's far reach would be
+    // truncated to the contact-range-only query radius.
     let max_contact_range = agents.iter()
-        .map(|a| a.effective_trait_with_steepness(1, k) * contact_range_coeff)
+        .map(|a| consumption_reach(a.effective_trait_with_steepness(1, k), a.structure, params))
         .fold(0.0_f32, f32::max);
 
     // --- Pass over living targets ---
@@ -423,7 +447,11 @@ pub fn resolve_drains(
                 if eff_heterotrophy <= 0.0 {
                     continue;
                 }
-                let consumer_contact_range = eff_heterotrophy * contact_range_coeff;
+                let consumer_contact_range = consumption_reach(
+                    eff_heterotrophy,
+                    agents[consumer_idx].structure,
+                    params,
+                );
                 if crate::toroidal_distance(
                     agents[consumer_idx].position,
                     target_pos,
@@ -568,7 +596,11 @@ pub fn resolve_drains(
                 if eff_heterotrophy <= 0.0 {
                     continue;
                 }
-                let consumer_contact_range = eff_heterotrophy * contact_range_coeff;
+                let consumer_contact_range = consumption_reach(
+                    eff_heterotrophy,
+                    agents[consumer_idx].structure,
+                    params,
+                );
                 if crate::toroidal_distance(
                     agents[consumer_idx].position,
                     carcass_pos,
@@ -1466,6 +1498,7 @@ mod tests {
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
+            body_reach_coefficient: 0.0,
             }
     }
 
@@ -7225,5 +7258,86 @@ mod tests {
             "totals should match: {total_low} vs {total_high}");
         assert!(per_high < per_low,
             "per-offspring structure should fall with fecundity (got {per_low} -> {per_high})");
+    }
+
+    #[test]
+    fn consumption_reach_grows_with_structure() {
+        let mut params = test_params();
+        params.contact_range_coefficient = 5.0;
+        params.body_reach_coefficient = 2.0;
+        let small = consumption_reach(1.0, 1.0, &params);
+        let large = consumption_reach(1.0, 100.0, &params);
+        assert!(
+            large > small,
+            "a larger body must reach farther ({small} -> {large})"
+        );
+    }
+
+    #[test]
+    fn consumption_reach_is_zero_for_non_heterotroph() {
+        let mut params = test_params();
+        params.contact_range_coefficient = 5.0;
+        params.body_reach_coefficient = 2.0;
+        // A non-heterotroph (eff_heterotrophy = 0) gains no foraging reach no
+        // matter how large its body: the foraging body is the heterotrophic body.
+        assert_eq!(consumption_reach(0.0, 100.0, &params), 0.0);
+    }
+
+    #[test]
+    fn consumption_reach_reduces_to_contact_range_with_no_body_term() {
+        let mut params = test_params();
+        params.contact_range_coefficient = 5.0;
+        params.body_reach_coefficient = 0.0;
+        // With the body term disabled, reach is the historical
+        // eff_heterotrophy * contact_range_coefficient — backward compatible.
+        assert_eq!(consumption_reach(1.0, 100.0, &params), 5.0);
+    }
+
+    #[test]
+    fn large_sessile_heterotroph_reaches_carcass_a_small_one_cannot() {
+        // Two sessile (mobility 0) heterotrophs identical except body size, each
+        // beside a carcass placed just beyond the contact-only reach. Only the
+        // large-bodied one — its mycelium grown through the substrate — should
+        // touch and drain its carcass.
+        let mut params = test_params();
+        params.contact_range_coefficient = 5.0;
+        params.body_reach_coefficient = 2.0;
+        params.consumption_contact_half_saturation = 0.0; // no contact-time ramp
+
+        let het = TraitVector {
+            heterotrophy: 1.0,
+            ..zero_traits()
+        };
+        // contact-only reach = 1.0 * 5.0 = 5.0; carcass sits at distance 8.0.
+        // small body (structure 1) reach = 5 + 2*sqrt(1) = 7.0 < 8.0 (no touch)
+        // large body (structure 9) reach = 5 + 2*sqrt(9) = 11.0 > 8.0 (touch)
+        let mut small = make_agent(0, (0.0, 0.0), 10.0, het);
+        small.structure = 1.0;
+        let mut large = make_agent(1, (50.0, 0.0), 10.0, het);
+        large.structure = 9.0;
+        let mut agents = vec![small, large];
+
+        let mut carcasses = vec![
+            Carcass { id: 100, position: (8.0, 0.0), energy: 20.0, nutrient: 0.0, traits: zero_traits() },
+            Carcass { id: 101, position: (58.0, 0.0), energy: 20.0, nutrient: 0.0, traits: zero_traits() },
+        ];
+
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (50.0, 0.0));
+
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        resolve_drains(&mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid);
+
+        assert!(
+            (carcasses[0].energy - 20.0).abs() < 1e-3,
+            "small-bodied heterotroph must NOT reach its carcass at distance 8 (energy {})",
+            carcasses[0].energy
+        );
+        assert!(
+            carcasses[1].energy < 20.0,
+            "large-bodied heterotroph must reach its carcass at distance 8 by body extent (energy {})",
+            carcasses[1].energy
+        );
     }
 }

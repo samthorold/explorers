@@ -508,6 +508,7 @@ fn default_recipe() -> WorldRecipe {
             dispersal_propagule_cost_coefficient: 0.0,
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
+            body_reach_coefficient: 0.0,
         },
         initial_distribution: Some(InitialDistribution {
             mean_traits: TraitVector {
