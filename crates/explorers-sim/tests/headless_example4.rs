@@ -1,10 +1,10 @@
-//! Headless run of scenarios/example4_consumer_tuning.json to diagnose why no
+//! Headless run of scenarios/example4.json to diagnose why no
 //! reproduction is observed. Run with:
 //!   cargo test -p explorers-sim --test headless_example4 -- --nocapture
 
 use explorers_sim::{Agent, World, WorldRecipe};
 
-const SCENARIO: &str = "/Users/sam/Projects/explorers/scenarios/example4_consumer_tuning.json";
+const SCENARIO: &str = "/Users/sam/Projects/explorers/scenarios/example4.json";
 
 fn is_producer(a: &Agent) -> bool {
     a.traits.photosynthetic_absorption >= a.traits.heterotrophy

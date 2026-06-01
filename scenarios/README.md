@@ -21,7 +21,7 @@ in `explorers-app`, or `serde_json::from_str` in tests.
 Open one in the GUI:
 
 ```
-cargo run -p explorers-app -- --scenario scenarios/example4_consumer_tuning.json
+cargo run -p explorers-app -- --scenario scenarios/example4.json
 ```
 
 Or run it **headless** (no window) and emit per-tick telemetry as JSON-lines to
@@ -33,7 +33,7 @@ grepping or plotting (#279). Pass `--seed N` for a reproducible run; the chosen
 seed is logged to stderr either way:
 
 ```
-cargo run -p explorers-app -- --scenario scenarios/example4_consumer_tuning.json --trace --seed 1
+cargo run -p explorers-app -- --scenario scenarios/example4.json --trace --seed 1
 ```
 
 `--trace` is per-tick and fine-grained (for debugging *why* a run behaves as it does).
@@ -85,7 +85,7 @@ issue, surfaced by the example lens).
 ## Current status (seed 1)
 
 > **The legacy suite is stale and trophically incomplete** — `status: stale-params` on most of
-> the older files. `example4_consumer_tuning.json` reproduces (36 births), and
+> the older files. `example4.json` reproduces (36 births), and
 > `example6_decomposer_viability.json` (#303) is the first scenario to seed a working decomposer:
 > it reads behaviourally as a `Decomposer` and sustains on a self-thinning producer stand's
 > carcasses through 2000 ticks. Per-scenario verdicts in [`verdicts.md`](verdicts.md); raw numbers
@@ -99,7 +99,7 @@ kappa-split machinery, those defaults moved *under* the old files, so **the reco
 `parameters` block is no longer the world that runs.** The sharpest case:
 `growth_efficiency` defaults to **0.0** when unset — agents build *zero* structure, so
 carcasses carry no biomass energy and the decomposer pathway has nothing to eat.
-`example1/2/3` all omit it. The fix pattern is `example4_consumer_tuning.json`:
+`example1/2/3` all omit it. The fix pattern is `example4.json`:
 **specify every parameter**. Unifying one canonical parameter/form model across genesis, scenarios, and
 viability is tracked in **#295**; promoting committed functional forms into system
 design is **#294**.
@@ -120,7 +120,7 @@ which survive only on serde aliases.
 
 ## Adding or repairing a scenario
 
-1. **Specify every `WorldParameter`** (copy `example4_consumer_tuning.json`) so the file
+1. **Specify every `WorldParameter`** (copy `example4.json`) so the file
    fully determines its world.
 2. **Fill in the `metadata` declarations** — `intent`, `probes`, `prediction`, `rationale`.
 3. **Regenerate `observed.json`** (`eval_scenarios`, above) — never hand-type the outcome.

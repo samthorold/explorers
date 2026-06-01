@@ -17,8 +17,7 @@ that had stopped any decomposer from ever consuming a carcass).
 | example1 | inconclusive | n/a | stale params — `max_ticks=0`, never steps |
 | example2 | not-sensible | agree (predicted live → dead) | stale params (`growth_efficiency` unset → 0.0) |
 | example3 | inconclusive | n/a (undecided) | stale params (`growth_efficiency`=0, `asexual_propensity`=0) |
-| example4 | not-sensible | disagree | stale params + no turnover (0 births) |
-| example4_consumer_tuning | partially-sensible | partial | incomplete roster (no decomposer), low turnover |
+| example4 | partially-sensible | partial | incomplete roster (no decomposer), low turnover |
 | example5 | not-sensible | disagree | roster/probe mismatch, then stale params |
 | example6_decomposer_viability | partially-sensible | agree (predicted live → lives) | detrital pathway works, but a single-cohort carcass pulse — no sustained multi-cluster ecology |
 | example7 | not-sensible | n/a (undecided) | roster mismatch (no decomposer), then stale params |
@@ -36,19 +35,16 @@ that had stopped any decomposer from ever consuming a carcass).
 - **example3** — Inconclusive (prediction `undecided`). Extinction is foregone: `growth_efficiency=0`
   *and* `asexual_propensity=0` (the latter precludes the lone-founder reproduction an isolation
   scenario needs). The drift/isolation question is untested.
-- **example4** — Not-sensible; disagrees with "live". 0 births = no demographic turnover, so it
-  fails that criterion outright. Partial params + retired vocabulary (the recorded params aren't the
-  world that runs) drive a slow decline to a final pop of 4. The corrected detector no longer labels
-  this `energy_death` (its living-energy stock does not collapse irreversibly into carcasses); the
-  failure is the absence of turnover, not free-energy death.
-- **example4_consumer_tuning** — Partially-sensible, and the most diagnostic row. The one
-  fully-specified file, and the only one with real turnover (**36 births, 51 deaths**, final pop 7,
-  fitness 0.68). Under the corrected detector it reads `failure=none`: its free-energy stock is
-  sustained by an actively reproducing living system, so the previous `energy_death` label is
-  confirmed to have been a detector artifact (the old Consumed-only series read all-zero once
-  predation tapered in the tail). It is still not a *complete* sensible world — final pop 7, no
-  decomposer role, low coexistence — but it is the closest the suite has to a live ecology, and the
-  detector now treats it as such.
+- **example4** — Partially-sensible, and the most diagnostic row. The fully-specified file
+  (20 producers + 2 consumers, heterogeneous traits), and the only one with real turnover
+  (**36 births, 51 deaths**, final pop 7, fitness 0.68). Under the corrected detector it reads
+  `failure=none`: its free-energy stock is sustained by an actively reproducing living system, so the
+  previous `energy_death` label is confirmed to have been a detector artifact (the old Consumed-only
+  series read all-zero once predation tapered in the tail). It is still not a *complete* sensible
+  world — final pop 7, no decomposer role, low coexistence — but it is the closest the suite has to a
+  live ecology, and the detector now treats it as such. (This file is the former
+  `example4_consumer_tuning`, promoted to the canonical `example4` slot; the legacy degenerate
+  example4 — triple-zeroed mate-limited producers, 0 births — has been retired.)
 - **example5** — Not-sensible; disagrees with "live". Roster/probe mismatch ranks first: it declares
   `probes=population_explosion` yet seeds only 2 consumers on stale params and collapses toward
   a final pop of 3 — the opposite regime — so it can't exercise the negative feedbacks it claims.
@@ -98,12 +94,12 @@ detector now measures what `expected-properties.md` actually defines as energy d
 (non-carcass-locked) energy stock** — agent reserve + structure summed across the living population,
 sampled each tick — *trending irreversibly toward zero*. It flags energy death only when that stock
 collapses to a small fraction of its earlier peak and does not recover. None of the eight scenarios
-trips it now: example4_consumer_tuning sustains its living stock through active reproduction, and the
+trips it now: example4 sustains its living stock through active reproduction, and the
 others decline slowly without the irreversible carcass-locked collapse the property describes. The
-false `energy_death` is gone, most importantly on example4_consumer_tuning — the closest thing to a
+false `energy_death` is gone, most importantly on example4 — the closest thing to a
 live world in the suite.
 
 With the detector corrected, cross-lens *agreement* improves; for the suite to *certify* sensible
 worlds it still needs the README's repairs — migrate every file to fully-specified params (the
-example4_consumer_tuning template, #295) and seed a real decomposer roster (#136) so the detrital,
+example4 template, #295) and seed a real decomposer roster (#136) so the detrital,
 trophic-structure, and coexistence criteria can be exercised at all.
