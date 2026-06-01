@@ -7,10 +7,13 @@ the validation triad (#293): the [observed evidence](observed.json) (computed by
 [`expected-properties.md`](../docs/system-design/expected-properties.md). It is a
 *reading*, not a pass/fail test — precise numbers are evidence for the read, not the
 gate. Regenerate by re-running `eval_scenarios` and re-judging (a human or a
-fresh-perspective agent); the verdict below was re-judged by an agent on 2026-05-31
-(after #302 replaced the energy-death detector with a free-energy-stock-trend test, and
-after #303 added `example6_decomposer_viability` and fixed the drain-phase index/id bug
-that had stopped any decomposer from ever consuming a carcass).
+fresh-perspective agent); the verdict below was re-judged by an agent on 2026-06-01
+(after #302 replaced the energy-death detector with a free-energy-stock-trend test, after
+#303 added `example6_decomposer_viability` and fixed the drain-phase index/id bug that had
+stopped any decomposer from ever consuming a carcass, and after #313 made the structural
+death threshold *peak-relative* — a fraction of each agent's own peak structure — so
+newborns and seeds are born viable by construction rather than dead-on-arrival below an
+absolute floor).
 
 | scenario | verdict | agrees with prediction? | primary fault |
 |---|---|---|---|
@@ -37,11 +40,16 @@ that had stopped any decomposer from ever consuming a carcass).
   scenario needs). The drift/isolation question is untested.
 - **example4** — Partially-sensible, and the most diagnostic row. The fully-specified file
   (20 producers + 2 consumers, heterogeneous traits), and the only one with real turnover
-  (**36 births, 51 deaths**, final pop 7, fitness 0.68). Under the corrected detector it reads
+  (**34 births, 45 deaths**, final pop 11, fitness 0.50). Under the corrected detector it reads
   `failure=none`: its free-energy stock is sustained by an actively reproducing living system, so the
   previous `energy_death` label is confirmed to have been a detector artifact (the old Consumed-only
-  series read all-zero once predation tapered in the tail). It is still not a *complete* sensible
-  world — final pop 7, no decomposer role, low coexistence — but it is the closest the suite has to a
+  series read all-zero once predation tapered in the tail). #313's peak-relative death threshold lifts
+  its final population (7 → 11) and cuts deaths (51 → 45) — newborns that the absolute floor used to
+  kill on arrival now survive — which is the expected ecological direction of the root fix. The
+  coexistence and oscillation scores fall in step (coexistence 0.995 → 0.337, oscillation 0.33 → 0.12):
+  with more survivors the system settles toward a steadier, less boom-bust trajectory rather than the
+  sharper predator-prey cycle the old over-mortality produced. It is still not a *complete* sensible
+  world — no decomposer role, lower coexistence — but it remains the closest the suite has to a
   live ecology, and the detector now treats it as such. (This file is the former
   `example4_consumer_tuning`, promoted to the canonical `example4` slot; the legacy degenerate
   example4 — triple-zeroed mate-limited producers, 0 births — has been retired.)
@@ -54,8 +62,8 @@ that had stopped any decomposer from ever consuming a carcass).
   light competition into a carcass field, and a sessile, low-reach, heterotrophy-dominant decomposer
   embedded in it feeds on those carcasses: it reads behaviourally as a `Decomposer` for 1991 of 2000
   ticks (the headless `--trace` brown/green split), majority of its consumed energy is detrital
-  (~62% across the run), and it never starves out — it survives to `max_ticks` (17 births / 40 deaths,
-  `failure=none`). This is what #303 set out to prove possible and what #136 only claimed. Building it
+  (~62% across the run), and it never starves out — it survives to `max_ticks` (16 births / 39 deaths
+  under #313's peak-relative threshold, `failure=none`). This is what #303 set out to prove possible and what #136 only claimed. Building it
   surfaced a latent bug: the drain phase keyed the spatial grid by slice index but looked consumers up
   by agent id, so once any death reindexed the living slice — i.e. exactly when carcasses first exist —
   the carcass pass found zero consumers and carcasses accumulated unconsumed forever. With that fixed,

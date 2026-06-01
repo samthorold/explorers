@@ -1846,6 +1846,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 0.0,
             structure: 0.0,
+            peak_structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: autotrophy,
@@ -1963,6 +1964,7 @@ mod tests {
             position,
             reserve: 50.0,
             structure: 0.0,
+            peak_structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 1.0,

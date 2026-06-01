@@ -447,6 +447,16 @@ pub struct Agent {
     pub position: (f32, f32),
     pub reserve: f32,
     pub structure: f32,
+    /// Developmental high-water mark: `max(structure ever held)`. The death
+    /// threshold is a *fraction of peak structure* (world-rules #9), so this is
+    /// the body the agent measures its own structural loss against. It is
+    /// physiological state — DEB's maximum structural length — not analysis or
+    /// classification state (ADR-0001): the stepper legitimately owns it.
+    /// Invariant: `peak_structure >= structure`, maintained at birth/seeding
+    /// (= initial structure) and after the growth flow (the only place structure
+    /// increases). Structure only ever decreases via grazing/metabolism, so no
+    /// peak update is needed there.
+    pub peak_structure: f32,
     pub nutrient: f32,
     pub traits: TraitVector,
     pub contact_time: u64,
@@ -466,6 +476,42 @@ pub struct Agent {
 pub const FUNCTIONAL_TRAIT_INDICES: [usize; FUNCTIONAL_TRAIT_COUNT] = [0, 1, 2];
 
 impl Agent {
+    /// Construct an agent at birth/seeding, establishing the peak-structure
+    /// high-water mark at the initial structure so the agent is born above its
+    /// own (peak-relative) death threshold. wear starts at zero and the
+    /// reproductive earmarks start empty — the universal birth state.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: u64,
+        position: (f32, f32),
+        reserve: f32,
+        structure: f32,
+        nutrient: f32,
+        traits: TraitVector,
+    ) -> Self {
+        Agent {
+            id,
+            position,
+            reserve,
+            structure,
+            peak_structure: structure,
+            nutrient,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
+            repro_nutrient: 0.0,
+        }
+    }
+
+    /// Record the agent's structure into its peak high-water mark. Call after
+    /// any flow that *increases* structure (growth). Cheap and idempotent.
+    pub fn record_peak_structure(&mut self) {
+        if self.structure > self.peak_structure {
+            self.peak_structure = self.structure;
+        }
+    }
+
     /// Total energy held by this agent (reserve + structure + repro_reserve).
     pub fn energy(&self) -> f32 {
         self.reserve + self.structure + self.repro_reserve
@@ -538,18 +584,22 @@ pub struct Carcass {
 }
 
 
-/// Complexity-dependent death threshold.
+/// Complexity-dependent structural fragility — the *fraction of peak structure*
+/// below which structural damage is fatal (world-rules #9, energy-flow.md:103).
 ///
-/// Returns the structure level below which an agent dies. Derived from
-/// the normalised entropy of the L1-normalised trait vector:
-/// - Specialist (budget concentrated in few traits) → low threshold
-/// - Generalist (budget spread across many traits) → high threshold
+/// Returns the normalised entropy of the L1-normalised trait vector, in [0, 1):
+/// - Specialist (budget concentrated in few traits) → ~0 (robust: a moss at
+///   half its mass is still a functioning moss)
+/// - Generalist (budget spread across many traits) → ~1 (fragile: complex,
+///   interdependent systems cannot sustain partial loss)
 ///
-/// The threshold is `normalised_entropy * max_threshold` where
-/// max_threshold is the trait budget (L1 sum). This means a perfectly
-/// uniform generalist's threshold approaches its total trait budget,
-/// while a pure specialist's threshold approaches zero.
-pub fn death_threshold(traits: &TraitVector) -> f32 {
+/// This is the *shape* of the trait vector only — it is size-independent. The
+/// absolute death threshold is this fragility scaled by the agent's own
+/// peak-structure high-water mark (see `death_threshold`): death-by-structural-
+/// loss is catabolising your own body past a survivable *fraction* of what you
+/// built, not falling below an absolute floor a newborn never had a chance to
+/// clear.
+pub fn structural_fragility(traits: &TraitVector) -> f32 {
     let mut values = [0.0_f32; TraitVector::NUM_DIMS];
     let mut sum = 0.0_f32;
     for dim in 0..TraitVector::NUM_DIMS {
@@ -570,54 +620,18 @@ pub fn death_threshold(traits: &TraitVector) -> f32 {
             entropy -= p * p.ln();
         }
     }
-    let normalised_entropy = entropy / ln_n;
-    // Scale by the trait budget so the threshold is in energy units
-    normalised_entropy * sum
+    entropy / ln_n
 }
 
-/// Minimum reproductive-energy earmark (`repro_reserve`) an agent must hold for
-/// its offspring to be born at or above their own death threshold — so a birth
-/// clears the same structural floor a seeded agent does, rather than being
-/// killed by `check_death_thresholds` the tick it is born.
+/// Complexity- and size-dependent death threshold: the structure level below
+/// which an agent dies, relative to the body it actually built.
 ///
-/// Inverts the birth-provisioning pipeline for the realised brood: the
-/// committed investment passes through `reproduction_efficiency`, loses the
-/// dispersal propagule share, is divided across the provisioned-for offspring
-/// count, and the structure share is converted via `growth_efficiency`. We solve
-/// for the investment at which the per-offspring structure equals the parent's
-/// `death_threshold` (the offspring's threshold, since offspring are the parent
-/// plus mutation).
-///
-/// The provisioned-for brood is `max(fecundity, 1.0)`: it banks for the full
-/// expected brood when fecundity exceeds one, but never for less than a single
-/// whole offspring — a realised brood, when positive, is always at least one
-/// offspring, so banking for the fractional Poisson mean would still birth a
-/// doomed singleton (the low-fecundity decomposer's failure mode in #310).
-///
-/// Returns 0 (no gating beyond the flat floor) for a pure specialist (zero
-/// threshold), and also when no positive structure can be built
-/// (`growth_efficiency == 0`, `offspring_structure_fraction == 0`, or a propagule
-/// fraction of 1): such offspring are born at structure 0, which the death check
-/// does not kill (it guards on `structure > 0`), so there is no viability gate to
-/// enforce.
-pub fn minimum_viable_repro_investment(
-    traits: &TraitVector,
-    params: &WorldParameters,
-) -> f32 {
-    let threshold = death_threshold(traits);
-    if threshold <= 0.0 {
-        return 0.0;
-    }
-    let propagule = dispersal_propagule_cost_fraction(traits.dispersal, params);
-    let conversion = params.reproduction_efficiency
-        * (1.0 - propagule)
-        * params.offspring_structure_fraction.clamp(0.0, 1.0)
-        * params.growth_efficiency;
-    if conversion <= 0.0 {
-        return 0.0;
-    }
-    let provisioned_for = traits.fecundity.max(1.0);
-    threshold * provisioned_for / conversion
+/// `threshold = structural_fragility(traits) × peak_structure` — a *fraction of
+/// peak structure* (world-rules #9). A newborn or seed has
+/// `peak_structure == birth structure` and `fragility < 1`, so it is born above
+/// its own threshold regardless of size: small is not the same as dying.
+pub fn death_threshold(traits: &TraitVector, peak_structure: f32) -> f32 {
+    structural_fragility(traits) * peak_structure
 }
 
 /// Stoichiometric nutrient demand: structure × trait-derived ratio.
@@ -718,6 +732,9 @@ impl World {
                     position: (x, y),
                     reserve: seed_reserve,
                     structure: seed_structure,
+                    // Seed structure is the high-water mark: a fresh seed is
+                    // born above its own peak-relative death threshold (#312).
+                    peak_structure: seed_structure,
                     nutrient: 0.0,
                     traits: TraitVector {
                         photosynthetic_absorption: centroid.photosynthetic_absorption
@@ -786,6 +803,7 @@ impl World {
                         position: spec.position,
                         reserve,
                         structure,
+                        peak_structure: structure,
                         nutrient: spec.nutrient,
                         traits: spec.traits,
                         contact_time: 0,
@@ -1427,7 +1445,7 @@ mod tests {
     #[test]
     fn agent_and_carcass_have_nutrient_field() {
         let agent = Agent {
-            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0,
+            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, peak_structure: 0.0,
             nutrient: 5.0, traits: zero_traits(), contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -1493,7 +1511,7 @@ mod tests {
     #[test]
     fn agent_carries_repro_nutrient_earmark() {
         let agent = Agent {
-            id: 0, position: (0.0, 0.0), reserve: 0.0, structure: 0.0,
+            id: 0, position: (0.0, 0.0), reserve: 0.0, structure: 0.0, peak_structure: 0.0,
             nutrient: 5.0, traits: zero_traits(), contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 0.0,
             repro_nutrient: 7.0,
@@ -1508,7 +1526,7 @@ mod tests {
         // (structure * demand). The bound portion is matter locked into the body.
         let params = conservation_params();
         let agent = Agent {
-            id: 0, position: (0.0, 0.0), reserve: 0.0, structure: 4.0,
+            id: 0, position: (0.0, 0.0), reserve: 0.0, structure: 4.0, peak_structure: 4.0,
             nutrient: 5.0, traits: zero_traits(), contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 0.0,
             repro_nutrient: 7.0,
@@ -1577,7 +1595,13 @@ mod tests {
     }
 
     #[test]
-    fn death_threshold_higher_for_generalists() {
+    fn structural_fragility_is_size_independent_and_ordered() {
+        // structural_fragility is the normalised entropy of the trait vector,
+        // in [0, 1): a pure specialist concentrates its budget and is robust
+        // (fragility ~0); a uniform generalist spreads it and is fragile
+        // (fragility -> 1). It is size-independent — it depends only on the
+        // *shape* of the trait vector, never on the agent's structure — because
+        // it is the fraction of *peak structure* below which damage is fatal.
         let specialist = TraitVector {
             photosynthetic_absorption: 1.0,
             ..zero_traits()
@@ -1591,104 +1615,100 @@ mod tests {
             asexual_propensity: 0.1,
             dispersal: 0.1,
         };
-        let spec_threshold = death_threshold(&specialist);
-        let gen_threshold = death_threshold(&generalist);
-        assert!(gen_threshold > spec_threshold,
-            "generalist threshold ({}) should exceed specialist ({})",
-            gen_threshold, spec_threshold);
-    }
-
-    #[test]
-    fn minimum_viable_repro_investment_provisions_offspring_at_death_threshold() {
-        // An agent investing exactly the minimum-viable amount should produce an
-        // offspring (in the expected-brood case) whose birth structure lands
-        // right at its death threshold — the floor below which a newborn would
-        // be killed at birth. This ties the reproduction gate to the structural
-        // floor a newborn must clear, so generalists no longer birth doomed
-        // offspring.
-        let params = WorldParameters {
-            growth_efficiency: 0.3,
-            ..test_params()
-        };
-        let generalist = TraitVector {
-            photosynthetic_absorption: 0.3,
-            heterotrophy: 0.3,
-            mobility: 0.3,
-            kappa: 0.5,
-            fecundity: 2.0,
-            asexual_propensity: 0.3,
-            dispersal: 0.1,
-        };
-        let investment = minimum_viable_repro_investment(&generalist, &params);
-
-        // Walk the same provisioning pipeline resolve_reproduction uses, for the
-        // expected offspring count. fecundity 2.0 exceeds the one-offspring floor,
-        // so the provisioned-for brood is exactly the fecundity.
-        let post_efficiency = investment * params.reproduction_efficiency;
-        let propagule = dispersal_propagule_cost_fraction(generalist.dispersal, &params);
-        let offspring_total = post_efficiency * (1.0 - propagule);
-        let expected_count = generalist.fecundity;
-        let energy_per_offspring = offspring_total / expected_count;
-        let structure_energy_share =
-            energy_per_offspring * params.offspring_structure_fraction;
-        // Ample nutrient so birth structure is energy-limited, not nutrient-limited.
-        let prov = provision_offspring(
-            &generalist,
-            structure_energy_share,
-            energy_per_offspring,
-            1e6,
-            &params,
-        );
-
-        let threshold = death_threshold(&generalist);
+        let spec = structural_fragility(&specialist);
+        let gen_f = structural_fragility(&generalist);
+        assert!(spec >= 0.0 && spec < 1.0, "specialist fragility {spec} out of [0,1)");
+        assert!(gen_f >= 0.0 && gen_f < 1.0, "generalist fragility {gen_f} out of [0,1)");
         assert!(
-            (prov.structure - threshold).abs() < 1e-3,
-            "offspring structure ({}) should land at the death threshold ({})",
-            prov.structure,
-            threshold
+            gen_f > spec,
+            "generalist fragility ({gen_f}) should exceed specialist ({spec})"
         );
-    }
 
-    #[test]
-    fn low_fecundity_generalist_single_birth_clears_threshold() {
-        // #310 core: fecundity < 1 means the realised brood, when positive, is
-        // still at least one whole offspring. The gate must bank enough for one
-        // offspring to clear its death threshold — not for the fractional
-        // Poisson-mean brood, which would bank a fifth of what a single realised
-        // birth needs and so still produce a doomed singleton (the decomposer's
-        // exact failure mode in example6).
-        let params = WorldParameters {
-            growth_efficiency: 0.3,
-            reproduction_efficiency: 0.7,
-            offspring_structure_fraction: 0.2,
-            ..test_params()
-        };
-        // The example6 decomposer (mobility variant): a generalist with low
-        // fecundity.
-        let decomposer = TraitVector {
-            photosynthetic_absorption: 0.45,
-            heterotrophy: 0.5,
+        // Scaling the trait budget up or down must not change fragility — only
+        // the shape matters.
+        let bigger = TraitVector {
+            photosynthetic_absorption: 0.2,
+            heterotrophy: 0.2,
             mobility: 0.2,
-            kappa: 0.5,
+            kappa: 0.2,
             fecundity: 0.2,
-            asexual_propensity: 0.3,
-            dispersal: 0.1,
+            asexual_propensity: 0.2,
+            dispersal: 0.2,
         };
-        let gate = minimum_viable_repro_investment(&decomposer, &params);
-
-        // A single realised offspring provisioned from exactly the gate.
-        let post = gate * params.reproduction_efficiency;
-        let propagule = dispersal_propagule_cost_fraction(decomposer.dispersal, &params);
-        let energy_per_offspring = post * (1.0 - propagule); // realised count = 1
-        let share = energy_per_offspring * params.offspring_structure_fraction;
-        let prov = provision_offspring(&decomposer, share, energy_per_offspring, 1e6, &params);
-
-        let threshold = death_threshold(&decomposer);
         assert!(
-            prov.structure >= threshold - 1e-3,
-            "a single realised offspring ({}) must clear its death threshold ({})",
-            prov.structure,
-            threshold
+            (structural_fragility(&bigger) - gen_f).abs() < 1e-6,
+            "fragility must be size-independent"
+        );
+    }
+
+    #[test]
+    fn newborns_and_seeds_are_born_viable_across_the_trait_range() {
+        // Root fix for the "born below the death threshold, dead on arrival"
+        // class of bugs (#310, #312): with the peak-relative threshold, an agent
+        // whose peak structure equals its birth structure is always above its own
+        // threshold, because fragility < 1. This must hold for *any* trait shape
+        // and *any* birth size — even a tiny seed and the most uniform generalist.
+        let shapes = [
+            // pure specialist
+            TraitVector { photosynthetic_absorption: 1.0, ..zero_traits() },
+            // uniform generalist (maximal fragility)
+            TraitVector {
+                photosynthetic_absorption: 0.2,
+                heterotrophy: 0.2,
+                mobility: 0.2,
+                kappa: 0.2,
+                fecundity: 0.2,
+                asexual_propensity: 0.2,
+                dispersal: 0.2,
+            },
+            // fragile decomposer (example6)
+            TraitVector {
+                photosynthetic_absorption: 0.45,
+                heterotrophy: 0.5,
+                mobility: 0.2,
+                kappa: 0.5,
+                fecundity: 0.2,
+                asexual_propensity: 0.3,
+                dispersal: 0.1,
+            },
+        ];
+        for traits in shapes {
+            for birth_structure in [1e-4_f32, 0.01, 0.5, 5.0, 50.0] {
+                let threshold = death_threshold(&traits, birth_structure);
+                assert!(
+                    threshold < birth_structure,
+                    "newborn (structure {birth_structure}, fragility {}) must be \
+                     born above its own threshold ({threshold})",
+                    structural_fragility(&traits)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generalist_dies_at_a_larger_fraction_of_peak_than_specialist() {
+        // World-rules #9 preserved as a *relative* loss property: a complex,
+        // interdependent generalist cannot sustain partial loss, so it dies having
+        // lost a *smaller fraction of its peak* — i.e. its death threshold is a
+        // *larger fraction* of peak structure than a specialist's. The threshold
+        // is now relative to the body actually built, not an absolute floor.
+        let specialist = TraitVector { photosynthetic_absorption: 1.0, ..zero_traits() };
+        let generalist = TraitVector {
+            photosynthetic_absorption: 0.2,
+            heterotrophy: 0.2,
+            mobility: 0.2,
+            kappa: 0.2,
+            fecundity: 0.2,
+            asexual_propensity: 0.2,
+            dispersal: 0.2,
+        };
+        let peak = 10.0;
+        let spec_fraction = death_threshold(&specialist, peak) / peak;
+        let gen_fraction = death_threshold(&generalist, peak) / peak;
+        assert!(
+            gen_fraction > spec_fraction,
+            "generalist must die at a larger fraction of peak ({gen_fraction}) \
+             than specialist ({spec_fraction})"
         );
     }
 
@@ -1723,6 +1743,7 @@ mod tests {
                 position: (i as f32 * 5.0 - 25.0, 0.0),
                 reserve: 50.0,
                 structure: 0.0,
+                peak_structure: 0.0,
                 nutrient: 5.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 0.8,
@@ -1786,6 +1807,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 50.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.8,
@@ -1846,6 +1868,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 50.0,
             structure: 0.0,
+            peak_structure: 0.0,
             nutrient: 0.0,
             traits: TraitVector {
                 heterotrophy: 0.6,
@@ -1862,6 +1885,7 @@ mod tests {
             position: (1.0, 0.0), // within contact_radius=10
             reserve: 50.0,
             structure: 20.0,
+            peak_structure: 20.0,
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.5,
@@ -1916,6 +1940,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 50.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mobility: 0.5,
@@ -1971,6 +1996,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 50.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 0.0,
             traits: TraitVector {
                 mobility: 0.5,
@@ -2016,7 +2042,7 @@ mod tests {
     #[test]
     fn effective_trait_degrades_with_wear() {
         let mut agent = Agent {
-            id: 1, position: (0.0, 0.0), reserve: 10.0, structure: 0.0,
+            id: 1, position: (0.0, 0.0), reserve: 10.0, structure: 0.0, peak_structure: 0.0,
             nutrient: 0.0, traits: TraitVector {
                 photosynthetic_absorption: 1.0,
                 ..zero_traits()
@@ -2127,6 +2153,76 @@ mod tests {
         assert_eq!(world.agents().len(), 1);
     }
 
+    #[test]
+    fn high_entropy_generalist_seed_survives_tick_zero() {
+        // #312 regression (folded into #313): a small, high-entropy generalist
+        // seed used to be born below the *absolute* structural death threshold and
+        // die on arrival — `structure_at_birth < normalised_entropy × trait_budget`.
+        // With the peak-relative threshold, its peak structure is its birth
+        // structure and fragility < 1, so it is born viable and survives the death
+        // check on the very first tick. No seed gate is needed.
+        let params = WorldParameters {
+            // Tiny base metabolism keeps a retention buffer (so reserve stays
+            // positive); the trait-maintenance superlinear drains are zeroed so the
+            // *only* death path under test is the structural threshold — not
+            // starvation. The point is structural viability at birth.
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.001,
+            somatic_maintenance_cost_coefficient: 0.0,
+            structure_maintenance_coefficient: 0.0,
+            photo_maintenance_cost: 0.0,
+            heterotrophy_maintenance_cost: 0.0,
+            mobility_maintenance_cost: 0.0,
+            asexual_propensity_maintenance_cost: 0.0,
+            wear_rate: 0.0,
+            use_wear_rate: 0.0,
+            movement_cost_coefficient: 0.0,
+            growth_efficiency: 0.5,
+            offspring_structure_fraction: 0.2,
+            initial_nutrient_pool: 1000.0,
+            ..test_params()
+        };
+        // A uniform generalist (maximal fragility) with a *small* energy budget,
+        // so its seeded structure is tiny — exactly the dead-on-arrival profile.
+        let generalist = TraitVector {
+            photosynthetic_absorption: 0.5,
+            heterotrophy: 0.2,
+            mobility: 0.2,
+            kappa: 0.2,
+            fecundity: 0.2,
+            asexual_propensity: 0.2,
+            dispersal: 0.2,
+        };
+        let recipe = WorldRecipe {
+            parameters: params,
+            initial_distribution: None,
+            agents: Some(vec![AgentSpec {
+                position: (0.0, 0.0),
+                reserve: 1.0, // small budget -> tiny seeded structure
+                traits: generalist,
+                nutrient: 100.0,
+            }]),
+            max_ticks: 10,
+        };
+        let mut world = World::from_recipe(&recipe, 42);
+        // Born alive at world creation.
+        assert_eq!(world.agents().len(), 1, "seed must be created alive");
+        let seed_structure = world.agents()[0].structure;
+        assert!(seed_structure > 0.0, "seed should have positive structure");
+        // The seed's peak high-water mark equals its birth structure.
+        assert!(
+            (world.agents()[0].peak_structure - seed_structure).abs() < 1e-9,
+            "seed peak structure must equal its birth structure"
+        );
+        // Survives the death check on the very first tick.
+        world.step();
+        assert_eq!(
+            world.agents().len(),
+            1,
+            "high-entropy generalist seed must survive its first tick (#312)"
+        );
+    }
+
     // --- Energy ledger conservation tests ---
 
     /// Helper: conservation params with all phases active.
@@ -2182,6 +2278,7 @@ mod tests {
                 position: (i as f32 * 5.0 - 25.0, 0.0),
                 reserve: 50.0,
                 structure: 5.0,
+                peak_structure: 5.0,
                 nutrient: 10.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 0.6,
@@ -2202,6 +2299,7 @@ mod tests {
                 position: (i as f32 * 10.0 - 25.0, 10.0),
                 reserve: 40.0,
                 structure: 3.0,
+                peak_structure: 3.0,
                 nutrient: 5.0,
                 traits: TraitVector {
                     heterotrophy: 0.4,
@@ -2241,7 +2339,7 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             reserve: 50.0,
-            structure: 5.0, // nonzero structure required for light capture
+            structure: 5.0, peak_structure: 5.0, // nonzero structure required for light capture
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.8,
@@ -2402,6 +2500,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 50.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.6,
@@ -2438,6 +2537,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 40.0,
             structure: 3.0,
+            peak_structure: 3.0,
             nutrient: 0.0,
             traits: TraitVector {
                 heterotrophy: 0.5,
@@ -2455,6 +2555,7 @@ mod tests {
             position: (0.5, 0.0),
             reserve: 10.0,
             structure: 10.0,
+            peak_structure: 10.0,
             nutrient: 20.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.1,
@@ -2493,6 +2594,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 1.0, // tiny reserve — wiped out by metabolism
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 12.0,
             traits: TraitVector {
                 heterotrophy: 0.3,
@@ -2536,6 +2638,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 60.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 20.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.3,
@@ -2594,6 +2697,7 @@ mod tests {
             position: (0.0, 0.0),
             reserve: 50.0,
             structure: 5.0,
+            peak_structure: 5.0,
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.8,
@@ -2891,22 +2995,16 @@ mod tests {
             dispersal: 0.3,
             ..zero_traits()
         };
-        // Death threshold for this generalist is significant.
-        // We set reserve to a small positive value so the agent doesn't die
-        // from starvation before wear runs, but the structure is very low.
-        let threshold = death_threshold(&traits);
-        world.add_agent(Agent {
-            id: 0,
-            position: (0.0, 0.0),
-            reserve: 0.01,  // barely alive (won't die from starvation with base_metabolic_rate=0)
-            structure: threshold * 0.5,  // below threshold → should die at death check
-            nutrient: 0.0,
-            traits,
-            contact_time: 0,
-            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-            repro_reserve: 0.0,
-            repro_nutrient: 0.0,
-        });
+        // Death threshold for this generalist is significant. The threshold is a
+        // fraction of *peak* structure, so we model an agent that grew to a peak
+        // of 10.0 and has since been worn down below its peak-relative threshold.
+        // We set reserve to a small positive value so the agent doesn't die from
+        // starvation before wear runs, but the structure is below threshold.
+        let peak = 10.0;
+        let threshold = death_threshold(&traits, peak);
+        let mut agent = Agent::new(0, (0.0, 0.0), 0.01, threshold * 0.5, 0.0, traits);
+        agent.peak_structure = peak; // had grown to its peak, now worn down
+        world.add_agent(agent);
 
         let agent_id = world.agents().last().unwrap().id;
 

@@ -264,13 +264,13 @@ mod tests {
     /// An agent carrying only the trophic traits `trophic_roles` reads: autotrophy
     /// (`photo`) and heterotrophy (`hetero`). Everything else is zeroed.
     fn agent(id: u64, photo: f32, hetero: f32) -> crate::Agent {
-        crate::Agent {
+        crate::Agent::new(
             id,
-            position: (0.0, 0.0),
-            reserve: 1.0,
-            structure: 1.0,
-            nutrient: 0.0,
-            traits: crate::TraitVector {
+            (0.0, 0.0),
+            1.0,
+            1.0,
+            0.0,
+            crate::TraitVector {
                 photosynthetic_absorption: photo,
                 heterotrophy: hetero,
                 mobility: 0.0,
@@ -279,11 +279,7 @@ mod tests {
                 asexual_propensity: 0.0,
                 dispersal: 0.0,
             },
-            contact_time: 0,
-            wear: [0.0; crate::FUNCTIONAL_TRAIT_COUNT],
-            repro_reserve: 0.0,
-            repro_nutrient: 0.0,
-        }
+        )
     }
 
     #[test]

@@ -61,13 +61,13 @@ fn decomposer_drains_carcass_after_a_death_reindexes_agents() {
     // A doomed agent (id 0) with zero reserve dies on the first step, shifting
     // every later agent's slice index down by one (index != id thereafter).
     world.add_agent(Agent {
-        id: 0, position: (80.0, 80.0), reserve: 0.0, structure: 0.0, nutrient: 0.0,
+        id: 0, position: (80.0, 80.0), reserve: 0.0, structure: 0.0, peak_structure: 0.0, nutrient: 0.0,
         traits: TraitVector { photosynthetic_absorption: 0.0, heterotrophy: 0.0, mobility: 0.0, kappa: 0.5, fecundity: 0.0, asexual_propensity: 0.0, dispersal: 0.0 },
         contact_time: 0, wear: Default::default(), repro_reserve: 0.0, repro_nutrient: 0.0,
     });
     // The decomposer, co-located with a carcass it should drain.
     world.add_agent(Agent {
-        id: 1, position: (10.0, 10.0), reserve: 100.0, structure: 5.0, nutrient: 5.0,
+        id: 1, position: (10.0, 10.0), reserve: 100.0, structure: 5.0, peak_structure: 5.0, nutrient: 5.0,
         traits: TraitVector { photosynthetic_absorption: 0.4, heterotrophy: 1.1, mobility: 0.0, kappa: 0.5, fecundity: 0.0, asexual_propensity: 0.0, dispersal: 0.0 },
         contact_time: 0, wear: Default::default(), repro_reserve: 0.0, repro_nutrient: 0.0,
     });

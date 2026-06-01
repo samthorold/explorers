@@ -55,21 +55,21 @@
   },
   {
     "failure_mode": "none",
-    "final_population": 7,
+    "final_population": 11,
     "max_ticks": 1000,
     "scenario": "example4.json",
     "scores": {
       "clustering_strength": 1.0,
-      "coexistence_duration": 0.9950000047683716,
-      "fitness": 0.6753461956977844,
-      "oscillation_strength": 0.33073100447654724,
+      "coexistence_duration": 0.3370000123977661,
+      "fitness": 0.5006994605064392,
+      "oscillation_strength": 0.12149713933467865,
       "trophic_balance_score": 1.0,
-      "turnover_score": 0.050999999046325684
+      "turnover_score": 0.04500000178813934
     },
     "seed": 1,
     "ticks_survived": 1000,
-    "total_births": 36,
-    "total_deaths": 51
+    "total_births": 34,
+    "total_deaths": 45
   },
   {
     "failure_mode": "none",
@@ -97,15 +97,15 @@
     "scores": {
       "clustering_strength": 0.0,
       "coexistence_duration": 0.0,
-      "fitness": 0.004000000189989805,
+      "fitness": 0.003900000127032399,
       "oscillation_strength": 0.0,
       "trophic_balance_score": 0.0,
-      "turnover_score": 0.019999999552965164
+      "turnover_score": 0.019500000402331352
     },
     "seed": 1,
     "ticks_survived": 2000,
-    "total_births": 17,
-    "total_deaths": 40
+    "total_births": 16,
+    "total_deaths": 39
   },
   {
     "failure_mode": "none",
