@@ -38,14 +38,7 @@ impl GaussianProcess {
     pub fn predict(&self, x: &[f64]) -> (f64, f64) {
         let n = self.x_train.len();
         let k_star: Vec<f64> = (0..n)
-            .map(|i| {
-                se_kernel(
-                    x,
-                    &self.x_train[i],
-                    self.length_scale,
-                    self.signal_variance,
-                )
-            })
+            .map(|i| se_kernel(x, &self.x_train[i], self.length_scale, self.signal_variance))
             .collect();
 
         let mean: f64 = k_star.iter().zip(&self.alpha).map(|(k, a)| k * a).sum();
@@ -59,11 +52,7 @@ impl GaussianProcess {
 }
 
 fn se_kernel(a: &[f64], b: &[f64], length_scale: f64, signal_variance: f64) -> f64 {
-    let sq_dist: f64 = a
-        .iter()
-        .zip(b)
-        .map(|(ai, bi)| (ai - bi).powi(2))
-        .sum();
+    let sq_dist: f64 = a.iter().zip(b).map(|(ai, bi)| (ai - bi).powi(2)).sum();
     signal_variance * (-sq_dist / (2.0 * length_scale * length_scale)).exp()
 }
 

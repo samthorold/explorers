@@ -55,8 +55,11 @@ mod tests {
                 .map(|s| (s[d] * n as f64).floor() as usize)
                 .collect();
             strata.sort();
-            assert_eq!(strata, (0..n).collect::<Vec<_>>(),
-                "dimension {d} must have exactly one sample per stratum");
+            assert_eq!(
+                strata,
+                (0..n).collect::<Vec<_>>(),
+                "dimension {d} must have exactly one sample per stratum"
+            );
         }
     }
 }

@@ -29,8 +29,7 @@ pub fn run_single(
     run_config: &RunConfig,
     seed: u64,
 ) -> RunResult {
-    let mut world =
-        explorers_sim::World::new(params.clone(), distribution.clone(), seed);
+    let mut world = explorers_sim::World::new(params.clone(), distribution.clone(), seed);
 
     // Sample free (non-carcass-locked) energy each tick for the energy-death
     // detector's stock-trend signal (issue #302); the world stays history-free.
@@ -142,7 +141,7 @@ mod tests {
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
             body_reach_coefficient: 0.0,
-            }
+        }
     }
 
     fn test_distribution() -> InitialDistribution {
@@ -219,8 +218,10 @@ mod tests {
                 || a.trophic_balance_score != b.trophic_balance_score,
             "different seeds should produce different trajectories \
              (a: tick={} fit={}, b: tick={} fit={})",
-            result_a.termination_tick, result_a.fitness,
-            result_b.termination_tick, result_b.fitness,
+            result_a.termination_tick,
+            result_a.fitness,
+            result_b.termination_tick,
+            result_b.fitness,
         );
     }
 

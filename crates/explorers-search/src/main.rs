@@ -20,13 +20,34 @@ fn main() {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--samples" => { i += 1; lhs_samples = args[i].parse().unwrap(); }
-            "--ensemble" => { i += 1; ensemble_size = args[i].parse().unwrap(); }
-            "--max-ticks" => { i += 1; max_ticks = args[i].parse().unwrap(); }
-            "--bayesopt-iterations" => { i += 1; bayesopt_iterations = args[i].parse().unwrap(); }
-            "--seed" => { i += 1; seed = args[i].parse().unwrap(); }
-            "--output" => { i += 1; output_path = PathBuf::from(&args[i]); }
-            "--recipe-output" => { i += 1; recipe_output_path = PathBuf::from(&args[i]); }
+            "--samples" => {
+                i += 1;
+                lhs_samples = args[i].parse().unwrap();
+            }
+            "--ensemble" => {
+                i += 1;
+                ensemble_size = args[i].parse().unwrap();
+            }
+            "--max-ticks" => {
+                i += 1;
+                max_ticks = args[i].parse().unwrap();
+            }
+            "--bayesopt-iterations" => {
+                i += 1;
+                bayesopt_iterations = args[i].parse().unwrap();
+            }
+            "--seed" => {
+                i += 1;
+                seed = args[i].parse().unwrap();
+            }
+            "--output" => {
+                i += 1;
+                output_path = PathBuf::from(&args[i]);
+            }
+            "--recipe-output" => {
+                i += 1;
+                recipe_output_path = PathBuf::from(&args[i]);
+            }
             "--help" | "-h" => {
                 print_usage();
                 return;
@@ -74,7 +95,9 @@ fn main() {
     }
 
     // Diagnostic: summarise failure modes and component scores
-    let total_runs: usize = result.parameterisations.iter()
+    let total_runs: usize = result
+        .parameterisations
+        .iter()
         .map(|p| p.run_breakdowns.len())
         .sum();
     let mut failures: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -112,11 +135,21 @@ fn main() {
         let mut ts_sum = 0.0_f32;
         let mut tb_sum = 0.0_f32;
         for r in &surviving_runs {
-            if r.oscillation_strength == 0.0 { os_zero += 1; }
-            if r.clustering_strength == 0.0 { cs_zero += 1; }
-            if r.coexistence_duration == 0.0 { cd_zero += 1; }
-            if r.turnover_score == 0.0 { ts_zero += 1; }
-            if r.trophic_balance_score == 0.0 { tb_zero += 1; }
+            if r.oscillation_strength == 0.0 {
+                os_zero += 1;
+            }
+            if r.clustering_strength == 0.0 {
+                cs_zero += 1;
+            }
+            if r.coexistence_duration == 0.0 {
+                cd_zero += 1;
+            }
+            if r.turnover_score == 0.0 {
+                ts_zero += 1;
+            }
+            if r.trophic_balance_score == 0.0 {
+                tb_zero += 1;
+            }
             os_sum += r.oscillation_strength;
             cs_sum += r.clustering_strength;
             cd_sum += r.coexistence_duration;

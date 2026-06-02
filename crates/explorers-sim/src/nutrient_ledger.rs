@@ -57,7 +57,8 @@ impl NutrientLedger {
 
     /// Total nutrient received by this endpoint (sum of all inflows).
     pub fn net_received(&self, endpoint: &NutrientEndpoint) -> f32 {
-        self.flows.iter()
+        self.flows
+            .iter()
             .filter(|(_, dest, _)| dest == endpoint)
             .map(|&(_, _, amount)| amount)
             .sum()
@@ -65,7 +66,8 @@ impl NutrientLedger {
 
     /// Total nutrient sent by this endpoint (sum of all outflows).
     pub fn net_sent(&self, endpoint: &NutrientEndpoint) -> f32 {
-        self.flows.iter()
+        self.flows
+            .iter()
             .filter(|(source, _, _)| source == endpoint)
             .map(|&(_, _, amount)| amount)
             .sum()
@@ -192,8 +194,16 @@ mod tests {
     fn build_from_conserved_pool_totals_is_balanced() {
         let mut ledger = NutrientLedger::new();
         // 10 nutrient moves from grid into agents; total unchanged (37 -> 37).
-        let pre = PoolTotals { grid: 30.0, agents: 5.0, carcasses: 2.0 };
-        let post = PoolTotals { grid: 20.0, agents: 15.0, carcasses: 2.0 };
+        let pre = PoolTotals {
+            grid: 30.0,
+            agents: 5.0,
+            carcasses: 2.0,
+        };
+        let post = PoolTotals {
+            grid: 20.0,
+            agents: 15.0,
+            carcasses: 2.0,
+        };
         ledger.build_from_pool_totals(pre, post);
         ledger.assert_balanced();
     }
@@ -203,8 +213,16 @@ mod tests {
         let mut ledger = NutrientLedger::new();
         // Grid -> agents (uptake), agents -> carcasses (death), and a carcass
         // partially decomposes back to grid. Total conserved (50 -> 50).
-        let pre = PoolTotals { grid: 40.0, agents: 8.0, carcasses: 2.0 };
-        let post = PoolTotals { grid: 35.0, agents: 6.0, carcasses: 9.0 };
+        let pre = PoolTotals {
+            grid: 40.0,
+            agents: 8.0,
+            carcasses: 2.0,
+        };
+        let post = PoolTotals {
+            grid: 35.0,
+            agents: 6.0,
+            carcasses: 9.0,
+        };
         ledger.build_from_pool_totals(pre, post);
         ledger.assert_balanced();
     }
@@ -216,8 +234,16 @@ mod tests {
         // Post total (40) exceeds pre total (37): nutrient created from nowhere.
         // No pool loses, so a naive delta-shuffle would miss this — the
         // Endowment/Retained reconciliation catches it.
-        let pre = PoolTotals { grid: 30.0, agents: 5.0, carcasses: 2.0 };
-        let post = PoolTotals { grid: 30.0, agents: 8.0, carcasses: 2.0 };
+        let pre = PoolTotals {
+            grid: 30.0,
+            agents: 5.0,
+            carcasses: 2.0,
+        };
+        let post = PoolTotals {
+            grid: 30.0,
+            agents: 8.0,
+            carcasses: 2.0,
+        };
         ledger.build_from_pool_totals(pre, post);
         ledger.assert_balanced();
     }
@@ -227,8 +253,16 @@ mod tests {
     fn build_from_destroyed_nutrient_panics() {
         let mut ledger = NutrientLedger::new();
         // Post total (32) is less than pre total (37): nutrient vanished.
-        let pre = PoolTotals { grid: 30.0, agents: 5.0, carcasses: 2.0 };
-        let post = PoolTotals { grid: 25.0, agents: 5.0, carcasses: 2.0 };
+        let pre = PoolTotals {
+            grid: 30.0,
+            agents: 5.0,
+            carcasses: 2.0,
+        };
+        let post = PoolTotals {
+            grid: 25.0,
+            agents: 5.0,
+            carcasses: 2.0,
+        };
         ledger.build_from_pool_totals(pre, post);
         ledger.assert_balanced();
     }

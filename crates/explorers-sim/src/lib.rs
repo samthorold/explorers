@@ -1,6 +1,6 @@
 pub mod energy_ledger;
-pub mod nutrient_ledger;
 pub mod event;
+pub mod nutrient_ledger;
 pub mod phase;
 pub mod spatial;
 pub mod topology;
@@ -31,7 +31,6 @@ pub fn toroidal_displacement(from: (f32, f32), to: (f32, f32), extent: f32) -> (
     (dx, dy)
 }
 
-
 /// Wrap a position into the toroidal world.
 pub fn wrap_position(pos: (f32, f32), extent: f32) -> (f32, f32) {
     let half = extent / 2.0;
@@ -50,7 +49,11 @@ pub struct TraitVector {
     pub mobility: f32,
     /// DEB-theory allocation parameter: fraction of mobilised energy routed to soma
     /// vs reproduction. High kappa = long-lived, slow-reproducing. Range 0.0–1.0.
-    #[serde(alias = "somatic_maintenance", alias = "reproductive_investment", default = "default_kappa")]
+    #[serde(
+        alias = "somatic_maintenance",
+        alias = "reproductive_investment",
+        default = "default_kappa"
+    )]
     pub kappa: f32,
     #[serde(default)]
     pub fecundity: f32,
@@ -107,14 +110,30 @@ impl TraitVector {
     pub const NUM_DIMS: usize = 7;
 }
 
-fn default_kappa() -> f32 { 0.5 }
-fn default_wear_rate() -> f32 { 0.1 }
-fn default_wear_degradation_steepness() -> f32 { 1.0 }
-fn default_somatic_maintenance_cost_coefficient() -> f32 { 0.1 }
-fn default_use_wear_rate() -> f32 { 0.01 }
-fn default_structure_maintenance_coefficient() -> f32 { 0.01 }
-fn default_repair_decay() -> f32 { 1.0 }
-fn default_trophic_distance_decay() -> f32 { 1.0 }
+fn default_kappa() -> f32 {
+    0.5
+}
+fn default_wear_rate() -> f32 {
+    0.1
+}
+fn default_wear_degradation_steepness() -> f32 {
+    1.0
+}
+fn default_somatic_maintenance_cost_coefficient() -> f32 {
+    0.1
+}
+fn default_use_wear_rate() -> f32 {
+    0.01
+}
+fn default_structure_maintenance_coefficient() -> f32 {
+    0.01
+}
+fn default_repair_decay() -> f32 {
+    1.0
+}
+fn default_trophic_distance_decay() -> f32 {
+    1.0
+}
 
 fn zero_traits() -> TraitVector {
     TraitVector {
@@ -127,18 +146,42 @@ fn zero_traits() -> TraitVector {
         dispersal: 0.0,
     }
 }
-fn default_base_nutrient_ratio() -> f32 { 0.1 }
-fn default_specification_nutrient_coefficient() -> f32 { 0.2 }
-fn default_sensing_range_coefficient() -> f32 { 10.0 }
-fn default_reproductive_compatibility_distance() -> f32 { 2.0 }
-fn default_reproduction_nutrient_threshold() -> f32 { 1.0 }
-fn default_maintenance_cost_exponent() -> f32 { 2.0 }
-fn default_consumption_contact_half_saturation() -> f32 { 3.0 }
-fn default_nutrient_grid_cell_size() -> f32 { 10.0 }
-fn default_growth_retention_multiplier() -> f32 { 2.0 }
-fn default_offspring_structure_fraction() -> f32 { 0.2 }
-fn default_asexual_propensity_maintenance_cost() -> f32 { 0.01 }
-fn default_dispersal_propagule_cost_exponent() -> f32 { 2.0 }
+fn default_base_nutrient_ratio() -> f32 {
+    0.1
+}
+fn default_specification_nutrient_coefficient() -> f32 {
+    0.2
+}
+fn default_sensing_range_coefficient() -> f32 {
+    10.0
+}
+fn default_reproductive_compatibility_distance() -> f32 {
+    2.0
+}
+fn default_reproduction_nutrient_threshold() -> f32 {
+    1.0
+}
+fn default_maintenance_cost_exponent() -> f32 {
+    2.0
+}
+fn default_consumption_contact_half_saturation() -> f32 {
+    3.0
+}
+fn default_nutrient_grid_cell_size() -> f32 {
+    10.0
+}
+fn default_growth_retention_multiplier() -> f32 {
+    2.0
+}
+fn default_offspring_structure_fraction() -> f32 {
+    0.2
+}
+fn default_asexual_propensity_maintenance_cost() -> f32 {
+    0.01
+}
+fn default_dispersal_propagule_cost_exponent() -> f32 {
+    2.0
+}
 
 /// Split a per-agent initial energy budget into a (reserve, structure, heat)
 /// triple using the same reserve/structure provisioning that reproduction
@@ -216,11 +259,20 @@ pub fn provision_offspring(
     let structure = energy_limited.min(nutrient_limited);
     // Energy actually spent building that structure; unmatched energy stays in
     // reserve. Guard efficiency == 0 (no structure built).
-    let energy_spent = if efficiency > 0.0 { structure / efficiency } else { 0.0 };
+    let energy_spent = if efficiency > 0.0 {
+        structure / efficiency
+    } else {
+        0.0
+    };
     let heat = energy_spent - structure;
     let reserve = energy_budget - energy_spent;
     let free_nutrient = (nutrient_budget - structure * ratio).max(0.0);
-    OffspringProvision { structure, reserve, free_nutrient, heat }
+    OffspringProvision {
+        structure,
+        reserve,
+        free_nutrient,
+        heat,
+    }
 }
 
 /// Draw the nutrient bound in each seeded agent's birth structure from the
@@ -630,7 +682,6 @@ pub struct Carcass {
     pub traits: TraitVector,
 }
 
-
 /// Complexity-dependent structural fragility — the *fraction of peak structure*
 /// below which structural damage is fatal (world-rules #9, energy-flow.md:103).
 ///
@@ -688,12 +739,16 @@ pub fn death_threshold(traits: &TraitVector, peak_structure: f32) -> f32 {
 ///
 /// Larger agents need more nutrient. More specification investment means
 /// proportionally more nutrient per unit biomass.
-pub fn stoichiometric_demand(traits: &TraitVector, structure: f32, params: &WorldParameters) -> f32 {
+pub fn stoichiometric_demand(
+    traits: &TraitVector,
+    structure: f32,
+    params: &WorldParameters,
+) -> f32 {
     let specification_sum = traits.photosynthetic_absorption.max(0.0)
         + traits.heterotrophy.max(0.0)
         + traits.mobility.max(0.0);
-    let ratio = params.base_nutrient_ratio
-        + params.specification_nutrient_coefficient * specification_sum;
+    let ratio =
+        params.base_nutrient_ratio + params.specification_nutrient_coefficient * specification_sum;
     structure * ratio
 }
 
@@ -790,7 +845,9 @@ impl World {
                         mobility: centroid.mobility + trait_dist.sample(&mut rng),
                         kappa: (centroid.kappa + trait_dist.sample(&mut rng)).clamp(0.0, 1.0),
                         fecundity: centroid.fecundity + trait_dist.sample(&mut rng),
-                        asexual_propensity: (centroid.asexual_propensity + trait_dist.sample(&mut rng)).clamp(0.0, 1.0),
+                        asexual_propensity: (centroid.asexual_propensity
+                            + trait_dist.sample(&mut rng))
+                        .clamp(0.0, 1.0),
                         dispersal: (centroid.dispersal + trait_dist.sample(&mut rng)).max(0.0),
                     },
                     contact_time: 0,
@@ -925,28 +982,31 @@ impl World {
         let extent = self.params.world_extent;
 
         // Snapshot pre-tick state for energy ledger conservation verification
-        let pre_agent_energy: std::collections::HashMap<u64, f32> = self.agents.iter()
+        let pre_agent_energy: std::collections::HashMap<u64, f32> = self
+            .agents
+            .iter()
             .map(|a| (a.id, a.reserve + a.structure + a.repro_reserve))
             .collect();
-        let pre_carcass_energy: std::collections::HashMap<u64, f32> = self.carcasses.iter()
-            .map(|c| (c.id, c.energy))
-            .collect();
+        let pre_carcass_energy: std::collections::HashMap<u64, f32> =
+            self.carcasses.iter().map(|c| (c.id, c.energy)).collect();
 
         // Snapshot pre-tick nutrient per pool for the nutrient ledger.
         // Nutrient is a closed resource: the ledger verifies that the total
         // across all pools (grid cells + living agents + carcasses) at tick
         // end equals the total at tick start.
         let pre_grid_nutrient: f32 = self.nutrient_grid.total();
-        let pre_agent_nutrient: f32 = self.agents.iter().map(|a| a.nutrient_total(&self.params)).sum();
+        let pre_agent_nutrient: f32 = self
+            .agents
+            .iter()
+            .map(|a| a.nutrient_total(&self.params))
+            .sum();
         let pre_carcass_nutrient: f32 = self.carcasses.iter().map(|c| c.nutrient).sum();
 
         // Snapshot trait vectors for ledger efficiency calculations
-        let pre_agent_traits: std::collections::HashMap<u64, TraitVector> = self.agents.iter()
-            .map(|a| (a.id, a.traits))
-            .collect();
-        let pre_carcass_traits: std::collections::HashMap<u64, TraitVector> = self.carcasses.iter()
-            .map(|c| (c.id, c.traits))
-            .collect();
+        let pre_agent_traits: std::collections::HashMap<u64, TraitVector> =
+            self.agents.iter().map(|a| (a.id, a.traits)).collect();
+        let pre_carcass_traits: std::collections::HashMap<u64, TraitVector> =
+            self.carcasses.iter().map(|c| (c.id, c.traits)).collect();
 
         // Build spatial grid once at start of tick
         let cell_size = self.params.light_competition_radius.max(1.0);
@@ -959,17 +1019,14 @@ impl World {
         let mut events = Vec::new();
 
         // 1. Photosynthesise
-        let photo_events = phase::photosynthesise(
-            &mut self.agents, &grid, &self.params,
-        );
+        let photo_events = phase::photosynthesise(&mut self.agents, &grid, &self.params);
         let solar_this_tick: f32 = photo_events.iter().map(|e| e.energy_delta).sum();
         self.total_solar_input += solar_this_tick;
         events.extend(photo_events);
 
         // 2. Absorb nutrients
-        let nutrient_events = phase::absorb_nutrients(
-            &mut self.agents, &mut self.nutrient_grid, &self.params,
-        );
+        let nutrient_events =
+            phase::absorb_nutrients(&mut self.agents, &mut self.nutrient_grid, &self.params);
         events.extend(nutrient_events);
 
         // 3. Metabolise
@@ -984,13 +1041,18 @@ impl World {
 
         // 5. Resolve drains (coordinated pass 1)
         let drain_result = phase::resolve_drains(
-            &mut self.agents, &mut self.carcasses, &grid, &self.params, &mut self.nutrient_grid,
+            &mut self.agents,
+            &mut self.carcasses,
+            &grid,
+            &self.params,
+            &mut self.nutrient_grid,
         );
         self.dissipated_energy += drain_result.dissipated;
         events.extend(drain_result.events);
 
         // Mark deaths from drain resolution
-        let drain_dead_ids: std::collections::HashSet<u64> = drain_result.dead_agents.iter().copied().collect();
+        let drain_dead_ids: std::collections::HashSet<u64> =
+            drain_result.dead_agents.iter().copied().collect();
         for agent in self.agents.iter_mut() {
             if drain_dead_ids.contains(&agent.id) {
                 // Dissipate remaining reserve and repro_reserve (not captured by carcass)
@@ -1024,7 +1086,11 @@ impl World {
             repro_grid.insert(i as u64, a.position);
         }
         let repro_result = phase::resolve_reproduction(
-            &mut self.agents, &drain_dead_ids, &repro_grid, &self.params, &mut self.rng,
+            &mut self.agents,
+            &drain_dead_ids,
+            &repro_grid,
+            &self.params,
+            &mut self.rng,
         );
         self.dissipated_energy += repro_result.dissipated;
         self.last_tick_births = repro_result.offspring.len();
@@ -1047,13 +1113,19 @@ impl World {
             move_grid.insert(i as u64, a.position);
         }
         let move_result = phase::move_agents(
-            &mut self.agents, &self.carcasses, &move_grid, &self.params, &mut self.rng,
+            &mut self.agents,
+            &self.carcasses,
+            &move_grid,
+            &self.params,
+            &mut self.rng,
         );
         self.dissipated_energy += move_result.dissipated;
         // move_result.move_distance is aligned by index with self.agents at move
         // time; no agents are added or removed between move and wear, so the
         // index -> id mapping is stable.
-        let move_distance_by_id: std::collections::HashMap<u64, f32> = self.agents.iter()
+        let move_distance_by_id: std::collections::HashMap<u64, f32> = self
+            .agents
+            .iter()
             .enumerate()
             .filter_map(|(i, a)| {
                 let dist = move_result.move_distance[i];
@@ -1063,29 +1135,41 @@ impl World {
         events.extend(move_result.events);
 
         // 8. Wear: collect per-agent usage from earlier phases
-        let mut usage_data: std::collections::HashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]> = std::collections::HashMap::new();
+        let mut usage_data: std::collections::HashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]> =
+            std::collections::HashMap::new();
         // Autotrophy usage: energy captured via photosynthesis
-        for ev in events.iter().filter(|e| e.kind == event::EventKind::Photosynthesized) {
-            let entry = usage_data.entry(ev.source).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
+        for ev in events
+            .iter()
+            .filter(|e| e.kind == event::EventKind::Photosynthesized)
+        {
+            let entry = usage_data
+                .entry(ev.source)
+                .or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
             entry[0] += ev.energy_delta;
         }
         // Heterotrophy usage: energy drained via consumption
-        for ev in events.iter().filter(|e| e.kind == event::EventKind::Consumed) {
-            let entry = usage_data.entry(ev.source).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
+        for ev in events
+            .iter()
+            .filter(|e| e.kind == event::EventKind::Consumed)
+        {
+            let entry = usage_data
+                .entry(ev.source)
+                .or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
             entry[1] += ev.energy_delta;
         }
         // Mobility usage: distance moved during this tick's movement phase.
         for (&id, &dist) in &move_distance_by_id {
-            let entry = usage_data.entry(id).or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
+            let entry = usage_data
+                .entry(id)
+                .or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
             entry[2] += dist;
         }
         let wear_events = phase::apply_wear(&mut self.agents, &self.params, &usage_data);
         events.extend(wear_events);
 
         // 9. Check death thresholds
-        let (death_events, threshold_carcasses, death_dissipated) = phase::check_death_thresholds(
-            &mut self.agents, &self.params,
-        );
+        let (death_events, threshold_carcasses, death_dissipated) =
+            phase::check_death_thresholds(&mut self.agents, &self.params);
         let threshold_deaths = threshold_carcasses.len();
         self.dissipated_energy += death_dissipated;
         events.extend(death_events);
@@ -1100,35 +1184,52 @@ impl World {
         // Built from event data and state snapshots, after all phases complete.
         self.ledger.clear();
 
-        let post_agent_energy: std::collections::HashMap<u64, f32> = self.agents.iter()
+        let post_agent_energy: std::collections::HashMap<u64, f32> = self
+            .agents
+            .iter()
             .map(|a| (a.id, a.reserve + a.structure + a.repro_reserve))
             .collect();
-        let post_carcass_energy: std::collections::HashMap<u64, f32> = self.carcasses.iter()
-            .map(|c| (c.id, c.energy))
-            .collect();
+        let post_carcass_energy: std::collections::HashMap<u64, f32> =
+            self.carcasses.iter().map(|c| (c.id, c.energy)).collect();
 
         // Collect all agent IDs that exist at start or end of tick
         let mut all_agent_ids = std::collections::HashSet::new();
-        for &id in pre_agent_energy.keys() { all_agent_ids.insert(id); }
-        for &id in post_agent_energy.keys() { all_agent_ids.insert(id); }
+        for &id in pre_agent_energy.keys() {
+            all_agent_ids.insert(id);
+        }
+        for &id in post_agent_energy.keys() {
+            all_agent_ids.insert(id);
+        }
         let mut all_carcass_ids = std::collections::HashSet::new();
-        for &id in pre_carcass_energy.keys() { all_carcass_ids.insert(id); }
-        for &id in post_carcass_energy.keys() { all_carcass_ids.insert(id); }
+        for &id in pre_carcass_energy.keys() {
+            all_carcass_ids.insert(id);
+        }
+        for &id in post_carcass_energy.keys() {
+            all_carcass_ids.insert(id);
+        }
 
         // Record endowments (pre-tick energy for entities that existed at tick start)
         for (&id, &energy) in &pre_agent_energy {
             if energy > 0.0 {
-                self.ledger.record(EnergyEndpoint::Endowment, EnergyEndpoint::Agent(id), energy);
+                self.ledger
+                    .record(EnergyEndpoint::Endowment, EnergyEndpoint::Agent(id), energy);
             }
         }
         for (&id, &energy) in &pre_carcass_energy {
             if energy > 0.0 {
-                self.ledger.record(EnergyEndpoint::Endowment, EnergyEndpoint::Carcass(id), energy);
+                self.ledger.record(
+                    EnergyEndpoint::Endowment,
+                    EnergyEndpoint::Carcass(id),
+                    energy,
+                );
             }
         }
 
         // Record solar input per agent
-        for ev in events.iter().filter(|e| e.kind == event::EventKind::Photosynthesized) {
+        for ev in events
+            .iter()
+            .filter(|e| e.kind == event::EventKind::Photosynthesized)
+        {
             self.ledger.record(
                 EnergyEndpoint::SolarTap,
                 EnergyEndpoint::Agent(ev.source),
@@ -1137,24 +1238,36 @@ impl World {
         }
 
         // Record consumption flows (target -> consumer with trophic loss)
-        for ev in events.iter().filter(|e| e.kind == event::EventKind::Consumed) {
+        for ev in events
+            .iter()
+            .filter(|e| e.kind == event::EventKind::Consumed)
+        {
             let target_id = ev.target.unwrap();
             let drain = ev.energy_delta;
             let is_carcass = pre_carcass_energy.contains_key(&target_id)
                 && !pre_agent_energy.contains_key(&target_id);
             // Compute distance-dependent trophic efficiency from trait vectors
-            let consumer_traits = pre_agent_traits.get(&ev.source)
+            let consumer_traits = pre_agent_traits
+                .get(&ev.source)
                 .copied()
                 .unwrap_or_else(|| {
                     // Offspring born this tick — look up from current agents
-                    self.agents.iter().find(|a| a.id == ev.source)
+                    self.agents
+                        .iter()
+                        .find(|a| a.id == ev.source)
                         .map(|a| a.traits)
                         .unwrap_or_else(zero_traits)
                 });
             let target_traits = if is_carcass {
-                pre_carcass_traits.get(&target_id).copied().unwrap_or_else(zero_traits)
+                pre_carcass_traits
+                    .get(&target_id)
+                    .copied()
+                    .unwrap_or_else(zero_traits)
             } else {
-                pre_agent_traits.get(&target_id).copied().unwrap_or_else(zero_traits)
+                pre_agent_traits
+                    .get(&target_id)
+                    .copied()
+                    .unwrap_or_else(zero_traits)
             };
             let eff = trophic_transfer_efficiency(&consumer_traits, &target_traits, &self.params);
             let gained = drain * eff;
@@ -1165,10 +1278,12 @@ impl World {
                 EnergyEndpoint::Agent(target_id)
             };
             if gained > 0.0 {
-                self.ledger.record(target_ep.clone(), EnergyEndpoint::Agent(ev.source), gained);
+                self.ledger
+                    .record(target_ep.clone(), EnergyEndpoint::Agent(ev.source), gained);
             }
             if lost > 0.0 {
-                self.ledger.record(target_ep, EnergyEndpoint::Dissipation, lost);
+                self.ledger
+                    .record(target_ep, EnergyEndpoint::Dissipation, lost);
             }
         }
 
@@ -1190,7 +1305,8 @@ impl World {
         // Record offspring birth endowments
         for (&id, &energy) in &post_agent_energy {
             if !pre_agent_energy.contains_key(&id) && energy > 0.0 {
-                self.ledger.record(EnergyEndpoint::Endowment, EnergyEndpoint::Agent(id), energy);
+                self.ledger
+                    .record(EnergyEndpoint::Endowment, EnergyEndpoint::Agent(id), energy);
             }
         }
 
@@ -1237,10 +1353,15 @@ impl World {
         };
         let post_pools = nutrient_ledger::PoolTotals {
             grid: self.nutrient_grid.total(),
-            agents: self.agents.iter().map(|a| a.nutrient_total(&self.params)).sum(),
+            agents: self
+                .agents
+                .iter()
+                .map(|a| a.nutrient_total(&self.params))
+                .sum(),
             carcasses: self.carcasses.iter().map(|c| c.nutrient).sum(),
         };
-        self.nutrient_ledger.build_from_pool_totals(pre_pools, post_pools);
+        self.nutrient_ledger
+            .build_from_pool_totals(pre_pools, post_pools);
         // Verify conservation eagerly in debug builds; in release the check is
         // compiled out, keeping the ledger an orthogonal, zero-cost wrapper
         // (mirrors the energy ledger's disable-in-release approach).
@@ -1332,7 +1453,14 @@ impl World {
 
     /// Emit an event to the log. Retained for coordinated phases (not yet implemented).
     #[allow(dead_code)]
-    fn emit(&mut self, kind: event::EventKind, source: u64, target: Option<u64>, energy_delta: f32, position: Option<(f32, f32)>) {
+    fn emit(
+        &mut self,
+        kind: event::EventKind,
+        source: u64,
+        target: Option<u64>,
+        energy_delta: f32,
+        position: Option<(f32, f32)>,
+    ) {
         let seq = self.next_seq;
         self.next_seq += 1;
         let _ = self.event_log.append(event::Event {
@@ -1427,7 +1555,10 @@ mod tests {
 
     #[test]
     fn propagule_cost_fraction_is_zero_when_coefficient_disabled() {
-        let params = WorldParameters { dispersal_propagule_cost_coefficient: 0.0, ..test_params() };
+        let params = WorldParameters {
+            dispersal_propagule_cost_coefficient: 0.0,
+            ..test_params()
+        };
         assert_eq!(dispersal_propagule_cost_fraction(3.0, &params), 0.0);
     }
 
@@ -1441,7 +1572,10 @@ mod tests {
         let f1 = dispersal_propagule_cost_fraction(1.0, &params);
         let f2 = dispersal_propagule_cost_fraction(2.0, &params);
         // Superlinear: doubling the trait more than doubles the fraction.
-        assert!(f2 > 2.0 * f1, "fraction should rise superlinearly: f1={f1}, f2={f2}");
+        assert!(
+            f2 > 2.0 * f1,
+            "fraction should rise superlinearly: f1={f1}, f2={f2}"
+        );
         // Clamped to at most 1.0 even for large dispersal.
         assert_eq!(dispersal_propagule_cost_fraction(100.0, &params), 1.0);
     }
@@ -1500,22 +1634,42 @@ mod tests {
         let mut world = world;
         let before = world.free_energy();
         world.add_carcass(Carcass {
-            id: 9999, position: (0.0, 0.0), energy: 500.0, nutrient: 0.0,
+            id: 9999,
+            position: (0.0, 0.0),
+            energy: 500.0,
+            nutrient: 0.0,
             traits: zero_traits(),
         });
-        assert_eq!(world.free_energy(), before, "carcass energy is not free energy");
+        assert_eq!(
+            world.free_energy(),
+            before,
+            "carcass energy is not free energy"
+        );
     }
 
     #[test]
     fn agent_and_carcass_have_nutrient_field() {
         let agent = Agent {
-            id: 0, position: (0.0, 0.0), reserve: 100.0, structure: 0.0, peak_structure: 0.0,
-            nutrient: 5.0, traits: zero_traits(), contact_time: 0,
-            wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 0.0,
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 100.0,
+            structure: 0.0,
+            peak_structure: 0.0,
+            nutrient: 5.0,
+            traits: zero_traits(),
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
             repro_nutrient: 0.0,
         };
         assert_eq!(agent.nutrient, 5.0);
-        let carcass = Carcass { id: 0, position: (0.0, 0.0), energy: 50.0, nutrient: 3.0, traits: zero_traits() };
+        let carcass = Carcass {
+            id: 0,
+            position: (0.0, 0.0),
+            energy: 50.0,
+            nutrient: 3.0,
+            traits: zero_traits(),
+        };
         assert_eq!(carcass.nutrient, 3.0);
     }
 
@@ -1542,7 +1696,10 @@ mod tests {
             }"#,
         )
         .expect("params omitting reproduction_nutrient_threshold should deserialise");
-        assert_eq!(params.reproduction_nutrient_threshold, default_reproduction_nutrient_threshold());
+        assert_eq!(
+            params.reproduction_nutrient_threshold,
+            default_reproduction_nutrient_threshold()
+        );
     }
 
     #[test]
@@ -1603,9 +1760,16 @@ mod tests {
     #[test]
     fn agent_carries_repro_nutrient_earmark() {
         let agent = Agent {
-            id: 0, position: (0.0, 0.0), reserve: 0.0, structure: 0.0, peak_structure: 0.0,
-            nutrient: 5.0, traits: zero_traits(), contact_time: 0,
-            wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 0.0,
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 0.0,
+            structure: 0.0,
+            peak_structure: 0.0,
+            nutrient: 5.0,
+            traits: zero_traits(),
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
             repro_nutrient: 7.0,
         };
         assert_eq!(agent.repro_nutrient, 7.0);
@@ -1618,16 +1782,26 @@ mod tests {
         // (structure * demand). The bound portion is matter locked into the body.
         let params = conservation_params();
         let agent = Agent {
-            id: 0, position: (0.0, 0.0), reserve: 0.0, structure: 4.0, peak_structure: 4.0,
-            nutrient: 5.0, traits: zero_traits(), contact_time: 0,
-            wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 0.0,
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 0.0,
+            structure: 4.0,
+            peak_structure: 4.0,
+            nutrient: 5.0,
+            traits: zero_traits(),
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 0.0,
             repro_nutrient: 7.0,
         };
         // zero traits -> ratio = base_nutrient_ratio = 0.1; bound = 4.0 * 0.1 = 0.4
         let bound = stoichiometric_demand(&agent.traits, agent.structure, &params);
         assert!((bound - 0.4).abs() < 1e-6, "bound = structure * ratio");
-        assert!((agent.nutrient_total(&params) - (5.0 + 7.0 + 0.4)).abs() < 1e-6,
-            "nutrient_total = free + earmark + bound, got {}", agent.nutrient_total(&params));
+        assert!(
+            (agent.nutrient_total(&params) - (5.0 + 7.0 + 0.4)).abs() < 1e-6,
+            "nutrient_total = free + earmark + bound, got {}",
+            agent.nutrient_total(&params)
+        );
     }
 
     #[test]
@@ -1642,7 +1816,10 @@ mod tests {
             ..test_params()
         };
         let mut world = World::new(params, test_distribution(), 42);
-        assert!(world.agents().is_empty(), "world should have no living agents");
+        assert!(
+            world.agents().is_empty(),
+            "world should have no living agents"
+        );
 
         let initial_energy = 50.0_f32;
         let initial_nutrient = 3.0_f32;
@@ -1709,8 +1886,14 @@ mod tests {
         };
         let spec = structural_fragility(&specialist);
         let gen_f = structural_fragility(&generalist);
-        assert!(spec >= 0.0 && spec < 1.0, "specialist fragility {spec} out of [0,1)");
-        assert!(gen_f >= 0.0 && gen_f < 1.0, "generalist fragility {gen_f} out of [0,1)");
+        assert!(
+            spec >= 0.0 && spec < 1.0,
+            "specialist fragility {spec} out of [0,1)"
+        );
+        assert!(
+            gen_f >= 0.0 && gen_f < 1.0,
+            "generalist fragility {gen_f} out of [0,1)"
+        );
         assert!(
             gen_f > spec,
             "generalist fragility ({gen_f}) should exceed specialist ({spec})"
@@ -1742,7 +1925,10 @@ mod tests {
         // and *any* birth size — even a tiny seed and the most uniform generalist.
         let shapes = [
             // pure specialist
-            TraitVector { photosynthetic_absorption: 1.0, ..zero_traits() },
+            TraitVector {
+                photosynthetic_absorption: 1.0,
+                ..zero_traits()
+            },
             // uniform generalist (maximal fragility)
             TraitVector {
                 photosynthetic_absorption: 0.2,
@@ -1784,7 +1970,10 @@ mod tests {
         // lost a *smaller fraction of its peak* — i.e. its death threshold is a
         // *larger fraction* of peak structure than a specialist's. The threshold
         // is now relative to the body actually built, not an absolute floor.
-        let specialist = TraitVector { photosynthetic_absorption: 1.0, ..zero_traits() };
+        let specialist = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
         let generalist = TraitVector {
             photosynthetic_absorption: 0.2,
             heterotrophy: 0.2,
@@ -1863,8 +2052,13 @@ mod tests {
         assert!(world.event_log().len() > 0, "should have logged events");
 
         // Verify photosynthesis events exist
-        let photo_events = world.event_log().by_kind(&event::EventKind::Photosynthesized);
-        assert!(!photo_events.is_empty(), "should have photosynthesis events");
+        let photo_events = world
+            .event_log()
+            .by_kind(&event::EventKind::Photosynthesized);
+        assert!(
+            !photo_events.is_empty(),
+            "should have photosynthesis events"
+        );
 
         // Verify metabolism events exist
         let metab_events = world.event_log().by_kind(&event::EventKind::Metabolized);
@@ -1921,12 +2115,20 @@ mod tests {
         // Use-dependent wear: 0.02 * energy_captured (should be > 0 since it photosynthesised)
         // Total should exceed baseline alone
         let baseline_only = 0.01 * 0.8;
-        assert!(agent.wear[0] > baseline_only,
+        assert!(
+            agent.wear[0] > baseline_only,
             "autotrophy wear ({}) should exceed baseline-only ({baseline_only}) due to photosynthesis use-wear",
-            agent.wear[0]);
+            agent.wear[0]
+        );
         // Heterotrophy and mobility wear should be baseline only (no usage)
-        assert!((agent.wear[1]).abs() < 1e-6, "heterotrophy wear should be zero (no heterotrophy trait)");
-        assert!((agent.wear[2]).abs() < 1e-6, "mobility wear should be zero (no mobility trait)");
+        assert!(
+            (agent.wear[1]).abs() < 1e-6,
+            "heterotrophy wear should be zero (no heterotrophy trait)"
+        );
+        assert!(
+            (agent.wear[2]).abs() < 1e-6,
+            "mobility wear should be zero (no mobility trait)"
+        );
     }
 
     #[test]
@@ -1934,7 +2136,7 @@ mod tests {
         // A consumer that drains a target should accumulate extra heterotrophy wear.
         let params = WorldParameters {
             solar_flux_magnitude: 0.0, // no photosynthesis
-            base_metabolic_rate: 0.0, // no metabolism drain
+            base_metabolic_rate: 0.0,  // no metabolism drain
             growth_efficiency: 0.0,
             wear_rate: 0.01,
             use_wear_rate: 0.02,
@@ -1997,9 +2199,11 @@ mod tests {
         let consumer = consumer.unwrap();
         // Heterotrophy wear should exceed baseline due to consumption
         let baseline_only = 0.01 * 0.6;
-        assert!(consumer.wear[1] > baseline_only,
+        assert!(
+            consumer.wear[1] > baseline_only,
             "heterotrophy wear ({}) should exceed baseline ({baseline_only}) due to consumption",
-            consumer.wear[1]);
+            consumer.wear[1]
+        );
     }
 
     #[test]
@@ -2009,12 +2213,12 @@ mod tests {
         // moved on a given tick is folded into THAT tick's mobility usage.
         let params = WorldParameters {
             solar_flux_magnitude: 0.0, // no photosynthesis
-            base_metabolic_rate: 0.5, // small drain so reserve is retained, not dumped to repro
+            base_metabolic_rate: 0.5,  // small drain so reserve is retained, not dumped to repro
             growth_efficiency: 0.0,
             wear_rate: 0.01,
             use_wear_rate: 0.02,
             wear_degradation_steepness: 1.0,
-            repair_decay: 0.0, // no repair
+            repair_decay: 0.0,              // no repair
             movement_cost_coefficient: 0.0, // free movement so the agent survives
             initial_population_size: 0,
             ..test_params()
@@ -2049,13 +2253,18 @@ mod tests {
         world.step();
         world.step();
 
-        let agent = world.agents().iter().find(|a| a.id == 0)
+        let agent = world
+            .agents()
+            .iter()
+            .find(|a| a.id == 0)
             .expect("mobile agent should survive two ticks");
         // Two ticks of baseline-only wear: 2 * wear_rate * mobility = 2 * 0.01 * 0.5
         let baseline_only = 2.0 * 0.01 * 0.5;
-        assert!(agent.wear[2] > baseline_only,
+        assert!(
+            agent.wear[2] > baseline_only,
             "mobility wear ({}) should exceed two ticks of baseline ({baseline_only}) due to movement use-wear",
-            agent.wear[2]);
+            agent.wear[2]
+        );
     }
 
     #[test]
@@ -2071,7 +2280,7 @@ mod tests {
             wear_rate: 0.01,
             use_wear_rate: 0.02,
             wear_degradation_steepness: 1.0,
-            repair_decay: 0.0, // no repair
+            repair_decay: 0.0,              // no repair
             movement_cost_coefficient: 0.0, // free movement so the agent survives
             initial_population_size: 0,
             ..test_params()
@@ -2103,15 +2312,20 @@ mod tests {
         // A single tick: the agent moves and the move-wear is charged this tick.
         world.step();
 
-        let agent = world.agents().iter().find(|a| a.id == 0)
+        let agent = world
+            .agents()
+            .iter()
+            .find(|a| a.id == 0)
             .expect("mobile agent should survive one tick");
         // One tick of baseline-only wear: wear_rate * mobility = 0.01 * 0.5.
         // Under the old one-tick lag this is exactly what wear[2] would be after
         // the first step; charging the move this tick pushes it strictly higher.
         let baseline_only = 0.01 * 0.5;
-        assert!(agent.wear[2] > baseline_only,
+        assert!(
+            agent.wear[2] > baseline_only,
             "mobility wear ({}) should exceed one tick of baseline ({baseline_only}) because this tick's move is charged this tick",
-            agent.wear[2]);
+            agent.wear[2]
+        );
     }
 
     #[test]
@@ -2134,8 +2348,13 @@ mod tests {
     #[test]
     fn effective_trait_degrades_with_wear() {
         let mut agent = Agent {
-            id: 1, position: (0.0, 0.0), reserve: 10.0, structure: 0.0, peak_structure: 0.0,
-            nutrient: 0.0, traits: TraitVector {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 10.0,
+            structure: 0.0,
+            peak_structure: 0.0,
+            nutrient: 0.0,
+            traits: TraitVector {
                 photosynthetic_absorption: 1.0,
                 ..zero_traits()
             },
@@ -2171,9 +2390,12 @@ mod tests {
         };
         let demand_low = stoichiometric_demand(&low_spec, structure, &params);
         let demand_high = stoichiometric_demand(&high_spec, structure, &params);
-        assert!(demand_high > demand_low,
+        assert!(
+            demand_high > demand_low,
             "more specification investment should yield higher demand: low={}, high={}",
-            demand_low, demand_high);
+            demand_low,
+            demand_high
+        );
 
         // Non-specification traits (fecundity, mate_selectivity etc.) should NOT affect demand
         let with_repro = TraitVector {
@@ -2182,9 +2404,12 @@ mod tests {
             ..zero_traits()
         };
         let demand_repro = stoichiometric_demand(&with_repro, structure, &params);
-        assert!((demand_repro - demand_low).abs() < 1e-6,
+        assert!(
+            (demand_repro - demand_low).abs() < 1e-6,
             "non-specification traits should not affect demand: low={}, with_repro={}",
-            demand_low, demand_repro);
+            demand_low,
+            demand_repro
+        );
     }
 
     #[test]
@@ -2194,9 +2419,12 @@ mod tests {
         let traits = zero_traits();
         let demand = stoichiometric_demand(&traits, 10.0, &params);
         let expected = 10.0 * params.base_nutrient_ratio;
-        assert!((demand - expected).abs() < 1e-6,
+        assert!(
+            (demand - expected).abs() < 1e-6,
             "zero-spec demand should be structure * base_ratio: got {}, expected {}",
-            demand, expected);
+            demand,
+            expected
+        );
     }
 
     #[test]
@@ -2213,17 +2441,30 @@ mod tests {
         // Positive structure → positive demand
         let demand_small = stoichiometric_demand(&traits, 1.0, &params);
         let demand_large = stoichiometric_demand(&traits, 10.0, &params);
-        assert!(demand_small > 0.0, "positive structure should yield positive demand");
-        assert!(demand_large > demand_small, "larger structure should yield larger demand");
+        assert!(
+            demand_small > 0.0,
+            "positive structure should yield positive demand"
+        );
+        assert!(
+            demand_large > demand_small,
+            "larger structure should yield larger demand"
+        );
         // Demand is proportional to structure
         let ratio = demand_large / demand_small;
-        assert!((ratio - 10.0).abs() < 1e-4, "demand should scale linearly with structure");
+        assert!(
+            (ratio - 10.0).abs() < 1e-4,
+            "demand should scale linearly with structure"
+        );
     }
 
     #[test]
     fn toroidal_distance_wraps_correctly() {
         let d = toroidal_distance((-48.0, 0.0), (48.0, 0.0), 100.0);
-        assert!((d - 4.0).abs() < 1e-3, "toroidal distance should be 4.0, got {}", d);
+        assert!(
+            (d - 4.0).abs() < 1e-3,
+            "toroidal distance should be 4.0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -2231,14 +2472,12 @@ mod tests {
         let recipe = WorldRecipe {
             parameters: test_params(),
             initial_distribution: None,
-            agents: Some(vec![
-                AgentSpec {
-                    position: (0.0, 0.0),
-                    reserve: 50.0,
-                    traits: zero_traits(),
-                    nutrient: 0.0,
-                },
-            ]),
+            agents: Some(vec![AgentSpec {
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                traits: zero_traits(),
+                nutrient: 0.0,
+            }]),
             carcasses: None,
             max_ticks: 100,
         };
@@ -2269,7 +2508,11 @@ mod tests {
             max_ticks: 100,
         };
         let world = World::from_recipe(&recipe, 42);
-        assert_eq!(world.carcasses().len(), 1, "seeded carcass must materialise");
+        assert_eq!(
+            world.carcasses().len(),
+            1,
+            "seeded carcass must materialise"
+        );
         let c = &world.carcasses()[0];
         assert_eq!(c.position, (1.0, 2.0));
         assert_eq!(c.energy, 40.0);
@@ -2286,12 +2529,32 @@ mod tests {
             parameters: test_params(),
             initial_distribution: None,
             agents: Some(vec![
-                AgentSpec { position: (0.0, 0.0), reserve: 50.0, traits: zero_traits(), nutrient: 0.0 },
-                AgentSpec { position: (1.0, 1.0), reserve: 50.0, traits: zero_traits(), nutrient: 0.0 },
+                AgentSpec {
+                    position: (0.0, 0.0),
+                    reserve: 50.0,
+                    traits: zero_traits(),
+                    nutrient: 0.0,
+                },
+                AgentSpec {
+                    position: (1.0, 1.0),
+                    reserve: 50.0,
+                    traits: zero_traits(),
+                    nutrient: 0.0,
+                },
             ]),
             carcasses: Some(vec![
-                CarcassSpec { position: (2.0, 2.0), energy: 10.0, nutrient: 1.0, traits: zero_traits() },
-                CarcassSpec { position: (3.0, 3.0), energy: 10.0, nutrient: 1.0, traits: zero_traits() },
+                CarcassSpec {
+                    position: (2.0, 2.0),
+                    energy: 10.0,
+                    nutrient: 1.0,
+                    traits: zero_traits(),
+                },
+                CarcassSpec {
+                    position: (3.0, 3.0),
+                    energy: 10.0,
+                    nutrient: 1.0,
+                    traits: zero_traits(),
+                },
             ]),
             max_ticks: 100,
         };
@@ -2515,7 +2778,8 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             reserve: 50.0,
-            structure: 5.0, peak_structure: 5.0, // nonzero structure required for light capture
+            structure: 5.0,
+            peak_structure: 5.0, // nonzero structure required for light capture
             nutrient: 0.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.8,
@@ -2535,8 +2799,10 @@ mod tests {
         world.energy_ledger().assert_balanced();
 
         // Solar input should be positive
-        assert!(world.energy_ledger().total_solar_input() > 0.0,
-            "solar input should be positive");
+        assert!(
+            world.energy_ledger().total_solar_input() > 0.0,
+            "solar input should be positive"
+        );
     }
 
     #[test]
@@ -2568,23 +2834,27 @@ mod tests {
         // Verify cumulative conservation: total solar = dissipated + retained
         let total_solar = world.total_solar_input();
         let total_dissipated = world.dissipated_energy();
-        let retained_agents: f32 = world.agents().iter()
-            .map(|a| a.reserve + a.structure + a.repro_reserve).sum();
-        let retained_carcasses: f32 = world.carcasses().iter()
-            .map(|c| c.energy).sum();
+        let retained_agents: f32 = world
+            .agents()
+            .iter()
+            .map(|a| a.reserve + a.structure + a.repro_reserve)
+            .sum();
+        let retained_carcasses: f32 = world.carcasses().iter().map(|c| c.energy).sum();
         // Initial endowment energy
         let initial_energy: f32 = 50.0 * 10.0  // producers reserve
             + 5.0 * 10.0   // producer structure
             + 5.0 * 10.0   // producer repro_reserve
             + 40.0 * 10.0  // heterotrophs reserve
             + 3.0 * 10.0   // heterotroph structure
-            + 5.0 * 10.0;  // heterotroph repro_reserve
+            + 5.0 * 10.0; // heterotroph repro_reserve
         let total_input = initial_energy + total_solar;
         let total_output = total_dissipated + retained_agents + retained_carcasses;
         let diff = (total_input - total_output).abs();
         let tolerance = total_input * 1e-3; // 0.1% tolerance for f32
-        assert!(diff < tolerance,
-            "cumulative energy conservation violated: input={total_input}, output={total_output}, diff={diff}");
+        assert!(
+            diff < tolerance,
+            "cumulative energy conservation violated: input={total_input}, output={total_output}, diff={diff}"
+        );
     }
 
     #[test]
@@ -2609,15 +2879,29 @@ mod tests {
 
         // Some agents must actually carry bound nutrient for this to be a real
         // test (seeded structure > 0 and positive demand).
-        let total_bound: f32 = world.agents().iter().map(|a| a.bound_nutrient(&params)).sum();
-        assert!(total_bound > 0.0, "seeded agents should carry bound nutrient");
+        let total_bound: f32 = world
+            .agents()
+            .iter()
+            .map(|a| a.bound_nutrient(&params))
+            .sum();
+        assert!(
+            total_bound > 0.0,
+            "seeded agents should carry bound nutrient"
+        );
 
         let total_system_nutrient: f32 = world.nutrient_pool()
-            + world.agents().iter().map(|a| a.nutrient_total(&params)).sum::<f32>()
+            + world
+                .agents()
+                .iter()
+                .map(|a| a.nutrient_total(&params))
+                .sum::<f32>()
             + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
-        assert!((total_system_nutrient - params.initial_nutrient_pool).abs() < 1e-2,
+        assert!(
+            (total_system_nutrient - params.initial_nutrient_pool).abs() < 1e-2,
             "total system nutrient at creation must equal the initial pool: got {}, expected {}",
-            total_system_nutrient, params.initial_nutrient_pool);
+            total_system_nutrient,
+            params.initial_nutrient_pool
+        );
     }
 
     #[test]
@@ -2636,20 +2920,30 @@ mod tests {
 
         // Compute initial total nutrient
         let initial_nutrient: f32 = world.nutrient_pool()
-            + world.agents().iter().map(|a| a.nutrient_total(world.params())).sum::<f32>()
+            + world
+                .agents()
+                .iter()
+                .map(|a| a.nutrient_total(world.params()))
+                .sum::<f32>()
             + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
 
         for t in 0..200 {
             world.step();
 
             let current_nutrient: f32 = world.nutrient_pool()
-                + world.agents().iter().map(|a| a.nutrient_total(world.params())).sum::<f32>()
+                + world
+                    .agents()
+                    .iter()
+                    .map(|a| a.nutrient_total(world.params()))
+                    .sum::<f32>()
                 + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
 
             let diff = (current_nutrient - initial_nutrient).abs();
             let tolerance = initial_nutrient.abs().max(1.0) * 1e-4;
-            assert!(diff < tolerance,
-                "nutrient conservation violated at tick {t}: initial={initial_nutrient}, current={current_nutrient}, diff={diff}");
+            assert!(
+                diff < tolerance,
+                "nutrient conservation violated at tick {t}: initial={initial_nutrient}, current={current_nutrient}, diff={diff}"
+            );
 
             if world.agents().is_empty() {
                 break;
@@ -2832,8 +3126,10 @@ mod tests {
 
         world.step();
 
-        assert!(world.last_tick_births() > 0,
-            "reproduction should produce births this tick");
+        assert!(
+            world.last_tick_births() > 0,
+            "reproduction should produce births this tick"
+        );
         world.nutrient_ledger().assert_balanced();
     }
 
@@ -2898,8 +3194,10 @@ mod tests {
             }
         }
 
-        assert!(total_births > 0,
-            "a fed producer must reproduce — the #269 nutrient-gate pinning is resolved");
+        assert!(
+            total_births > 0,
+            "a fed producer must reproduce — the #269 nutrient-gate pinning is resolved"
+        );
     }
 
     #[test]
@@ -2982,8 +3280,11 @@ mod tests {
         // Died events should remove agents from active set
         let died_events = world.event_log().by_kind(&event::EventKind::Died);
         for ev in &died_events {
-            assert!(!topo.active_agents().contains(&ev.source),
-                "dead agent {} should not be in active set", ev.source);
+            assert!(
+                !topo.active_agents().contains(&ev.source),
+                "dead agent {} should not be in active set",
+                ev.source
+            );
         }
 
         // Incremental update should not panic
@@ -2991,10 +3292,14 @@ mod tests {
 
         // Verify event log has expected event types
         let log = world.event_log();
-        assert!(!log.by_kind(&event::EventKind::Photosynthesized).is_empty(),
-            "should have photosynthesis events");
-        assert!(!log.by_kind(&event::EventKind::Metabolized).is_empty(),
-            "should have metabolism events");
+        assert!(
+            !log.by_kind(&event::EventKind::Photosynthesized).is_empty(),
+            "should have photosynthesis events"
+        );
+        assert!(
+            !log.by_kind(&event::EventKind::Metabolized).is_empty(),
+            "should have metabolism events"
+        );
     }
 
     // --- Trophic transfer efficiency tests ---
@@ -3011,8 +3316,11 @@ mod tests {
             ..zero_traits()
         };
         let eff = trophic_transfer_efficiency(&traits, &traits, &params);
-        assert!((eff - 0.7).abs() < 1e-6,
-            "identical traits should yield base efficiency, got {}", eff);
+        assert!(
+            (eff - 0.7).abs() < 1e-6,
+            "identical traits should yield base efficiency, got {}",
+            eff
+        );
     }
 
     #[test]
@@ -3038,12 +3346,18 @@ mod tests {
         };
         let eff_near = trophic_transfer_efficiency(&consumer, &near_target, &params);
         let eff_far = trophic_transfer_efficiency(&consumer, &far_target, &params);
-        assert!(eff_near > eff_far,
-            "near target should have higher efficiency: near={}, far={}", eff_near, eff_far);
-        assert!(eff_near < 0.8,
-            "non-identical traits should be below base: {}", eff_near);
-        assert!(eff_far > 0.0,
-            "efficiency should be positive: {}", eff_far);
+        assert!(
+            eff_near > eff_far,
+            "near target should have higher efficiency: near={}, far={}",
+            eff_near,
+            eff_far
+        );
+        assert!(
+            eff_near < 0.8,
+            "non-identical traits should be below base: {}",
+            eff_near
+        );
+        assert!(eff_far > 0.0, "efficiency should be positive: {}", eff_far);
     }
 
     #[test]
@@ -3062,14 +3376,23 @@ mod tests {
             ..zero_traits()
         };
         let eff = trophic_transfer_efficiency(&consumer, &far_target, &params);
-        assert!((eff - 0.6).abs() < 1e-6,
-            "zero decay should yield flat base efficiency, got {}", eff);
+        assert!(
+            (eff - 0.6).abs() < 1e-6,
+            "zero decay should yield flat base efficiency, got {}",
+            eff
+        );
     }
 
     #[test]
     fn trophic_efficiency_higher_decay_penalises_distance_more() {
-        let consumer = TraitVector { heterotrophy: 0.5, ..zero_traits() };
-        let target = TraitVector { photosynthetic_absorption: 1.0, ..zero_traits() };
+        let consumer = TraitVector {
+            heterotrophy: 0.5,
+            ..zero_traits()
+        };
+        let target = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
         let low_decay = WorldParameters {
             base_trophic_efficiency: 0.8,
             trophic_distance_decay: 0.5,
@@ -3082,8 +3405,12 @@ mod tests {
         };
         let eff_low = trophic_transfer_efficiency(&consumer, &target, &low_decay);
         let eff_high = trophic_transfer_efficiency(&consumer, &target, &high_decay);
-        assert!(eff_low > eff_high,
-            "higher decay should reduce efficiency more: low_decay={}, high_decay={}", eff_low, eff_high);
+        assert!(
+            eff_low > eff_high,
+            "higher decay should reduce efficiency more: low_decay={}, high_decay={}",
+            eff_low,
+            eff_high
+        );
     }
 
     #[test]
@@ -3115,19 +3442,23 @@ mod tests {
         // Cumulative conservation
         let total_solar = world.total_solar_input();
         let total_dissipated = world.dissipated_energy();
-        let retained_agents: f32 = world.agents().iter()
-            .map(|a| a.reserve + a.structure + a.repro_reserve).sum();
-        let retained_carcasses: f32 = world.carcasses().iter()
-            .map(|c| c.energy).sum();
-        let initial_energy: f32 = 50.0 * 10.0 + 5.0 * 10.0 + 5.0 * 10.0
-            + 40.0 * 10.0 + 3.0 * 10.0 + 5.0 * 10.0;
+        let retained_agents: f32 = world
+            .agents()
+            .iter()
+            .map(|a| a.reserve + a.structure + a.repro_reserve)
+            .sum();
+        let retained_carcasses: f32 = world.carcasses().iter().map(|c| c.energy).sum();
+        let initial_energy: f32 =
+            50.0 * 10.0 + 5.0 * 10.0 + 5.0 * 10.0 + 40.0 * 10.0 + 3.0 * 10.0 + 5.0 * 10.0;
         let total_input = initial_energy + total_solar;
         let total_output = total_dissipated + retained_agents + retained_carcasses;
         let diff = (total_input - total_output).abs();
         let tolerance = total_input * 2e-3; // 0.2% tolerance for f32 accumulation over 200 ticks
-        assert!(diff < tolerance,
+        assert!(
+            diff < tolerance,
             "cumulative energy conservation violated with distance-dependent efficiency: \
-             input={total_input}, output={total_output}, diff={diff}");
+             input={total_input}, output={total_output}, diff={diff}"
+        );
     }
 
     #[test]
@@ -3137,13 +3468,13 @@ mod tests {
         // before the death check. The agent still dies; its final move only
         // repositions a corpse no subsequent tick will read, so it is immaterial.
         let params = WorldParameters {
-            solar_flux_magnitude: 0.0,  // no photosynthesis income
-            base_metabolic_rate: 0.0,   // no metabolism drain
+            solar_flux_magnitude: 0.0, // no photosynthesis income
+            base_metabolic_rate: 0.0,  // no metabolism drain
             growth_efficiency: 0.0,
-            wear_rate: 10.0,            // very high baseline wear
+            wear_rate: 10.0, // very high baseline wear
             use_wear_rate: 0.0,
             wear_degradation_steepness: 1.0,
-            repair_decay: 0.0,          // no repair
+            repair_decay: 0.0, // no repair
             contact_range_coefficient: 5.0,
             movement_cost_coefficient: 0.0,
             initial_population_size: 0,
@@ -3187,25 +3518,35 @@ mod tests {
         world.step();
 
         // The agent should still have died from structure below the threshold.
-        let died_events: Vec<_> = world.event_log().by_kind(&event::EventKind::Died)
+        let died_events: Vec<_> = world
+            .event_log()
+            .by_kind(&event::EventKind::Died)
             .into_iter()
             .filter(|e| e.source == agent_id)
             .collect();
-        assert!(!died_events.is_empty(),
-            "agent should have died from structure below death threshold");
+        assert!(
+            !died_events.is_empty(),
+            "agent should have died from structure below death threshold"
+        );
 
         // The agent is removed from the living population after the death check.
-        assert!(world.agents().iter().all(|a| a.id != agent_id),
-            "dead agent should be removed from the living population");
+        assert!(
+            world.agents().iter().all(|a| a.id != agent_id),
+            "dead agent should be removed from the living population"
+        );
 
         // It took one final step before the death check: the move phase now runs
         // ahead of wear/death, so a Moved event for the dying agent is expected
         // (and immaterial — it only repositions a corpse).
-        let moved_events: Vec<_> = world.event_log().by_kind(&event::EventKind::Moved)
+        let moved_events: Vec<_> = world
+            .event_log()
+            .by_kind(&event::EventKind::Moved)
             .into_iter()
             .filter(|e| e.source == agent_id)
             .collect();
-        assert!(!moved_events.is_empty(),
-            "dying agent should take one final step before the death check (move runs before wear/death)");
+        assert!(
+            !moved_events.is_empty(),
+            "dying agent should take one final step before the death check (move runs before wear/death)"
+        );
     }
 }

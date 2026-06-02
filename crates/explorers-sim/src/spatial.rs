@@ -297,16 +297,19 @@ mod tests {
     #[test]
     fn nutrient_grid_total_equals_initial() {
         let grid = NutrientGrid::new(100.0, 10.0, 500.0);
-        assert!((grid.total() - 500.0).abs() < 1e-3,
-            "total should equal initial, got {}", grid.total());
+        assert!(
+            (grid.total() - 500.0).abs() < 1e-3,
+            "total should equal initial, got {}",
+            grid.total()
+        );
     }
 
     #[test]
     fn nutrient_grid_different_cells_are_independent() {
         // Two positions in different cells should access independent pools
         let mut grid = NutrientGrid::new(100.0, 10.0, 500.0);
-        let far_left = (-40.0, 0.0);  // cell near left edge
-        let far_right = (40.0, 0.0);  // cell near right edge
+        let far_left = (-40.0, 0.0); // cell near left edge
+        let far_right = (40.0, 0.0); // cell near right edge
 
         // Drain from one cell
         *grid.at_position(far_left) -= 3.0;
@@ -314,11 +317,17 @@ mod tests {
         // Other cell unaffected
         let initial_per_cell = 500.0 / 100.0; // 100 cells (10x10)
         let right_val = *grid.at_position(far_right);
-        assert!((right_val - initial_per_cell).abs() < 1e-6,
-            "distant cell should be unaffected, got {}", right_val);
+        assert!(
+            (right_val - initial_per_cell).abs() < 1e-6,
+            "distant cell should be unaffected, got {}",
+            right_val
+        );
 
         // Total reflects the drain
-        assert!((grid.total() - 497.0).abs() < 1e-3,
-            "total should reflect drain, got {}", grid.total());
+        assert!(
+            (grid.total() - 497.0).abs() < 1e-3,
+            "total should reflect drain, got {}",
+            grid.total()
+        );
     }
 }
