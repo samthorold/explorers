@@ -2,6 +2,7 @@ pub mod energy_ledger;
 pub mod event;
 pub mod nutrient_ledger;
 pub mod phase;
+pub mod soa;
 pub mod spatial;
 pub mod topology;
 
@@ -548,6 +549,7 @@ pub struct WorldRecipe {
 /// Indices: 0=photosynthetic_absorption, 1=heterotrophy, 2=mobility.
 pub const FUNCTIONAL_TRAIT_COUNT: usize = 3;
 
+#[derive(Clone, Debug)]
 pub struct Agent {
     pub id: u64,
     pub position: (f32, f32),
