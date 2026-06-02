@@ -1,4 +1,9 @@
 .DS_Store
 
 /target
+
+# Claude Code — local/runtime state (shared config like .claude/settings.json stays tracked)
+.claude/settings.local.json
 .claude/worktrees
+.claude/scheduled_tasks.json
+.claude/scheduled_tasks.lock
