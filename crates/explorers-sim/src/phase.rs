@@ -7427,7 +7427,9 @@ mod tests {
                 "initial_population_size": 0,
                 "light_competition_radius": 1000.0,
                 "photo_maintenance_cost": 0.0,
-                "heterotrophy_maintenance_cost": 0.0
+                "heterotrophy_maintenance_cost": 0.0,
+                "initial_nutrient_pool": 100.0,
+                "growth_efficiency": 0.5
             }"#,
         )
         .expect("default params should deserialise");
