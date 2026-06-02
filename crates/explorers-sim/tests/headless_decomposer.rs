@@ -194,27 +194,48 @@ fn load_pathway() -> WorldRecipe {
     serde_json::from_str(&contents).expect("parse pathway scenario")
 }
 
-fn run_pathway_seed(seed: u64) -> (World, TopologyProjection) {
+/// Everything the three pathway property tests assert on, distilled from a single
+/// run of the scenario at a given seed. The example9 run is the suite's dominant
+/// cost (~90 agents over 2000 ticks); the three tests previously each re-ran the
+/// full 12-seed sweep (36 identical runs). Distilling into seed-keyed scalars and
+/// memoising (`pathway_seed_result`) collapses that to one run per seed.
+#[derive(Clone, Copy)]
+struct PathwaySeedResult {
+    /// Cumulative predation energy (living prey) across the run.
+    predation: f32,
+    /// Cumulative decomposition energy (carcass-sourced) across the run.
+    decomposition: f32,
+    /// Agents that read as a `Decomposer` behavioural role at end of run.
+    decomposers: usize,
+    /// Surviving heterotrophy-dominant agents at end of run.
+    surviving_heterotrophs: usize,
+    /// Final living population.
+    final_population: usize,
+}
+
+/// Test-path run horizon for the example9 sweep. The scenario file declares
+/// `max_ticks = 2000` (its budget for `eval_scenarios`/genesis), but all three
+/// pathway properties stabilise by ~tick 2 and hold flat to tick 2000 on every
+/// seed: detrital_share sits at 0.89–0.99 (never near the 0.5 threshold) and the
+/// decomposer + a heterotroph persist throughout. 500 ticks is a generous sustain
+/// horizon — the decomposer feeds for 500 ticks on the supply, well past
+/// stabilisation — while cutting the suite's dominant cost ~4x. (Verified the
+/// properties are unchanged at 2000 ticks during this work; see issue #320.)
+const PATHWAY_TEST_MAX_TICKS: u64 = 500;
+
+/// Run the pathway scenario once at `seed` and distil every property the tests
+/// need. The same single step-loop accumulates the topology projection (for the
+/// role classification) and the predation-vs-decomposition tally (the green/brown
+/// split), so no property requires a second run of the same seed.
+fn compute_pathway_seed(seed: u64) -> PathwaySeedResult {
     let recipe = load_pathway();
     let mut world = World::from_recipe(&recipe, seed);
     let mut topology = TopologyProjection::new();
-    for _ in 0..recipe.max_ticks {
-        world.step();
-        topology.update(world.event_log());
-        if world.agents().is_empty() {
-            break;
-        }
-    }
-    (world, topology)
-}
-
-fn pathway_predation_vs_decomposition(seed: u64) -> (f32, f32) {
-    let recipe = load_pathway();
-    let mut world = World::from_recipe(&recipe, seed);
     let mut predation = 0.0f32;
     let mut decomposition = 0.0f32;
     let mut cursor = 0usize;
-    for _ in 0..recipe.max_ticks {
+    let ticks = recipe.max_ticks.min(PATHWAY_TEST_MAX_TICKS);
+    for _ in 0..ticks {
         world.step();
         for ev in world.event_log().since(cursor) {
             if let explorers_sim::event::EventKind::Consumed = ev.kind {
@@ -226,11 +247,47 @@ fn pathway_predation_vs_decomposition(seed: u64) -> (f32, f32) {
             }
         }
         cursor = world.event_log().len();
+        topology.update(world.event_log());
         if world.agents().is_empty() {
             break;
         }
     }
-    (predation, decomposition)
+    let roles = topology.trophic_roles(world.agents());
+    let decomposers = roles
+        .values()
+        .filter(|&&r| r == TrophicRole::Decomposer)
+        .count();
+    let surviving_heterotrophs = world
+        .agents()
+        .iter()
+        .filter(|a| a.traits.heterotrophy > a.traits.photosynthetic_absorption)
+        .count();
+    PathwaySeedResult {
+        predation,
+        decomposition,
+        decomposers,
+        surviving_heterotrophs,
+        final_population: world.agents().len(),
+    }
+}
+
+/// Memoised accessor: the expensive example9 run for `seed` happens exactly once
+/// per test-binary invocation, shared across all three pathway property tests
+/// (which run in parallel by default). Keyed by seed so the full 12-seed sweep is
+/// preserved — only the redundant re-runs are removed.
+fn pathway_seed_result(seed: u64) -> PathwaySeedResult {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<u64, PathwaySeedResult>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache.lock().unwrap().get(&seed) {
+        return *cached;
+    }
+    // Compute outside the lock so concurrent tests fan out across seeds rather
+    // than serialising on the cache mutex.
+    let result = compute_pathway_seed(seed);
+    cache.lock().unwrap().insert(seed, result);
+    result
 }
 
 /// The headline property: detrital intake is the MAJORITY of system consumption
@@ -240,7 +297,7 @@ fn pathway_predation_vs_decomposition(seed: u64) -> (f32, f32) {
 #[test]
 fn pathway_is_majority_detrital_on_every_seed() {
     for seed in PATHWAY_SEEDS {
-        let (predation, decomposition) = pathway_predation_vs_decomposition(seed);
+        let PathwaySeedResult { predation, decomposition, .. } = pathway_seed_result(seed);
         assert!(
             decomposition > 0.0,
             "seed {seed}: the detrital pathway must carry real energy \
@@ -261,16 +318,12 @@ fn pathway_is_majority_detrital_on_every_seed() {
 #[test]
 fn pathway_decomposer_reads_as_decomposer_role() {
     for seed in PATHWAY_SEEDS {
-        let (world, topology) = run_pathway_seed(seed);
-        let roles = topology.trophic_roles(world.agents());
-        let decomposers = roles
-            .values()
-            .filter(|&&r| r == TrophicRole::Decomposer)
-            .count();
+        let result = pathway_seed_result(seed);
         assert!(
-            decomposers >= 1,
-            "seed {seed}: expected a surviving agent to read as Decomposer; roles = {:?}",
-            roles
+            result.decomposers >= 1,
+            "seed {seed}: expected a surviving agent to read as Decomposer; \
+             decomposers = {}",
+            result.decomposers
         );
     }
 }
@@ -280,17 +333,12 @@ fn pathway_decomposer_reads_as_decomposer_role() {
 #[test]
 fn pathway_decomposer_sustains_itself_to_end_of_run() {
     for seed in PATHWAY_SEEDS {
-        let (world, _topology) = run_pathway_seed(seed);
-        let surviving_heterotrophs = world
-            .agents()
-            .iter()
-            .filter(|a| a.traits.heterotrophy > a.traits.photosynthetic_absorption)
-            .count();
+        let result = pathway_seed_result(seed);
         assert!(
-            surviving_heterotrophs >= 1,
+            result.surviving_heterotrophs >= 1,
             "seed {seed}: decomposer lineage must survive to the end of the run, but no \
              heterotroph-dominant agent remains (final population {})",
-            world.agents().len()
+            result.final_population
         );
     }
 }
