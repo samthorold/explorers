@@ -6,6 +6,20 @@
 //!
 //! Run with:
 //!   cargo test -p explorers-sim --test headless_decomposer -- --nocapture
+//!
+//! ## The `slow_` marker convention
+//!
+//! The multi-seed behavioural sweeps in this file each run the scenario to
+//! completion across a spread of seeds, so they dominate the suite's wall-clock
+//! cost. They are first-class tests — they stay in the default run (NOT
+//! `#[ignore]`d) — but they are tagged with a `slow_` name prefix so the slow
+//! sweeps form a selectable category:
+//!   * `cargo test` / `cargo test --workspace` — runs everything, sweeps included.
+//!   * `cargo test slow_` — run ONLY the slow sweeps.
+//!   * `cargo test -- --skip slow_` — the tight inner loop: everything EXCEPT the
+//!     sweeps (sub-second; leaves only the fast correctness regression).
+//! Any future slow sweep should adopt the `slow_` prefix to join the category for
+//! free. The cheap correctness regressions stay unprefixed.
 
 use explorers_sim::topology::{TopologyProjection, TrophicRole};
 use explorers_sim::{World, WorldRecipe};
@@ -93,7 +107,7 @@ fn decomposer_drains_carcass_after_a_death_reindexes_agents() {
 /// luck. (This — not a system-wide consumption share — is the domain definition
 /// of "reads as a Decomposer".)
 #[test]
-fn decomposer_reads_as_decomposer_role() {
+fn slow_decomposer_reads_as_decomposer_role() {
     for seed in SEEDS {
         let (world, topology) = run_seed(seed);
         let roles = topology.trophic_roles(world.agents());
@@ -112,7 +126,7 @@ fn decomposer_reads_as_decomposer_role() {
 /// The seeded decomposer must not starve out: a heterotrophy-dominant agent
 /// persists to the end of the run on the carcass supply, on every seed.
 #[test]
-fn decomposer_sustains_itself_to_end_of_run() {
+fn slow_decomposer_sustains_itself_to_end_of_run() {
     for seed in SEEDS {
         let (world, _topology) = run_seed(seed);
         let surviving_heterotrophs = world
@@ -137,7 +151,7 @@ fn decomposer_sustains_itself_to_end_of_run() {
 /// real structure (it grew) and have driven a live detrital pathway — i.e. it
 /// reaches food rather than starving in place at population 1.
 #[test]
-fn decomposer_extends_feeding_reach_by_growing_structure() {
+fn slow_decomposer_extends_feeding_reach_by_growing_structure() {
     // The scenario must actually exercise body-as-reach.
     let recipe = load();
     assert!(
@@ -295,7 +309,7 @@ fn pathway_seed_result(seed: u64) -> PathwaySeedResult {
 /// physically cannot reach a living agent), not by parameter luck. Should
 /// comfortably clear 0.5; if it is borderline, the construction has failed.
 #[test]
-fn pathway_is_majority_detrital_on_every_seed() {
+fn slow_pathway_is_majority_detrital_on_every_seed() {
     for seed in PATHWAY_SEEDS {
         let PathwaySeedResult { predation, decomposition, .. } = pathway_seed_result(seed);
         assert!(
@@ -316,7 +330,7 @@ fn pathway_is_majority_detrital_on_every_seed() {
 /// The surviving decomposer reads as a `Decomposer` behavioural role on every
 /// seed — its own lifetime diet is majority detrital.
 #[test]
-fn pathway_decomposer_reads_as_decomposer_role() {
+fn slow_pathway_decomposer_reads_as_decomposer_role() {
     for seed in PATHWAY_SEEDS {
         let result = pathway_seed_result(seed);
         assert!(
@@ -331,7 +345,7 @@ fn pathway_decomposer_reads_as_decomposer_role() {
 /// The decomposer sustains to the end of the run on the seeded deposit + carcass
 /// supply, on every seed — it does not starve out.
 #[test]
-fn pathway_decomposer_sustains_itself_to_end_of_run() {
+fn slow_pathway_decomposer_sustains_itself_to_end_of_run() {
     for seed in PATHWAY_SEEDS {
         let result = pathway_seed_result(seed);
         assert!(
@@ -382,7 +396,7 @@ fn predation_vs_decomposition(seed: u64) -> (f32, f32) {
 /// artifact of the pre-#310 bug (doomed newborns were pure-decomposition
 /// carcasses).
 #[test]
-fn carcasses_are_consumed_through_the_detrital_pathway() {
+fn slow_carcasses_are_consumed_through_the_detrital_pathway() {
     for seed in SEEDS {
         let (predation, decomposition) = predation_vs_decomposition(seed);
         assert!(
