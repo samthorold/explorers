@@ -27,7 +27,11 @@ showed its producers mass-died in a single tick and its decomposer never establi
 lineage — pinned at count 1 for all 2000 ticks — so it demonstrated neither the viability
 nor the sustained carcass supply it claimed; emergent decomposers from the genesis search are
 now the real evidence) and **re-cast `example9_detrital_pathway` as a wiring/regression test
-rather than emergence evidence**. Earlier rebuilds: after #302 replaced the energy-death
+rather than emergence evidence**, then once more on 2026-06-02 after **`example9`'s decomposer was made
+obligate** (`photosynthetic_absorption` 0.4 → 0) and its deposit resized (480 → 12000 energy): the old
+file's detrital pathway had not actually been load-bearing — a stray `0.4` autotrophy trait was funding
+the agent through photosynthesis, masking a deposit that lasted only ~134 ticks on detritus alone.
+Earlier rebuilds: after #302 replaced the energy-death
 detector with a free-energy-stock-trend test, after #313 made the structural death threshold
 *peak-relative* — a fraction of each agent's own peak structure — so newborns and seeds are
 born viable by construction rather than dead-on-arrival below an absolute floor, and after
@@ -46,7 +50,7 @@ carcass-fall it could not previously touch (every remaining file keeps
 | example5 | not-sensible | none (8/8) | disagree | roster/probe mismatch, then stale params; 0 births fails turnover |
 | example7 | not-sensible | none (8/8) | n/a (undecided) | roster mismatch (no decomposer); 0 births fails turnover |
 | example8 | not-sensible | none (8/8) | disagree | roster mismatch (no decomposer); 0 births fails turnover |
-| example9_detrital_pathway | wiring test (not emergence evidence) | none (8/8) | n/a — by construction | none material — verifies the producer→carcass→decomposer pathway closes; detrital_share > 0.5 holds by geometry, so it tests wiring, not that detritivory emerges |
+| example9_detrital_pathway | wiring test (not emergence evidence) | none (8/8) | n/a — by construction | none material — verifies the producer→carcass→decomposer pathway closes; `detrital_share` stays majority-detrital (≈0.9–1.0) by geometry (obligate decomposer; the producer ring is out of reach — the slight impurity is the decomposer's own co-located offspring, not predation on producers), so it tests wiring, not that detritivory emerges |
 
 ## Per-scenario fault localisation
 
@@ -83,23 +87,33 @@ carcass-fall it could not previously touch (every remaining file keeps
   modal failure mode is `none` (survives 1500 ticks without tripping a detector), but a birthless,
   non-reproducing stall is not a sensible ecology. No longer flagged `energy_death`.
 - **example9_detrital_pathway** — A **pathway wiring / regression test, not emergence evidence.**
-  Its headline property — `detrital_share > 0.5` "on every seed" — is **true by construction**, not a
-  finding about dynamics. The decomposer is seeded on a standing carcass deposit (a `carcasses` recipe
-  capability, #311) with **no living agent inside its consumption reach**: with
-  `body_reach_coefficient=0.0` the reach is structure-independent and exact —
-  `heterotrophy × contact_range_coefficient = 0.5 × 1.0 = 0.5` world units — and the nearest living
-  agent (a producer ring at radius ~30 on a 100-extent torus) is far outside it. The hand-placed
-  carcass deposit plus the out-of-reach producer ring therefore *force* the decomposer's diet to be
-  detrital. That makes this scenario a clean **regression on the producer→carcass→decomposer code
-  path**: it verifies energy and nutrient route end to end through detritivory (the brown pathway
-  closes, drains carcasses, and returns nutrient), which is genuinely useful as a wiring guard. It is
-  **not** evidence that a detritivore niche *arises from dynamics* — the diet is detrital because the
-  geometry forbids anything else, not because detritivory won out in the ecology. Read that way the
-  numbers are healthy: the out-of-reach producer ring reproduces and self-thins (median 2247 births /
-  2176 deaths, median final pop 86 spanning 77–100, `failure=none` 8/8, median fitness 0.80, trophic
-  balance 1.0), raining carcasses across the field, while a generously-sized seeded deposit (480
-  energy) backstops the decomposer past `max_ticks`; the tight fitness spread (0.793–0.806) shows the
-  *wiring* is robust across the ensemble. Emergence evidence — that decomposers and a detrital niche
+  Its headline property — `detrital_share > 0.5` (in practice ≈0.9–1.0) on every seed — is **true by
+  construction**, not a finding about dynamics. The decomposer is **obligate** (`photosynthetic_absorption
+  = 0`, so it has no solar income) and seeded on a standing carcass deposit (a `carcasses` recipe capability, #311) with
+  **no living agent inside its consumption reach**: with `body_reach_coefficient=0.0` the reach is
+  structure-independent and exact — `heterotrophy × contact_range_coefficient = 0.5 × 1.0 = 0.5` world
+  units — and the nearest living agent (a producer ring at radius ~30 on a 100-extent torus) is far
+  outside it. Being obligate, the deposit is the decomposer's *only* energy source, so the diet is
+  detrital not just by geometry but by physiology. That makes this scenario a clean **regression on the
+  producer→carcass→decomposer code path**: it verifies energy and nutrient route end to end through
+  detritivory (the brown pathway closes, drains carcasses, and returns nutrient), which is genuinely
+  useful as a wiring guard. It is **not** evidence that a detritivore niche *arises from dynamics* — the
+  diet is detrital because no producer is reachable and (being obligate) it cannot photosynthesise, not
+  because detritivory won out in the ecology. (`detrital_share` is ≈0.9–1.0 rather than exactly 1.0 for an
+  endogenous reason — the decomposer's own asexual offspring are born co-located, inside the 0.5 reach, so
+  a little parent/offspring cannibalism dilutes the purity; no producer is ever predated.) Read that way
+  the numbers are healthy: the out-of-reach producer ring reproduces and
+  self-thins (median 2190 births / 2116 deaths, median final pop 87.5 spanning 77–99, `failure=none` 8/8,
+  median fitness 0.805 spanning 0.773–0.81, trophic balance 1.0). A 12000-energy seeded deposit — sized
+  to genuinely outlast `max_ticks` (the obligate decomposer draws it down at ~3.6 energy/tick and reaches
+  tick 2000 with ~40% unspent) — backstops the decomposer as a single individual; an earlier
+  480-energy deposit had *appeared* to suffice only because a `photosynthetic_absorption=0.4` trait was
+  quietly funding the agent through the green pathway (it starved at tick ~134 once photosynthesis was
+  removed), so the detrital pathway was never actually load-bearing until this fix. Note the ring's
+  carcasses fall near radius ~30, out of reach, so they **accumulate unconsumed** (nutrient locks into
+  the dead pool) — the brown loop closes only *locally* at the deposit; the field-wide rain is not a
+  self-sustaining detrital web, and the evaluator's healthy score does not yet register that lockup.
+  Emergence evidence — that decomposers and a detrital niche
   arise without being hand-built — now comes from the genesis search (71/120 viable random worlds
   produced decomposers, guilds up to 235, including from full-random founders), not from this file; a
   dedicated genesis-emergence regression is a deferred follow-up.
@@ -121,8 +135,9 @@ defects swamp the legacy scenarios: partial recipes drifting under code defaults
 roster/intent drift — for a long time **no scenario in the suite contained a working decomposer**, so
 carcasses accumulated unconsumed in every run. `example9_detrital_pathway` (#311) now drives the
 producer→carcass→decomposer detrital loop end to end — but only as a **wiring test**: it forces a
-detrital diet *by geometry* (a hand-placed carcass deposit plus an out-of-reach producer ring), so it
-proves the code path closes, not that a detritivore niche emerges. Building this pathway turned up
+detrital diet by physiology and geometry (an *obligate* decomposer, `photosynthetic_absorption = 0`, on
+a hand-placed deposit sized to outlast the run, with the producer ring out of reach), so it proves the
+code path closes, not that a detritivore niche emerges. Building this pathway turned up
 *why* carcasses had always accumulated — a drain-phase index/id bug (now fixed, guarded by
 `decomposer_drains_carcass_after_a_death_reindexes_agents`) meant no decomposer could consume a
 carcass once any agent had died — so the "carcasses accumulate unconsumed" symptom was partly a code
