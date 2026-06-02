@@ -432,6 +432,19 @@ pub fn has_trophic_pyramid(
     producer_energy > consumer_energy
 }
 
+/// Producer share of living energy: `producer_energy / (producer + consumer)`,
+/// bucketing each cluster as producer or consumer by whether its mean photo-
+/// synthetic coordinate exceeds its mean heterotrophic one. It rewards the
+/// pyramid base — energy concentrated in producers — per the "Trophic structure"
+/// expected property.
+///
+/// It is deliberately **decomposer-blind**: decomposers are heterotrophs, so they
+/// fall in `consumer_energy`, and this score does not — and cannot — reward a
+/// decomposer guild distinctly. Decomposer-ness is not in the trait vector to
+/// score (see `docs/system-design/trait-space.md`, "Decomposer is a behavioural
+/// role, not a heritable trait"), so the detrital pathway is held to account
+/// negatively by the `EnergyDeath` failure gate (a world where it fails locks
+/// matter in carcasses and scores zero fitness), never by this term.
 pub fn trophic_balance_score(
     trait_vectors: &[explorers_sim::TraitVector],
     labels: &[Option<usize>],
