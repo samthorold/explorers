@@ -17,8 +17,8 @@ When a region's deadness *cannot* be decided here, that is itself a finding: the
 The sharpness of a gate is bounded by how much of the map `T` is pinned. Three tiers:
 
 - **Fully pinned** — the phase order; the kappa flow-allocation rule; the linear nutrient demand `demand = base_nutrient_ratio + spec_coeff · (autotrophy + heterotrophy + mobility)`; the route-agnostic nutrient split; both conservation laws; proportional competition; the reproduction gate. Here the math is exact, symbolic in a few constants.
-- **Form pinned, coefficients searched** — convex/superlinear trait maintenance; movement cost linear in distance; the monotone structural death threshold. Here the math is parametric: real inequalities and comparative statics.
-- **Open** — the photosynthesis income magnitude; the wear accumulation/repair law. Here only structural or bounding statements are possible. (The efficiency-vs-distance form is *parameterised in the scenario files* but not yet owned by system design — see Findings.)
+- **Form pinned, coefficients searched** — convex/superlinear trait maintenance; movement cost linear in distance; the monotone structural death threshold; the exponential efficiency-vs-distance trophic-transfer form (`base_trophic_efficiency · exp(−trophic_distance_decay · d)`, [world rules](world-rules.md), flow 7). Here the math is parametric: real inequalities and comparative statics.
+- **Open** — the photosynthesis income magnitude; the wear accumulation/repair law. Here only structural or bounding statements are possible.
 
 A gate is cheap and decidable today exactly when it rests on the first two tiers.
 
@@ -81,6 +81,6 @@ For this loop to work, an example must carry not just its initial condition but 
 
 ## Findings and follow-ups
 
-- **Promote committed forms into system design.** The efficiency-vs-distance form is already parameterised in the scenario files (`base_trophic_efficiency`, `trophic_distance_decay`) but is not owned by system design. Promoting it would convert the trophic-pyramid-height gate from conditional to decidable.
+- **Promote committed forms into system design — done for trophic transfer.** The efficiency-vs-distance form (`base_trophic_efficiency · exp(−trophic_distance_decay · d)`) is now owned by [world rules](world-rules.md) (flow 7), not just parameterised in the scenario files. With the form pinned, the trophic-pyramid-height question moves from conditional to parametric: pyramid height is bounded by how many transfers can each retain enough of the level below to clear metabolism, and the per-transfer ceiling is now a closed form in `base_trophic_efficiency` and `trophic_distance_decay` rather than a free shape.
 - **Anti-generalist mechanism — stated, gate deferred by design.** Prevention now rests on structural fragility (#9) and functional incompatibility (#2); a closed-form generalist-dominance gate becomes possible only if a cross-trait interaction maintenance term is later committed (see the resolved finding above). Tracked as a contingency, not current work.
 - **Unify the canonical parameter/form model** across genesis, scenarios, and viability so the three lenses describe the same physics.
