@@ -41,6 +41,7 @@ fn failure_name(failure: &Option<FailureMode>) -> &'static str {
         Some(FailureMode::EnergyDeath) => "energy_death",
         Some(FailureMode::Monoculture) => "monoculture",
         Some(FailureMode::GeneralistDominance) => "generalist_dominance",
+        Some(FailureMode::NutrientLockup) => "nutrient_lockup",
     }
 }
 
@@ -114,17 +115,28 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
     // evaluator can read its trend — energy death is this stock collapsing into
     // carcasses (issue #302). The world stays history-free; the series lives here.
     let mut free_energy_per_tick: Vec<f32> = Vec::with_capacity(recipe.max_ticks as usize);
+    // Sample the dead pool's share of system nutrient each tick so the evaluator
+    // can read its trend — nutrient lockup is this fraction sequestering high and
+    // staying there as carcasses out-accumulate the decomposers (issue #342).
+    let mut carcass_fraction_per_tick: Vec<f32> = Vec::with_capacity(recipe.max_ticks as usize);
     for _ in 0..recipe.max_ticks {
         world.step();
         total_births += world.last_tick_births();
         total_deaths += world.last_tick_deaths();
         free_energy_per_tick.push(world.free_energy());
+        carcass_fraction_per_tick.push(world.carcass_locked_nutrient_fraction());
         if world.agents().is_empty() || world.agents().len() > config.max_population {
             break;
         }
     }
 
-    let breakdown = evaluate_from_log(&world, &free_energy_per_tick, config, recipe.max_ticks);
+    let breakdown = evaluate_from_log(
+        &world,
+        &free_energy_per_tick,
+        &carcass_fraction_per_tick,
+        config,
+        recipe.max_ticks,
+    );
 
     SeedObservation {
         seed,

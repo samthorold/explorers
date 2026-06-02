@@ -60,7 +60,11 @@ Trait space collapses to a single cluster. The system has persistence but no div
 
 ### Energy death
 
-Free energy trends to zero. Energy accumulates in carcass structure and is not returned to the living system. This occurs when decomposer strategies are not viable — either the cost of decomposition exceeds its energy return, or decomposer populations cannot sustain themselves. Nutrient also locks in carcasses, compounding the decline: producers cannot reproduce without nutrient even when solar flux provides ample energy. The living system starves while energy and nutrient sit locked in dead matter.
+Free energy trends to zero. Energy accumulates in carcass structure and is not returned to the living system. This occurs when decomposer strategies are not viable — either the cost of decomposition exceeds its energy return, or decomposer populations cannot sustain themselves. The living system starves while energy sits locked in dead matter. Its nutrient-side sibling, **nutrient lockup**, is the same dead-pool sequestration measured on the nutrient pool rather than the energy pool; the two often co-occur but need not (see below).
+
+### Nutrient lockup
+
+Nutrient sequesters irreversibly into the dead pool. The conserved system nutrient — which cycles between the substrate grid, living agents, and carcasses — silts up in carcasses faster than the living decomposers can turn it over, on a rising trend that does not reverse. Producers cannot reproduce without nutrient *even when solar flux provides ample energy*, so the living system can starve for nutrient while its energy budget looks healthy. This is the distinction from energy death: a world whose producers photosynthesise fine (free energy does not collapse) can still lock its nutrient away, because the decomposers that would return it are absent, out of reach, or non-viable. It is the pathology the decomposer role exists to prevent ([trophic roles](../ecology/trophic-roles.md), [world rules](world-rules.md): "a world without decomposers accumulates resources in the dead pool until the living system starves"). The canonical case is a producer→carcass front whose carcass rain falls outside any decomposer's reach (`scenarios/example9_detrital_pathway.json`): energy flow is sustained, but nutrient accumulates unconsumed in the dead pool.
 
 ### Population explosion
 
