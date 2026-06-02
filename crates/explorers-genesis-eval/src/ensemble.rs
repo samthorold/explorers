@@ -58,34 +58,37 @@ impl Spread {
     }
 }
 
-/// The six failure-mode names the genesis evaluator emits, in canonical order
+/// The seven failure-mode names the genesis evaluator emits, in canonical order
 /// (`none` first). Used for deterministic tie-breaking and to give every mode a
 /// stable slot in the distribution — modes never observed still read as 0.
-pub const FAILURE_MODES: [&str; 6] = [
+/// `nutrient_lockup` is appended last so the existing modes keep their canonical
+/// order and the committed snapshot's tie-breaks stay stable (issue #342).
+pub const FAILURE_MODES: [&str; 7] = [
     "none",
     "extinction",
     "population_explosion",
     "energy_death",
     "monoculture",
     "generalist_dominance",
+    "nutrient_lockup",
 ];
 
 /// How a scenario's `failure_mode` is distributed across the seed ensemble: a
-/// count per mode (over the canonical six) and the modal mode. Distribution as
+/// count per mode (over the canonical seven) and the modal mode. Distribution as
 /// evidence — the modal mode is the robust read, the counts show how decisive
 /// (or split) the ensemble is. Verdict-free: matching this against the declared
 /// prediction is `verdicts.md`'s job.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FailureDistribution {
     /// Count per mode, indexed parallel to [`FAILURE_MODES`].
-    counts: [usize; 6],
+    counts: [usize; 7],
 }
 
 impl FailureDistribution {
     /// Tally an iterator of failure-mode names. Unknown names are ignored (the
-    /// evaluator only ever emits the canonical six).
+    /// evaluator only ever emits the canonical seven).
     pub fn of<'a, I: IntoIterator<Item = &'a str>>(modes: I) -> Self {
-        let mut counts = [0usize; 6];
+        let mut counts = [0usize; 7];
         for mode in modes {
             if let Some(i) = FAILURE_MODES.iter().position(|&m| m == mode) {
                 counts[i] += 1;
@@ -117,7 +120,7 @@ impl FailureDistribution {
 }
 
 impl Serialize for FailureDistribution {
-    /// Serialize as a `mode -> count` map over the canonical six, so the JSON is
+    /// Serialize as a `mode -> count` map over the canonical seven, so the JSON is
     /// self-describing and stable (every mode present, unobserved ones at 0).
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;

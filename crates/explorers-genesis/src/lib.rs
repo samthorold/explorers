@@ -34,9 +34,14 @@ pub fn run_single(
     // Sample free (non-carcass-locked) energy each tick for the energy-death
     // detector's stock-trend signal (issue #302); the world stays history-free.
     let mut free_energy_per_tick: Vec<f32> = Vec::with_capacity(run_config.max_ticks as usize);
+    // Sample the dead pool's share of system nutrient each tick for the
+    // nutrient-lockup detector's stock-trend signal (issue #342); the world
+    // stays history-free, mirroring the free-energy sampling above.
+    let mut carcass_fraction_per_tick: Vec<f32> = Vec::with_capacity(run_config.max_ticks as usize);
     for _ in 0..run_config.max_ticks {
         world.step();
         free_energy_per_tick.push(world.free_energy());
+        carcass_fraction_per_tick.push(world.carcass_locked_nutrient_fraction());
         if world.agents().is_empty() {
             break;
         }
@@ -48,6 +53,7 @@ pub fn run_single(
     let breakdown = explorers_genesis_eval::evaluate_from_log(
         &world,
         &free_energy_per_tick,
+        &carcass_fraction_per_tick,
         &run_config.eval_config,
         run_config.max_ticks,
     );

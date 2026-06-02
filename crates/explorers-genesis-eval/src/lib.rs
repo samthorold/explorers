@@ -7,6 +7,11 @@ pub enum FailureMode {
     EnergyDeath,
     Monoculture,
     GeneralistDominance,
+    /// Nutrient sequestered irreversibly into the dead pool: carcasses
+    /// accumulate faster than the living decomposers turn them over, starving
+    /// the living system of nutrient (issue #342). The nutrient-side sibling of
+    /// `EnergyDeath` — distinct pool, distinct quantity.
+    NutrientLockup,
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +30,7 @@ pub struct FitnessBreakdown {
 pub struct EvalConfig {
     pub max_population: usize,
     pub energy_death_window: usize,
+    pub nutrient_lock_window: usize,
     pub clustering_threshold: f32,
     pub dbscan_eps: f32,
     pub dbscan_min_points: usize,
@@ -38,6 +44,7 @@ impl Default for EvalConfig {
         Self {
             max_population: 10_000,
             energy_death_window: 50,
+            nutrient_lock_window: 50,
             clustering_threshold: 0.5,
             dbscan_eps: 1.0,
             dbscan_min_points: 5,
@@ -51,6 +58,7 @@ impl Default for EvalConfig {
 pub fn evaluate_from_log(
     world: &explorers_sim::World,
     free_energy_per_tick: &[f32],
+    carcass_fraction_per_tick: &[f32],
     config: &EvalConfig,
     max_ticks: u64,
 ) -> FitnessBreakdown {
@@ -109,6 +117,21 @@ pub fn evaluate_from_log(
             .collect();
         if is_free_energy_dead(&post_grace, config.energy_death_window) {
             return zero_breakdown(FailureMode::EnergyDeath);
+        }
+
+        // Carcass-locked nutrient fraction, sampled once per tick by the caller.
+        // Nutrient lockup is the dead pool's share trending high and staying
+        // there — nutrient sequestered into carcasses the living decomposers
+        // cannot turn over (issue #342). The nutrient-side sibling of energy
+        // death, checked after it: a world can photosynthesise fine while its
+        // nutrient irreversibly silts up the dead pool. Same grace prefix drop.
+        let post_grace_nutrient: Vec<f32> = carcass_fraction_per_tick
+            .iter()
+            .copied()
+            .skip(grace_ticks as usize)
+            .collect();
+        if is_nutrient_locked(&post_grace_nutrient, config.nutrient_lock_window) {
+            return zero_breakdown(FailureMode::NutrientLockup);
         }
     }
 
@@ -596,6 +619,39 @@ pub fn is_free_energy_dead(free_energy_per_tick: &[f32], window: usize) -> bool 
     window_peak < peak * COLLAPSE_FRACTION
 }
 
+/// Whether nutrient is locked irreversibly in the dead pool — the pathology a
+/// world without viable decomposers exhibits (world-rules.md: "a world without
+/// decomposers accumulates resources in the dead pool until the living system
+/// starves"). `carcass_fraction_per_tick` is the dead pool's share of the
+/// conserved system nutrient, sampled once per tick by the caller.
+///
+/// Lockup is the carcass-locked fraction sitting high across the whole trailing
+/// window *and* not receding: even the window's low point stays above the lock
+/// threshold (sustained sequestration, not a transient carcass spike) and is no
+/// lower than the pre-window low (still climbing or stuck, not being turned
+/// over). A world whose decomposers keep up sees the fraction drain back down,
+/// driving the window low below threshold; a world recovering from a glut sees
+/// the fraction recede below its earlier level. Neither is flagged.
+pub fn is_nutrient_locked(carcass_fraction_per_tick: &[f32], window: usize) -> bool {
+    if carcass_fraction_per_tick.len() < window || window == 0 {
+        return false;
+    }
+    let split = carcass_fraction_per_tick.len() - window;
+    let pre_low = carcass_fraction_per_tick[..split]
+        .iter()
+        .copied()
+        .fold(f32::INFINITY, f32::min);
+    let window_low = carcass_fraction_per_tick[split..]
+        .iter()
+        .copied()
+        .fold(f32::INFINITY, f32::min);
+    // Sustained and non-receding: the dead pool's smallest share over the whole
+    // trailing window still exceeds the lock threshold and has not fallen below
+    // its pre-window low.
+    const LOCK_FRACTION: f32 = 0.4;
+    window_low >= LOCK_FRACTION && window_low >= pre_low
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -686,7 +742,7 @@ mod tests {
         let max_ticks = 50;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let free = run_collecting_free_energy(&mut world, max_ticks);
-        let result = evaluate_from_log(&world, &free, &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &config, max_ticks);
         let born_count = world
             .event_log()
             .by_kind(&explorers_sim::event::EventKind::Reproduced)
@@ -725,7 +781,7 @@ mod tests {
         let collapsing: Vec<f32> = (0..n)
             .map(|t| if t < n / 2 { 100.0 } else { 1.0 })
             .collect();
-        let dead = evaluate_from_log(&world, &collapsing, &config, max_ticks);
+        let dead = evaluate_from_log(&world, &collapsing, &[], &config, max_ticks);
         assert_eq!(
             dead.failure,
             Some(FailureMode::EnergyDeath),
@@ -733,11 +789,52 @@ mod tests {
         );
 
         let sustained: Vec<f32> = vec![100.0; n];
-        let alive = evaluate_from_log(&world, &sustained, &config, max_ticks);
+        let alive = evaluate_from_log(&world, &sustained, &[], &config, max_ticks);
         assert_ne!(
             alive.failure,
             Some(FailureMode::EnergyDeath),
             "a sustained free-energy stock is not energy death"
+        );
+    }
+
+    #[test]
+    fn evaluate_from_log_flags_nutrient_lockup_when_dead_pool_share_stays_high() {
+        // A surviving world with a healthy free-energy stock (so EnergyDeath does
+        // not preempt) plus two carcass-fraction trajectories. Nutrient piling
+        // irreversibly into the dead pool is nutrient lockup; a turned-over dead
+        // pool is not. The one scenario this targets (example9) photosynthesises
+        // fine while sequestering nutrient — the two pools fail independently
+        // (issue #342).
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 0.0,
+            nutrient_lock_window: 5,
+            ..EvalConfig::default()
+        };
+        let max_ticks = 20;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let _ = run_collecting_free_energy(&mut world, max_ticks);
+        if world.agents().is_empty() {
+            return; // need a surviving world to reach the nutrient-lockup branch
+        }
+        let n = world.tick() as usize;
+        let healthy_energy: Vec<f32> = vec![100.0; n];
+
+        let locked: Vec<f32> = (0..n).map(|t| if t < n / 2 { 0.05 } else { 0.6 }).collect();
+        let dead = evaluate_from_log(&world, &healthy_energy, &locked, &config, max_ticks);
+        assert_eq!(
+            dead.failure,
+            Some(FailureMode::NutrientLockup),
+            "nutrient sequestering into the dead pool is nutrient lockup"
+        );
+
+        let turned_over: Vec<f32> = vec![0.05; n];
+        let alive = evaluate_from_log(&world, &healthy_energy, &turned_over, &config, max_ticks);
+        assert_ne!(
+            alive.failure,
+            Some(FailureMode::NutrientLockup),
+            "a turned-over dead pool is not nutrient lockup"
         );
     }
 
@@ -772,6 +869,45 @@ mod tests {
     }
 
     #[test]
+    fn nutrient_locked_when_dead_pool_share_stays_high() {
+        // The carcass-locked fraction climbs and sits high across the whole
+        // trailing window: nutrient is sequestered in the dead pool and the
+        // living decomposers are not turning it over (issue #342).
+        let frac = vec![0.05, 0.1, 0.2, 0.35, 0.45, 0.5, 0.52, 0.55];
+        assert!(is_nutrient_locked(&frac, 4));
+    }
+
+    #[test]
+    fn nutrient_not_locked_when_dead_pool_share_stays_low() {
+        // The dead pool never holds much: carcasses are turned over as fast as
+        // they form, so the fraction stays well below the lock threshold.
+        let frac = vec![0.05, 0.1, 0.08, 0.12, 0.09, 0.11, 0.1, 0.07];
+        assert!(!is_nutrient_locked(&frac, 5));
+    }
+
+    #[test]
+    fn nutrient_not_locked_when_dead_pool_drains_back() {
+        // The fraction spikes then drains back down — decomposers eat the dead
+        // pool down within the window. Not an irreversible lockup.
+        let frac = vec![0.1, 0.3, 0.6, 0.7, 0.5, 0.3, 0.15, 0.1];
+        assert!(!is_nutrient_locked(&frac, 4));
+    }
+
+    #[test]
+    fn nutrient_not_locked_when_dead_pool_high_but_receding() {
+        // Still above the threshold late, but on a downward trend the whole
+        // window — the system is turning the dead pool over, not locking it up.
+        let frac = vec![0.9, 0.8, 0.7, 0.6, 0.5, 0.45, 0.42, 0.41];
+        assert!(!is_nutrient_locked(&frac, 4));
+    }
+
+    #[test]
+    fn nutrient_not_locked_when_shorter_than_window() {
+        let frac = vec![0.5, 0.6];
+        assert!(!is_nutrient_locked(&frac, 5));
+    }
+
+    #[test]
     fn evaluate_from_log_detects_monoculture() {
         let params = explorers_sim::WorldParameters {
             solar_flux_magnitude: 5.0,
@@ -800,7 +936,7 @@ mod tests {
         if world.agents().len() < 20 {
             return; // can't test monoculture with too few agents
         }
-        let result = evaluate_from_log(&world, &free, &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &config, max_ticks);
         assert_eq!(
             result.failure,
             Some(FailureMode::Monoculture),
@@ -821,7 +957,7 @@ mod tests {
         let config = EvalConfig::default();
         let max_ticks: u64 = 1;
         let world = explorers_sim::World::new(params, dist, 42);
-        let result = evaluate_from_log(&world, &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &[], &[], &config, max_ticks);
         assert_eq!(result.failure, Some(FailureMode::PopulationExplosion));
         assert_eq!(result.fitness, 0.0);
     }
@@ -840,7 +976,7 @@ mod tests {
         if world.agents().is_empty() {
             return;
         }
-        let result = evaluate_from_log(&world, &free, &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &config, max_ticks);
         // With 30 initial agents from 2 clusters, there should be some coexistence
         // and the values should be computed (not left at 0.0 stub)
         let fitness = 0.2 * result.oscillation_strength
@@ -872,7 +1008,7 @@ mod tests {
         if world.agents().is_empty() {
             return; // can't test final-state metrics on extinct world
         }
-        let result = evaluate_from_log(&world, &free, &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &config, max_ticks);
 
         let trait_vectors: Vec<_> = world.agents().iter().map(|a| a.traits).collect();
         let energies: Vec<_> = world.agents().iter().map(|a| a.energy()).collect();
@@ -949,7 +1085,7 @@ mod tests {
         let max_ticks = 100;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let free = run_collecting_free_energy(&mut world, 10);
-        let result = evaluate_from_log(&world, &free, &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &config, max_ticks);
         assert_eq!(result.fitness, 0.0);
         assert_eq!(result.failure, Some(FailureMode::Extinction));
     }

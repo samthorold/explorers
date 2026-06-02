@@ -50,7 +50,7 @@ carcass-fall it could not previously touch (every remaining file keeps
 | example5 | not-sensible | none (8/8) | disagree | roster/probe mismatch, then stale params; 0 births fails turnover |
 | example7 | not-sensible | none (8/8) | n/a (undecided) | roster mismatch (no decomposer); 0 births fails turnover |
 | example8 | not-sensible | none (8/8) | disagree | roster mismatch (no decomposer); 0 births fails turnover |
-| example9_detrital_pathway | wiring test (not emergence evidence) | none (8/8) | n/a — by construction | none material — verifies the producer→carcass→decomposer pathway closes; `detrital_share` stays majority-detrital (≈0.9–1.0) by geometry (obligate decomposer; the producer ring is out of reach — the slight impurity is the decomposer's own co-located offspring, not predation on producers), so it tests wiring, not that detritivory emerges |
+| example9_detrital_pathway | wiring test (not emergence evidence) | nutrient_lockup (8/8) | n/a — by construction | wiring healthy locally (the producer→carcass→decomposer pathway closes; `detrital_share` stays majority-detrital ≈0.9–1.0 by geometry), but the lone obligate decomposer cannot reach the producer ring's carcass-fall, so nutrient sequesters irreversibly into the dead pool — the field-level failure the scenario's own pathway is meant to prevent (now registered, #342) |
 
 ## Per-scenario fault localisation
 
@@ -101,18 +101,22 @@ carcass-fall it could not previously touch (every remaining file keeps
   diet is detrital because no producer is reachable and (being obligate) it cannot photosynthesise, not
   because detritivory won out in the ecology. (`detrital_share` is ≈0.9–1.0 rather than exactly 1.0 for an
   endogenous reason — the decomposer's own asexual offspring are born co-located, inside the 0.5 reach, so
-  a little parent/offspring cannibalism dilutes the purity; no producer is ever predated.) Read that way
-  the numbers are healthy: the out-of-reach producer ring reproduces and
-  self-thins (median 2190 births / 2116 deaths, median final pop 87.5 spanning 77–99, `failure=none` 8/8,
-  median fitness 0.805 spanning 0.773–0.81, trophic balance 1.0). A 12000-energy seeded deposit — sized
-  to genuinely outlast `max_ticks` (the obligate decomposer draws it down at ~3.6 energy/tick and reaches
-  tick 2000 with ~40% unspent) — backstops the decomposer as a single individual; an earlier
-  480-energy deposit had *appeared* to suffice only because a `photosynthetic_absorption=0.4` trait was
-  quietly funding the agent through the green pathway (it starved at tick ~134 once photosynthesis was
-  removed), so the detrital pathway was never actually load-bearing until this fix. Note the ring's
-  carcasses fall near radius ~30, out of reach, so they **accumulate unconsumed** (nutrient locks into
-  the dead pool) — the brown loop closes only *locally* at the deposit; the field-wide rain is not a
-  self-sustaining detrital web, and the evaluator's healthy score does not yet register that lockup.
+  a little parent/offspring cannibalism dilutes the purity; no producer is ever predated.) The **local
+  wiring is healthy**: the out-of-reach producer ring reproduces and self-thins (≈2200 births / ≈2100
+  deaths, final pop ≈90) and the brown loop closes at the deposit (`detrital_share` ≈0.9–1.0). A
+  12000-energy seeded deposit — sized to genuinely outlast `max_ticks` (the obligate decomposer draws it
+  down at ~3.6 energy/tick and reaches tick 2000 with ~40% unspent) — backstops the decomposer as a single
+  individual; an earlier 480-energy deposit had *appeared* to suffice only because a
+  `photosynthetic_absorption=0.4` trait was quietly funding the agent through the green pathway (it
+  starved at tick ~134 once photosynthesis was removed), so the detrital pathway was never actually
+  load-bearing until that fix. But the **field-level verdict is now `nutrient_lockup` (8/8, fitness 0.0)**:
+  the ring's carcasses fall near radius ~30, out of reach, so they **accumulate unconsumed** and nutrient
+  silts irreversibly into the dead pool (~43% of system nutrient by tick 2000) — the brown loop closes only
+  *locally* at the deposit; the field-wide rain is not a self-sustaining detrital web. The evaluator now
+  **registers that lockup** (#342); before, it scored the scenario healthy 8/8, blind to the very pathology
+  the scenario targets. (The exact birth/death/population medians vary seed-to-seed *and* run-to-run —
+  example9's high-population producer-ring + carcass path is non-deterministic, tracked in #343; the
+  `nutrient_lockup` verdict itself is stable across runs.)
   Emergence evidence — that decomposers and a detrital niche
   arise without being hand-built — now comes from the genesis search (71/120 viable random worlds
   produced decomposers, guilds up to 235, including from full-random founders), not from this file; a

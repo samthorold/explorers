@@ -106,12 +106,16 @@ issue, surfaced by the example lens).
 > inside its consumption reach, so `detrital_share` stays majority-detrital (≈0.9–1.0) *by geometry* — it verifies the
 > producer→carcass→decomposer code path closes end to end, **not** that detritivory emerges. The
 > deposit (12000 energy) is sized to genuinely outlast the run: the decomposer persists as a single
-> individual to tick 2000 on detritus alone. An out-of-reach producer ring (median final pop 87.5,
-> 2190 births / 2116 deaths) supplies the living producer→carcass front of the pathway and the deaths
+> individual to tick 2000 on detritus alone. An out-of-reach producer ring (final pop ≈90, ≈2200
+> births / ≈2100 deaths) supplies the living producer→carcass front of the pathway and the deaths
 > that exercise the post-reindex drain regression, but its carcasses fall near the ring, out of reach,
 > so they accumulate unconsumed rather than feeding the decomposer — the brown loop closes only
 > *locally*, at the deposit. (Earlier framing called this "a full living brown food web"; the telemetry
 > shows the field-wide rain is unconsumed, so the closed loop is the local deposit, not the field.)
+> That unconsumed rain now reads honestly: the field-level verdict is **`nutrient_lockup` (8/8)** since
+> the evaluator gained a carcass-locked-nutrient signal (#342) — locally healthy wiring, nutrient
+> lockup at the field scale. (example9's demographic medians are non-deterministic run-to-run, #343;
+> the `nutrient_lockup` verdict is stable.)
 > Whether decomposers *emerge* is answered by the genesis search (71/120 viable random
 > worlds produced decomposers), not by a hand-built scenario; `example6_decomposer_viability.json`
 > was retired in #328 because it demonstrated neither the viability nor the sustained carcass supply

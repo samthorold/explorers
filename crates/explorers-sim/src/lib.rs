@@ -1430,6 +1430,25 @@ impl World {
         self.agents.iter().map(|a| a.energy()).sum()
     }
 
+    /// The dead pool's share of the conserved system nutrient: carcass-locked
+    /// nutrient over the total across grid, living agents, and carcasses. Zero
+    /// when no nutrient is present anywhere. Total nutrient is conserved, so the
+    /// fraction's trend isolates *where* the nutrient sits, not how much there is
+    /// — a normalized, scenario-independent read. Sampled each tick by callers,
+    /// it lets the genesis evaluator detect nutrient sequestered into carcasses
+    /// that the living decomposer population cannot turn over (issue #342).
+    /// Instantaneous read of public state; the world stays history-free.
+    pub fn carcass_locked_nutrient_fraction(&self) -> f32 {
+        let carcasses: f32 = self.carcasses.iter().map(|c| c.nutrient).sum();
+        let agents: f32 = self
+            .agents
+            .iter()
+            .map(|a| a.nutrient_total(&self.params))
+            .sum();
+        let total = self.nutrient_grid.total() + agents + carcasses;
+        if total > 0.0 { carcasses / total } else { 0.0 }
+    }
+
     pub fn total_solar_input(&self) -> f32 {
         self.total_solar_input
     }
@@ -1651,6 +1670,40 @@ mod tests {
             world.free_energy(),
             before,
             "carcass energy is not free energy"
+        );
+    }
+
+    #[test]
+    fn carcass_locked_nutrient_fraction_is_dead_pool_share_of_total() {
+        // Mirror of free_energy, on the nutrient side: an instantaneous read of
+        // the dead pool's share of the conserved system nutrient (grid + living
+        // agents + carcasses). This is the per-tick signal the genesis evaluator
+        // samples to detect nutrient sequestered into carcasses that the living
+        // decomposer population cannot turn over (issue #342).
+        let mut world = World::new(test_params(), test_distribution(), 42);
+        let grid = world.nutrient_pool();
+        let agents: f32 = world
+            .agents()
+            .iter()
+            .map(|a| a.nutrient_total(world.params()))
+            .sum();
+        // No carcasses yet: the dead pool holds none of the system's nutrient.
+        assert_eq!(world.carcass_locked_nutrient_fraction(), 0.0);
+
+        // Lock a known amount of nutrient into a carcass; the fraction becomes
+        // that share of the (now larger) system total.
+        world.add_carcass(Carcass {
+            id: 9999,
+            position: (0.0, 0.0),
+            energy: 0.0,
+            nutrient: 40.0,
+            traits: zero_traits(),
+        });
+        let expected = 40.0 / (grid + agents + 40.0);
+        assert!(
+            (world.carcass_locked_nutrient_fraction() - expected).abs() < 1e-6,
+            "fraction = carcass nutrient / total system nutrient, got {}",
+            world.carcass_locked_nutrient_fraction()
         );
     }
 
