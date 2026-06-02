@@ -1,8 +1,26 @@
-//! Behavioural verification for scenarios/example6_decomposer_viability.json
-//! (issue #303): a self-thinning producer stand generates structure-rich
-//! carcasses, and a seeded decomposer must (a) read as a `Decomposer`
-//! behavioural role — it consumes carcasses, not living agents — and (b) sustain
-//! itself on that carcass supply rather than starving out.
+//! Behavioural verification for the detrital pathway.
+//!
+//! Two things are guarded here:
+//!
+//!   1. A fast correctness regression for the #303 drain-phase index/id bug — a
+//!      decomposer must drain a co-located carcass even after a death has
+//!      reindexed the living `agents` slice (so an agent's index no longer equals
+//!      its id). This test builds its world programmatically; it borrows only a
+//!      fully-specified `WorldParameters` block from a scenario file.
+//!   2. The example9 *pathway wiring* sweeps (issue #311): a sessile decomposer
+//!      seeded on a standing carcass deposit with no living agent inside its
+//!      consumption reach drives `detrital_share > 0.5` **by construction** (the
+//!      decomposer physically cannot reach a living agent). These verify the
+//!      producer->carcass->decomposer code path closes end to end — they are a
+//!      regression on the *wiring*, not evidence that detritivory *emerges*
+//!      (emergence evidence now comes from the genesis search; see issue #328 and
+//!      the deferred genesis-emergence-regression follow-up).
+//!
+//! Note: `scenarios/example6_decomposer_viability.json` was retired in #328 (its
+//! decomposer never established a lineage and its producers mass-died in a single
+//! tick, so it demonstrated neither viability nor a sustained carcass supply).
+//! The drain regression below now sources its parameters from example9, which
+//! uses the same fully-specified parameter template.
 //!
 //! Run with:
 //!   cargo test -p explorers-sim --test headless_decomposer -- --nocapture
@@ -24,35 +42,12 @@
 use explorers_sim::topology::{TopologyProjection, TrophicRole};
 use explorers_sim::{World, WorldRecipe};
 
-const SCENARIO: &str = "/Users/sam/Projects/explorers/scenarios/example6_decomposer_viability.json";
+const PATHWAY_SCENARIO: &str =
+    "/Users/sam/Projects/explorers/scenarios/example9_detrital_pathway.json";
 
-fn load() -> WorldRecipe {
-    let contents = std::fs::read_to_string(SCENARIO).expect("read scenario");
-    serde_json::from_str(&contents).expect("parse scenario")
-}
-
-/// Number of seeds the behavioural assertions sweep. example6's dynamics are
-/// regime-sensitive (a productive stand can overshoot and collapse, or settle),
-/// so the decomposer-role and detrital-pathway properties are asserted across a
-/// spread of seeds rather than the single seed `eval_scenarios` happens to use —
-/// a robust property, not a single-seed artifact.
-const SEEDS: std::ops::RangeInclusive<u64> = 1..=8;
-
-/// Run the scenario to completion under `seed`, returning the final world and the
-/// topology projection accumulated over the whole run (so role classification
-/// reads the full predation-vs-decomposition history).
-fn run_seed(seed: u64) -> (World, TopologyProjection) {
-    let recipe = load();
-    let mut world = World::from_recipe(&recipe, seed);
-    let mut topology = TopologyProjection::new();
-    for _ in 0..recipe.max_ticks {
-        world.step();
-        topology.update(world.event_log());
-        if world.agents().is_empty() {
-            break;
-        }
-    }
-    (world, topology)
+fn load_pathway() -> WorldRecipe {
+    let contents = std::fs::read_to_string(PATHWAY_SCENARIO).expect("read pathway scenario");
+    serde_json::from_str(&contents).expect("parse pathway scenario")
 }
 
 /// Regression: a decomposer must drain a co-located carcass even after some
@@ -62,10 +57,13 @@ fn run_seed(seed: u64) -> (World, TopologyProjection) {
 /// the carcass pass find zero consumers once any death has occurred — which is
 /// exactly when carcasses exist. Carcasses then accumulate forever (the
 /// suite-wide "carcasses accumulate unconsumed" symptom in #303/#293).
+///
+/// The world is built programmatically; only the fully-specified
+/// `WorldParameters` block is borrowed from a scenario file (example9, post-#328).
 #[test]
 fn decomposer_drains_carcass_after_a_death_reindexes_agents() {
     use explorers_sim::{Agent, Carcass, TraitVector};
-    let recipe = load();
+    let recipe = load_pathway();
     let params = recipe.parameters.clone();
     let mut world = World::from_recipe(
         &WorldRecipe {
@@ -158,88 +156,6 @@ fn decomposer_drains_carcass_after_a_death_reindexes_agents() {
     );
 }
 
-/// The authoritative decomposer signal: a surviving agent reads as a
-/// `Decomposer` — `trophic_roles` buckets a heterotroph as a Decomposer when its
-/// *own* lifetime diet is majority detrital (carcass-sourced). Asserted across
-/// `SEEDS` so it reflects a robust behavioural property rather than one seed's
-/// luck. (This — not a system-wide consumption share — is the domain definition
-/// of "reads as a Decomposer".)
-#[test]
-fn slow_decomposer_reads_as_decomposer_role() {
-    for seed in SEEDS {
-        let (world, topology) = run_seed(seed);
-        let roles = topology.trophic_roles(world.agents());
-        let decomposers = roles
-            .values()
-            .filter(|&&r| r == TrophicRole::Decomposer)
-            .count();
-        assert!(
-            decomposers >= 1,
-            "seed {seed}: expected a surviving agent to read as Decomposer; roles = {:?}",
-            roles
-        );
-    }
-}
-
-/// The seeded decomposer must not starve out: a heterotrophy-dominant agent
-/// persists to the end of the run on the carcass supply, on every seed.
-#[test]
-fn slow_decomposer_sustains_itself_to_end_of_run() {
-    for seed in SEEDS {
-        let (world, _topology) = run_seed(seed);
-        let surviving_heterotrophs = world
-            .agents()
-            .iter()
-            .filter(|a| a.traits.heterotrophy > a.traits.photosynthetic_absorption)
-            .count();
-        assert!(
-            surviving_heterotrophs >= 1,
-            "seed {seed}: decomposer lineage must survive to the end of the run, but no \
-             heterotroph-dominant agent remains (final population {})",
-            world.agents().len()
-        );
-    }
-}
-
-/// Issue #309 — body as feeding reach. A sessile decomposer must not freeze
-/// beside carcasses it cannot touch: by growing structure (its mycelium through
-/// the substrate) it extends its consumption reach and drains carcass-fall that
-/// sits beyond its contact-only radius. The scenario sets a non-zero
-/// `body_reach_coefficient`, and the surviving decomposer should both carry
-/// real structure (it grew) and have driven a live detrital pathway — i.e. it
-/// reaches food rather than starving in place at population 1.
-#[test]
-fn slow_decomposer_extends_feeding_reach_by_growing_structure() {
-    // The scenario must actually exercise body-as-reach.
-    let recipe = load();
-    assert!(
-        recipe.parameters.body_reach_coefficient > 0.0,
-        "example6 must enable body-as-feeding-reach (body_reach_coefficient > 0)"
-    );
-
-    for seed in SEEDS {
-        let (world, _topology) = run_seed(seed);
-        // A surviving heterotroph-dominant agent that has grown structure: it is
-        // not frozen at its birth size beside unreachable food.
-        let grown_decomposer = world.agents().iter().any(|a| {
-            a.traits.heterotrophy > a.traits.photosynthetic_absorption && a.structure > 0.0
-        });
-        assert!(
-            grown_decomposer,
-            "seed {seed}: a surviving decomposer must have grown structure (extending its \
-             feeding reach), not frozen beside unreachable carcass nutrient"
-        );
-        // And the detrital pathway must have carried real energy — the reach
-        // actually reached carcasses.
-        let (_predation, decomposition) = predation_vs_decomposition(seed);
-        assert!(
-            decomposition > 0.0,
-            "seed {seed}: the decomposer's extended reach must drain carcass energy \
-             (decomposition = {decomposition})"
-        );
-    }
-}
-
 // ----------------------------------------------------------------------------
 // example9_detrital_pathway.json (issue #311): majority-detrital BY CONSTRUCTION.
 //
@@ -247,11 +163,10 @@ fn slow_decomposer_extends_feeding_reach_by_growing_structure() {
 // agent inside its consumption reach (body_reach_coefficient = 0 keeps reach
 // fixed and structure-independent, so the geometry is exact). Its diet is
 // detrital from tick 0 deterministically. These assertions verify the property
-// holds across the full seed sweep — robust by geometry, not by tuning.
+// holds across the full seed sweep — a regression on the *wiring* of the
+// producer->carcass->decomposer pathway, robust by geometry, not evidence that
+// detritivory emerges (that now comes from the genesis search; see #328).
 // ----------------------------------------------------------------------------
-
-const PATHWAY_SCENARIO: &str =
-    "/Users/sam/Projects/explorers/scenarios/example9_detrital_pathway.json";
 
 /// Seed sweep for the by-construction detrital-pathway assertions. The
 /// majority-detrital property holds *by geometry* (the decomposer physically
@@ -260,11 +175,6 @@ const PATHWAY_SCENARIO: &str =
 /// keeps each full-run test (90+ agents over 2000 ticks) under the suite's
 /// time budget. (Verified to also hold over 1..=20 during development.)
 const PATHWAY_SEEDS: std::ops::RangeInclusive<u64> = 1..=12;
-
-fn load_pathway() -> WorldRecipe {
-    let contents = std::fs::read_to_string(PATHWAY_SCENARIO).expect("read pathway scenario");
-    serde_json::from_str(&contents).expect("parse pathway scenario")
-}
 
 /// Everything the three pathway property tests assert on, distilled from a single
 /// run of the scenario at a given seed. The example9 run is the suite's dominant
@@ -415,63 +325,6 @@ fn slow_pathway_decomposer_sustains_itself_to_end_of_run() {
             "seed {seed}: decomposer lineage must survive to the end of the run, but no \
              heterotroph-dominant agent remains (final population {})",
             result.final_population
-        );
-    }
-}
-
-/// Cumulative predation vs decomposition energy across the run, summed from the
-/// `Consumed` event stream (the same green/brown split `trophic_roles` reads).
-fn predation_vs_decomposition(seed: u64) -> (f32, f32) {
-    let recipe = load();
-    let mut world = World::from_recipe(&recipe, seed);
-    let mut predation = 0.0f32;
-    let mut decomposition = 0.0f32;
-    let mut cursor = 0usize;
-    for _ in 0..recipe.max_ticks {
-        world.step();
-        for ev in world.event_log().since(cursor) {
-            if let explorers_sim::event::EventKind::Consumed = ev.kind {
-                if ev.target_was_carcass {
-                    decomposition += ev.energy_delta;
-                } else {
-                    predation += ev.energy_delta;
-                }
-            }
-        }
-        cursor = world.event_log().len();
-        if world.agents().is_empty() {
-            break;
-        }
-    }
-    (predation, decomposition)
-}
-
-/// Regression for #303 ("carcasses accumulate unconsumed"): the detrital pathway
-/// must carry real, *substantial* energy on every run — carcasses are actively
-/// drained, not merely accumulating. Whether detrital is the MAJORITY of the
-/// decomposer's intake is the authoritative role check
-/// (`decomposer_reads_as_decomposer_role`), which reads the surviving
-/// decomposer's own diet; this test instead guards that the brown pathway is a
-/// major, live energy route system-wide. A flat-majority assertion on
-/// *system-wide* consumption was dropped: it conflated the decomposer's own diet
-/// with the transient predation of short-lived lineage members, and was an
-/// artifact of the pre-#310 bug (doomed newborns were pure-decomposition
-/// carcasses).
-#[test]
-fn slow_carcasses_are_consumed_through_the_detrital_pathway() {
-    for seed in SEEDS {
-        let (predation, decomposition) = predation_vs_decomposition(seed);
-        assert!(
-            decomposition > 0.0,
-            "seed {seed}: the detrital pathway must carry real energy \
-             (decomposition = {decomposition})"
-        );
-        let detrital_share = decomposition / (predation + decomposition);
-        assert!(
-            detrital_share > 0.3,
-            "seed {seed}: detrital energy must be a substantial share of system consumption \
-             (predation {predation:.1}, decomposition {decomposition:.1}, \
-             detrital share {detrital_share:.3})"
         );
     }
 }
