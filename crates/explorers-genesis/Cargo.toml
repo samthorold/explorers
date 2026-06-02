@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 explorers-sim = { path = "../explorers-sim" }
 explorers-genesis-eval = { path = "../explorers-genesis-eval" }
+rayon = "1"
