@@ -13,25 +13,29 @@ deterministic seed ensemble (`base_seed=1 .. base_seed+8`, mirroring genesis's
 `run_ensemble`) and emits the *distribution* — a failure-mode count + modal mode, the
 median/min/max of every score, plus a `per_seed` breakdown. It stays prediction-agnostic
 and verdict-free; the supermajority read against the declared prediction is made here. This
-matters because regime-sensitive scenarios (example6) can flip on a single draw, so a
+matters because regime-sensitive scenarios can flip on a single draw, so a
 verdict hung on one seed is fragile. The columns below cite the **modal failure mode** and
 the **fraction of seeds** matching the prediction; the per-row prose quotes the median and
 its spread. (Across the current suite all eight seeds agree on the modal failure mode for
 every scenario — the ensemble *confirms* the single-seed reads were not lucky draws, which
-is itself evidence — but the demographic and score spreads are now visible, and example6's
-births swing seed to seed exactly as expected.)
+is itself evidence — but the demographic and score spreads are now visible.)
 
 Regenerate by re-running `eval_scenarios` and re-judging (a human or a
-fresh-perspective agent); the verdict below was re-judged by an agent on 2026-06-02
-(after #302 replaced the energy-death detector with a free-energy-stock-trend test, after
-#303 added `example6_decomposer_viability` and fixed the drain-phase index/id bug that had
-stopped any decomposer from ever consuming a carcass, after #313 made the structural
-death threshold *peak-relative* — a fraction of each agent's own peak structure — so
-newborns and seeds are born viable by construction rather than dead-on-arrival below an
-absolute floor, and after #309 gave feeding reach a sessile body-extent solution
+fresh-perspective agent); the verdict below was re-judged by an agent on 2026-06-02, and
+again on 2026-06-02 after #328 **retired `example6_decomposer_viability`** (trace inspection
+showed its producers mass-died in a single tick and its decomposer never established a
+lineage — pinned at count 1 for all 2000 ticks — so it demonstrated neither the viability
+nor the sustained carcass supply it claimed; emergent decomposers from the genesis search are
+now the real evidence) and **re-cast `example9_detrital_pathway` as a wiring/regression test
+rather than emergence evidence**. Earlier rebuilds: after #302 replaced the energy-death
+detector with a free-energy-stock-trend test, after #313 made the structural death threshold
+*peak-relative* — a fraction of each agent's own peak structure — so newborns and seeds are
+born viable by construction rather than dead-on-arrival below an absolute floor, and after
+#309 gave feeding reach a sessile body-extent solution
 — `consumption_reach = effective_heterotrophy × (contact_range_coefficient +
-body_reach_coefficient × √structure)` — so a growing sessile decomposer extends its reach
-to carcass-fall it could not previously touch, set non-zero only in `example6`).
+body_reach_coefficient × √structure)` — so a growing sessile decomposer extends its reach to
+carcass-fall it could not previously touch (every remaining file keeps
+`body_reach_coefficient=0.0`).
 
 | scenario | verdict | modal failure (n/8) | agrees with prediction? (seeds) | primary fault |
 |---|---|---|---|---|
@@ -40,10 +44,9 @@ to carcass-fall it could not previously touch, set non-zero only in `example6`).
 | example3 | inconclusive | extinction (8/8) | n/a (undecided) | stale params (`growth_efficiency`=0, `asexual_propensity`=0) |
 | example4 | partially-sensible | none (8/8) | partial, 8/8 survive | incomplete roster (no decomposer), low turnover |
 | example5 | not-sensible | none (8/8) | disagree | roster/probe mismatch, then stale params; 0 births fails turnover |
-| example6_decomposer_viability | partially-sensible | none (8/8) | agree (predicted live → lives), 8/8 | detrital pathway works, but a single-cohort carcass pulse — no sustained multi-cluster ecology |
 | example7 | not-sensible | none (8/8) | n/a (undecided) | roster mismatch (no decomposer); 0 births fails turnover |
 | example8 | not-sensible | none (8/8) | disagree | roster mismatch (no decomposer); 0 births fails turnover |
-| example9_detrital_pathway | sensible | none (8/8) | agree (predicted live → lives), 8/8 | none material — clean by-construction brown food web; detrital_share > 0.5 holds by geometry on every seed |
+| example9_detrital_pathway | wiring test (not emergence evidence) | none (8/8) | n/a — by construction | none material — verifies the producer→carcass→decomposer pathway closes; detrital_share > 0.5 holds by geometry, so it tests wiring, not that detritivory emerges |
 
 ## Per-scenario fault localisation
 
@@ -79,48 +82,27 @@ to carcass-fall it could not previously touch, set non-zero only in `example6`).
   negative feedbacks it claims. 0 births on every seed fails turnover (fitness 0 throughout). The
   modal failure mode is `none` (survives 1500 ticks without tripping a detector), but a birthless,
   non-reproducing stall is not a sensible ecology. No longer flagged `energy_death`.
-- **example6_decomposer_viability** — Partially-sensible; agrees with "live", and the first scenario
-  in the suite to actually exercise the detrital pathway. A dense producer stand self-thins under
-  light competition into a carcass field, and a sessile, low-reach, heterotrophy-dominant decomposer
-  embedded in it feeds on those carcasses: it reads behaviourally as a `Decomposer` for 1991 of 2000
-  ticks (the headless `--trace` brown/green split), majority of its consumed energy is detrital
-  (~62% across the run), and it never starves out — it survives to `max_ticks` on every seed
-  (`failure=none` 8/8; median 18 births / 41 deaths under #313's peak-relative threshold *and* #309's
-  body-as-feeding-reach). This is exactly the regime-sensitive scenario #314 was motivated by: its
-  birth count swings seed to seed (the carcass pulse is finite, so how many offspring catch it before
-  it drains is a draw), now visible as the `per_seed` spread rather than hidden behind one lucky
-  number — yet the *verdict* is stable because all eight seeds agree it lives. #309 set
-  `body_reach_coefficient=2.0` here so the sessile decomposer's reach
-  grows with its structure (the mycelium foraging through the substrate) and it touches carcass-fall
-  that previously sat just outside its fixed contact radius — the modestly higher turnover and fitness
-  (0.0039 → 0.0043) reflect that extra reachable detritus; it is the only scenario with the term
-  enabled (all others keep `body_reach_coefficient=0.0`, so their numbers are unchanged).
-  This is what #303 set out to prove possible and what #136 only claimed. Building it
-  surfaced a latent bug: the drain phase keyed the spatial grid by slice index but looked consumers up
-  by agent id, so once any death reindexed the living slice — i.e. exactly when carcasses first exist —
-  the carcass pass found zero consumers and carcasses accumulated unconsumed forever. With that fixed,
-  the pathway runs. It is still not a *complete* sensible world: the producers self-thin in essentially
-  one early cohort, so the decomposer lives off a finite carcass pulse plus its own sparse offspring
-  rather than a renewed producer→carcass supply; clustering, coexistence, and oscillation all score 0
-  (final pop 1), and fitness is low. It proves decomposer *viability*, not a full multi-trophic ecology.
-- **example9_detrital_pathway** — Sensible; agrees with "live", and the clean companion to
-  example6's borderline showcase (#311). example6 reveals an embedded sessile decomposer as a
-  *mixed* feeder — co-located with the producers it self-thins, "carcasses in reach" and "living
-  producers in reach" are inseparable, so its detrital share sits at a parameter-luck ~0.47–0.62.
-  example9 removes the luck by *geometry*: the decomposer is seeded on a standing carcass deposit
-  (a new `carcasses` recipe capability, #311) with **no living agent inside its consumption reach**.
-  With `body_reach_coefficient=0.0` the reach is structure-independent and exact —
+- **example9_detrital_pathway** — A **pathway wiring / regression test, not emergence evidence.**
+  Its headline property — `detrital_share > 0.5` "on every seed" — is **true by construction**, not a
+  finding about dynamics. The decomposer is seeded on a standing carcass deposit (a `carcasses` recipe
+  capability, #311) with **no living agent inside its consumption reach**: with
+  `body_reach_coefficient=0.0` the reach is structure-independent and exact —
   `heterotrophy × contact_range_coefficient = 0.5 × 1.0 = 0.5` world units — and the nearest living
-  agent (a producer ring at radius ~30 on a 100-extent torus) is far outside it, so every unit the
-  decomposer drains is detrital. `detrital_share > 0.5` therefore holds on every seed by
-  construction, not by tuning (now confirmed across the 8-seed ensemble, not one seed). It is also a
-  *complete* living ecology, not a sterile pile: the out-of-reach producer ring reproduces and
-  self-thins (median 2062 births / 1998 deaths, median final pop 90 spanning 79–96, `failure=none`
-  8/8, median fitness 0.80, trophic balance 1.0), raining carcasses across the field, while a
-  generously-sized seeded deposit (480 energy) backstops the decomposer past `max_ticks`. The tight
-  fitness spread (0.796–0.809) shows this is a robust live regime, not a draw. This is the
-  producer→carcass→decomposer brown web demonstrated robustly — the property example6 only borderline
-  reaches.
+  agent (a producer ring at radius ~30 on a 100-extent torus) is far outside it. The hand-placed
+  carcass deposit plus the out-of-reach producer ring therefore *force* the decomposer's diet to be
+  detrital. That makes this scenario a clean **regression on the producer→carcass→decomposer code
+  path**: it verifies energy and nutrient route end to end through detritivory (the brown pathway
+  closes, drains carcasses, and returns nutrient), which is genuinely useful as a wiring guard. It is
+  **not** evidence that a detritivore niche *arises from dynamics* — the diet is detrital because the
+  geometry forbids anything else, not because detritivory won out in the ecology. Read that way the
+  numbers are healthy: the out-of-reach producer ring reproduces and self-thins (median 2247 births /
+  2176 deaths, median final pop 86 spanning 77–100, `failure=none` 8/8, median fitness 0.80, trophic
+  balance 1.0), raining carcasses across the field, while a generously-sized seeded deposit (480
+  energy) backstops the decomposer past `max_ticks`; the tight fitness spread (0.793–0.806) shows the
+  *wiring* is robust across the ensemble. Emergence evidence — that decomposers and a detrital niche
+  arise without being hand-built — now comes from the genesis search (71/120 viable random worlds
+  produced decomposers, guilds up to 235, including from full-random founders), not from this file; a
+  dedicated genesis-emergence regression is a deferred follow-up.
 - **example7** — Not-sensible (prediction `undecided`). Roster mismatch is primary: intent is
   "three trophic roles incl. a decomposer", but the roster is 3 *undifferentiated* mobile consumers —
   no decomposer exists, so the detrital pathway it means to probe is absent and carcasses accumulate.
@@ -136,13 +118,18 @@ This is a **stale, trophically-incomplete validation set, not a fleet of broken 
 older files say so themselves (`status: stale-params` on most of the legacy set). Two structural
 defects swamp the legacy scenarios: partial recipes drifting under code defaults (most damningly
 `growth_efficiency`→0.0 in example1/2/3, guaranteeing collapse before any ecology runs), and
-roster/intent drift — until #303, **no scenario in the suite contained a working decomposer**, so
-carcasses accumulated unconsumed in every run. `example6_decomposer_viability` now closes that gap:
-it is the first scenario to seed a decomposer that reads behaviourally as one and to drive the
-producer→carcass→decomposer detrital loop end to end. Closing it also turned up *why* carcasses had
-always accumulated — a drain-phase index/id bug (now fixed) meant no decomposer could consume a
+roster/intent drift — for a long time **no scenario in the suite contained a working decomposer**, so
+carcasses accumulated unconsumed in every run. `example9_detrital_pathway` (#311) now drives the
+producer→carcass→decomposer detrital loop end to end — but only as a **wiring test**: it forces a
+detrital diet *by geometry* (a hand-placed carcass deposit plus an out-of-reach producer ring), so it
+proves the code path closes, not that a detritivore niche emerges. Building this pathway turned up
+*why* carcasses had always accumulated — a drain-phase index/id bug (now fixed, guarded by
+`decomposer_drains_carcass_after_a_death_reindexes_agents`) meant no decomposer could consume a
 carcass once any agent had died — so the "carcasses accumulate unconsumed" symptom was partly a code
-defect, not only a roster gap.
+defect, not only a roster gap. (`example6_decomposer_viability` was retired in #328: it claimed to
+prove decomposer viability but its producers mass-died in a single tick and its decomposer never
+established a lineage. Whether decomposers *emerge* is now answered by the genesis search — 71/120
+viable random worlds produced decomposers — not by a hand-built scenario.)
 
 The previously near-universal `energy_death` verdict was **mostly artifact, not signal**, and #302
 has now removed it. The old detector summed only `Consumed` (predation) energy per tick — both
@@ -151,7 +138,7 @@ lacked predation, which was true of every producer-dominated or consumer-collaps
 detector now measures what `expected-properties.md` actually defines as energy death: the **free
 (non-carcass-locked) energy stock** — agent reserve + structure summed across the living population,
 sampled each tick — *trending irreversibly toward zero*. It flags energy death only when that stock
-collapses to a small fraction of its earlier peak and does not recover. None of the nine scenarios
+collapses to a small fraction of its earlier peak and does not recover. None of the eight scenarios
 trips it now, on any of the eight seeds: example4 sustains its living stock through active
 reproduction, and the others decline slowly without the irreversible carcass-locked collapse the
 property describes. The
