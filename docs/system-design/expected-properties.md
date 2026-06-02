@@ -96,6 +96,16 @@ The properties and failure modes above are claims about a calibrated world. Thre
 2. **Diagnostic examples** (`scenarios/`) — a hand-built initial condition that probes a specific failure mode, run headless to observe whether the mode occurs or the system recovers.
 3. **Genesis search** — the broad, expensive empirical sweep across parameter space (ensembles of replicate runs).
 
+### Slow sweeps carry a `slow_` marker
+
+The diagnostic-example tests are multi-seed behavioural **sweeps** — each runs a scenario to completion across a spread of seeds, so they dominate the suite's wall-clock cost. They are first-class tests and stay in the default run (they are **not** `#[ignore]`d), but each is tagged with a `slow_` name prefix so the slow sweeps form a selectable category:
+
+- `cargo test --workspace` — runs everything, sweeps included.
+- `cargo test slow_` — run only the slow sweeps.
+- `cargo test -- --skip slow_` — the tight inner loop: everything except the sweeps (sub-second), leaving the cheap correctness regressions.
+
+Any new slow sweep should adopt the `slow_` prefix to join the category for free; cheap correctness regressions stay unprefixed.
+
 The **example file is the connective tissue**: it is the one concrete object the three lenses share. The same initial condition can be *predicted* by viability, *observed* by a simulation run, and *located* relative to the search — so each example is a unit of cross-validation where an a priori prediction meets an empirical outcome on identical ground. Agreement raises confidence; disagreement localises the fault (a wrong gate, an incomplete gate set, or a miscalibrated rule). For the loop to close, an example should carry the failure mode it probes, viability's prediction, and the observed outcome — not only its initial condition.
 
 ## What this document does not prescribe
