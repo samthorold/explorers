@@ -101,12 +101,18 @@ issue, surfaced by the example lens).
 > the ensemble *confirms* the earlier single-seed reads were not lucky draws — but the demographic
 > and score spreads (example4 final pop 6–11) are now legible.
 > `example4.json` reproduces (median 34 births); `example9_detrital_pathway.json` (#311) is a
-> **pathway wiring test**: a sessile decomposer is seeded on a standing carcass deposit (a
-> `carcasses` recipe capability) with no living agent inside its consumption reach, so
-> `detrital_share > 0.5` holds *by geometry* — it verifies the producer→carcass→decomposer code
-> path closes end to end, **not** that detritivory emerges. An out-of-reach producer ring rains
-> carcasses to sustain a full living brown food web (median final pop 86, 2247 births / 2176
-> deaths). Whether decomposers *emerge* is answered by the genesis search (71/120 viable random
+> **pathway wiring test**: a sessile, *obligate* decomposer (`photosynthetic_absorption = 0`) is
+> seeded on a standing carcass deposit (a `carcasses` recipe capability) with no living agent
+> inside its consumption reach, so `detrital_share` stays majority-detrital (≈0.9–1.0) *by geometry* — it verifies the
+> producer→carcass→decomposer code path closes end to end, **not** that detritivory emerges. The
+> deposit (12000 energy) is sized to genuinely outlast the run: the decomposer persists as a single
+> individual to tick 2000 on detritus alone. An out-of-reach producer ring (median final pop 87.5,
+> 2190 births / 2116 deaths) supplies the living producer→carcass front of the pathway and the deaths
+> that exercise the post-reindex drain regression, but its carcasses fall near the ring, out of reach,
+> so they accumulate unconsumed rather than feeding the decomposer — the brown loop closes only
+> *locally*, at the deposit. (Earlier framing called this "a full living brown food web"; the telemetry
+> shows the field-wide rain is unconsumed, so the closed loop is the local deposit, not the field.)
+> Whether decomposers *emerge* is answered by the genesis search (71/120 viable random
 > worlds produced decomposers), not by a hand-built scenario; `example6_decomposer_viability.json`
 > was retired in #328 because it demonstrated neither the viability nor the sustained carcass supply
 > it claimed (its producers mass-died in a single tick and its decomposer never established a
