@@ -24,8 +24,7 @@
 use explorers_sim::topology::{TopologyProjection, TrophicRole};
 use explorers_sim::{World, WorldRecipe};
 
-const SCENARIO: &str =
-    "/Users/sam/Projects/explorers/scenarios/example6_decomposer_viability.json";
+const SCENARIO: &str = "/Users/sam/Projects/explorers/scenarios/example6_decomposer_viability.json";
 
 fn load() -> WorldRecipe {
     let contents = std::fs::read_to_string(SCENARIO).expect("read scenario");
@@ -69,31 +68,90 @@ fn decomposer_drains_carcass_after_a_death_reindexes_agents() {
     let recipe = load();
     let params = recipe.parameters.clone();
     let mut world = World::from_recipe(
-        &WorldRecipe { parameters: params, agents: Some(vec![]), carcasses: None, max_ticks: 50, initial_distribution: None },
+        &WorldRecipe {
+            parameters: params,
+            agents: Some(vec![]),
+            carcasses: None,
+            max_ticks: 50,
+            initial_distribution: None,
+        },
         1,
     );
     // A doomed agent (id 0) with zero reserve dies on the first step, shifting
     // every later agent's slice index down by one (index != id thereafter).
     world.add_agent(Agent {
-        id: 0, position: (80.0, 80.0), reserve: 0.0, structure: 0.0, peak_structure: 0.0, nutrient: 0.0,
-        traits: TraitVector { photosynthetic_absorption: 0.0, heterotrophy: 0.0, mobility: 0.0, kappa: 0.5, fecundity: 0.0, asexual_propensity: 0.0, dispersal: 0.0 },
-        contact_time: 0, wear: Default::default(), repro_reserve: 0.0, repro_nutrient: 0.0,
+        id: 0,
+        position: (80.0, 80.0),
+        reserve: 0.0,
+        structure: 0.0,
+        peak_structure: 0.0,
+        nutrient: 0.0,
+        traits: TraitVector {
+            photosynthetic_absorption: 0.0,
+            heterotrophy: 0.0,
+            mobility: 0.0,
+            kappa: 0.5,
+            fecundity: 0.0,
+            asexual_propensity: 0.0,
+            dispersal: 0.0,
+        },
+        contact_time: 0,
+        wear: Default::default(),
+        repro_reserve: 0.0,
+        repro_nutrient: 0.0,
     });
     // The decomposer, co-located with a carcass it should drain.
     world.add_agent(Agent {
-        id: 1, position: (10.0, 10.0), reserve: 100.0, structure: 5.0, peak_structure: 5.0, nutrient: 5.0,
-        traits: TraitVector { photosynthetic_absorption: 0.4, heterotrophy: 1.1, mobility: 0.0, kappa: 0.5, fecundity: 0.0, asexual_propensity: 0.0, dispersal: 0.0 },
-        contact_time: 0, wear: Default::default(), repro_reserve: 0.0, repro_nutrient: 0.0,
+        id: 1,
+        position: (10.0, 10.0),
+        reserve: 100.0,
+        structure: 5.0,
+        peak_structure: 5.0,
+        nutrient: 5.0,
+        traits: TraitVector {
+            photosynthetic_absorption: 0.4,
+            heterotrophy: 1.1,
+            mobility: 0.0,
+            kappa: 0.5,
+            fecundity: 0.0,
+            asexual_propensity: 0.0,
+            dispersal: 0.0,
+        },
+        contact_time: 0,
+        wear: Default::default(),
+        repro_reserve: 0.0,
+        repro_nutrient: 0.0,
     });
     world.add_carcass(Carcass {
-        id: 999, position: (10.0, 10.0), energy: 50.0, nutrient: 3.0,
-        traits: TraitVector { photosynthetic_absorption: 0.45, heterotrophy: 0.0, mobility: 0.0, kappa: 0.5, fecundity: 0.3, asexual_propensity: 0.3, dispersal: 0.2 },
+        id: 999,
+        position: (10.0, 10.0),
+        energy: 50.0,
+        nutrient: 3.0,
+        traits: TraitVector {
+            photosynthetic_absorption: 0.45,
+            heterotrophy: 0.0,
+            mobility: 0.0,
+            kappa: 0.5,
+            fecundity: 0.3,
+            asexual_propensity: 0.3,
+            dispersal: 0.2,
+        },
     });
-    let before = world.carcasses().iter().find(|c| c.id == 999).unwrap().energy;
+    let before = world
+        .carcasses()
+        .iter()
+        .find(|c| c.id == 999)
+        .unwrap()
+        .energy;
     for _ in 0..10 {
         world.step();
     }
-    let after = world.carcasses().iter().find(|c| c.id == 999).map(|c| c.energy).unwrap_or(0.0);
+    let after = world
+        .carcasses()
+        .iter()
+        .find(|c| c.id == 999)
+        .map(|c| c.energy)
+        .unwrap_or(0.0);
     assert!(
         after < before,
         "decomposer must drain a co-located carcass even after a death reindexes agents ({before} -> {after})"
@@ -311,7 +369,11 @@ fn pathway_seed_result(seed: u64) -> PathwaySeedResult {
 #[test]
 fn slow_pathway_is_majority_detrital_on_every_seed() {
     for seed in PATHWAY_SEEDS {
-        let PathwaySeedResult { predation, decomposition, .. } = pathway_seed_result(seed);
+        let PathwaySeedResult {
+            predation,
+            decomposition,
+            ..
+        } = pathway_seed_result(seed);
         assert!(
             decomposition > 0.0,
             "seed {seed}: the detrital pathway must carry real energy \

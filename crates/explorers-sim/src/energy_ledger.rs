@@ -40,7 +40,8 @@ impl EnergyLedger {
 
     /// Total energy received by this endpoint (sum of all inflows).
     pub fn net_received(&self, endpoint: &EnergyEndpoint) -> f32 {
-        self.flows.iter()
+        self.flows
+            .iter()
             .filter(|(_, dest, _)| dest == endpoint)
             .map(|&(_, _, amount)| amount)
             .sum()
@@ -48,7 +49,8 @@ impl EnergyLedger {
 
     /// Total energy sent by this endpoint (sum of all outflows).
     pub fn net_sent(&self, endpoint: &EnergyEndpoint) -> f32 {
-        self.flows.iter()
+        self.flows
+            .iter()
             .filter(|(source, _, _)| source == endpoint)
             .map(|&(_, _, amount)| amount)
             .sum()
@@ -89,7 +91,9 @@ impl EnergyLedger {
         }
 
         // SolarTap is a source — no energy may flow into it
-        let solar_inflow: f32 = self.flows.iter()
+        let solar_inflow: f32 = self
+            .flows
+            .iter()
             .filter(|&(_, dest, _)| *dest == EnergyEndpoint::SolarTap)
             .map(|&(_, _, amount)| amount)
             .sum();
@@ -100,7 +104,9 @@ impl EnergyLedger {
         );
 
         // Endowment is a source — no energy may flow into it
-        let endowment_inflow: f32 = self.flows.iter()
+        let endowment_inflow: f32 = self
+            .flows
+            .iter()
             .filter(|&(_, dest, _)| *dest == EnergyEndpoint::Endowment)
             .map(|&(_, _, amount)| amount)
             .sum();
@@ -123,7 +129,9 @@ impl EnergyLedger {
             let tolerance = match endpoint {
                 EnergyEndpoint::Agent(_) | EnergyEndpoint::Carcass(_) => {
                     // Scale tolerance by total throughput for this endpoint
-                    let throughput: f32 = self.flows.iter()
+                    let throughput: f32 = self
+                        .flows
+                        .iter()
                         .filter(|(_, d, _)| d == endpoint)
                         .map(|&(_, _, a)| a.abs())
                         .sum::<f32>()
@@ -154,7 +162,8 @@ impl EnergyLedger {
         let endowment_balance = *balances.get(&EnergyEndpoint::Endowment).unwrap_or(&0.0);
         let total_in = -solar_balance - endowment_balance;
         let total_dissipated = dissipation_balance;
-        let retained: f32 = balances.iter()
+        let retained: f32 = balances
+            .iter()
             .filter(|(ep, _)| matches!(ep, EnergyEndpoint::Agent(_) | EnergyEndpoint::Carcass(_)))
             .map(|(_, b)| b)
             .sum();
@@ -265,7 +274,11 @@ mod tests {
         ledger.record(EnergyEndpoint::Agent(1), EnergyEndpoint::Carcass(1), 30.0);
         // Decomposer (agent 3) scavenges carcass — lossy transfer
         ledger.record(EnergyEndpoint::Carcass(1), EnergyEndpoint::Agent(3), 15.0);
-        ledger.record(EnergyEndpoint::Carcass(1), EnergyEndpoint::Dissipation, 15.0); // transfer loss
+        ledger.record(
+            EnergyEndpoint::Carcass(1),
+            EnergyEndpoint::Dissipation,
+            15.0,
+        ); // transfer loss
         // Consumer and decomposer pay metabolic costs
         ledger.record(EnergyEndpoint::Agent(2), EnergyEndpoint::Dissipation, 40.0);
         ledger.record(EnergyEndpoint::Agent(3), EnergyEndpoint::Dissipation, 15.0);

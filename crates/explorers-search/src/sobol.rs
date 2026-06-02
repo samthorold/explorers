@@ -31,7 +31,11 @@ pub fn sobol_indices(
 ) -> SobolIndices {
     let mut sample_matrix = || -> Vec<Vec<f64>> {
         (0..n)
-            .map(|_| (0..dimensions).map(|_| rng.random_range(0.0..1.0)).collect())
+            .map(|_| {
+                (0..dimensions)
+                    .map(|_| rng.random_range(0.0..1.0))
+                    .collect()
+            })
             .collect()
     };
 
@@ -70,16 +74,11 @@ pub fn sobol_indices(
         let y_ab_j: Vec<f64> = ab_j.iter().map(|x| evaluate(x)).collect();
 
         // Jansen (1999) estimator for first-order
-        let s_j = (0..n)
-            .map(|i| y_b[i] * (y_ab_j[i] - y_a[i]))
-            .sum::<f64>()
-            / (n as f64 * var_y);
+        let s_j = (0..n).map(|i| y_b[i] * (y_ab_j[i] - y_a[i])).sum::<f64>() / (n as f64 * var_y);
 
         // Jansen (1999) estimator for total-effect
-        let st_j = (0..n)
-            .map(|i| (y_a[i] - y_ab_j[i]).powi(2))
-            .sum::<f64>()
-            / (2.0 * n as f64 * var_y);
+        let st_j =
+            (0..n).map(|i| (y_a[i] - y_ab_j[i]).powi(2)).sum::<f64>() / (2.0 * n as f64 * var_y);
 
         first_order[j] = s_j;
         total_effect[j] = st_j;

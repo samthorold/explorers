@@ -27,7 +27,7 @@
 //! same evidence every run, so the committed snapshot is regenerable and drift
 //! shows up as a diff.
 
-use explorers_genesis_eval::ensemble::{SeedObservation, SeedScores, ScenarioAggregate, aggregate};
+use explorers_genesis_eval::ensemble::{ScenarioAggregate, SeedObservation, SeedScores, aggregate};
 use explorers_genesis_eval::{EvalConfig, FailureMode, evaluate_from_log};
 use explorers_sim::{World, WorldRecipe};
 
@@ -83,12 +83,7 @@ fn main() {
 /// `base_seed .. base_seed + seeds` (mirroring genesis's
 /// `base_seed.wrapping_add(i)`) and aggregate the per-seed evidence into its
 /// ensemble distribution.
-fn eval_scenario(
-    path: &str,
-    base_seed: u64,
-    seeds: u64,
-    config: &EvalConfig,
-) -> ScenarioAggregate {
+fn eval_scenario(path: &str, base_seed: u64, seeds: u64, config: &EvalConfig) -> ScenarioAggregate {
     let contents =
         std::fs::read_to_string(path).unwrap_or_else(|e| die(&format!("read {path}: {e}")));
     let recipe: WorldRecipe =

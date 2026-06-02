@@ -43,9 +43,7 @@ impl BayesianOptimiser {
             self.y_observed.push(y);
         }
 
-        let free_dims: Vec<usize> = (0..dims)
-            .filter(|&d| self.fixed[d].is_none())
-            .collect();
+        let free_dims: Vec<usize> = (0..dims).filter(|&d| self.fixed[d].is_none()).collect();
 
         for _ in 0..iterations {
             let x_free: Vec<Vec<f64>> = self
@@ -145,8 +143,7 @@ fn erf(x: f64) -> f64 {
     let t = 1.0 / (1.0 + 0.3275911 * x.abs());
     let poly = t
         * (0.254829592
-            + t * (-0.284496736
-                + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+            + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
     let result = 1.0 - poly * (-x * x).exp();
     if x >= 0.0 { result } else { -result }
 }
@@ -177,10 +174,7 @@ mod tests {
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let f = |x: &[f64]| -> f64 { -(x[0] - 0.3).powi(2) - (x[1] - 0.8).powi(2) };
 
-        let mut opt = BayesianOptimiser::new(
-            vec![(0.0, 1.0), (0.0, 1.0)],
-            vec![None, Some(0.5)],
-        );
+        let mut opt = BayesianOptimiser::new(vec![(0.0, 1.0), (0.0, 1.0)], vec![None, Some(0.5)]);
         let result = opt.optimise(f, 20, &mut rng);
 
         assert_eq!(result.best_x[1], 0.5, "fixed dimension should stay at 0.5");

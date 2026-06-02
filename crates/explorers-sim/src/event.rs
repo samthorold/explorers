@@ -155,17 +155,38 @@ mod tests {
     fn by_agent_matches_source_and_target() {
         let mut log = EventLog::new();
         log.append(Event {
-            tick: 1, seq: 0, kind: EventKind::Consumed,
-            source: 10, target: Some(20), energy_delta: 5.0, position: None, target_was_carcass: false,
-        }).unwrap();
+            tick: 1,
+            seq: 0,
+            kind: EventKind::Consumed,
+            source: 10,
+            target: Some(20),
+            energy_delta: 5.0,
+            position: None,
+            target_was_carcass: false,
+        })
+        .unwrap();
         log.append(Event {
-            tick: 1, seq: 1, kind: EventKind::Reproduced,
-            source: 30, target: None, energy_delta: 8.0, position: None, target_was_carcass: false,
-        }).unwrap();
+            tick: 1,
+            seq: 1,
+            kind: EventKind::Reproduced,
+            source: 30,
+            target: None,
+            energy_delta: 8.0,
+            position: None,
+            target_was_carcass: false,
+        })
+        .unwrap();
         log.append(Event {
-            tick: 2, seq: 2, kind: EventKind::Consumed,
-            source: 40, target: Some(10), energy_delta: 3.0, position: None, target_was_carcass: false,
-        }).unwrap();
+            tick: 2,
+            seq: 2,
+            kind: EventKind::Consumed,
+            source: 40,
+            target: Some(10),
+            energy_delta: 3.0,
+            position: None,
+            target_was_carcass: false,
+        })
+        .unwrap();
 
         let for_10: Vec<_> = log.by_agent(10);
         assert_eq!(for_10.len(), 2);

@@ -66,8 +66,7 @@ impl TopologyProjection {
                     self.active_agents.remove(&event.source);
                     self.death_tick.insert(event.source, event.tick);
                     let dead = event.source;
-                    self.edges
-                        .retain(|&(s, t, _), _| s != dead && t != dead);
+                    self.edges.retain(|&(s, t, _), _| s != dead && t != dead);
                 }
                 EventKind::Consumed => {
                     if let Some(target) = event.target {
@@ -132,8 +131,7 @@ impl TopologyProjection {
             let decomposition = self.outgoing_energy(a.id, EdgeKind::Decomposed);
             let consumed = predation + decomposition;
 
-            let role = if consumed > 0.0
-                && decomposition / consumed >= DETRITAL_RELIANCE_THRESHOLD
+            let role = if consumed > 0.0 && decomposition / consumed >= DETRITAL_RELIANCE_THRESHOLD
             {
                 TrophicRole::Decomposer
             } else {
@@ -240,9 +238,7 @@ impl TopologyProjection {
         let roles = self.trophic_roles(agents);
         self.edges
             .iter()
-            .filter(|&(&(s, t, _), _)| {
-                roles.get(&s) == Some(&from) && roles.get(&t) == Some(&to)
-            })
+            .filter(|&(&(s, t, _), _)| roles.get(&s) == Some(&from) && roles.get(&t) == Some(&to))
             .map(|(_, &w)| w)
             .sum()
     }
@@ -286,15 +282,25 @@ mod tests {
     fn carcass_eating_heterotroph_reads_as_decomposer() {
         let log = make_log(vec![
             Event {
-                tick: 1, seq: 0, kind: EventKind::Reproduced,
-                source: 1, target: None,
-                energy_delta: 10.0, position: None, target_was_carcass: false,
+                tick: 1,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: 1,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
             },
             // Heterotroph 1 drains carcass 99 — the detrital (brown) pathway.
             Event {
-                tick: 2, seq: 1, kind: EventKind::Consumed,
-                source: 1, target: Some(99),
-                energy_delta: 5.0, position: None, target_was_carcass: true,
+                tick: 2,
+                seq: 1,
+                kind: EventKind::Consumed,
+                source: 1,
+                target: Some(99),
+                energy_delta: 5.0,
+                position: None,
+                target_was_carcass: true,
             },
         ]);
 
@@ -314,7 +320,9 @@ mod tests {
             kind: EventKind::Reproduced,
             source: 42,
             target: None,
-            energy_delta: 10.0, position: None, target_was_carcass: false,
+            energy_delta: 10.0,
+            position: None,
+            target_was_carcass: false,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -331,7 +339,9 @@ mod tests {
             kind: EventKind::Consumed,
             source: 10,
             target: Some(20),
-            energy_delta: 5.0, position: None, target_was_carcass: false,
+            energy_delta: 5.0,
+            position: None,
+            target_was_carcass: false,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -350,7 +360,9 @@ mod tests {
                 kind: EventKind::Consumed,
                 source: 10,
                 target: Some(20),
-                energy_delta: 5.0, position: None, target_was_carcass: false,
+                energy_delta: 5.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
                 tick: 2,
@@ -358,7 +370,9 @@ mod tests {
                 kind: EventKind::Consumed,
                 source: 10,
                 target: Some(20),
-                energy_delta: 3.0, position: None, target_was_carcass: false,
+                energy_delta: 3.0,
+                position: None,
+                target_was_carcass: false,
             },
         ]);
 
@@ -377,7 +391,9 @@ mod tests {
                 kind: EventKind::Reproduced,
                 source: 10,
                 target: None,
-                energy_delta: 10.0, position: None, target_was_carcass: false,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
                 tick: 1,
@@ -385,7 +401,9 @@ mod tests {
                 kind: EventKind::Reproduced,
                 source: 20,
                 target: None,
-                energy_delta: 10.0, position: None, target_was_carcass: false,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
                 tick: 2,
@@ -393,7 +411,9 @@ mod tests {
                 kind: EventKind::Consumed,
                 source: 10,
                 target: Some(20),
-                energy_delta: 5.0, position: None, target_was_carcass: false,
+                energy_delta: 5.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
                 tick: 3,
@@ -401,7 +421,9 @@ mod tests {
                 kind: EventKind::Died,
                 source: 20,
                 target: None,
-                energy_delta: 0.0, position: None, target_was_carcass: false,
+                energy_delta: 0.0,
+                position: None,
+                target_was_carcass: false,
             },
         ]);
 
@@ -416,31 +438,56 @@ mod tests {
     fn trophic_roles_classify_by_energy_flow() {
         let log = make_log(vec![
             Event {
-                tick: 1, seq: 0, kind: EventKind::Reproduced,
-                source: 1, target: None,
-                energy_delta: 10.0, position: None, target_was_carcass: false,
+                tick: 1,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: 1,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
-                tick: 1, seq: 1, kind: EventKind::Reproduced,
-                source: 2, target: None,
-                energy_delta: 10.0, position: None, target_was_carcass: false,
+                tick: 1,
+                seq: 1,
+                kind: EventKind::Reproduced,
+                source: 2,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
-                tick: 1, seq: 2, kind: EventKind::Reproduced,
-                source: 3, target: None,
-                energy_delta: 10.0, position: None, target_was_carcass: false,
+                tick: 1,
+                seq: 2,
+                kind: EventKind::Reproduced,
+                source: 3,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
             },
             // Agent 2 consumes agent 1 -> consumer
             Event {
-                tick: 2, seq: 3, kind: EventKind::Consumed,
-                source: 2, target: Some(1),
-                energy_delta: 5.0, position: None, target_was_carcass: false,
+                tick: 2,
+                seq: 3,
+                kind: EventKind::Consumed,
+                source: 2,
+                target: Some(1),
+                energy_delta: 5.0,
+                position: None,
+                target_was_carcass: false,
             },
             // Agent 3 drains carcass 99 -> detrital pathway
             Event {
-                tick: 2, seq: 4, kind: EventKind::Consumed,
-                source: 3, target: Some(99),
-                energy_delta: 3.0, position: None, target_was_carcass: true,
+                tick: 2,
+                seq: 4,
+                kind: EventKind::Consumed,
+                source: 3,
+                target: Some(99),
+                energy_delta: 3.0,
+                position: None,
+                target_was_carcass: true,
             },
         ]);
 
@@ -462,14 +509,24 @@ mod tests {
         // incidentally scavenges a carcass is still a producer.
         let log = make_log(vec![
             Event {
-                tick: 1, seq: 0, kind: EventKind::Reproduced,
-                source: 1, target: None,
-                energy_delta: 10.0, position: None, target_was_carcass: false,
+                tick: 1,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: 1,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
-                tick: 2, seq: 1, kind: EventKind::Consumed,
-                source: 1, target: Some(99),
-                energy_delta: 5.0, position: None, target_was_carcass: true,
+                tick: 2,
+                seq: 1,
+                kind: EventKind::Consumed,
+                source: 1,
+                target: Some(99),
+                energy_delta: 5.0,
+                position: None,
+                target_was_carcass: true,
             },
         ]);
 
@@ -485,19 +542,34 @@ mod tests {
         // Mostly-predation diet (1 of 4 units detrital = 25% < 50%) -> Consumer.
         let log = make_log(vec![
             Event {
-                tick: 1, seq: 0, kind: EventKind::Reproduced,
-                source: 1, target: None,
-                energy_delta: 10.0, position: None, target_was_carcass: false,
+                tick: 1,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: 1,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
-                tick: 2, seq: 1, kind: EventKind::Consumed,
-                source: 1, target: Some(2),
-                energy_delta: 3.0, position: None, target_was_carcass: false,
+                tick: 2,
+                seq: 1,
+                kind: EventKind::Consumed,
+                source: 1,
+                target: Some(2),
+                energy_delta: 3.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
-                tick: 2, seq: 2, kind: EventKind::Consumed,
-                source: 1, target: Some(99),
-                energy_delta: 1.0, position: None, target_was_carcass: true,
+                tick: 2,
+                seq: 2,
+                kind: EventKind::Consumed,
+                source: 1,
+                target: Some(99),
+                energy_delta: 1.0,
+                position: None,
+                target_was_carcass: true,
             },
         ]);
 
@@ -513,19 +585,34 @@ mod tests {
         // Exactly 50% detrital sits on the bucket boundary -> Decomposer (>=).
         let log = make_log(vec![
             Event {
-                tick: 1, seq: 0, kind: EventKind::Reproduced,
-                source: 1, target: None,
-                energy_delta: 10.0, position: None, target_was_carcass: false,
+                tick: 1,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: 1,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
-                tick: 2, seq: 1, kind: EventKind::Consumed,
-                source: 1, target: Some(2),
-                energy_delta: 2.0, position: None, target_was_carcass: false,
+                tick: 2,
+                seq: 1,
+                kind: EventKind::Consumed,
+                source: 1,
+                target: Some(2),
+                energy_delta: 2.0,
+                position: None,
+                target_was_carcass: false,
             },
             Event {
-                tick: 2, seq: 2, kind: EventKind::Consumed,
-                source: 1, target: Some(99),
-                energy_delta: 2.0, position: None, target_was_carcass: true,
+                tick: 2,
+                seq: 2,
+                kind: EventKind::Consumed,
+                source: 1,
+                target: Some(99),
+                energy_delta: 2.0,
+                position: None,
+                target_was_carcass: true,
             },
         ]);
 
@@ -541,9 +628,14 @@ mod tests {
         // A heterotroph that has eaten nothing has no detrital reliance to read,
         // so it defaults to Consumer rather than Decomposer.
         let log = make_log(vec![Event {
-            tick: 1, seq: 0, kind: EventKind::Reproduced,
-            source: 1, target: None,
-            energy_delta: 10.0, position: None, target_was_carcass: false,
+            tick: 1,
+            seq: 0,
+            kind: EventKind::Reproduced,
+            source: 1,
+            target: None,
+            energy_delta: 10.0,
+            position: None,
+            target_was_carcass: false,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -557,8 +649,26 @@ mod tests {
     fn lineage_tracks_parent_offspring_from_reproduced_events() {
         // Reproduced with target = parent pair, Reproduced without target = offspring
         let log = make_log(vec![
-            Event { tick: 1, seq: 0, kind: EventKind::Reproduced, source: 10, target: Some(20), energy_delta: 0.0, position: None, target_was_carcass: false },
-            Event { tick: 1, seq: 1, kind: EventKind::Reproduced, source: 30, target: None, energy_delta: 8.0, position: None, target_was_carcass: false },
+            Event {
+                tick: 1,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: 10,
+                target: Some(20),
+                energy_delta: 0.0,
+                position: None,
+                target_was_carcass: false,
+            },
+            Event {
+                tick: 1,
+                seq: 1,
+                kind: EventKind::Reproduced,
+                source: 30,
+                target: None,
+                energy_delta: 8.0,
+                position: None,
+                target_was_carcass: false,
+            },
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -571,10 +681,46 @@ mod tests {
     #[test]
     fn active_agents_at_tick_reflects_births_and_deaths() {
         let log = make_log(vec![
-            Event { tick: 1, seq: 0, kind: EventKind::Reproduced, source: 1, target: None, energy_delta: 10.0, position: None, target_was_carcass: false },
-            Event { tick: 2, seq: 1, kind: EventKind::Reproduced, source: 2, target: None, energy_delta: 10.0, position: None, target_was_carcass: false },
-            Event { tick: 3, seq: 2, kind: EventKind::Died, source: 1, target: None, energy_delta: 0.0, position: None, target_was_carcass: false },
-            Event { tick: 4, seq: 3, kind: EventKind::Reproduced, source: 3, target: None, energy_delta: 10.0, position: None, target_was_carcass: false },
+            Event {
+                tick: 1,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: 1,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
+            },
+            Event {
+                tick: 2,
+                seq: 1,
+                kind: EventKind::Reproduced,
+                source: 2,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
+            },
+            Event {
+                tick: 3,
+                seq: 2,
+                kind: EventKind::Died,
+                source: 1,
+                target: None,
+                energy_delta: 0.0,
+                position: None,
+                target_was_carcass: false,
+            },
+            Event {
+                tick: 4,
+                seq: 3,
+                kind: EventKind::Reproduced,
+                source: 3,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
+            },
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -590,14 +736,68 @@ mod tests {
     #[test]
     fn energy_flow_between_trophic_groups() {
         let log = make_log(vec![
-            Event { tick: 1, seq: 0, kind: EventKind::Reproduced, source: 1, target: None, energy_delta: 10.0, position: None, target_was_carcass: false },
-            Event { tick: 1, seq: 1, kind: EventKind::Reproduced, source: 2, target: None, energy_delta: 10.0, position: None, target_was_carcass: false },
-            Event { tick: 1, seq: 2, kind: EventKind::Reproduced, source: 3, target: None, energy_delta: 10.0, position: None, target_was_carcass: false },
+            Event {
+                tick: 1,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: 1,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
+            },
+            Event {
+                tick: 1,
+                seq: 1,
+                kind: EventKind::Reproduced,
+                source: 2,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
+            },
+            Event {
+                tick: 1,
+                seq: 2,
+                kind: EventKind::Reproduced,
+                source: 3,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
+            },
             // Consumer 2 eats producer 1 twice
-            Event { tick: 2, seq: 3, kind: EventKind::Consumed, source: 2, target: Some(1), energy_delta: 5.0, position: None, target_was_carcass: false },
-            Event { tick: 3, seq: 4, kind: EventKind::Consumed, source: 2, target: Some(1), energy_delta: 3.0, position: None, target_was_carcass: false },
+            Event {
+                tick: 2,
+                seq: 3,
+                kind: EventKind::Consumed,
+                source: 2,
+                target: Some(1),
+                energy_delta: 5.0,
+                position: None,
+                target_was_carcass: false,
+            },
+            Event {
+                tick: 3,
+                seq: 4,
+                kind: EventKind::Consumed,
+                source: 2,
+                target: Some(1),
+                energy_delta: 3.0,
+                position: None,
+                target_was_carcass: false,
+            },
             // Consumer 3 also eats producer 1
-            Event { tick: 3, seq: 5, kind: EventKind::Consumed, source: 3, target: Some(1), energy_delta: 2.0, position: None, target_was_carcass: false },
+            Event {
+                tick: 3,
+                seq: 5,
+                kind: EventKind::Consumed,
+                source: 3,
+                target: Some(1),
+                energy_delta: 2.0,
+                position: None,
+                target_was_carcass: false,
+            },
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -619,13 +819,58 @@ mod tests {
     fn lineage_clusters_groups_descendants_with_ancestors() {
         let log = make_log(vec![
             // Two initial agents (roots) born independently
-            Event { tick: 1, seq: 0, kind: EventKind::Reproduced, source: 1, target: None, energy_delta: 10.0, position: None, target_was_carcass: false },
-            Event { tick: 1, seq: 1, kind: EventKind::Reproduced, source: 2, target: None, energy_delta: 10.0, position: None, target_was_carcass: false },
+            Event {
+                tick: 1,
+                seq: 0,
+                kind: EventKind::Reproduced,
+                source: 1,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
+            },
+            Event {
+                tick: 1,
+                seq: 1,
+                kind: EventKind::Reproduced,
+                source: 2,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
+            },
             // Agent 1 and 2 mate -> child 3
-            Event { tick: 2, seq: 2, kind: EventKind::Reproduced, source: 1, target: Some(2), energy_delta: 0.0, position: None, target_was_carcass: false },
-            Event { tick: 2, seq: 3, kind: EventKind::Reproduced, source: 3, target: None, energy_delta: 8.0, position: None, target_was_carcass: false },
+            Event {
+                tick: 2,
+                seq: 2,
+                kind: EventKind::Reproduced,
+                source: 1,
+                target: Some(2),
+                energy_delta: 0.0,
+                position: None,
+                target_was_carcass: false,
+            },
+            Event {
+                tick: 2,
+                seq: 3,
+                kind: EventKind::Reproduced,
+                source: 3,
+                target: None,
+                energy_delta: 8.0,
+                position: None,
+                target_was_carcass: false,
+            },
             // Agent 4 born independently (separate lineage)
-            Event { tick: 3, seq: 4, kind: EventKind::Reproduced, source: 4, target: None, energy_delta: 10.0, position: None, target_was_carcass: false },
+            Event {
+                tick: 3,
+                seq: 4,
+                kind: EventKind::Reproduced,
+                source: 4,
+                target: None,
+                energy_delta: 10.0,
+                position: None,
+                target_was_carcass: false,
+            },
         ]);
 
         let mut proj = TopologyProjection::new();
@@ -642,13 +887,33 @@ mod tests {
     #[test]
     fn incremental_update_processes_only_new_events() {
         let mut log = EventLog::new();
-        log.append(Event { tick: 1, seq: 0, kind: EventKind::Reproduced, source: 1, target: None, energy_delta: 10.0, position: None, target_was_carcass: false }).unwrap();
+        log.append(Event {
+            tick: 1,
+            seq: 0,
+            kind: EventKind::Reproduced,
+            source: 1,
+            target: None,
+            energy_delta: 10.0,
+            position: None,
+            target_was_carcass: false,
+        })
+        .unwrap();
 
         let mut proj = TopologyProjection::new();
         proj.update(&log);
         assert_eq!(proj.active_agents().len(), 1);
 
-        log.append(Event { tick: 2, seq: 1, kind: EventKind::Reproduced, source: 2, target: None, energy_delta: 10.0, position: None, target_was_carcass: false }).unwrap();
+        log.append(Event {
+            tick: 2,
+            seq: 1,
+            kind: EventKind::Reproduced,
+            source: 2,
+            target: None,
+            energy_delta: 10.0,
+            position: None,
+            target_was_carcass: false,
+        })
+        .unwrap();
         proj.update(&log);
         assert_eq!(proj.active_agents().len(), 2);
         assert!(proj.active_agents().contains(&1));

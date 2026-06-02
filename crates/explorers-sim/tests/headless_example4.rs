@@ -42,8 +42,18 @@ fn diagnose_example4() {
 
     println!(
         "{:>5} {:>5} {:>5} {:>6} {:>7} {:>7} | {:>9} {:>9} | {:>9} {:>9} | {:>5} {:>5}",
-        "tick", "prod", "cons", "carc", "births", "deaths",
-        "prodRepE", "prodRepN", "consRepE", "consRepN", "elig", "eligC"
+        "tick",
+        "prod",
+        "cons",
+        "carc",
+        "births",
+        "deaths",
+        "prodRepE",
+        "prodRepN",
+        "consRepE",
+        "consRepN",
+        "elig",
+        "eligC"
     );
 
     for t in 0..ticks {
@@ -91,8 +101,18 @@ fn diagnose_example4() {
         if t < 10 || t % 50 == 49 || (b > 0) {
             println!(
                 "{:>5} {:>5} {:>5} {:>6} {:>7} {:>7} | {:>9.2} {:>9.2} | {:>9.2} {:>9.2} | {:>5} {:>5}",
-                t + 1, n_prod, n_cons, world.carcasses().len(), b, d,
-                max_prod_e, max_prod_n, max_cons_e, max_cons_n, eligible, eligible_cons
+                t + 1,
+                n_prod,
+                n_cons,
+                world.carcasses().len(),
+                b,
+                d,
+                max_prod_e,
+                max_prod_n,
+                max_cons_e,
+                max_cons_n,
+                eligible,
+                eligible_cons
             );
         }
     }
@@ -101,10 +121,17 @@ fn diagnose_example4() {
     let final_prod = agents.iter().filter(|a| is_producer(a)).count();
     let final_cons = agents.len() - final_prod;
     println!("\n=== SUMMARY (seed {seed}) ===");
-    println!("final population: {} ({final_prod} producers, {final_cons} consumers)", agents.len());
+    println!(
+        "final population: {} ({final_prod} producers, {final_cons} consumers)",
+        agents.len()
+    );
     println!("cumulative births: {cum_births}, cumulative deaths: {cum_deaths}");
-    println!("peak producer gates: repro_reserve {peak_prod_e:.2}/{e_thresh}, repro_nutrient {peak_prod_n:.2}/{n_thresh}");
-    println!("peak consumer gates: repro_reserve {peak_cons_e:.2}/{e_thresh}, repro_nutrient {peak_cons_n:.2}/{n_thresh}");
+    println!(
+        "peak producer gates: repro_reserve {peak_prod_e:.2}/{e_thresh}, repro_nutrient {peak_prod_n:.2}/{n_thresh}"
+    );
+    println!(
+        "peak consumer gates: repro_reserve {peak_cons_e:.2}/{e_thresh}, repro_nutrient {peak_cons_n:.2}/{n_thresh}"
+    );
     println!("ticks with an eligible agent but zero births: {eligible_but_no_birth_ticks}");
 }
 

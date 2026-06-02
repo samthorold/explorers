@@ -2,8 +2,7 @@ use rand::Rng;
 use serde::Serialize;
 
 use explorers_genesis::{
-    EnsembleConfig, EnsembleResult, RunConfig, WorldParameters,
-    InitialDistribution, EvalConfig,
+    EnsembleConfig, EnsembleResult, EvalConfig, InitialDistribution, RunConfig, WorldParameters,
 };
 use explorers_sim::{TraitVector, WorldRecipe};
 
@@ -102,37 +101,161 @@ impl SearchResult {
 
 pub fn default_ranges() -> Vec<ParameterRange> {
     vec![
-        ParameterRange { name: "solar_flux_magnitude".into(), min: 1.0, max: 20.0 },           // 0
-        ParameterRange { name: "base_trophic_efficiency".into(), min: 0.1, max: 0.9 },         // 1
-        ParameterRange { name: "trophic_distance_decay".into(), min: 0.1, max: 5.0 },          // 2
-        ParameterRange { name: "reproduction_efficiency".into(), min: 0.1, max: 0.9 },         // 3
-        ParameterRange { name: "base_metabolic_rate".into(), min: 0.01, max: 0.5 },            // 4
-        ParameterRange { name: "movement_cost_coefficient".into(), min: 0.001, max: 0.1 },     // 5
-        ParameterRange { name: "sensing_range_coefficient".into(), min: 1.0, max: 30.0 },      // 6
-        ParameterRange { name: "reproduction_energy_threshold".into(), min: 5.0, max: 50.0 },  // 7
-        ParameterRange { name: "mutation_rate".into(), min: 0.01, max: 0.5 },                  // 8
-        ParameterRange { name: "mutation_magnitude".into(), min: 0.01, max: 0.5 },             // 9
-        ParameterRange { name: "contact_range_coefficient".into(), min: 0.5, max: 5.0 },         // 10
-        ParameterRange { name: "world_extent".into(), min: 20.0, max: 100.0 },                 // 11
-        ParameterRange { name: "initial_population_size".into(), min: 5.0, max: 50.0 },        // 12
-        ParameterRange { name: "light_competition_radius".into(), min: 1.0, max: 20.0 },       // 13
-        ParameterRange { name: "photo_maintenance_cost".into(), min: 0.001, max: 0.1 },        // 14
-        ParameterRange { name: "heterotrophy_maintenance_cost".into(), min: 0.001, max: 0.1 },  // 15
-        ParameterRange { name: "reproductive_compatibility_distance".into(), min: 0.5, max: 5.0 }, // 16
-        ParameterRange { name: "mean_photosynthetic_absorption".into(), min: 0.0, max: 1.0 },  // 17
-        ParameterRange { name: "mean_heterotrophy".into(), min: 0.0, max: 1.0 },               // 18
-        ParameterRange { name: "mean_mobility".into(), min: 0.0, max: 1.0 },                   // 19
-        ParameterRange { name: "mean_kappa".into(), min: 0.0, max: 1.0 },                        // 20
-        ParameterRange { name: "trait_covariance".into(), min: 0.1, max: 1.0 },                // 21
-        ParameterRange { name: "initial_cluster_count".into(), min: 1.0, max: 5.0 },           // 22
-        ParameterRange { name: "initial_energy_per_agent".into(), min: 1.0, max: 50.0 },       // 23
-        ParameterRange { name: "base_nutrient_ratio".into(), min: 0.01, max: 0.5 },            // 24
-        ParameterRange { name: "specification_nutrient_coefficient".into(), min: 0.01, max: 0.5 }, // 25
-        ParameterRange { name: "mean_asexual_propensity".into(), min: 0.0, max: 1.0 },        // 26
-        ParameterRange { name: "mean_dispersal".into(), min: 0.0, max: 2.0 },                 // 27
-        ParameterRange { name: "maintenance_cost_exponent".into(), min: 1.5, max: 3.0 },     // 28
-        ParameterRange { name: "growth_retention_multiplier".into(), min: 1.0, max: 5.0 },   // 29
-        ParameterRange { name: "offspring_structure_fraction".into(), min: 0.05, max: 0.5 }, // 30
+        ParameterRange {
+            name: "solar_flux_magnitude".into(),
+            min: 1.0,
+            max: 20.0,
+        }, // 0
+        ParameterRange {
+            name: "base_trophic_efficiency".into(),
+            min: 0.1,
+            max: 0.9,
+        }, // 1
+        ParameterRange {
+            name: "trophic_distance_decay".into(),
+            min: 0.1,
+            max: 5.0,
+        }, // 2
+        ParameterRange {
+            name: "reproduction_efficiency".into(),
+            min: 0.1,
+            max: 0.9,
+        }, // 3
+        ParameterRange {
+            name: "base_metabolic_rate".into(),
+            min: 0.01,
+            max: 0.5,
+        }, // 4
+        ParameterRange {
+            name: "movement_cost_coefficient".into(),
+            min: 0.001,
+            max: 0.1,
+        }, // 5
+        ParameterRange {
+            name: "sensing_range_coefficient".into(),
+            min: 1.0,
+            max: 30.0,
+        }, // 6
+        ParameterRange {
+            name: "reproduction_energy_threshold".into(),
+            min: 5.0,
+            max: 50.0,
+        }, // 7
+        ParameterRange {
+            name: "mutation_rate".into(),
+            min: 0.01,
+            max: 0.5,
+        }, // 8
+        ParameterRange {
+            name: "mutation_magnitude".into(),
+            min: 0.01,
+            max: 0.5,
+        }, // 9
+        ParameterRange {
+            name: "contact_range_coefficient".into(),
+            min: 0.5,
+            max: 5.0,
+        }, // 10
+        ParameterRange {
+            name: "world_extent".into(),
+            min: 20.0,
+            max: 100.0,
+        }, // 11
+        ParameterRange {
+            name: "initial_population_size".into(),
+            min: 5.0,
+            max: 50.0,
+        }, // 12
+        ParameterRange {
+            name: "light_competition_radius".into(),
+            min: 1.0,
+            max: 20.0,
+        }, // 13
+        ParameterRange {
+            name: "photo_maintenance_cost".into(),
+            min: 0.001,
+            max: 0.1,
+        }, // 14
+        ParameterRange {
+            name: "heterotrophy_maintenance_cost".into(),
+            min: 0.001,
+            max: 0.1,
+        }, // 15
+        ParameterRange {
+            name: "reproductive_compatibility_distance".into(),
+            min: 0.5,
+            max: 5.0,
+        }, // 16
+        ParameterRange {
+            name: "mean_photosynthetic_absorption".into(),
+            min: 0.0,
+            max: 1.0,
+        }, // 17
+        ParameterRange {
+            name: "mean_heterotrophy".into(),
+            min: 0.0,
+            max: 1.0,
+        }, // 18
+        ParameterRange {
+            name: "mean_mobility".into(),
+            min: 0.0,
+            max: 1.0,
+        }, // 19
+        ParameterRange {
+            name: "mean_kappa".into(),
+            min: 0.0,
+            max: 1.0,
+        }, // 20
+        ParameterRange {
+            name: "trait_covariance".into(),
+            min: 0.1,
+            max: 1.0,
+        }, // 21
+        ParameterRange {
+            name: "initial_cluster_count".into(),
+            min: 1.0,
+            max: 5.0,
+        }, // 22
+        ParameterRange {
+            name: "initial_energy_per_agent".into(),
+            min: 1.0,
+            max: 50.0,
+        }, // 23
+        ParameterRange {
+            name: "base_nutrient_ratio".into(),
+            min: 0.01,
+            max: 0.5,
+        }, // 24
+        ParameterRange {
+            name: "specification_nutrient_coefficient".into(),
+            min: 0.01,
+            max: 0.5,
+        }, // 25
+        ParameterRange {
+            name: "mean_asexual_propensity".into(),
+            min: 0.0,
+            max: 1.0,
+        }, // 26
+        ParameterRange {
+            name: "mean_dispersal".into(),
+            min: 0.0,
+            max: 2.0,
+        }, // 27
+        ParameterRange {
+            name: "maintenance_cost_exponent".into(),
+            min: 1.5,
+            max: 3.0,
+        }, // 28
+        ParameterRange {
+            name: "growth_retention_multiplier".into(),
+            min: 1.0,
+            max: 5.0,
+        }, // 29
+        ParameterRange {
+            name: "offspring_structure_fraction".into(),
+            min: 0.05,
+            max: 0.5,
+        }, // 30
     ]
 }
 
@@ -182,7 +305,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         dispersal_propagule_cost_exponent: 2.0,
         dispersal_reach_coefficient: 0.0,
         body_reach_coefficient: 0.0,
-        };
+    };
 
     let dist = InitialDistribution {
         mean_traits: TraitVector {
@@ -272,8 +395,13 @@ pub fn run_search(config: &SearchConfig, base_seed: u64, rng: &mut impl Rng) -> 
     );
 
     let (opt_wp, opt_dist) = decode(&opt_result.best_x, &config.ranges);
-    let opt_ensemble = explorers_genesis::run_ensemble(&opt_wp, &opt_dist, &ensemble_config, base_seed);
-    let optimised = vec![to_evaluated(&opt_result.best_x, &config.ranges, &opt_ensemble)];
+    let opt_ensemble =
+        explorers_genesis::run_ensemble(&opt_wp, &opt_dist, &ensemble_config, base_seed);
+    let optimised = vec![to_evaluated(
+        &opt_result.best_x,
+        &config.ranges,
+        &opt_ensemble,
+    )];
 
     parameterisations.sort_by(|a, b| b.median_fitness.partial_cmp(&a.median_fitness).unwrap());
 
@@ -290,10 +418,14 @@ fn to_evaluated(
     result: &EnsembleResult,
 ) -> EvaluatedParameterisation {
     EvaluatedParameterisation {
-        parameters: sample.iter().enumerate().map(|(i, &v)| {
-            let r = &ranges[i];
-            r.min + v * (r.max - r.min)
-        }).collect(),
+        parameters: sample
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                let r = &ranges[i];
+                r.min + v * (r.max - r.min)
+            })
+            .collect(),
         parameter_names: ranges.iter().map(|r| r.name.clone()).collect(),
         median_fitness: result.median_fitness,
         run_breakdowns: result
@@ -320,8 +452,16 @@ mod tests {
     #[test]
     fn decode_maps_unit_interval_to_parameter_ranges() {
         let ranges = vec![
-            ParameterRange { name: "a".into(), min: 10.0, max: 20.0 },
-            ParameterRange { name: "b".into(), min: 0.0, max: 1.0 },
+            ParameterRange {
+                name: "a".into(),
+                min: 10.0,
+                max: 20.0,
+            },
+            ParameterRange {
+                name: "b".into(),
+                min: 0.0,
+                max: 1.0,
+            },
         ];
 
         let values_at_zero = vec![0.0, 0.0];
@@ -419,7 +559,10 @@ mod tests {
     #[test]
     fn base_metabolic_rate_range_capped_at_half() {
         let ranges = default_ranges();
-        let bmr = ranges.iter().find(|r| r.name == "base_metabolic_rate").unwrap();
+        let bmr = ranges
+            .iter()
+            .find(|r| r.name == "base_metabolic_rate")
+            .unwrap();
         assert!((bmr.min - 0.01).abs() < 1e-10);
         assert!((bmr.max - 0.5).abs() < 1e-10);
     }
@@ -427,7 +570,10 @@ mod tests {
     #[test]
     fn trait_covariance_range_widened() {
         let ranges = default_ranges();
-        let tc = ranges.iter().find(|r| r.name == "trait_covariance").unwrap();
+        let tc = ranges
+            .iter()
+            .find(|r| r.name == "trait_covariance")
+            .unwrap();
         assert!((tc.min - 0.1).abs() < 1e-10);
         assert!((tc.max - 1.0).abs() < 1e-10);
     }
@@ -435,12 +581,16 @@ mod tests {
     #[test]
     fn stoichiometric_parameters_in_search_ranges() {
         let ranges = default_ranges();
-        let bnr = ranges.iter().find(|r| r.name == "base_nutrient_ratio")
+        let bnr = ranges
+            .iter()
+            .find(|r| r.name == "base_nutrient_ratio")
             .expect("base_nutrient_ratio should be in search ranges");
         assert!(bnr.min >= 0.0);
         assert!(bnr.max > bnr.min);
 
-        let snc = ranges.iter().find(|r| r.name == "specification_nutrient_coefficient")
+        let snc = ranges
+            .iter()
+            .find(|r| r.name == "specification_nutrient_coefficient")
             .expect("specification_nutrient_coefficient should be in search ranges");
         assert!(snc.min >= 0.0);
         assert!(snc.max > snc.min);
@@ -448,9 +598,13 @@ mod tests {
         // decode at midpoint should produce non-zero values
         let unit = vec![0.5; ranges.len()];
         let (params, _) = decode(&unit, &ranges);
-        assert!(params.base_nutrient_ratio > 0.0,
-            "decoded base_nutrient_ratio should be positive");
-        assert!(params.specification_nutrient_coefficient > 0.0,
-            "decoded specification_nutrient_coefficient should be positive");
+        assert!(
+            params.base_nutrient_ratio > 0.0,
+            "decoded base_nutrient_ratio should be positive"
+        );
+        assert!(
+            params.specification_nutrient_coefficient > 0.0,
+            "decoded specification_nutrient_coefficient should be positive"
+        );
     }
 }

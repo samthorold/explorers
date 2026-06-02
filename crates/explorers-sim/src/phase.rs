@@ -7,10 +7,10 @@
 use crate::event::{Event, EventKind};
 use crate::spatial::SpatialGrid;
 use crate::{
-    Agent, Carcass, TraitVector, WorldParameters, FUNCTIONAL_TRAIT_COUNT, FUNCTIONAL_TRAIT_INDICES,
+    Agent, Carcass, FUNCTIONAL_TRAIT_COUNT, FUNCTIONAL_TRAIT_INDICES, TraitVector, WorldParameters,
 };
-use rand_chacha::ChaCha8Rng;
 use rand::Rng;
+use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal, Poisson};
 
 /// Photosynthesise: agents with nonzero effective photosynthetic absorption
@@ -153,10 +153,7 @@ pub fn absorb_nutrients(
 /// mobility maintenance) + structure maintenance. Per-distance movement cost
 /// is in the movement phase. Somatic maintenance is governed by kappa
 /// allocation in the grow phase.
-pub fn metabolise(
-    agents: &mut [Agent],
-    params: &WorldParameters,
-) -> (Vec<Event>, f32) {
+pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32) {
     let mut events = Vec::new();
     let mut total_dissipated = 0.0_f32;
 
@@ -166,7 +163,8 @@ pub fn metabolise(
             + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
             + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
             + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
-            + agent.traits.asexual_propensity.powf(exp) * params.asexual_propensity_maintenance_cost
+            + agent.traits.asexual_propensity.powf(exp)
+                * params.asexual_propensity_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
 
         agent.reserve -= cost;
@@ -188,10 +186,7 @@ pub fn metabolise(
 /// Grow: surplus energy (reserve above metabolic retention) is split by kappa.
 /// - kappa fraction → soma: growth (reserve → structure, lossy) and wear repair
 /// - (1 - kappa) fraction → repro_reserve: accumulates across ticks
-pub fn grow(
-    agents: &mut [Agent],
-    params: &WorldParameters,
-) -> (Vec<Event>, f32) {
+pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32) {
     let mut events = Vec::new();
     let mut total_dissipated = 0.0_f32;
 
@@ -205,7 +200,8 @@ pub fn grow(
             + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
             + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
             + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
-            + agent.traits.asexual_propensity.powf(exp) * params.asexual_propensity_maintenance_cost
+            + agent.traits.asexual_propensity.powf(exp)
+                * params.asexual_propensity_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
         let retention = metabolic_cost * params.growth_retention_multiplier;
         let surplus = (agent.reserve - retention).max(0.0);
@@ -322,7 +318,10 @@ pub fn apply_wear(
     for agent in agents.iter_mut() {
         let mut total_wear_delta = 0.0_f32;
 
-        let agent_usage = usage.get(&agent.id).copied().unwrap_or([0.0; FUNCTIONAL_TRAIT_COUNT]);
+        let agent_usage = usage
+            .get(&agent.id)
+            .copied()
+            .unwrap_or([0.0; FUNCTIONAL_TRAIT_COUNT]);
 
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
             let nominal = agent.traits.get(FUNCTIONAL_TRAIT_INDICES[ft]);
@@ -403,7 +402,8 @@ pub fn resolve_drains(
     // query must use the same `consumption_reach` helper as the per-consumer
     // checks below — otherwise a large-bodied consumer's far reach would be
     // truncated to the contact-range-only query radius.
-    let max_contact_range = agents.iter()
+    let max_contact_range = agents
+        .iter()
         .map(|a| consumption_reach(a.effective_trait_with_steepness(1, k), a.structure, params))
         .fold(0.0_f32, f32::max);
 
@@ -442,21 +442,14 @@ pub fn resolve_drains(
                 if consumer_idx == target_idx {
                     continue; // can't consume yourself
                 }
-                let eff_heterotrophy = agents[consumer_idx]
-                    .effective_trait_with_steepness(1, k); // index 1 = heterotrophy
+                let eff_heterotrophy = agents[consumer_idx].effective_trait_with_steepness(1, k); // index 1 = heterotrophy
                 if eff_heterotrophy <= 0.0 {
                     continue;
                 }
-                let consumer_contact_range = consumption_reach(
-                    eff_heterotrophy,
-                    agents[consumer_idx].structure,
-                    params,
-                );
-                if crate::toroidal_distance(
-                    agents[consumer_idx].position,
-                    target_pos,
-                    extent,
-                ) > consumer_contact_range
+                let consumer_contact_range =
+                    consumption_reach(eff_heterotrophy, agents[consumer_idx].structure, params);
+                if crate::toroidal_distance(agents[consumer_idx].position, target_pos, extent)
+                    > consumer_contact_range
                 {
                     continue;
                 }
@@ -591,21 +584,14 @@ pub fn resolve_drains(
                 if dead_agents.contains(&agents[consumer_idx].id) {
                     continue;
                 }
-                let eff_heterotrophy = agents[consumer_idx]
-                    .effective_trait_with_steepness(1, k); // index 1 = heterotrophy
+                let eff_heterotrophy = agents[consumer_idx].effective_trait_with_steepness(1, k); // index 1 = heterotrophy
                 if eff_heterotrophy <= 0.0 {
                     continue;
                 }
-                let consumer_contact_range = consumption_reach(
-                    eff_heterotrophy,
-                    agents[consumer_idx].structure,
-                    params,
-                );
-                if crate::toroidal_distance(
-                    agents[consumer_idx].position,
-                    carcass_pos,
-                    extent,
-                ) > consumer_contact_range
+                let consumer_contact_range =
+                    consumption_reach(eff_heterotrophy, agents[consumer_idx].structure, params);
+                if crate::toroidal_distance(agents[consumer_idx].position, carcass_pos, extent)
+                    > consumer_contact_range
                 {
                     continue;
                 }
@@ -708,8 +694,7 @@ pub fn check_death_thresholds(
 
     for agent in agents.iter_mut() {
         let threshold = crate::death_threshold(&agent.traits, agent.peak_structure);
-        let dies = agent.reserve <= 0.0
-            || (agent.structure > 0.0 && agent.structure < threshold);
+        let dies = agent.reserve <= 0.0 || (agent.structure > 0.0 && agent.structure < threshold);
 
         if dies {
             let carcass_energy = agent.structure.max(0.0);
@@ -810,20 +795,13 @@ pub fn move_agents(
                 if j >= agents.len() {
                     continue;
                 }
-                let dist = crate::toroidal_distance(
-                    agents[i].position,
-                    agents[j].position,
-                    extent,
-                );
+                let dist = crate::toroidal_distance(agents[i].position, agents[j].position, extent);
                 if dist < 1e-6 {
                     detected_count += 1.0;
                     continue;
                 }
-                let (dx, dy) = crate::toroidal_displacement(
-                    agents[i].position,
-                    agents[j].position,
-                    extent,
-                );
+                let (dx, dy) =
+                    crate::toroidal_displacement(agents[i].position, agents[j].position, extent);
                 // Attraction weighted by chemotaxis * heterotrophy (toward living agents)
                 let weight = eff_chemotaxis * eff_heterotrophy / dist;
                 dir_x += dx * weight;
@@ -833,11 +811,7 @@ pub fn move_agents(
 
             // Detect nearby carcasses
             for carcass in carcasses.iter() {
-                let dist = crate::toroidal_distance(
-                    agents[i].position,
-                    carcass.position,
-                    extent,
-                );
+                let dist = crate::toroidal_distance(agents[i].position, carcass.position, extent);
                 if dist > eff_sensing {
                     continue;
                 }
@@ -845,11 +819,8 @@ pub fn move_agents(
                 if dist < 1e-6 {
                     continue;
                 }
-                let (dx, dy) = crate::toroidal_displacement(
-                    agents[i].position,
-                    carcass.position,
-                    extent,
-                );
+                let (dx, dy) =
+                    crate::toroidal_displacement(agents[i].position, carcass.position, extent);
                 // Attraction weighted by chemotaxis * heterotrophy (toward carcasses)
                 let weight = eff_chemotaxis * eff_heterotrophy / dist;
                 dir_x += dx * weight;
@@ -1079,9 +1050,7 @@ pub fn resolve_reproduction(
             // Asexual offspring: parent traits + mutation only (no crossover)
             let mut child_traits = parent_traits;
             for dim in 0..TraitVector::NUM_DIMS {
-                if params.mutation_rate > 0.0
-                    && rng.random::<f32>() < params.mutation_rate
-                {
+                if params.mutation_rate > 0.0 && rng.random::<f32>() < params.mutation_rate {
                     let normal = Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
                     let mutated = (child_traits.get(dim) + normal.sample(rng)).max(0.0);
                     // Clamp kappa and asexual_propensity to [0, 1]
@@ -1101,10 +1070,7 @@ pub fn resolve_reproduction(
             } else {
                 (0.0, 0.0)
             };
-            let pos = crate::wrap_position(
-                (parent_pos.0 + dx, parent_pos.1 + dy),
-                extent,
-            );
+            let pos = crate::wrap_position((parent_pos.0 + dx, parent_pos.1 + dy), extent);
 
             // Provision the offspring's structure, reserve, and nutrient, with
             // birth structure co-limited by the donated nutrient (ADR-0003).
@@ -1174,8 +1140,7 @@ pub fn resolve_reproduction(
         // eligibility only — it does not move offspring (placement is governed
         // independently by the dispersal trait at the birth step).
         let eff_mobility = agent_i.effective_trait_with_steepness(2, wear_steepness);
-        let reach = eff_mobility * sensing_coeff
-            + agent_i.traits.dispersal * dispersal_reach_coeff;
+        let reach = eff_mobility * sensing_coeff + agent_i.traits.dispersal * dispersal_reach_coeff;
 
         let nearby = grid.query_radius(agent_i.position, reach);
         let mut best: Option<(usize, f32)> = None;
@@ -1190,11 +1155,8 @@ pub fn resolve_reproduction(
             if j >= agents.len() || !sexual_eligible.contains(&j) {
                 continue;
             }
-            let dist_spatial = crate::toroidal_distance(
-                agent_i.position,
-                agents[j].position,
-                extent,
-            );
+            let dist_spatial =
+                crate::toroidal_distance(agent_i.position, agents[j].position, extent);
             if dist_spatial > reach {
                 continue;
             }
@@ -1274,8 +1236,7 @@ pub fn resolve_reproduction(
             dissipated += total_investment;
 
             let (dx, dy) = crate::toroidal_displacement(a_pos, b_pos, extent);
-            let mid_pos =
-                crate::wrap_position((a_pos.0 + dx / 2.0, a_pos.1 + dy / 2.0), extent);
+            let mid_pos = crate::wrap_position((a_pos.0 + dx / 2.0, a_pos.1 + dy / 2.0), extent);
             events.push(Event {
                 tick: 0,
                 seq: 0,
@@ -1298,8 +1259,7 @@ pub fn resolve_reproduction(
         // energy dissipates, leaving less to provision each offspring. Charged
         // only at the event, never per tick.
         let avg_dispersal = (a_traits.dispersal + b_traits.dispersal) / 2.0;
-        let propagule_fraction =
-            crate::dispersal_propagule_cost_fraction(avg_dispersal, params);
+        let propagule_fraction = crate::dispersal_propagule_cost_fraction(avg_dispersal, params);
         let propagule_cost = post_efficiency * propagule_fraction;
         let offspring_total_energy = post_efficiency - propagule_cost;
         let energy_per_offspring = offspring_total_energy / offspring_count as f32;
@@ -1362,14 +1322,13 @@ pub fn resolve_reproduction(
                     b_traits.get(dim)
                 };
                 // Mutation
-                let mut val = if params.mutation_rate > 0.0
-                    && rng.random::<f32>() < params.mutation_rate
-                {
-                    let normal = Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
-                    (parent_val + normal.sample(rng)).max(0.0)
-                } else {
-                    parent_val
-                };
+                let mut val =
+                    if params.mutation_rate > 0.0 && rng.random::<f32>() < params.mutation_rate {
+                        let normal = Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
+                        (parent_val + normal.sample(rng)).max(0.0)
+                    } else {
+                        parent_val
+                    };
                 // Clamp kappa and asexual_propensity to [0, 1]
                 if dim == 3 || dim == 5 {
                     val = val.clamp(0.0, 1.0);
@@ -1384,10 +1343,7 @@ pub fn resolve_reproduction(
             } else {
                 (0.0, 0.0)
             };
-            let pos = crate::wrap_position(
-                (seed_pos.0 + dx, seed_pos.1 + dy),
-                extent,
-            );
+            let pos = crate::wrap_position((seed_pos.0 + dx, seed_pos.1 + dy), extent);
 
             // Provision the offspring's structure, reserve, and nutrient, with
             // birth structure co-limited by the donated nutrient (ADR-0003).
@@ -1444,7 +1400,7 @@ pub fn resolve_reproduction(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{TraitVector, WorldParameters, FUNCTIONAL_TRAIT_COUNT};
+    use crate::{FUNCTIONAL_TRAIT_COUNT, TraitVector, WorldParameters};
 
     fn zero_traits() -> TraitVector {
         TraitVector {
@@ -1499,7 +1455,7 @@ mod tests {
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
             body_reach_coefficient: 0.0,
-            }
+        }
     }
 
     fn make_agent(id: u64, position: (f32, f32), reserve: f32, traits: TraitVector) -> Agent {
@@ -1590,13 +1546,22 @@ mod tests {
         // weight_0 = 0.5 * 9.0 = 4.5, weight_1 = 0.5 * 3.0 = 1.5, total = 6.0
         // share_0 = 4.5 / 6.0 = 0.75, share_1 = 1.5 / 6.0 = 0.25
         // income_0 = 10.0 * 0.75 = 7.5, income_1 = 10.0 * 0.25 = 2.5
-        assert!((events[0].energy_delta - 7.5).abs() < 1e-3,
-            "larger producer should get 7.5, got {}", events[0].energy_delta);
-        assert!((events[1].energy_delta - 2.5).abs() < 1e-3,
-            "smaller producer should get 2.5, got {}", events[1].energy_delta);
+        assert!(
+            (events[0].energy_delta - 7.5).abs() < 1e-3,
+            "larger producer should get 7.5, got {}",
+            events[0].energy_delta
+        );
+        assert!(
+            (events[1].energy_delta - 2.5).abs() < 1e-3,
+            "smaller producer should get 2.5, got {}",
+            events[1].energy_delta
+        );
         // Total flux conserved
         let total: f32 = events.iter().map(|e| e.energy_delta).sum();
-        assert!((total - 10.0).abs() < 1e-3, "total flux should be conserved");
+        assert!(
+            (total - 10.0).abs() < 1e-3,
+            "total flux should be conserved"
+        );
     }
 
     #[test]
@@ -1646,8 +1611,14 @@ mod tests {
         let events = photosynthesise(&mut agents, &grid, &params);
 
         // With zero structure, agent should get zero light
-        assert!(events.is_empty(), "agent with zero structure should produce no photosynthesis event");
-        assert!((agents[0].reserve - 10.0).abs() < 1e-6, "reserve should be unchanged");
+        assert!(
+            events.is_empty(),
+            "agent with zero structure should produce no photosynthesis event"
+        );
+        assert!(
+            (agents[0].reserve - 10.0).abs() < 1e-6,
+            "reserve should be unchanged"
+        );
     }
 
     // --- Absorb nutrients ---
@@ -1669,12 +1640,21 @@ mod tests {
 
         // Total uptake = effective autotrophy = 1.0.
         let total = agents[0].nutrient + agents[0].repro_nutrient;
-        assert!((total - 1.0).abs() < 1e-3, "total uptake should be 1.0, got {total}");
+        assert!(
+            (total - 1.0).abs() < 1e-3,
+            "total uptake should be 1.0, got {total}"
+        );
         // kappa share (0.3) to free store, (1 - kappa) share (0.7) to earmark.
-        assert!((agents[0].nutrient - 0.3).abs() < 1e-3,
-            "free store should get kappa share 0.3, got {}", agents[0].nutrient);
-        assert!((agents[0].repro_nutrient - 0.7).abs() < 1e-3,
-            "earmark should get (1-kappa) share 0.7, got {}", agents[0].repro_nutrient);
+        assert!(
+            (agents[0].nutrient - 0.3).abs() < 1e-3,
+            "free store should get kappa share 0.3, got {}",
+            agents[0].nutrient
+        );
+        assert!(
+            (agents[0].repro_nutrient - 0.7).abs() < 1e-3,
+            "earmark should get (1-kappa) share 0.7, got {}",
+            agents[0].repro_nutrient
+        );
     }
 
     #[test]
@@ -1693,8 +1673,11 @@ mod tests {
         assert_eq!(events[0].kind, EventKind::NutrientAbsorbed);
         // demand = eff_autotrophy = 0.5 (no wear degradation on fresh agent)
         let expected = 0.5;
-        assert!((agents[0].nutrient_total(&params) - expected).abs() < 1e-3,
-            "uptake should equal effective autotrophy, got {}", agents[0].nutrient_total(&params));
+        assert!(
+            (agents[0].nutrient_total(&params) - expected).abs() < 1e-3,
+            "uptake should equal effective autotrophy, got {}",
+            agents[0].nutrient_total(&params)
+        );
         assert!((grid.total() - (100.0 - expected)).abs() < 1e-3);
     }
 
@@ -1719,7 +1702,9 @@ mod tests {
         // Both have same demand, so each gets half
         let total_uptake = agents[0].nutrient_total(&params) + agents[1].nutrient_total(&params);
         assert!((total_uptake - 0.1).abs() < 1e-3);
-        assert!((agents[0].nutrient_total(&params) - agents[1].nutrient_total(&params)).abs() < 1e-3);
+        assert!(
+            (agents[0].nutrient_total(&params) - agents[1].nutrient_total(&params)).abs() < 1e-3
+        );
     }
 
     #[test]
@@ -1737,8 +1722,15 @@ mod tests {
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
         let events = absorb_nutrients(&mut agents, &mut grid, &params);
-        assert_eq!(events.len(), 1, "agent with autotrophy should get nutrients regardless of contact_time");
-        assert!(agents[0].nutrient_total(&params) > 0.0, "nutrient uptake should be positive");
+        assert_eq!(
+            events.len(),
+            1,
+            "agent with autotrophy should get nutrients regardless of contact_time"
+        );
+        assert!(
+            agents[0].nutrient_total(&params) > 0.0,
+            "nutrient uptake should be positive"
+        );
     }
 
     #[test]
@@ -1759,8 +1751,11 @@ mod tests {
         assert_eq!(events[0].kind, EventKind::NutrientAbsorbed);
         // demand = effective_autotrophy = 0.5
         let expected = 0.5;
-        assert!((agents[0].nutrient_total(&params) - expected).abs() < 1e-3,
-            "autotrophy-derived uptake expected {expected}, got {}", agents[0].nutrient_total(&params));
+        assert!(
+            (agents[0].nutrient_total(&params) - expected).abs() < 1e-3,
+            "autotrophy-derived uptake expected {expected}, got {}",
+            agents[0].nutrient_total(&params)
+        );
     }
 
     #[test]
@@ -1778,12 +1773,18 @@ mod tests {
 
         let events = absorb_nutrients(&mut agents, &mut grid, &params);
 
-        assert!(events.is_empty(),
-            "zero-autotrophy agent should get no nutrient uptake events");
-        assert!((agents[0].nutrient_total(&params)).abs() < 1e-6,
-            "zero-autotrophy agent should have zero nutrient");
-        assert!((grid.total() - 100.0).abs() < 1e-6,
-            "pool should be unchanged when no uptake occurs");
+        assert!(
+            events.is_empty(),
+            "zero-autotrophy agent should get no nutrient uptake events"
+        );
+        assert!(
+            (agents[0].nutrient_total(&params)).abs() < 1e-6,
+            "zero-autotrophy agent should have zero nutrient"
+        );
+        assert!(
+            (grid.total() - 100.0).abs() < 1e-6,
+            "pool should be unchanged when no uptake occurs"
+        );
     }
 
     #[test]
@@ -1808,15 +1809,25 @@ mod tests {
         let _events = absorb_nutrients(&mut agents, &mut grid, &params);
 
         // Agent A should have absorbed nutrient
-        assert!(agents[0].nutrient_total(&params) > 0.0,
-            "agent in nutrient-rich cell should absorb, got {}", agents[0].nutrient_total(&params));
+        assert!(
+            agents[0].nutrient_total(&params) > 0.0,
+            "agent in nutrient-rich cell should absorb, got {}",
+            agents[0].nutrient_total(&params)
+        );
         // Agent B should have absorbed nothing
-        assert!((agents[1].nutrient_total(&params)).abs() < 1e-6,
-            "agent in nutrient-poor cell should absorb nothing, got {}", agents[1].nutrient_total(&params));
+        assert!(
+            (agents[1].nutrient_total(&params)).abs() < 1e-6,
+            "agent in nutrient-poor cell should absorb nothing, got {}",
+            agents[1].nutrient_total(&params)
+        );
         // Total nutrient conserved
-        let total = grid.total() + agents[0].nutrient_total(&params) + agents[1].nutrient_total(&params);
-        assert!((total - 5.0).abs() < 1e-3,
-            "total nutrient should be conserved, got {}", total);
+        let total =
+            grid.total() + agents[0].nutrient_total(&params) + agents[1].nutrient_total(&params);
+        assert!(
+            (total - 5.0).abs() < 1e-3,
+            "total nutrient should be conserved, got {}",
+            total
+        );
     }
 
     // --- Metabolise ---
@@ -2038,8 +2049,14 @@ mod tests {
         // and surplus would be 0, so no growth would occur and reserve stays at 10.0.
         // With mobility_maintenance_cost (1.0), retention is 2.0, surplus is 8.0,
         // and with kappa=1.0 and growth_efficiency=1.0, all goes to structure.
-        assert!((agents[0].reserve - 2.0).abs() < 1e-6, "reserve should equal retention");
-        assert!((agents[0].structure - 8.0).abs() < 1e-6, "surplus should become structure");
+        assert!(
+            (agents[0].reserve - 2.0).abs() < 1e-6,
+            "reserve should equal retention"
+        );
+        assert!(
+            (agents[0].structure - 8.0).abs() < 1e-6,
+            "surplus should become structure"
+        );
     }
 
     #[test]
@@ -2068,8 +2085,14 @@ mod tests {
 
         let (_events, _dissipated) = grow(&mut agents, &params);
 
-        assert!((agents[0].reserve - 2.0).abs() < 1e-6, "reserve should equal retention");
-        assert!((agents[0].structure - 8.0).abs() < 1e-6, "surplus should become structure");
+        assert!(
+            (agents[0].reserve - 2.0).abs() < 1e-6,
+            "reserve should equal retention"
+        );
+        assert!(
+            (agents[0].structure - 8.0).abs() < 1e-6,
+            "surplus should become structure"
+        );
     }
 
     // --- Grow ---
@@ -2087,7 +2110,10 @@ mod tests {
             specification_nutrient_coefficient: 0.0, // ratio = base_nutrient_ratio = 0.1
             ..test_params()
         };
-        let traits = TraitVector { kappa: 1.0, ..zero_traits() }; // all surplus to soma
+        let traits = TraitVector {
+            kappa: 1.0,
+            ..zero_traits()
+        }; // all surplus to soma
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
         agents[0].nutrient = 1.0; // ratio 0.1 -> supports at most 10.0 structure
 
@@ -2097,17 +2123,29 @@ mod tests {
         // 98.0 structure, but the free store (1.0 / 0.1 = 10.0) is the binding
         // constraint, so only 10.0 structure is built.
         assert_eq!(events.len(), 1);
-        assert!((agents[0].structure - 10.0).abs() < 1e-3,
-            "structure co-limited by free nutrient supply, got {}", agents[0].structure);
+        assert!(
+            (agents[0].structure - 10.0).abs() < 1e-3,
+            "structure co-limited by free nutrient supply, got {}",
+            agents[0].structure
+        );
         // Building 10.0 structure binds 10.0 * 0.1 = 1.0 free nutrient — the whole
         // free store is consumed into the body.
-        assert!(agents[0].nutrient.abs() < 1e-3,
-            "growth consumes the free store into structure, got {}", agents[0].nutrient);
+        assert!(
+            agents[0].nutrient.abs() < 1e-3,
+            "growth consumes the free store into structure, got {}",
+            agents[0].nutrient
+        );
         // Unspent growth energy (88.0) returns to reserve on top of retention.
-        assert!((agents[0].reserve - 90.0).abs() < 1e-3,
-            "leftover growth energy stays in reserve, got {}", agents[0].reserve);
+        assert!(
+            (agents[0].reserve - 90.0).abs() < 1e-3,
+            "leftover growth energy stays in reserve, got {}",
+            agents[0].reserve
+        );
         // No energy dissipated at efficiency 1.0.
-        assert!(dissipated.abs() < 1e-3, "no dissipation at efficiency 1.0, got {dissipated}");
+        assert!(
+            dissipated.abs() < 1e-3,
+            "no dissipation at efficiency 1.0, got {dissipated}"
+        );
     }
 
     #[test]
@@ -2120,18 +2158,30 @@ mod tests {
             growth_efficiency: 1.0,
             ..test_params()
         };
-        let traits = TraitVector { kappa: 1.0, ..zero_traits() };
+        let traits = TraitVector {
+            kappa: 1.0,
+            ..zero_traits()
+        };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
         // make_agent leaves nutrient at 0.0.
 
         let (events, dissipated) = grow(&mut agents, &params);
 
         assert!(events.is_empty(), "no Grew event when nutrient-starved");
-        assert!(agents[0].structure.abs() < 1e-6, "no structure built without nutrient");
+        assert!(
+            agents[0].structure.abs() < 1e-6,
+            "no structure built without nutrient"
+        );
         // Surplus (98.0) was not burned: retention (2.0) + returned growth energy.
-        assert!((agents[0].reserve - 100.0).abs() < 1e-3,
-            "growth energy stays in reserve, got {}", agents[0].reserve);
-        assert!(dissipated.abs() < 1e-6, "nothing dissipated, got {dissipated}");
+        assert!(
+            (agents[0].reserve - 100.0).abs() < 1e-3,
+            "growth energy stays in reserve, got {}",
+            agents[0].reserve
+        );
+        assert!(
+            dissipated.abs() < 1e-6,
+            "nothing dissipated, got {dissipated}"
+        );
     }
 
     #[test]
@@ -2145,7 +2195,10 @@ mod tests {
             growth_efficiency: 1.0,
             ..test_params()
         };
-        let traits = TraitVector { kappa: 1.0, ..zero_traits() };
+        let traits = TraitVector {
+            kappa: 1.0,
+            ..zero_traits()
+        };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
         agents[0].nutrient = 0.0; // empty free store
         agents[0].repro_nutrient = 50.0; // ample earmark
@@ -2153,10 +2206,15 @@ mod tests {
         let (events, _dissipated) = grow(&mut agents, &params);
 
         assert!(events.is_empty(), "no growth when the free store is empty");
-        assert!(agents[0].structure.abs() < 1e-6,
-            "growth cannot bind the earmark, so no structure is built");
-        assert!((agents[0].repro_nutrient - 50.0).abs() < 1e-6,
-            "the reproductive-nutrient earmark is untouched, got {}", agents[0].repro_nutrient);
+        assert!(
+            agents[0].structure.abs() < 1e-6,
+            "growth cannot bind the earmark, so no structure is built"
+        );
+        assert!(
+            (agents[0].repro_nutrient - 50.0).abs() < 1e-6,
+            "the reproductive-nutrient earmark is untouched, got {}",
+            agents[0].repro_nutrient
+        );
     }
 
     #[test]
@@ -2166,7 +2224,10 @@ mod tests {
             growth_efficiency: 0.8,
             ..test_params()
         };
-        let traits = TraitVector { kappa: 1.0, ..zero_traits() }; // all surplus to soma
+        let traits = TraitVector {
+            kappa: 1.0,
+            ..zero_traits()
+        }; // all surplus to soma
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
         agents[0].nutrient = 1_000.0; // ample: growth is energy-limited here
 
@@ -2182,7 +2243,10 @@ mod tests {
         assert!((agents[0].structure - 78.4).abs() < 1e-3);
         assert!((agents[0].reserve - 2.0).abs() < 1e-3);
         assert!((dissipated - 19.6).abs() < 1e-3);
-        assert!((agents[0].repro_reserve).abs() < 1e-6, "kappa=1 should send nothing to repro");
+        assert!(
+            (agents[0].repro_reserve).abs() < 1e-6,
+            "kappa=1 should send nothing to repro"
+        );
     }
 
     #[test]
@@ -2217,10 +2281,14 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
         agents[0].nutrient = 1_000.0; // ample: growth is energy-limited here
         let (_events, _dissipated) = grow(&mut agents, &params);
-        assert!((agents[0].reserve - 5.0).abs() < 1e-6,
-            "reserve should equal retention (5.0) under multiplier=5.0");
-        assert!((agents[0].structure - 5.0).abs() < 1e-6,
-            "surplus (5.0) should become structure");
+        assert!(
+            (agents[0].reserve - 5.0).abs() < 1e-6,
+            "reserve should equal retention (5.0) under multiplier=5.0"
+        );
+        assert!(
+            (agents[0].structure - 5.0).abs() < 1e-6,
+            "surplus (5.0) should become structure"
+        );
     }
 
     #[test]
@@ -2258,7 +2326,10 @@ mod tests {
             growth_efficiency: 1.0, // perfect conversion for easy math
             ..test_params()
         };
-        let traits = TraitVector { kappa: 0.6, ..zero_traits() };
+        let traits = TraitVector {
+            kappa: 0.6,
+            ..zero_traits()
+        };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
         agents[0].nutrient = 1_000.0; // ample: growth is energy-limited here
 
@@ -2267,12 +2338,21 @@ mod tests {
         // surplus = 100.0, kappa=0.6
         // soma = 60.0 -> all to structure (efficiency=1.0, dissipated=0)
         // repro = 40.0 -> to repro_reserve
-        assert!((agents[0].structure - 60.0).abs() < 1e-3,
-            "kappa fraction should go to structure, got {}", agents[0].structure);
-        assert!((agents[0].repro_reserve - 40.0).abs() < 1e-3,
-            "1-kappa fraction should go to repro_reserve, got {}", agents[0].repro_reserve);
-        assert!((agents[0].reserve).abs() < 1e-3,
-            "all surplus should be consumed, got {}", agents[0].reserve);
+        assert!(
+            (agents[0].structure - 60.0).abs() < 1e-3,
+            "kappa fraction should go to structure, got {}",
+            agents[0].structure
+        );
+        assert!(
+            (agents[0].repro_reserve - 40.0).abs() < 1e-3,
+            "1-kappa fraction should go to repro_reserve, got {}",
+            agents[0].repro_reserve
+        );
+        assert!(
+            (agents[0].reserve).abs() < 1e-3,
+            "all surplus should be consumed, got {}",
+            agents[0].reserve
+        );
     }
 
     #[test]
@@ -2282,15 +2362,24 @@ mod tests {
             growth_efficiency: 0.8,
             ..test_params()
         };
-        let traits = TraitVector { kappa: 0.0, ..zero_traits() };
+        let traits = TraitVector {
+            kappa: 0.0,
+            ..zero_traits()
+        };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 50.0, traits)];
 
         let (_events, _dissipated) = grow(&mut agents, &params);
 
         // kappa=0: everything to repro
-        assert!((agents[0].structure).abs() < 1e-6, "zero kappa should not grow");
-        assert!((agents[0].repro_reserve - 50.0).abs() < 1e-3,
-            "all surplus to repro_reserve, got {}", agents[0].repro_reserve);
+        assert!(
+            (agents[0].structure).abs() < 1e-6,
+            "zero kappa should not grow"
+        );
+        assert!(
+            (agents[0].repro_reserve - 50.0).abs() < 1e-3,
+            "all surplus to repro_reserve, got {}",
+            agents[0].repro_reserve
+        );
     }
 
     #[test]
@@ -2300,7 +2389,10 @@ mod tests {
             growth_efficiency: 1.0,
             ..test_params()
         };
-        let traits = TraitVector { kappa: 0.5, ..zero_traits() };
+        let traits = TraitVector {
+            kappa: 0.5,
+            ..zero_traits()
+        };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 20.0, traits)];
 
         // First tick: surplus=20, repro=10
@@ -2312,8 +2404,11 @@ mod tests {
         agents[0].reserve = 20.0;
         grow(&mut agents, &params);
         // Should accumulate: 10.0 + 10.0 = 20.0
-        assert!((agents[0].repro_reserve - 20.0).abs() < 1e-3,
-            "repro_reserve should accumulate, got {}", agents[0].repro_reserve);
+        assert!(
+            (agents[0].repro_reserve - 20.0).abs() < 1e-3,
+            "repro_reserve should accumulate, got {}",
+            agents[0].repro_reserve
+        );
     }
 
     #[test]
@@ -2354,11 +2449,17 @@ mod tests {
 
         assert!(!result.offspring.is_empty(), "should reproduce");
         // Reserve should be unchanged
-        assert!((agents[0].reserve - 50.0).abs() < 1e-3,
-            "reserve should be untouched, got {}", agents[0].reserve);
+        assert!(
+            (agents[0].reserve - 50.0).abs() < 1e-3,
+            "reserve should be untouched, got {}",
+            agents[0].reserve
+        );
         // Repro_reserve should be zero
-        assert!(agents[0].repro_reserve.abs() < 1e-3,
-            "repro_reserve should be spent, got {}", agents[0].repro_reserve);
+        assert!(
+            agents[0].repro_reserve.abs() < 1e-3,
+            "repro_reserve should be spent, got {}",
+            agents[0].repro_reserve
+        );
     }
 
     #[test]
@@ -2398,8 +2499,11 @@ mod tests {
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         for child in &result.offspring {
-            assert!((child.repro_reserve).abs() < 1e-6,
-                "offspring should have zero repro_reserve, got {}", child.repro_reserve);
+            assert!(
+                (child.repro_reserve).abs() < 1e-6,
+                "offspring should have zero repro_reserve, got {}",
+                child.repro_reserve
+            );
         }
     }
 
@@ -2452,16 +2556,14 @@ mod tests {
             grid.insert(0, (0.0, 0.0));
             let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-            let result =
-                resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
             if result.offspring.is_empty() {
                 continue;
             }
             produced = true;
             let mut offspring = result.offspring;
             let structures: Vec<f32> = offspring.iter().map(|o| o.structure).collect();
-            let (_events, carcasses, _diss) =
-                check_death_thresholds(&mut offspring, &params);
+            let (_events, carcasses, _diss) = check_death_thresholds(&mut offspring, &params);
             assert!(
                 carcasses.is_empty(),
                 "decomposer offspring must survive its birth tick (seed {seed}): \
@@ -2472,7 +2574,10 @@ mod tests {
             );
             break;
         }
-        assert!(produced, "decomposer should produce a brood within 200 seeds");
+        assert!(
+            produced,
+            "decomposer should produce a brood within 200 seeds"
+        );
     }
 
     // WR-16: "Offspring are born with zero wear." Parents accumulate wear over
@@ -2517,7 +2622,10 @@ mod tests {
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(!result.offspring.is_empty(), "asexual parents should reproduce");
+        assert!(
+            !result.offspring.is_empty(),
+            "asexual parents should reproduce"
+        );
         for child in &result.offspring {
             for ft in 0..FUNCTIONAL_TRAIT_COUNT {
                 assert_eq!(
@@ -2543,7 +2651,7 @@ mod tests {
         let traits = TraitVector {
             mobility: 1.0,
             kappa: 0.5,
-            fecundity: 4.0, // high mean so the Poisson draw yields offspring
+            fecundity: 4.0,          // high mean so the Poisson draw yields offspring
             asexual_propensity: 0.0, // force sexual path
             ..zero_traits()
         };
@@ -2569,10 +2677,16 @@ mod tests {
 
         // Confirm we actually exercised the sexual path (target = mate id).
         assert!(
-            result.events.iter().any(|e| e.kind == EventKind::Reproduced && e.target.is_some()),
+            result
+                .events
+                .iter()
+                .any(|e| e.kind == EventKind::Reproduced && e.target.is_some()),
             "expected a sexual reproduction event with a mate target"
         );
-        assert!(!result.offspring.is_empty(), "sexual pair should produce offspring");
+        assert!(
+            !result.offspring.is_empty(),
+            "sexual pair should produce offspring"
+        );
         for child in &result.offspring {
             for ft in 0..FUNCTIONAL_TRAIT_COUNT {
                 assert_eq!(
@@ -2626,8 +2740,11 @@ mod tests {
         let _events = apply_wear(&mut agents, &params, &no_usage);
 
         // Accumulation only: 0.1 * 0.5 = 0.05, wear goes to 1.05
-        assert!((agents[0].wear[0] - 1.05).abs() < 1e-6,
-            "apply_wear should only accumulate (repair is in grow), got {}", agents[0].wear[0]);
+        assert!(
+            (agents[0].wear[0] - 1.05).abs() < 1e-6,
+            "apply_wear should only accumulate (repair is in grow), got {}",
+            agents[0].wear[0]
+        );
     }
 
     #[test]
@@ -2648,8 +2765,11 @@ mod tests {
 
         let (_events, _dissipated) = grow(&mut agents, &params);
 
-        assert!(agents[0].wear[0] < 1.0,
-            "grow should repair wear from soma budget, got {}", agents[0].wear[0]);
+        assert!(
+            agents[0].wear[0] < 1.0,
+            "grow should repair wear from soma budget, got {}",
+            agents[0].wear[0]
+        );
         assert!(agents[0].wear[0] > 0.0, "wear should still be positive");
     }
 
@@ -2697,13 +2817,17 @@ mod tests {
         let use_wear = agents[0].wear[0];
 
         // Use-dependent wear should exceed baseline alone
-        assert!(use_wear > baseline_wear,
-            "use-dependent wear ({use_wear}) should exceed baseline ({baseline_wear})");
+        assert!(
+            use_wear > baseline_wear,
+            "use-dependent wear ({use_wear}) should exceed baseline ({baseline_wear})"
+        );
         // Extra wear = use_wear_rate * energy_captured = 0.05 * 5.0 = 0.25
         let expected_extra = 0.05 * 5.0;
         let actual_extra = use_wear - baseline_wear;
-        assert!((actual_extra - expected_extra).abs() < 1e-6,
-            "extra wear should be {expected_extra}, got {actual_extra}");
+        assert!(
+            (actual_extra - expected_extra).abs() < 1e-6,
+            "extra wear should be {expected_extra}, got {actual_extra}"
+        );
     }
 
     #[test]
@@ -2730,8 +2854,11 @@ mod tests {
         // Use-dependent: 0.05 * 3.0 = 0.15
         // Total heterotrophy wear (index 1): 0.08 + 0.15 = 0.23
         let expected = 0.08 + 0.15;
-        assert!((agents[0].wear[1] - expected).abs() < 1e-6,
-            "heterotrophy wear should be {expected}, got {}", agents[0].wear[1]);
+        assert!(
+            (agents[0].wear[1] - expected).abs() < 1e-6,
+            "heterotrophy wear should be {expected}, got {}",
+            agents[0].wear[1]
+        );
     }
 
     #[test]
@@ -2757,8 +2884,11 @@ mod tests {
         // Use-dependent: 0.05 * 2.0 = 0.10
         // Total mobility wear (index 2): 0.06 + 0.10 = 0.16
         let expected = 0.06 + 0.10;
-        assert!((agents[0].wear[2] - expected).abs() < 1e-6,
-            "mobility wear should be {expected}, got {}", agents[0].wear[2]);
+        assert!(
+            (agents[0].wear[2] - expected).abs() < 1e-6,
+            "mobility wear should be {expected}, got {}",
+            agents[0].wear[2]
+        );
     }
 
     #[test]
@@ -2870,8 +3000,11 @@ mod tests {
 
         assert_eq!(carcasses.len(), 1);
         // free(5.0) + earmark(2.0) + bound(1.0) = 8.0
-        assert!((carcasses[0].nutrient - 8.0).abs() < 1e-6,
-            "carcass inherits free + earmark + bound, got {}", carcasses[0].nutrient);
+        assert!(
+            (carcasses[0].nutrient - 8.0).abs() < 1e-6,
+            "carcass inherits free + earmark + bound, got {}",
+            carcasses[0].nutrient
+        );
         assert!((carcasses[0].energy - 10.0).abs() < 1e-6);
     }
 
@@ -2892,9 +3025,12 @@ mod tests {
         let (_, small_carcasses, _) = check_death_thresholds(&mut small, &params);
         let (_, large_carcasses, _) = check_death_thresholds(&mut large, &params);
 
-        assert!(large_carcasses[0].nutrient > small_carcasses[0].nutrient,
+        assert!(
+            large_carcasses[0].nutrient > small_carcasses[0].nutrient,
             "bigger body -> more bound nutrient -> richer carcass: small={}, large={}",
-            small_carcasses[0].nutrient, large_carcasses[0].nutrient);
+            small_carcasses[0].nutrient,
+            large_carcasses[0].nutrient
+        );
         // small: free(1.0) + bound(2.0 * 0.1 = 0.2) = 1.2
         // large: free(1.0) + bound(20.0 * 0.1 = 2.0) = 3.0
         assert!((small_carcasses[0].nutrient - 1.2).abs() < 1e-6);
@@ -2930,7 +3066,11 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // Consumer demand = effective consumption_rate = 0.4
@@ -2938,12 +3078,21 @@ mod tests {
         // Target structure: 20.0 - 0.4 = 19.6
         // Consumer reserve: 10.0 + 0.4 * 0.5 = 10.2 (trophic efficiency)
         // Dissipated: 0.4 * 0.5 = 0.2
-        assert!((agents[1].structure - 19.6).abs() < 1e-3,
-            "target structure should be 19.6, got {}", agents[1].structure);
-        assert!((agents[0].reserve - 10.2).abs() < 1e-3,
-            "consumer reserve should be 10.2, got {}", agents[0].reserve);
-        assert!((result.dissipated - 0.2).abs() < 1e-3,
-            "dissipated should be 0.2, got {}", result.dissipated);
+        assert!(
+            (agents[1].structure - 19.6).abs() < 1e-3,
+            "target structure should be 19.6, got {}",
+            agents[1].structure
+        );
+        assert!(
+            (agents[0].reserve - 10.2).abs() < 1e-3,
+            "consumer reserve should be 10.2, got {}",
+            agents[0].reserve
+        );
+        assert!(
+            (result.dissipated - 0.2).abs() < 1e-3,
+            "dissipated should be 0.2, got {}",
+            result.dissipated
+        );
         assert!(result.dead_agents.is_empty());
         assert!(result.new_carcasses.is_empty());
     }
@@ -2968,9 +3117,9 @@ mod tests {
         };
         // All within contact_radius=5.0
         let mut agents = vec![
-            make_agent(1, (0.0, 0.0), 10.0, consumer_a_traits),  // demand 3.0
-            make_agent(2, (1.0, 0.0), 10.0, consumer_b_traits),  // demand 1.0
-            make_agent(3, (0.5, 0.0), 10.0, target_traits),      // target
+            make_agent(1, (0.0, 0.0), 10.0, consumer_a_traits), // demand 3.0
+            make_agent(2, (1.0, 0.0), 10.0, consumer_b_traits), // demand 1.0
+            make_agent(3, (0.5, 0.0), 10.0, target_traits),     // target
         ];
         agents[2].structure = 2.0;
 
@@ -2982,7 +3131,11 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // Total demand = 4.0, available = 2.0
@@ -2991,15 +3144,27 @@ mod tests {
         // Consumer A reserve: 10.0 + 1.5 * 0.5 = 10.75
         // Consumer B reserve: 10.0 + 0.5 * 0.5 = 10.25
         // Target structure: 2.0 - 2.0 = 0.0
-        assert!((agents[0].reserve - 10.75).abs() < 1e-3,
-            "consumer A reserve should be 10.75, got {}", agents[0].reserve);
-        assert!((agents[1].reserve - 10.25).abs() < 1e-3,
-            "consumer B reserve should be 10.25, got {}", agents[1].reserve);
-        assert!(agents[2].structure.abs() < 1e-3,
-            "target structure should be 0.0, got {}", agents[2].structure);
+        assert!(
+            (agents[0].reserve - 10.75).abs() < 1e-3,
+            "consumer A reserve should be 10.75, got {}",
+            agents[0].reserve
+        );
+        assert!(
+            (agents[1].reserve - 10.25).abs() < 1e-3,
+            "consumer B reserve should be 10.25, got {}",
+            agents[1].reserve
+        );
+        assert!(
+            agents[2].structure.abs() < 1e-3,
+            "target structure should be 0.0, got {}",
+            agents[2].structure
+        );
         // Dissipated: 1.5 * 0.5 + 0.5 * 0.5 = 1.0
-        assert!((result.dissipated - 1.0).abs() < 1e-3,
-            "dissipated should be 1.0, got {}", result.dissipated);
+        assert!(
+            (result.dissipated - 1.0).abs() < 1e-3,
+            "dissipated should be 1.0, got {}",
+            result.dissipated
+        );
     }
 
     #[test]
@@ -3045,14 +3210,17 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // Consumer demand = 5.0, target structure = threshold * 1.5
         // If demand > structure, drain is capped at structure
         // After drain, structure should be below threshold -> death
-        assert!(!result.dead_agents.is_empty(),
-            "target should be dead");
+        assert!(!result.dead_agents.is_empty(), "target should be dead");
         assert_eq!(result.dead_agents[0], 2);
         assert_eq!(result.new_carcasses.len(), 1);
         assert_eq!(result.new_carcasses[0].id, 2);
@@ -3085,7 +3253,11 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // Target should be killed (drained to 0)
@@ -3097,8 +3269,11 @@ mod tests {
         // decomposing the new carcass. The carcass energy is in new_carcasses,
         // not consumed further.
         // Consumer reserve = 10.0 + 5.0 * 0.5 = 12.5 (only from living drain)
-        assert!((agents[0].reserve - 12.5).abs() < 1e-3,
-            "consumer should only get energy from living drain, got {}", agents[0].reserve);
+        assert!(
+            (agents[0].reserve - 12.5).abs() < 1e-3,
+            "consumer should only get energy from living drain, got {}",
+            agents[0].reserve
+        );
     }
 
     #[test]
@@ -3136,34 +3311,57 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // From living target: drain 2.0, gain 2.0 * 0.5 = 1.0 (consumption_efficiency)
         // From carcass: drain 2.0, gain 2.0 * 0.5 = 1.0 (decomposition_efficiency)
         // Consumer reserve: 10.0 + 1.0 + 1.0 = 12.0
-        assert!((agents[0].reserve - 12.0).abs() < 1e-3,
-            "consumer should gain from both living and carcass, got {}", agents[0].reserve);
+        assert!(
+            (agents[0].reserve - 12.0).abs() < 1e-3,
+            "consumer should gain from both living and carcass, got {}",
+            agents[0].reserve
+        );
         // Living target structure: 20.0 - 2.0 = 18.0
-        assert!((agents[1].structure - 18.0).abs() < 1e-3,
-            "target structure should be 18.0, got {}", agents[1].structure);
+        assert!(
+            (agents[1].structure - 18.0).abs() < 1e-3,
+            "target structure should be 18.0, got {}",
+            agents[1].structure
+        );
         // Carcass energy: 10.0 - 2.0 = 8.0
-        assert!((carcasses[0].energy - 8.0).abs() < 1e-3,
-            "carcass energy should be 8.0, got {}", carcasses[0].energy);
+        assert!(
+            (carcasses[0].energy - 8.0).abs() < 1e-3,
+            "carcass energy should be 8.0, got {}",
+            carcasses[0].energy
+        );
         // Events should include both living and carcass consumption
-        assert!(result.events.len() >= 2,
-            "should have events for both consumption types");
+        assert!(
+            result.events.len() >= 2,
+            "should have events for both consumption types"
+        );
         // The raw interaction fact: which Consumed events drained a carcass.
-        let living = result.events.iter()
+        let living = result
+            .events
+            .iter()
             .find(|e| e.kind == EventKind::Consumed && e.target == Some(2))
             .expect("a Consumed event targeting the living agent");
-        assert!(!living.target_was_carcass,
-            "draining a living agent is not decomposition");
-        let carcass = result.events.iter()
+        assert!(
+            !living.target_was_carcass,
+            "draining a living agent is not decomposition"
+        );
+        let carcass = result
+            .events
+            .iter()
             .find(|e| e.kind == EventKind::Consumed && e.target == Some(99))
             .expect("a Consumed event targeting the carcass");
-        assert!(carcass.target_was_carcass,
-            "draining a carcass is decomposition");
+        assert!(
+            carcass.target_was_carcass,
+            "draining a carcass is decomposition"
+        );
     }
 
     // --- Move agents ---
@@ -3198,8 +3396,11 @@ mod tests {
         let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
 
         // Agent should have moved in the +x direction (toward target)
-        assert!(agents[0].position.0 > 0.0,
-            "agent should move toward target in +x, got x={}", agents[0].position.0);
+        assert!(
+            agents[0].position.0 > 0.0,
+            "agent should move toward target in +x, got x={}",
+            agents[0].position.0
+        );
         assert!(!result.events.is_empty());
         assert_eq!(result.events[0].kind, EventKind::Moved);
     }
@@ -3215,9 +3416,7 @@ mod tests {
             mobility: 5.0, // sensing range = 5.0 * 10.0 = 50.0
             ..zero_traits()
         };
-        let mut agents = vec![
-            make_agent(0, (0.0, 0.0), 100.0, mover_traits),
-        ];
+        let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, mover_traits)];
         let carcasses = vec![Carcass {
             id: 99,
             position: (0.0, 20.0),
@@ -3232,8 +3431,11 @@ mod tests {
         let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
 
         // Agent should have moved in the +y direction (toward carcass)
-        assert!(agents[0].position.1 > 0.0,
-            "agent should move toward carcass in +y, got y={}", agents[0].position.1);
+        assert!(
+            agents[0].position.1 > 0.0,
+            "agent should move toward carcass in +y, got y={}",
+            agents[0].position.1
+        );
     }
 
     #[test]
@@ -3256,10 +3458,16 @@ mod tests {
         let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
 
         // Zero structure means zero movement cost
-        assert!((agents[0].reserve - 100.0).abs() < 1e-3,
-            "zero-structure agent should pay zero movement cost, reserve={}", agents[0].reserve);
-        assert!((result.dissipated).abs() < 1e-3,
-            "zero dissipation for zero-structure agent, got {}", result.dissipated);
+        assert!(
+            (agents[0].reserve - 100.0).abs() < 1e-3,
+            "zero-structure agent should pay zero movement cost, reserve={}",
+            agents[0].reserve
+        );
+        assert!(
+            (result.dissipated).abs() < 1e-3,
+            "zero dissipation for zero-structure agent, got {}",
+            result.dissipated
+        );
     }
 
     #[test]
@@ -3291,12 +3499,21 @@ mod tests {
         // Large agent should pay 5x more (10/2)
         let small_cost = 100.0 - small[0].reserve;
         let large_cost = 100.0 - large[0].reserve;
-        assert!(large_cost > small_cost,
-            "large agent cost ({}) should exceed small agent cost ({})", large_cost, small_cost);
-        assert!((large_cost / small_cost - 5.0).abs() < 1e-3,
-            "cost ratio should be 5.0, got {}", large_cost / small_cost);
-        assert!((result_large.dissipated / result_small.dissipated - 5.0).abs() < 1e-3,
-            "dissipation ratio should be 5.0");
+        assert!(
+            large_cost > small_cost,
+            "large agent cost ({}) should exceed small agent cost ({})",
+            large_cost,
+            small_cost
+        );
+        assert!(
+            (large_cost / small_cost - 5.0).abs() < 1e-3,
+            "cost ratio should be 5.0, got {}",
+            large_cost / small_cost
+        );
+        assert!(
+            (result_large.dissipated / result_small.dissipated - 5.0).abs() < 1e-3,
+            "dissipation ratio should be 5.0"
+        );
     }
 
     #[test]
@@ -3319,8 +3536,12 @@ mod tests {
         // eff_mobility = 0.5 (no wear, k=0 so exp(0)=1)
         // cost = distance * coefficient * structure = 0.5 * 2.0 * 3.0 = 3.0
         let expected_cost = 0.5 * 2.0 * 3.0;
-        assert!((agents[0].reserve - (100.0 - expected_cost)).abs() < 1e-3,
-            "reserve should be {}, got {}", 100.0 - expected_cost, agents[0].reserve);
+        assert!(
+            (agents[0].reserve - (100.0 - expected_cost)).abs() < 1e-3,
+            "reserve should be {}, got {}",
+            100.0 - expected_cost,
+            agents[0].reserve
+        );
         assert!((result.dissipated - expected_cost).abs() < 1e-3);
     }
 
@@ -3341,8 +3562,11 @@ mod tests {
 
         let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
 
-        assert_eq!(agents[0].contact_time, 0,
-            "contact_time should reset to 0 after moving, got {}", agents[0].contact_time);
+        assert_eq!(
+            agents[0].contact_time, 0,
+            "contact_time should reset to 0 after moving, got {}",
+            agents[0].contact_time
+        );
     }
 
     #[test]
@@ -3350,9 +3574,7 @@ mod tests {
         use rand::SeedableRng;
         let params = test_params();
         // Zero mobility -> stationary
-        let traits = TraitVector {
-            ..zero_traits()
-        };
+        let traits = TraitVector { ..zero_traits() };
         let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
         agents[0].contact_time = 5;
         let carcasses = vec![];
@@ -3361,8 +3583,11 @@ mod tests {
 
         let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
 
-        assert_eq!(agents[0].contact_time, 6,
-            "contact_time should increment when stationary, got {}", agents[0].contact_time);
+        assert_eq!(
+            agents[0].contact_time, 6,
+            "contact_time should increment when stationary, got {}",
+            agents[0].contact_time
+        );
     }
 
     #[test]
@@ -3387,10 +3612,16 @@ mod tests {
         // Position should be within bounds after wrapping
         let extent = params.world_extent;
         let half = extent / 2.0;
-        assert!(agents[0].position.0 >= -half && agents[0].position.0 <= half,
-            "x position should be within bounds, got {}", agents[0].position.0);
-        assert!(agents[0].position.1 >= -half && agents[0].position.1 <= half,
-            "y position should be within bounds, got {}", agents[0].position.1);
+        assert!(
+            agents[0].position.0 >= -half && agents[0].position.0 <= half,
+            "x position should be within bounds, got {}",
+            agents[0].position.0
+        );
+        assert!(
+            agents[0].position.1 >= -half && agents[0].position.1 <= half,
+            "y position should be within bounds, got {}",
+            agents[0].position.1
+        );
     }
 
     #[test]
@@ -3415,8 +3646,10 @@ mod tests {
         let _r1 = move_agents(&mut agents1, &carcasses, &grid, &params, &mut rng1);
         let _r2 = move_agents(&mut agents2, &carcasses, &grid, &params, &mut rng2);
 
-        assert!((agents1[0].position.0 - agents2[0].position.0).abs() < 1e-6,
-            "positions should be identical with same seed");
+        assert!(
+            (agents1[0].position.0 - agents2[0].position.0).abs() < 1e-6,
+            "positions should be identical with same seed"
+        );
         assert!((agents1[0].position.1 - agents2[0].position.1).abs() < 1e-6);
     }
 
@@ -3457,8 +3690,11 @@ mod tests {
         let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
 
         // Agent 0 should detect 2 living agents + 1 carcass = 3
-        assert!((result.sensing_throughput[0] - 3.0).abs() < 1e-6,
-            "sensing throughput should be 3.0, got {}", result.sensing_throughput[0]);
+        assert!(
+            (result.sensing_throughput[0] - 3.0).abs() < 1e-6,
+            "sensing throughput should be 3.0, got {}",
+            result.sensing_throughput[0]
+        );
     }
 
     #[test]
@@ -3495,7 +3731,11 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // Drain = 2.0 (demand <= supply of 10.0)
@@ -3508,12 +3748,20 @@ mod tests {
         // reproductive-nutrient earmark (ADR-0004). This test asserts the
         // retention magnitude, so check the total retained across both stores.
         let retained = agents[0].nutrient + agents[0].repro_nutrient;
-        assert!((retained - 1.8).abs() < 1e-3,
-            "consumer should retain the 1.8 bound nutrient released, got {retained}");
-        assert!((nutrient_grid.total()).abs() < 1e-3,
-            "consumer need exceeds release, so nothing is excreted, got {}", nutrient_grid.total());
-        assert!((agents[1].nutrient - 20.0).abs() < 1e-3,
-            "grazing never touches the target's free store, got {}", agents[1].nutrient);
+        assert!(
+            (retained - 1.8).abs() < 1e-3,
+            "consumer should retain the 1.8 bound nutrient released, got {retained}"
+        );
+        assert!(
+            (nutrient_grid.total()).abs() < 1e-3,
+            "consumer need exceeds release, so nothing is excreted, got {}",
+            nutrient_grid.total()
+        );
+        assert!(
+            (agents[1].nutrient - 20.0).abs() < 1e-3,
+            "grazing never touches the target's free store, got {}",
+            agents[1].nutrient
+        );
     }
 
     #[test]
@@ -3546,7 +3794,11 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // bound released = 2.0 * 0.9 = 1.8; consumer need = 0.05 * 1.0 = 0.05
@@ -3554,12 +3806,20 @@ mod tests {
         // kappa = 0 routes the retained nutrient to the earmark (ADR-0004); the
         // retention magnitude is the total across both stores.
         let retained = agents[0].nutrient + agents[0].repro_nutrient;
-        assert!((retained - 0.05).abs() < 1e-3,
-            "consumer retains its demand 0.05, got {retained}");
-        assert!((nutrient_grid.total() - 1.75).abs() < 1e-3,
-            "excess bound nutrient 1.75 is excreted, got {}", nutrient_grid.total());
-        assert!((agents[1].nutrient - 20.0).abs() < 1e-3,
-            "target's free store untouched, got {}", agents[1].nutrient);
+        assert!(
+            (retained - 0.05).abs() < 1e-3,
+            "consumer retains its demand 0.05, got {retained}"
+        );
+        assert!(
+            (nutrient_grid.total() - 1.75).abs() < 1e-3,
+            "excess bound nutrient 1.75 is excreted, got {}",
+            nutrient_grid.total()
+        );
+        assert!(
+            (agents[1].nutrient - 20.0).abs() < 1e-3,
+            "target's free store untouched, got {}",
+            agents[1].nutrient
+        );
     }
 
     #[test]
@@ -3591,24 +3851,32 @@ mod tests {
         // A nutrient-rich pool the consumer cannot tap (zero autotrophy).
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
         absorb_nutrients(&mut agents, &mut nutrient_grid, &params);
-        assert!((agents[0].repro_nutrient).abs() < 1e-6,
+        assert!(
+            (agents[0].repro_nutrient).abs() < 1e-6,
             "pure heterotroph draws no earmark from pool uptake, got {}",
-            agents[0].repro_nutrient);
+            agents[0].repro_nutrient
+        );
 
         let mut carcasses: Vec<Carcass> = Vec::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // Consumption now feeds the earmark: released 1.8, retained 1.8, half to
         // the earmark = 0.9, which clears the test threshold of 1.0? No — 0.9 < 1.0
         // here, but the earmark is non-zero and accumulates, which is the point.
-        assert!(agents[0].repro_nutrient > 0.0,
+        assert!(
+            agents[0].repro_nutrient > 0.0,
             "heterotroph should earmark reproductive nutrient from prey, got {}",
-            agents[0].repro_nutrient);
+            agents[0].repro_nutrient
+        );
     }
 
     #[test]
@@ -3644,17 +3912,30 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // released = 2.0 * 0.9 = 1.8; need = 2.5; retained = 1.8; excreted = 0.0.
         // kappa share (0.25) -> free store = 0.45; (1 - kappa) share -> earmark = 1.35.
-        assert!((agents[0].nutrient - 0.45).abs() < 1e-3,
-            "free store should get kappa share 0.45, got {}", agents[0].nutrient);
-        assert!((agents[0].repro_nutrient - 1.35).abs() < 1e-3,
-            "earmark should get (1-kappa) share 1.35, got {}", agents[0].repro_nutrient);
-        assert!((nutrient_grid.total()).abs() < 1e-3,
-            "release is below need, so nothing is excreted, got {}", nutrient_grid.total());
+        assert!(
+            (agents[0].nutrient - 0.45).abs() < 1e-3,
+            "free store should get kappa share 0.45, got {}",
+            agents[0].nutrient
+        );
+        assert!(
+            (agents[0].repro_nutrient - 1.35).abs() < 1e-3,
+            "earmark should get (1-kappa) share 1.35, got {}",
+            agents[0].repro_nutrient
+        );
+        assert!(
+            (nutrient_grid.total()).abs() < 1e-3,
+            "release is below need, so nothing is excreted, got {}",
+            nutrient_grid.total()
+        );
     }
 
     #[test]
@@ -3693,12 +3974,19 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // The graze is non-lethal: nothing died this tick.
-        assert!(result.dead_agents.is_empty(),
-            "graze should be non-lethal, but agents died: {:?}", result.dead_agents);
+        assert!(
+            result.dead_agents.is_empty(),
+            "graze should be non-lethal, but agents died: {:?}",
+            result.dead_agents
+        );
 
         // bound released = actual_drain(2.0) * target_ratio(0.9) = 1.8
         // consumer need = demand(0.05) * energy_gained(1.0) = 0.05
@@ -3706,19 +3994,32 @@ mod tests {
         // kappa = 0 routes the consumer's retained nutrient to the earmark
         // (ADR-0004); the magnitude retained is the total across both stores.
         let retained = agents[0].nutrient + agents[0].repro_nutrient;
-        assert!((retained - 0.05).abs() < 1e-3,
-            "consumer retains its stoichiometric demand 0.05, got {retained}");
-        assert!(nutrient_grid.total() > 0.0,
-            "excess bound nutrient must be excreted to the pool, got {}", nutrient_grid.total());
-        assert!((nutrient_grid.total() - 1.75).abs() < 1e-3,
-            "excess bound nutrient 1.75 is excreted, got {}", nutrient_grid.total());
+        assert!(
+            (retained - 0.05).abs() < 1e-3,
+            "consumer retains its stoichiometric demand 0.05, got {retained}"
+        );
+        assert!(
+            nutrient_grid.total() > 0.0,
+            "excess bound nutrient must be excreted to the pool, got {}",
+            nutrient_grid.total()
+        );
+        assert!(
+            (nutrient_grid.total() - 1.75).abs() < 1e-3,
+            "excess bound nutrient 1.75 is excreted, got {}",
+            nutrient_grid.total()
+        );
 
         // The victim keeps BOTH its free store and its reproductive earmark.
-        assert!((agents[1].nutrient - 20.0).abs() < 1e-3,
-            "grazing never touches the victim's free store, got {}", agents[1].nutrient);
-        assert!((agents[1].repro_nutrient - 7.0).abs() < 1e-3,
+        assert!(
+            (agents[1].nutrient - 20.0).abs() < 1e-3,
+            "grazing never touches the victim's free store, got {}",
+            agents[1].nutrient
+        );
+        assert!(
+            (agents[1].repro_nutrient - 7.0).abs() < 1e-3,
             "grazing never touches the victim's reproductive earmark, got {}",
-            agents[1].repro_nutrient);
+            agents[1].repro_nutrient
+        );
     }
 
     #[test]
@@ -3737,7 +4038,7 @@ mod tests {
         // Place consumer and target far apart but within contact range
         // (contact_radius is 5.0 in test_params)
         let target_pos = (40.0, 0.0);
-        let consumer_pos = (41.0, 0.0);  // 1.0 away, within contact radius
+        let consumer_pos = (41.0, 0.0); // 1.0 away, within contact radius
         let mut agents = vec![
             make_agent(1, consumer_pos, 10.0, consumer_traits),
             make_agent(2, target_pos, 10.0, target_traits),
@@ -3753,22 +4054,34 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // Excreted nutrient should be in the cell at the target's position
         let target_cell_nutrient = *nutrient_grid.at_position(target_pos);
-        assert!(target_cell_nutrient > 0.0,
-            "excreted nutrient should be in target's cell, got {}", target_cell_nutrient);
+        assert!(
+            target_cell_nutrient > 0.0,
+            "excreted nutrient should be in target's cell, got {}",
+            target_cell_nutrient
+        );
 
         // A distant cell should have zero
         let distant_cell = *nutrient_grid.at_position((-40.0, -40.0));
-        assert!((distant_cell).abs() < 1e-6,
-            "distant cell should be unaffected, got {}", distant_cell);
+        assert!(
+            (distant_cell).abs() < 1e-6,
+            "distant cell should be unaffected, got {}",
+            distant_cell
+        );
 
         // Total excreted should match what the nutrient grid received
-        assert!((nutrient_grid.total() - target_cell_nutrient).abs() < 1e-6,
-            "all excreted nutrient should be in target's cell");
+        assert!(
+            (nutrient_grid.total() - target_cell_nutrient).abs() < 1e-6,
+            "all excreted nutrient should be in target's cell"
+        );
     }
 
     #[test]
@@ -3814,17 +4127,25 @@ mod tests {
         let grid_total_before = nutrient_grid.total();
 
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // Deltas across the single consumption tick.
-        let consumer_gain = (agents[0].nutrient + agents[0].repro_nutrient) - consumer_nutrient_before;
+        let consumer_gain =
+            (agents[0].nutrient + agents[0].repro_nutrient) - consumer_nutrient_before;
         let drained_from_carcass = carcass_nutrient_before - carcasses[0].nutrient;
         let excreted_to_grid = nutrient_grid.total() - grid_total_before;
 
         // Routing must split the drained nutrient with no loss.
         assert!(consumer_gain > 0.0, "consumer should retain some nutrient");
-        assert!(excreted_to_grid > 0.0, "excess should reach the available pool");
+        assert!(
+            excreted_to_grid > 0.0,
+            "excess should reach the available pool"
+        );
         assert!(
             (consumer_gain + excreted_to_grid - drained_from_carcass).abs() < 1e-4,
             "consumer gain ({consumer_gain}) + excreted ({excreted_to_grid}) must equal \
@@ -3872,19 +4193,32 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // actual_drain = 2.0; energy_gained = 2.0 * 0.5 = 1.0; need = 2.5 * 1.0 = 2.5.
         // transferred = 20.0 * (2.0/10.0) = 4.0; retained = min(4.0, 2.5) = 2.5.
         // kappa share (0.25) -> free store = 0.625; (1 - kappa) -> earmark = 1.875.
-        assert!((agents[0].nutrient - 0.625).abs() < 1e-3,
-            "free store should get kappa share 0.625, got {}", agents[0].nutrient);
-        assert!((agents[0].repro_nutrient - 1.875).abs() < 1e-3,
-            "earmark should get (1-kappa) share 1.875, got {}", agents[0].repro_nutrient);
+        assert!(
+            (agents[0].nutrient - 0.625).abs() < 1e-3,
+            "free store should get kappa share 0.625, got {}",
+            agents[0].nutrient
+        );
+        assert!(
+            (agents[0].repro_nutrient - 1.875).abs() < 1e-3,
+            "earmark should get (1-kappa) share 1.875, got {}",
+            agents[0].repro_nutrient
+        );
         // Excretion is unchanged by the split: 4.0 - 2.5 = 1.5 reaches the pool.
-        assert!((nutrient_grid.total() - 1.5).abs() < 1e-3,
-            "excess 1.5 still excreted to the pool, got {}", nutrient_grid.total());
+        assert!(
+            (nutrient_grid.total() - 1.5).abs() < 1e-3,
+            "excess 1.5 still excreted to the pool, got {}",
+            nutrient_grid.total()
+        );
     }
 
     // --- Distance-dependent trophic efficiency in drains ---
@@ -3929,7 +4263,11 @@ mod tests {
             grid.insert(1, (1.0, 0.0));
             let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
             let _result = resolve_drains(
-                &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+                &mut agents,
+                &mut carcasses,
+                &grid,
+                &params,
+                &mut nutrient_grid,
             );
             agents[0].reserve // energy gained
         };
@@ -3937,11 +4275,17 @@ mod tests {
         let gained_similar = run_drain(similar_consumer);
         let gained_distant = run_drain(distant_consumer);
 
-        assert!(gained_similar > gained_distant,
+        assert!(
+            gained_similar > gained_distant,
             "similar consumer should gain more: similar={}, distant={}",
-            gained_similar, gained_distant);
+            gained_similar,
+            gained_distant
+        );
         assert!(gained_similar > 0.0, "similar consumer should gain energy");
-        assert!(gained_distant > 0.0, "distant consumer should still gain some energy");
+        assert!(
+            gained_distant > 0.0,
+            "distant consumer should still gain some energy"
+        );
     }
 
     #[test]
@@ -3971,9 +4315,7 @@ mod tests {
 
         let run_carcass_drain = |carcass_traits: TraitVector| -> f32 {
             // Grid key is the slice index; here agent id 0 sits at index 0.
-            let mut agents = vec![
-                make_agent(0, (0.0, 0.0), 0.0, consumer_traits),
-            ];
+            let mut agents = vec![make_agent(0, (0.0, 0.0), 0.0, consumer_traits)];
             let mut carcasses = vec![Carcass {
                 id: 99,
                 position: (0.0, 0.0), // co-located with consumer
@@ -3985,7 +4327,11 @@ mod tests {
             grid.insert(0, agents[0].position);
             let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
             let _result = resolve_drains(
-                &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+                &mut agents,
+                &mut carcasses,
+                &grid,
+                &params,
+                &mut nutrient_grid,
             );
             agents[0].reserve
         };
@@ -3993,9 +4339,12 @@ mod tests {
         let gained_similar = run_carcass_drain(similar_carcass_traits);
         let gained_distant = run_carcass_drain(distant_carcass_traits);
 
-        assert!(gained_similar > gained_distant,
+        assert!(
+            gained_similar > gained_distant,
             "decomposing similar carcass should yield more: similar={}, distant={}",
-            gained_similar, gained_distant);
+            gained_similar,
+            gained_distant
+        );
     }
 
     #[test]
@@ -4031,7 +4380,11 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         let drained = pre_target_structure - agents[1].structure;
@@ -4039,9 +4392,14 @@ mod tests {
         let dissipated = result.dissipated;
 
         assert!(drained > 0.0, "something should have been drained");
-        assert!((drained - gained - dissipated).abs() < 1e-4,
+        assert!(
+            (drained - gained - dissipated).abs() < 1e-4,
             "energy conservation: drained={}, gained={}, dissipated={}, diff={}",
-            drained, gained, dissipated, drained - gained - dissipated);
+            drained,
+            gained,
+            dissipated,
+            drained - gained - dissipated
+        );
     }
 
     // --- Resolve reproduction ---
@@ -4085,25 +4443,35 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         // Each parent invests entire repro_reserve (15.0)
         // Total = 30.0, offspring energy = 30.0 * 0.7 = 21.0
         // Dissipated = 30.0 - 21.0 = 9.0
         assert!(!result.offspring.is_empty(), "should produce offspring");
         let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
-        assert!((total_offspring_energy - 21.0).abs() < 1e-3,
-            "offspring energy should be 21.0, got {}", total_offspring_energy);
-        assert!((result.dissipated - 9.0).abs() < 1e-3,
-            "dissipated should be 9.0, got {}", result.dissipated);
+        assert!(
+            (total_offspring_energy - 21.0).abs() < 1e-3,
+            "offspring energy should be 21.0, got {}",
+            total_offspring_energy
+        );
+        assert!(
+            (result.dissipated - 9.0).abs() < 1e-3,
+            "dissipated should be 9.0, got {}",
+            result.dissipated
+        );
         // Parents' reserve should be unchanged (investment came from repro_reserve)
-        assert!((agents[0].reserve - 100.0).abs() < 1e-3,
-            "parent A reserve should be unchanged, got {}", agents[0].reserve);
+        assert!(
+            (agents[0].reserve - 100.0).abs() < 1e-3,
+            "parent A reserve should be unchanged, got {}",
+            agents[0].reserve
+        );
         // Parents' repro_reserve should be 0
-        assert!(agents[0].repro_reserve.abs() < 1e-3,
-            "parent A repro_reserve should be 0, got {}", agents[0].repro_reserve);
+        assert!(
+            agents[0].repro_reserve.abs() < 1e-3,
+            "parent A repro_reserve should be 0, got {}",
+            agents[0].repro_reserve
+        );
     }
 
     #[test]
@@ -4141,14 +4509,16 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(result.offspring.is_empty(),
-            "dead agent should not reproduce");
-        assert!((agents[0].reserve - 100.0).abs() < 1e-6,
-            "no investment should occur");
+        assert!(
+            result.offspring.is_empty(),
+            "dead agent should not reproduce"
+        );
+        assert!(
+            (agents[0].reserve - 100.0).abs() < 1e-6,
+            "no investment should occur"
+        );
     }
 
     #[test]
@@ -4182,12 +4552,12 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(result.offspring.is_empty(),
-            "agents below energy threshold should not reproduce");
+        assert!(
+            result.offspring.is_empty(),
+            "agents below energy threshold should not reproduce"
+        );
     }
 
     #[test]
@@ -4230,12 +4600,12 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(result.offspring.is_empty(),
-            "agents with earmark below threshold should not reproduce");
+        assert!(
+            result.offspring.is_empty(),
+            "agents with earmark below threshold should not reproduce"
+        );
     }
 
     #[test]
@@ -4260,9 +4630,7 @@ mod tests {
             asexual_propensity: 1.0, // force asexual path
             ..zero_traits()
         };
-        let mut agents = vec![
-            make_agent(1, (0.0, 0.0), 100.0, traits),
-        ];
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
         // Large structure → old body-support demand (10 * 0.2 = 2.0) far exceeds
         // the tiny free store, which would have blocked reproduction before.
         agents[0].structure = 10.0;
@@ -4276,12 +4644,12 @@ mod tests {
         grid.insert(0, (0.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(!result.offspring.is_empty(),
-            "earmark above threshold should permit reproduction despite empty free store");
+        assert!(
+            !result.offspring.is_empty(),
+            "earmark above threshold should permit reproduction despite empty free store"
+        );
     }
 
     #[test]
@@ -4320,24 +4688,34 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         // Each parent invests entire repro_reserve: 20.0 each
         // Total = 40.0, offspring energy = 40.0 * 0.7 = 28.0
         assert!(!result.offspring.is_empty());
         let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
-        assert!((total_offspring_energy - 28.0).abs() < 1e-3,
-            "offspring energy should be 28.0, got {}", total_offspring_energy);
+        assert!(
+            (total_offspring_energy - 28.0).abs() < 1e-3,
+            "offspring energy should be 28.0, got {}",
+            total_offspring_energy
+        );
         // Parents' repro_reserve should be 0
-        assert!(agents[0].repro_reserve.abs() < 1e-3,
-            "parent A should have 0 repro_reserve, got {}", agents[0].repro_reserve);
-        assert!(agents[1].repro_reserve.abs() < 1e-3,
-            "parent B should have 0 repro_reserve, got {}", agents[1].repro_reserve);
+        assert!(
+            agents[0].repro_reserve.abs() < 1e-3,
+            "parent A should have 0 repro_reserve, got {}",
+            agents[0].repro_reserve
+        );
+        assert!(
+            agents[1].repro_reserve.abs() < 1e-3,
+            "parent B should have 0 repro_reserve, got {}",
+            agents[1].repro_reserve
+        );
         // Parents' reserve should be unchanged
-        assert!((agents[0].reserve - 15.0).abs() < 1e-3,
-            "parent A reserve should be unchanged, got {}", agents[0].reserve);
+        assert!(
+            (agents[0].reserve - 15.0).abs() < 1e-3,
+            "parent A reserve should be unchanged, got {}",
+            agents[0].reserve
+        );
     }
 
     #[test]
@@ -4388,20 +4766,23 @@ mod tests {
         grid.insert(2, (4.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         // A and B should pair (trait distance=0), C has no mate
         assert_eq!(result.events.len(), 1, "should produce exactly one pair");
         let ev = &result.events[0];
         // The pair should be agents 1 and 2 (ids)
         let paired_ids = [ev.source, ev.target.unwrap()];
-        assert!(paired_ids.contains(&1) && paired_ids.contains(&2),
-            "agents 1 and 2 should pair, got {:?}", paired_ids);
+        assert!(
+            paired_ids.contains(&1) && paired_ids.contains(&2),
+            "agents 1 and 2 should pair, got {:?}",
+            paired_ids
+        );
         // Agent C (id=3) should not have invested
-        assert!((agents[2].reserve - 100.0).abs() < 1e-6,
-            "agent C should not have reproduced");
+        assert!(
+            (agents[2].reserve - 100.0).abs() < 1e-6,
+            "agent C should not have reproduced"
+        );
     }
 
     #[test]
@@ -4448,9 +4829,7 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty());
         let child = &result.offspring[0];
@@ -4502,19 +4881,24 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         // With Poisson(5.0), expect multiple offspring (statistically unlikely to get 1)
-        assert!(result.offspring.len() > 1,
-            "high fecundity should produce multiple offspring, got {}", result.offspring.len());
+        assert!(
+            result.offspring.len() > 1,
+            "high fecundity should produce multiple offspring, got {}",
+            result.offspring.len()
+        );
         // Total offspring energy should equal total_investment * efficiency
         let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
         let total_investment = 30.0; // 15.0 + 15.0 (entire repro_reserve of each parent)
         let expected_total = total_investment * 0.7;
-        assert!((total_offspring_energy - expected_total).abs() < 1e-3,
-            "total offspring energy should be {}, got {}", expected_total, total_offspring_energy);
+        assert!(
+            (total_offspring_energy - expected_total).abs() < 1e-3,
+            "total offspring energy should be {}, got {}",
+            expected_total,
+            total_offspring_energy
+        );
     }
 
     #[test]
@@ -4553,9 +4937,7 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty());
         for child in &result.offspring {
@@ -4564,15 +4946,25 @@ mod tests {
                 assert!(*w == 0.0, "offspring should have zero wear");
             }
             // Zero structure
-            assert!(child.structure == 0.0, "offspring should have zero structure");
+            assert!(
+                child.structure == 0.0,
+                "offspring should have zero structure"
+            );
             // Zero contact time
-            assert!(child.contact_time == 0, "offspring should have zero contact time");
+            assert!(
+                child.contact_time == 0,
+                "offspring should have zero contact time"
+            );
             // Position within world bounds
             let half = params.world_extent / 2.0;
-            assert!(child.position.0 >= -half && child.position.0 <= half,
-                "offspring x should be within bounds");
-            assert!(child.position.1 >= -half && child.position.1 <= half,
-                "offspring y should be within bounds");
+            assert!(
+                child.position.0 >= -half && child.position.0 <= half,
+                "offspring x should be within bounds"
+            );
+            assert!(
+                child.position.1 >= -half && child.position.1 <= half,
+                "offspring y should be within bounds"
+            );
         }
         // With high dispersal trait, offspring should be placed at different positions
         // (not all at the exact same position)
@@ -4581,7 +4973,10 @@ mod tests {
             let all_same = positions.iter().all(|p| {
                 (p.0 - positions[0].0).abs() < 1e-6 && (p.1 - positions[0].1).abs() < 1e-6
             });
-            assert!(!all_same, "offspring should be dispersed to different positions");
+            assert!(
+                !all_same,
+                "offspring should be dispersed to different positions"
+            );
         }
     }
 
@@ -4618,14 +5013,14 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].kind, EventKind::Reproduced);
-        assert!(result.events[0].target.is_some(),
-            "Reproduced event should have target (second parent)");
+        assert!(
+            result.events[0].target.is_some(),
+            "Reproduced event should have target (second parent)"
+        );
     }
 
     #[test]
@@ -4654,10 +5049,10 @@ mod tests {
             ];
             agents[0].nutrient = 10.0;
             agents[1].nutrient = 10.0;
-        agents[0].repro_reserve = 15.0;
-        agents[0].repro_nutrient = 15.0;
-        agents[1].repro_reserve = 15.0;
-        agents[1].repro_nutrient = 15.0;
+            agents[0].repro_reserve = 15.0;
+            agents[0].repro_nutrient = 15.0;
+            agents[1].repro_reserve = 15.0;
+            agents[1].repro_nutrient = 15.0;
 
             let dead_ids = std::collections::HashSet::new();
             let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -4665,9 +5060,7 @@ mod tests {
             grid.insert(1, (1.0, 0.0));
             let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-            let result = resolve_reproduction(
-                &mut agents, &dead_ids, &grid, &params, &mut rng,
-            );
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
             let positions: Vec<(f32, f32)> = result.offspring.iter().map(|o| o.position).collect();
             let energies: Vec<f32> = result.offspring.iter().map(|o| o.reserve).collect();
             (positions, energies)
@@ -4675,7 +5068,11 @@ mod tests {
 
         let (pos1, en1) = run(42);
         let (pos2, en2) = run(42);
-        assert_eq!(pos1.len(), pos2.len(), "same seed should produce same count");
+        assert_eq!(
+            pos1.len(),
+            pos2.len(),
+            "same seed should produce same count"
+        );
         for i in 0..pos1.len() {
             assert!((pos1[i].0 - pos2[i].0).abs() < 1e-6);
             assert!((pos1[i].1 - pos2[i].1).abs() < 1e-6);
@@ -4719,21 +5116,27 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         // Total investment = 15.0 + 15.0 = 30.0 (entire repro_reserve)
         // Offspring energy = 30.0 * 0.5 = 15.0
         // Dissipated = 30.0 - 15.0 = 15.0
         let total_offspring_energy: f32 = result.offspring.iter().map(|o| o.reserve).sum();
-        assert!((total_offspring_energy - 15.0).abs() < 1e-3,
-            "offspring energy should be 15.0, got {}", total_offspring_energy);
-        assert!((result.dissipated - 15.0).abs() < 1e-3,
-            "dissipated should be 15.0, got {}", result.dissipated);
+        assert!(
+            (total_offspring_energy - 15.0).abs() < 1e-3,
+            "offspring energy should be 15.0, got {}",
+            total_offspring_energy
+        );
+        assert!(
+            (result.dissipated - 15.0).abs() < 1e-3,
+            "dissipated should be 15.0, got {}",
+            result.dissipated
+        );
         // Conservation: investment = offspring + dissipated
-        assert!((total_offspring_energy + result.dissipated - 30.0).abs() < 1e-3,
-            "energy should be conserved");
+        assert!(
+            (total_offspring_energy + result.dissipated - 30.0).abs() < 1e-3,
+            "energy should be conserved"
+        );
     }
 
     #[test]
@@ -4778,17 +5181,24 @@ mod tests {
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         // Zero offspring produced (reproductive failure).
-        assert!(result.offspring.is_empty(),
-            "zero Poisson draw should yield no offspring, got {}", result.offspring.len());
+        assert!(
+            result.offspring.is_empty(),
+            "zero Poisson draw should yield no offspring, got {}",
+            result.offspring.len()
+        );
         // Energy was still committed: parent's repro_reserve is consumed.
-        assert!(agents[0].repro_reserve < 1e-6,
+        assert!(
+            agents[0].repro_reserve < 1e-6,
             "parent repro_reserve should be consumed even on failure, got {}",
-            agents[0].repro_reserve);
+            agents[0].repro_reserve
+        );
         // Conservation: the entire committed investment (20.0) is dissipated since
         // no offspring carry any of it.
-        assert!((result.dissipated - 20.0).abs() < 1e-3,
+        assert!(
+            (result.dissipated - 20.0).abs() < 1e-3,
             "full investment should dissipate on zero-offspring failure, got {}",
-            result.dissipated);
+            result.dissipated
+        );
     }
 
     #[test]
@@ -4809,7 +5219,7 @@ mod tests {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
             kappa: 0.5,
-            fecundity: 0.0, // floored to 0.1 mean -> P(0) ~ 90%
+            fecundity: 0.0,          // floored to 0.1 mean -> P(0) ~ 90%
             asexual_propensity: 0.0, // force sexual path
             ..zero_traits()
         };
@@ -4833,16 +5243,24 @@ mod tests {
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         // Zero offspring (reproductive failure).
-        assert!(result.offspring.is_empty(),
-            "zero Poisson draw should yield no offspring, got {}", result.offspring.len());
+        assert!(
+            result.offspring.is_empty(),
+            "zero Poisson draw should yield no offspring, got {}",
+            result.offspring.len()
+        );
         // Both parents' repro_reserve consumed.
-        assert!(agents[0].repro_reserve < 1e-6 && agents[1].repro_reserve < 1e-6,
+        assert!(
+            agents[0].repro_reserve < 1e-6 && agents[1].repro_reserve < 1e-6,
             "both parents' repro_reserve should be consumed, got {} and {}",
-            agents[0].repro_reserve, agents[1].repro_reserve);
+            agents[0].repro_reserve,
+            agents[1].repro_reserve
+        );
         // Full combined investment (15 + 15 = 30) dissipates.
-        assert!((result.dissipated - 30.0).abs() < 1e-3,
+        assert!(
+            (result.dissipated - 30.0).abs() < 1e-3,
             "full investment should dissipate on zero-offspring failure, got {}",
-            result.dissipated);
+            result.dissipated
+        );
     }
 
     // --- Derived sensing range ---
@@ -4891,10 +5309,14 @@ mod tests {
 
         let low_detected = run(low_mobility);
         let high_detected = run(high_mobility);
-        assert_eq!(low_detected, 0.0,
-            "low-mobility agent should not detect target at distance 5 with sensing range 2");
-        assert!(high_detected >= 1.0,
-            "high-mobility agent should detect target at distance 5 with sensing range 20");
+        assert_eq!(
+            low_detected, 0.0,
+            "low-mobility agent should not detect target at distance 5 with sensing range 2"
+        );
+        assert!(
+            high_detected >= 1.0,
+            "high-mobility agent should detect target at distance 5 with sensing range 20"
+        );
     }
 
     #[test]
@@ -4923,8 +5345,10 @@ mod tests {
         let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
 
         // Zero mobility -> stationary, no sensing
-        assert_eq!(result.sensing_throughput[0], 0.0,
-            "zero-mobility agent should detect nothing");
+        assert_eq!(
+            result.sensing_throughput[0], 0.0,
+            "zero-mobility agent should detect nothing"
+        );
     }
 
     // --- Reproductive compatibility distance ---
@@ -4960,7 +5384,11 @@ mod tests {
             ..zero_traits()
         };
         let dist = traits_a.distance(&traits_b);
-        assert!(dist > 0.5, "trait distance should exceed compatibility threshold: {}", dist);
+        assert!(
+            dist > 0.5,
+            "trait distance should exceed compatibility threshold: {}",
+            dist
+        );
 
         let mut agents = vec![
             make_agent(1, (0.0, 0.0), 100.0, traits_a),
@@ -4979,12 +5407,12 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(result.offspring.is_empty(),
-            "agents beyond compatibility distance should not reproduce");
+        assert!(
+            result.offspring.is_empty(),
+            "agents beyond compatibility distance should not reproduce"
+        );
     }
 
     #[test]
@@ -5026,12 +5454,12 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(!result.offspring.is_empty(),
-            "agents within compatibility distance should reproduce");
+        assert!(
+            !result.offspring.is_empty(),
+            "agents within compatibility distance should reproduce"
+        );
     }
 
     // --- Reproductive reach (dispersal contributes to mate-finding) ---
@@ -5077,12 +5505,12 @@ mod tests {
         grid.insert(1, (3.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(!result.offspring.is_empty(),
-            "sessile agents with sufficient dispersal reach should reproduce sexually");
+        assert!(
+            !result.offspring.is_empty(),
+            "sessile agents with sufficient dispersal reach should reproduce sexually"
+        );
     }
 
     #[test]
@@ -5128,19 +5556,21 @@ mod tests {
             grid.insert(0, (0.0, 0.0));
             grid.insert(1, (8.0, 0.0));
             let mut rng = ChaCha8Rng::seed_from_u64(42);
-            let result = resolve_reproduction(
-                &mut agents, &dead_ids, &grid, &params, &mut rng,
-            );
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
             !result.offspring.is_empty()
         };
 
         // No wear: effective reach = nominal 10.0 > gap 8.0 -> pair.
-        assert!(run(0.0),
-            "unworn mobile agents within nominal reach should pair");
+        assert!(
+            run(0.0),
+            "unworn mobile agents within nominal reach should pair"
+        );
         // Heavy wear: effective mobility = 1.0 * exp(-1.0 * 1.0) ~ 0.368,
         // reach ~ 3.68 < gap 8.0 -> no pair.
-        assert!(!run(1.0),
-            "worn mobile agents should fail to pair as effective reach shrinks below the gap");
+        assert!(
+            !run(1.0),
+            "worn mobile agents should fail to pair as effective reach shrinks below the gap"
+        );
     }
 
     #[test]
@@ -5189,11 +5619,11 @@ mod tests {
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (6.0, 0.0));
         let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        assert!(
+            !result.offspring.is_empty(),
+            "a wide-reach broadcaster should pair with a zero-reach neighbour inside its reach"
         );
-        assert!(!result.offspring.is_empty(),
-            "a wide-reach broadcaster should pair with a zero-reach neighbour inside its reach");
     }
 
     #[test]
@@ -5221,12 +5651,15 @@ mod tests {
             photosynthetic_absorption: 0.5,
             mobility: 1.0,
             kappa: 0.5,
-            fecundity: 5.0, // high mean so the Poisson draw is reliably nonzero
-            ..zero_traits() // dispersal = 0 -> no offspring scatter
+            fecundity: 5.0,  // high mean so the Poisson draw is reliably nonzero
+            ..zero_traits()  // dispersal = 0 -> no offspring scatter
         };
 
         let run = |reach_coeff: f32| -> Vec<(f32, f32)> {
-            let params = WorldParameters { dispersal_reach_coefficient: reach_coeff, ..base };
+            let params = WorldParameters {
+                dispersal_reach_coefficient: reach_coeff,
+                ..base
+            };
             let mut agents = vec![
                 make_agent(1, (10.0, 10.0), 100.0, traits),
                 make_agent(2, (14.0, 10.0), 100.0, traits),
@@ -5241,24 +5674,27 @@ mod tests {
             grid.insert(0, (10.0, 10.0));
             grid.insert(1, (14.0, 10.0));
             let mut rng = ChaCha8Rng::seed_from_u64(7);
-            let result = resolve_reproduction(
-                &mut agents, &dead_ids, &grid, &params, &mut rng,
-            );
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
             result.offspring.iter().map(|o| o.position).collect()
         };
 
         let no_reach = run(0.0);
         let wide_reach = run(50.0);
         assert!(!no_reach.is_empty(), "scenario should produce offspring");
-        assert_eq!(no_reach, wide_reach,
-            "offspring positions must be unaffected by the mate-reach coefficient");
+        assert_eq!(
+            no_reach, wide_reach,
+            "offspring positions must be unaffected by the mate-reach coefficient"
+        );
         // With dispersal trait 0, offspring land exactly on the seed parent —
         // one of the two parent positions (10,10) or (14,10), never between.
         for pos in &no_reach {
             let at_a = (pos.0 - 10.0).abs() < 1e-4 && (pos.1 - 10.0).abs() < 1e-4;
             let at_b = (pos.0 - 14.0).abs() < 1e-4 && (pos.1 - 10.0).abs() < 1e-4;
-            assert!(at_a || at_b,
-                "offspring should land on a parent (seed), got {:?}", pos);
+            assert!(
+                at_a || at_b,
+                "offspring should land on a parent (seed), got {:?}",
+                pos
+            );
         }
     }
 
@@ -5302,8 +5738,12 @@ mod tests {
         let low_mob_x = run(0.1);
         let high_mob_x = run(1.0);
         // Higher mobility -> larger movement distance AND stronger chemotaxis bias
-        assert!(high_mob_x > low_mob_x,
-            "higher mobility should move further toward target: low={}, high={}", low_mob_x, high_mob_x);
+        assert!(
+            high_mob_x > low_mob_x,
+            "higher mobility should move further toward target: low={}, high={}",
+            low_mob_x,
+            high_mob_x
+        );
     }
 
     // --- Trait vector dimensions ---
@@ -5340,41 +5780,45 @@ mod tests {
             asexual_propensity: 1.0,
             ..zero_traits()
         };
-        let mut agents = vec![
-            Agent {
-                id: 1,
-                position: (0.0, 0.0),
-                reserve: 50.0,
-                structure: 5.0,
-                peak_structure: 5.0,
-                nutrient: 100.0,
-                traits,
-                contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                repro_reserve: 20.0,
-                repro_nutrient: 20.0,
-            },
-        ];
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 20.0,
+            repro_nutrient: 20.0,
+        }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         // Should have reproduced
-        assert!(!result.events.is_empty(), "should produce reproduction event");
+        assert!(
+            !result.events.is_empty(),
+            "should produce reproduction event"
+        );
         assert_eq!(result.events[0].kind, EventKind::Reproduced);
         // Asexual: target is None
-        assert_eq!(result.events[0].target, None,
-            "asexual reproduction should have target=None");
+        assert_eq!(
+            result.events[0].target, None,
+            "asexual reproduction should have target=None"
+        );
         assert_eq!(result.events[0].source, 1);
         // Should have offspring
         assert!(!result.offspring.is_empty(), "should produce offspring");
         // Parent's repro_reserve should be depleted
-        assert!(agents[0].repro_reserve < 1e-6,
-            "parent repro_reserve should be depleted, got {}", agents[0].repro_reserve);
+        assert!(
+            agents[0].repro_reserve < 1e-6,
+            "parent repro_reserve should be depleted, got {}",
+            agents[0].repro_reserve
+        );
     }
 
     #[test]
@@ -5398,32 +5842,31 @@ mod tests {
             asexual_propensity: 1.0,
             dispersal: 0.0,
         };
-        let mut agents = vec![
-            Agent {
-                id: 1,
-                position: (0.0, 0.0),
-                reserve: 50.0,
-                structure: 5.0,
-                peak_structure: 5.0,
-                nutrient: 100.0,
-                traits,
-                contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                repro_reserve: 20.0,
-                repro_nutrient: 20.0,
-            },
-        ];
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 20.0,
+            repro_nutrient: 20.0,
+        }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty());
         for child in &result.offspring {
-            assert_eq!(child.traits.photosynthetic_absorption, traits.photosynthetic_absorption);
+            assert_eq!(
+                child.traits.photosynthetic_absorption,
+                traits.photosynthetic_absorption
+            );
             assert_eq!(child.traits.heterotrophy, traits.heterotrophy);
             assert_eq!(child.traits.mobility, traits.mobility);
             assert_eq!(child.traits.kappa, traits.kappa);
@@ -5487,14 +5930,17 @@ mod tests {
         grid.insert(1, agents[1].position);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         // Should have sexual reproduction event with target=Some(mate_id)
-        assert!(!result.events.is_empty(), "should produce reproduction event");
-        assert!(result.events[0].target.is_some(),
-            "sexual reproduction should have target=Some(mate_id)");
+        assert!(
+            !result.events.is_empty(),
+            "should produce reproduction event"
+        );
+        assert!(
+            result.events[0].target.is_some(),
+            "sexual reproduction should have target=Some(mate_id)"
+        );
         assert!(!result.offspring.is_empty(), "should produce offspring");
     }
 
@@ -5518,38 +5964,40 @@ mod tests {
             ..zero_traits()
         };
         let initial_repro = 30.0;
-        let mut agents = vec![
-            Agent {
-                id: 1,
-                position: (0.0, 0.0),
-                reserve: 50.0,
-                structure: 5.0,
-                peak_structure: 5.0,
-                nutrient: 100.0,
-                traits,
-                contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                repro_reserve: initial_repro,
-                repro_nutrient: 10.0,
-            },
-        ];
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: initial_repro,
+            repro_nutrient: 10.0,
+        }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         // Parent's repro_reserve should be 0
-        assert!(agents[0].repro_reserve.abs() < 1e-6,
-            "parent repro_reserve should be depleted");
+        assert!(
+            agents[0].repro_reserve.abs() < 1e-6,
+            "parent repro_reserve should be depleted"
+        );
         // Total offspring energy + dissipated = initial investment
         let offspring_energy: f32 = result.offspring.iter().map(|c| c.reserve).sum();
         let total = offspring_energy + result.dissipated;
-        assert!((total - initial_repro).abs() < 1e-3,
+        assert!(
+            (total - initial_repro).abs() < 1e-3,
             "offspring energy ({}) + dissipated ({}) should equal investment ({})",
-            offspring_energy, result.dissipated, initial_repro);
+            offspring_energy,
+            result.dissipated,
+            initial_repro
+        );
         // Event energy_delta should equal the investment
         assert!((result.events[0].energy_delta - initial_repro).abs() < 1e-3);
     }
@@ -5598,7 +6046,10 @@ mod tests {
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
-        assert!(!result.offspring.is_empty(), "fixture should produce offspring");
+        assert!(
+            !result.offspring.is_empty(),
+            "fixture should produce offspring"
+        );
         result
             .offspring
             .iter()
@@ -5668,7 +6119,10 @@ mod tests {
         grid.insert(1, agents[1].position);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
-        assert!(!result.offspring.is_empty(), "fixture should produce offspring");
+        assert!(
+            !result.offspring.is_empty(),
+            "fixture should produce offspring"
+        );
         result
             .offspring
             .iter()
@@ -5703,13 +6157,19 @@ mod tests {
             1,
             (0.0, 0.0),
             100.0,
-            TraitVector { dispersal: 0.0, ..zero_traits() },
+            TraitVector {
+                dispersal: 0.0,
+                ..zero_traits()
+            },
         )];
         let mut high = vec![make_agent(
             2,
             (0.0, 0.0),
             100.0,
-            TraitVector { dispersal: 5.0, ..zero_traits() },
+            TraitVector {
+                dispersal: 5.0,
+                ..zero_traits()
+            },
         )];
         let (_, lost_low) = metabolise(&mut low, &params);
         let (_, lost_high) = metabolise(&mut high, &params);
@@ -5730,7 +6190,10 @@ mod tests {
         let baseline = asexual_offspring_energy(0.0, 0.5);
         let lost_at_d = baseline - asexual_offspring_energy(0.5, 0.5);
         let lost_at_2d = baseline - asexual_offspring_energy(1.0, 0.5);
-        assert!(lost_at_d > 0.0 && lost_at_2d > 0.0, "cost should be positive");
+        assert!(
+            lost_at_d > 0.0 && lost_at_2d > 0.0,
+            "cost should be positive"
+        );
         // Superlinear: doubling dispersal more than doubles the lost energy.
         assert!(
             lost_at_2d > 2.0 * lost_at_d,
@@ -5756,33 +6219,34 @@ mod tests {
             asexual_propensity: 0.0,
             ..zero_traits()
         };
-        let mut agents = vec![
-            Agent {
-                id: 1,
-                position: (0.0, 0.0),
-                reserve: 50.0,
-                structure: 5.0,
-                peak_structure: 5.0,
-                nutrient: 100.0,
-                traits,
-                contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                repro_reserve: 20.0,
-                repro_nutrient: 20.0,
-            },
-        ];
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 20.0,
+            repro_nutrient: 20.0,
+        }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(result.events.is_empty(), "should not reproduce without mate or asexual propensity");
+        assert!(
+            result.events.is_empty(),
+            "should not reproduce without mate or asexual propensity"
+        );
         assert!(result.offspring.is_empty());
-        assert!((agents[0].repro_reserve - 20.0).abs() < 1e-6,
-            "repro_reserve should be unchanged");
+        assert!(
+            (agents[0].repro_reserve - 20.0).abs() < 1e-6,
+            "repro_reserve should be unchanged"
+        );
     }
 
     #[test]
@@ -5803,33 +6267,31 @@ mod tests {
             asexual_propensity: 0.8,
             ..zero_traits()
         };
-        let mut agents = vec![
-            Agent {
-                id: 1,
-                position: (0.0, 0.0),
-                reserve: 50.0,
-                structure: 5.0,
-                peak_structure: 5.0,
-                nutrient: 100.0,
-                traits,
-                contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                repro_reserve: 20.0,
-                repro_nutrient: 20.0,
-            },
-        ];
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 20.0,
+            repro_nutrient: 20.0,
+        }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty());
         for child in &result.offspring {
-            assert_eq!(child.traits.asexual_propensity, 0.8,
-                "offspring should inherit parent's asexual_propensity");
+            assert_eq!(
+                child.traits.asexual_propensity, 0.8,
+                "offspring should inherit parent's asexual_propensity"
+            );
         }
     }
 
@@ -5868,15 +6330,29 @@ mod tests {
         };
         let mut agents = vec![
             Agent {
-                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: 100.0, traits: traits_a, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 100.0,
+                traits: traits_a,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
                 repro_nutrient: 20.0,
             },
             Agent {
-                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: 100.0, traits: traits_b, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
+                id: 2,
+                position: (1.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 100.0,
+                traits: traits_b,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
                 repro_nutrient: 20.0,
             },
         ];
@@ -5886,9 +6362,7 @@ mod tests {
         grid.insert(1, agents[1].position);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty());
         // Sexual event should have target
@@ -5899,10 +6373,16 @@ mod tests {
             let photo = child.traits.photosynthetic_absorption;
             let hetero = child.traits.heterotrophy;
             // Each should be either 0.0 or 1.0 (from one parent, no mutation)
-            assert!(photo == 0.0 || photo == 1.0,
-                "photo should be from one parent: {}", photo);
-            assert!(hetero == 0.0 || hetero == 1.0,
-                "hetero should be from one parent: {}", hetero);
+            assert!(
+                photo == 0.0 || photo == 1.0,
+                "photo should be from one parent: {}",
+                photo
+            );
+            assert!(
+                hetero == 0.0 || hetero == 1.0,
+                "hetero should be from one parent: {}",
+                hetero
+            );
         }
     }
 
@@ -5928,48 +6408,61 @@ mod tests {
         // store. The free store is left untouched by reproduction.
         let initial_free = 50.0;
         let initial_earmark = 20.0;
-        let mut agents = vec![
-            Agent {
-                id: 1,
-                position: (0.0, 0.0),
-                reserve: 50.0,
-                structure: 5.0,
-                peak_structure: 5.0,
-                nutrient: initial_free,
-                traits,
-                contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                repro_reserve: 20.0,
-                repro_nutrient: initial_earmark,
-            },
-        ];
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: initial_free,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 20.0,
+            repro_nutrient: initial_earmark,
+        }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(!result.offspring.is_empty(), "parent should have reproduced");
+        assert!(
+            !result.offspring.is_empty(),
+            "parent should have reproduced"
+        );
         // The free store is untouched by reproduction.
-        assert!((agents[0].nutrient - initial_free).abs() < 1e-6,
-            "free store should be untouched, got {}", agents[0].nutrient);
+        assert!(
+            (agents[0].nutrient - initial_free).abs() < 1e-6,
+            "free store should be untouched, got {}",
+            agents[0].nutrient
+        );
         // The entire earmark is donated to offspring, split by count.
-        assert!(agents[0].repro_nutrient.abs() < 1e-6,
-            "parent earmark should be depleted, got {}", agents[0].repro_nutrient);
+        assert!(
+            agents[0].repro_nutrient.abs() < 1e-6,
+            "parent earmark should be depleted, got {}",
+            agents[0].repro_nutrient
+        );
         // Offspring receive the donated earmark as their free nutrient store.
         let offspring_nutrient: f32 = result.offspring.iter().map(|c| c.nutrient).sum();
-        assert!((offspring_nutrient - initial_earmark).abs() < 1e-3,
+        assert!(
+            (offspring_nutrient - initial_earmark).abs() < 1e-3,
             "offspring should collectively receive the donated earmark {}, got {}",
-            initial_earmark, offspring_nutrient);
+            initial_earmark,
+            offspring_nutrient
+        );
         // Per-offspring share is equal.
         let n = result.offspring.len() as f32;
         for child in &result.offspring {
-            assert!((child.nutrient - initial_earmark / n).abs() < 1e-3,
-                "each offspring should get an equal earmark share");
-            assert!(child.repro_nutrient.abs() < 1e-6,
-                "offspring born with zero earmark, got {}", child.repro_nutrient);
+            assert!(
+                (child.nutrient - initial_earmark / n).abs() < 1e-3,
+                "each offspring should get an equal earmark share"
+            );
+            assert!(
+                child.repro_nutrient.abs() < 1e-6,
+                "offspring born with zero earmark, got {}",
+                child.repro_nutrient
+            );
         }
     }
 
@@ -6003,15 +6496,29 @@ mod tests {
         let free_store = 50.0;
         let mut agents = vec![
             Agent {
-                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: free_store, traits, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: free_store,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
                 repro_nutrient: earmark_a,
             },
             Agent {
-                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: free_store, traits, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 20.0,
+                id: 2,
+                position: (1.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: free_store,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 20.0,
                 repro_nutrient: earmark_b,
             },
         ];
@@ -6021,21 +6528,38 @@ mod tests {
         grid.insert(1, (1.0, 0.0));
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
-        assert!(!result.offspring.is_empty(), "the pair should have reproduced");
+        assert!(
+            !result.offspring.is_empty(),
+            "the pair should have reproduced"
+        );
         // Free stores untouched.
-        assert!((agents[0].nutrient - free_store).abs() < 1e-6, "parent A free store changed");
-        assert!((agents[1].nutrient - free_store).abs() < 1e-6, "parent B free store changed");
+        assert!(
+            (agents[0].nutrient - free_store).abs() < 1e-6,
+            "parent A free store changed"
+        );
+        assert!(
+            (agents[1].nutrient - free_store).abs() < 1e-6,
+            "parent B free store changed"
+        );
         // Both earmarks fully donated.
-        assert!(agents[0].repro_nutrient.abs() < 1e-6, "parent A earmark not depleted");
-        assert!(agents[1].repro_nutrient.abs() < 1e-6, "parent B earmark not depleted");
+        assert!(
+            agents[0].repro_nutrient.abs() < 1e-6,
+            "parent A earmark not depleted"
+        );
+        assert!(
+            agents[1].repro_nutrient.abs() < 1e-6,
+            "parent B earmark not depleted"
+        );
         // Offspring collectively receive both earmarks.
         let offspring_nutrient: f32 = result.offspring.iter().map(|c| c.nutrient).sum();
-        assert!((offspring_nutrient - (earmark_a + earmark_b)).abs() < 1e-3,
-            "offspring should receive both earmarks {}, got {}", earmark_a + earmark_b, offspring_nutrient);
+        assert!(
+            (offspring_nutrient - (earmark_a + earmark_b)).abs() < 1e-3,
+            "offspring should receive both earmarks {}, got {}",
+            earmark_a + earmark_b,
+            offspring_nutrient
+        );
     }
 
     // --- Dispersal trait tests ---
@@ -6063,30 +6587,28 @@ mod tests {
                 dispersal: dispersal_val,
                 ..zero_traits()
             };
-            let mut agents = vec![
-                Agent {
-                    id: 1,
-                    position: (0.0, 0.0),
-                    reserve: 50.0,
-                    structure: 5.0,
-                    peak_structure: 5.0,
-                    nutrient: 100.0,
-                    traits,
-                    contact_time: 0,
-                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                    repro_reserve: 50.0,
-                    repro_nutrient: 50.0,
-                },
-            ];
+            let mut agents = vec![Agent {
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 50.0,
+                repro_nutrient: 50.0,
+            }];
             let dead_ids = std::collections::HashSet::new();
             let grid = SpatialGrid::new(100.0, 10.0);
             let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-            let result = resolve_reproduction(
-                &mut agents, &dead_ids, &grid, &params, &mut rng,
-            );
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
             // Mean distance from parent position (0,0)
-            let total_dist: f32 = result.offspring.iter()
+            let total_dist: f32 = result
+                .offspring
+                .iter()
                 .map(|o| (o.position.0 * o.position.0 + o.position.1 * o.position.1).sqrt())
                 .sum();
             total_dist / result.offspring.len() as f32
@@ -6094,8 +6616,12 @@ mod tests {
 
         let low_spread = run(0.5);
         let high_spread = run(5.0);
-        assert!(high_spread > low_spread,
-            "higher dispersal should produce wider spread: low={}, high={}", low_spread, high_spread);
+        assert!(
+            high_spread > low_spread,
+            "higher dispersal should produce wider spread: low={}, high={}",
+            low_spread,
+            high_spread
+        );
     }
 
     #[test]
@@ -6116,35 +6642,37 @@ mod tests {
             dispersal: 0.0, // zero dispersal
             ..zero_traits()
         };
-        let mut agents = vec![
-            Agent {
-                id: 1,
-                position: (10.0, 10.0),
-                reserve: 50.0,
-                structure: 5.0,
-                peak_structure: 5.0,
-                nutrient: 100.0,
-                traits,
-                contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                repro_reserve: 20.0,
-                repro_nutrient: 20.0,
-            },
-        ];
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (10.0, 10.0),
+            reserve: 50.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 20.0,
+            repro_nutrient: 20.0,
+        }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty());
         for child in &result.offspring {
-            assert!((child.position.0 - 10.0).abs() < 1e-6,
-                "zero dispersal: offspring should be at parent x, got {}", child.position.0);
-            assert!((child.position.1 - 10.0).abs() < 1e-6,
-                "zero dispersal: offspring should be at parent y, got {}", child.position.1);
+            assert!(
+                (child.position.0 - 10.0).abs() < 1e-6,
+                "zero dispersal: offspring should be at parent x, got {}",
+                child.position.0
+            );
+            assert!(
+                (child.position.1 - 10.0).abs() < 1e-6,
+                "zero dispersal: offspring should be at parent y, got {}",
+                child.position.1
+            );
         }
     }
 
@@ -6187,15 +6715,29 @@ mod tests {
             };
             let mut agents = vec![
                 Agent {
-                    id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                    nutrient: 100.0, traits: traits_a, contact_time: 0,
-                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                    id: 1,
+                    position: (0.0, 0.0),
+                    reserve: 50.0,
+                    structure: 5.0,
+                    peak_structure: 5.0,
+                    nutrient: 100.0,
+                    traits: traits_a,
+                    contact_time: 0,
+                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                    repro_reserve: 30.0,
                     repro_nutrient: 30.0,
                 },
                 Agent {
-                    id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                    nutrient: 100.0, traits: traits_b, contact_time: 0,
-                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                    id: 2,
+                    position: (1.0, 0.0),
+                    reserve: 50.0,
+                    structure: 5.0,
+                    peak_structure: 5.0,
+                    nutrient: 100.0,
+                    traits: traits_b,
+                    contact_time: 0,
+                    wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                    repro_reserve: 30.0,
                     repro_nutrient: 30.0,
                 },
             ];
@@ -6205,16 +6747,17 @@ mod tests {
             grid.insert(1, agents[1].position);
             let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-            let result = resolve_reproduction(
-                &mut agents, &dead_ids, &grid, &params, &mut rng,
-            );
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
             // Scatter is measured from whichever parent each offspring is
             // closest to — the seed anchor is a real parent position, so the
             // distance to the nearest parent is the scatter magnitude.
             let parents = [(0.0_f32, 0.0_f32), (1.0_f32, 0.0_f32)];
-            let total_dist: f32 = result.offspring.iter()
+            let total_dist: f32 = result
+                .offspring
+                .iter()
                 .map(|o| {
-                    parents.iter()
+                    parents
+                        .iter()
                         .map(|p| {
                             let dx = o.position.0 - p.0;
                             let dy = o.position.1 - p.1;
@@ -6231,8 +6774,12 @@ mod tests {
         // Both parents share dispersal 4.0.
         let wide_spread = run(4.0, 4.0);
 
-        assert!(wide_spread > narrow_spread,
-            "wider dispersal should produce wider scatter: narrow={}, wide={}", narrow_spread, wide_spread);
+        assert!(
+            wide_spread > narrow_spread,
+            "wider dispersal should produce wider scatter: narrow={}, wide={}",
+            narrow_spread,
+            wide_spread
+        );
     }
 
     #[test]
@@ -6266,15 +6813,29 @@ mod tests {
         let b_pos = (300.0, 0.0); // far apart; midpoint would be (150, 0)
         let mut agents = vec![
             Agent {
-                id: 1, position: a_pos, reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: 100.0, traits, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                id: 1,
+                position: a_pos,
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 30.0,
                 repro_nutrient: 30.0,
             },
             Agent {
-                id: 2, position: b_pos, reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: 100.0, traits, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                id: 2,
+                position: b_pos,
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 30.0,
                 repro_nutrient: 30.0,
             },
         ];
@@ -6284,9 +6845,7 @@ mod tests {
         grid.insert(1, b_pos);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
         for child in &result.offspring {
@@ -6298,7 +6857,9 @@ mod tests {
                 at_a || at_b,
                 "offspring should originate at a parent's position, not the \
                  midpoint; got {:?} (parents at {:?} and {:?})",
-                child.position, a_pos, b_pos
+                child.position,
+                a_pos,
+                b_pos
             );
         }
     }
@@ -6332,15 +6893,29 @@ mod tests {
         let shared = (20.0, 20.0);
         let mut agents = vec![
             Agent {
-                id: 1, position: shared, reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: 100.0, traits, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                id: 1,
+                position: shared,
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 30.0,
                 repro_nutrient: 30.0,
             },
             Agent {
-                id: 2, position: shared, reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: 100.0, traits, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 30.0,
+                id: 2,
+                position: shared,
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 30.0,
                 repro_nutrient: 30.0,
             },
         ];
@@ -6350,9 +6925,7 @@ mod tests {
         grid.insert(1, shared);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
         for child in &result.offspring {
@@ -6360,7 +6933,8 @@ mod tests {
                 (child.position.0 - shared.0).abs() < 1e-6
                     && (child.position.1 - shared.1).abs() < 1e-6,
                 "co-located parents: offspring should land on the shared spot {:?}, got {:?}",
-                shared, child.position
+                shared,
+                child.position
             );
         }
     }
@@ -6382,41 +6956,42 @@ mod tests {
             kappa: 0.5,
             fecundity: 10.0,
             asexual_propensity: 1.0,
-            mobility: 0.0, // sessile
+            mobility: 0.0,  // sessile
             dispersal: 5.0, // high dispersal (like a dandelion)
             ..zero_traits()
         };
-        let mut agents = vec![
-            Agent {
-                id: 1,
-                position: (0.0, 0.0),
-                reserve: 50.0,
-                structure: 5.0,
-                peak_structure: 5.0,
-                nutrient: 100.0,
-                traits,
-                contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                repro_reserve: 50.0,
-                repro_nutrient: 50.0,
-            },
-        ];
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 50.0,
+            repro_nutrient: 50.0,
+        }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty());
         // Offspring should be dispersed despite zero mobility
-        let total_dist: f32 = result.offspring.iter()
+        let total_dist: f32 = result
+            .offspring
+            .iter()
             .map(|o| (o.position.0 * o.position.0 + o.position.1 * o.position.1).sqrt())
             .sum();
         let mean_dist = total_dist / result.offspring.len() as f32;
-        assert!(mean_dist > 0.5,
-            "sessile agent with high dispersal should still disperse offspring: mean_dist={}", mean_dist);
+        assert!(
+            mean_dist > 0.5,
+            "sessile agent with high dispersal should still disperse offspring: mean_dist={}",
+            mean_dist
+        );
     }
 
     #[test]
@@ -6437,33 +7012,31 @@ mod tests {
             dispersal: 3.7,
             ..zero_traits()
         };
-        let mut agents = vec![
-            Agent {
-                id: 1,
-                position: (0.0, 0.0),
-                reserve: 50.0,
-                structure: 5.0,
-                peak_structure: 5.0,
-                nutrient: 100.0,
-                traits,
-                contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-                repro_reserve: 20.0,
-                repro_nutrient: 20.0,
-            },
-        ];
+        let mut agents = vec![Agent {
+            id: 1,
+            position: (0.0, 0.0),
+            reserve: 50.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: 100.0,
+            traits,
+            contact_time: 0,
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 20.0,
+            repro_nutrient: 20.0,
+        }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty());
         for child in &result.offspring {
-            assert_eq!(child.traits.dispersal, 3.7,
-                "offspring should inherit parent's dispersal trait");
+            assert_eq!(
+                child.traits.dispersal, 3.7,
+                "offspring should inherit parent's dispersal trait"
+            );
         }
     }
 
@@ -6512,9 +7085,7 @@ mod tests {
         grid.insert(1, agents[1].position);
         let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
         let half = extent / 2.0;
@@ -6706,7 +7277,8 @@ mod tests {
             "under quadratic costs, specialist (1.0,0.0) should pay more ({}) \
              than generalist (0.5,0.5) ({}) — superlinear costs penalise \
              concentrated investment",
-            cost_specialist, cost_generalist
+            cost_specialist,
+            cost_generalist
         );
         // Verify exact values
         assert!((cost_generalist - 0.5).abs() < 1e-6);
@@ -6720,7 +7292,7 @@ mod tests {
         // drain more because demand = eff_heterotrophy * ct / (ct + K).
         let params = WorldParameters {
             consumption_contact_half_saturation: 10.0, // large K so contact_time matters
-            base_trophic_efficiency: 1.0, // no trophic loss for clarity
+            base_trophic_efficiency: 1.0,              // no trophic loss for clarity
             trophic_distance_decay: 0.0,
             ..test_params()
         };
@@ -6738,9 +7310,9 @@ mod tests {
             make_agent(2, (1.0, 0.0), 10.0, consumer_traits),
             make_agent(3, (0.5, 0.0), 10.0, target_traits),
         ];
-        agents[0].contact_time = 5;   // low contact
-        agents[1].contact_time = 50;  // high contact
-        agents[2].structure = 100.0;  // plenty of structure so no proportional split
+        agents[0].contact_time = 5; // low contact
+        agents[1].contact_time = 50; // high contact
+        agents[2].structure = 100.0; // plenty of structure so no proportional split
 
         let mut carcasses: Vec<Carcass> = Vec::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -6753,17 +7325,26 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         let gained_a = agents[0].reserve - initial_reserve_a;
         let gained_b = agents[1].reserve - initial_reserve_b;
 
-        assert!(gained_b > gained_a,
+        assert!(
+            gained_b > gained_a,
             "consumer with higher contact_time should drain more: \
-             low_ct gained {gained_a}, high_ct gained {gained_b}");
+             low_ct gained {gained_a}, high_ct gained {gained_b}"
+        );
         // Verify both gained something (both are consuming)
-        assert!(gained_a > 0.0, "low-ct consumer should still drain something");
+        assert!(
+            gained_a > 0.0,
+            "low-ct consumer should still drain something"
+        );
     }
 
     #[test]
@@ -6800,19 +7381,28 @@ mod tests {
         let initial_reserve = agents[0].reserve;
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         let gained = agents[0].reserve - initial_reserve;
         // Expected demand: 0.8 * 10000 / (10000 + 10) = 0.8 * 0.999... ≈ 0.7992
         // With trophic_efficiency=1.0, gained should equal demand
         let expected = 0.8 * 10_000.0 / (10_000.0 + half_sat);
-        assert!((gained - expected).abs() < 1e-3,
+        assert!(
+            (gained - expected).abs() < 1e-3,
             "at very high ct, demand should approach eff_heterotrophy: \
-             gained {gained}, expected ~{expected}");
+             gained {gained}, expected ~{expected}"
+        );
         // Should be very close to eff_heterotrophy (0.8) but not exceed it
         assert!(gained < 0.8, "demand must not exceed eff_heterotrophy");
-        assert!(gained > 0.799, "demand should be within 0.1% of eff_heterotrophy at ct=10000");
+        assert!(
+            gained > 0.799,
+            "demand should be within 0.1% of eff_heterotrophy at ct=10000"
+        );
     }
 
     #[test]
@@ -6897,12 +7487,8 @@ mod tests {
             ..zero_traits()
         };
 
-        let eff_a = crate::trophic_transfer_efficiency(
-            &consumer_a_traits, &target_traits, &params,
-        );
-        let eff_b = crate::trophic_transfer_efficiency(
-            &consumer_b_traits, &target_traits, &params,
-        );
+        let eff_a = crate::trophic_transfer_efficiency(&consumer_a_traits, &target_traits, &params);
+        let eff_b = crate::trophic_transfer_efficiency(&consumer_b_traits, &target_traits, &params);
         assert!(eff_a > eff_b, "sanity: A should be more efficient than B");
 
         let mut agents = vec![
@@ -6920,7 +7506,11 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let _result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         // Equal demand → equal drain (0.5 each). Energy = drain * trophic_eff.
@@ -6930,8 +7520,10 @@ mod tests {
         let actual_ratio = a_gained / b_gained;
         let expected_ratio = eff_a / eff_b;
 
-        assert!((actual_ratio - expected_ratio).abs() < 0.01,
-            "energy ratio should be eff_a/eff_b = {expected_ratio:.4}, got {actual_ratio:.4}");
+        assert!(
+            (actual_ratio - expected_ratio).abs() < 0.01,
+            "energy ratio should be eff_a/eff_b = {expected_ratio:.4}, got {actual_ratio:.4}"
+        );
     }
 
     #[test]
@@ -6973,7 +7565,11 @@ mod tests {
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         let result = resolve_drains(
-            &mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid,
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
         );
 
         let total_drained = initial_structure - agents[2].structure;
@@ -6981,9 +7577,11 @@ mod tests {
         let total_out = total_gained + result.dissipated;
 
         assert!(total_drained > 0.0, "something should have been drained");
-        assert!((total_drained - total_out).abs() < 1e-5,
+        assert!(
+            (total_drained - total_out).abs() < 1e-5,
             "energy conservation: drained {total_drained} != gained {total_gained} + dissipated {}",
-            result.dissipated);
+            result.dissipated
+        );
     }
 
     /// Conservation equation for asexual reproduction with structure provisioning:
@@ -7035,9 +7633,7 @@ mod tests {
         let grid = SpatialGrid::new(100.0, 10.0);
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
 
@@ -7046,17 +7642,25 @@ mod tests {
 
         // Every offspring must be born with strictly positive structure.
         for child in &result.offspring {
-            assert!(child.structure > 0.0,
-                "newborn structure must be > 0, got {}", child.structure);
-            assert!(child.reserve > 0.0,
-                "newborn reserve must be > 0, got {}", child.reserve);
+            assert!(
+                child.structure > 0.0,
+                "newborn structure must be > 0, got {}",
+                child.structure
+            );
+            assert!(
+                child.reserve > 0.0,
+                "newborn reserve must be > 0, got {}",
+                child.reserve
+            );
         }
 
         let committed = initial_repro_reserve;
         let accounted = offspring_reserve_sum + offspring_structure_sum + result.dissipated;
-        assert!((committed - accounted).abs() < 1e-4,
+        assert!(
+            (committed - accounted).abs() < 1e-4,
             "energy conservation: committed {committed} != reserve {offspring_reserve_sum} + structure {offspring_structure_sum} + dissipated {} (sum {accounted})",
-            result.dissipated);
+            result.dissipated
+        );
     }
 
     /// Energy conservation must still hold when the dispersal propagule cost is
@@ -7160,15 +7764,29 @@ mod tests {
         let invest_b = 140.0_f32;
         let mut agents = vec![
             Agent {
-                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: 100.0, traits, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: invest_a,
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: invest_a,
                 repro_nutrient: 10.0,
             },
             Agent {
-                id: 2, position: (1.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: 100.0, traits, contact_time: 0,
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: invest_b,
+                id: 2,
+                position: (1.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 100.0,
+                traits,
+                contact_time: 0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: invest_b,
                 repro_nutrient: 10.0,
             },
         ];
@@ -7178,9 +7796,7 @@ mod tests {
         grid.insert(2, (1.0, 0.0));
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
 
-        let result = resolve_reproduction(
-            &mut agents, &dead_ids, &grid, &params, &mut rng,
-        );
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
         for child in &result.offspring {
@@ -7192,9 +7808,11 @@ mod tests {
         let offspring_structure_sum: f32 = result.offspring.iter().map(|c| c.structure).sum();
         let committed = invest_a + invest_b;
         let accounted = offspring_reserve_sum + offspring_structure_sum + result.dissipated;
-        assert!((committed - accounted).abs() < 1e-3,
+        assert!(
+            (committed - accounted).abs() < 1e-3,
             "sexual conservation: committed {committed} != reserve {offspring_reserve_sum} + structure {offspring_structure_sum} + dissipated {} (sum {accounted})",
-            result.dissipated);
+            result.dissipated
+        );
     }
 
     /// Per-offspring structure must scale inversely with fecundity: doubling
@@ -7225,20 +7843,29 @@ mod tests {
                 ..zero_traits()
             };
             let mut agents = vec![Agent {
-                id: 1, position: (0.0, 0.0), reserve: 50.0, structure: 5.0, peak_structure: 5.0,
-                nutrient: 1000.0, traits, contact_time: 0,
+                id: 1,
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 1000.0,
+                traits,
+                contact_time: 0,
                 // Funded above the #310 viability gate for fecundity up to 20.
-                wear: [0.0; FUNCTIONAL_TRAIT_COUNT], repro_reserve: 600.0,
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 600.0,
                 repro_nutrient: 100.0,
             }];
             let dead_ids = std::collections::HashSet::new();
             let grid = SpatialGrid::new(100.0, 10.0);
             let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
-            let result = resolve_reproduction(
-                &mut agents, &dead_ids, &grid, &params, &mut rng,
-            );
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
             let n = result.offspring.len();
-            let per = if n > 0 { result.offspring[0].structure } else { 0.0 };
+            let per = if n > 0 {
+                result.offspring[0].structure
+            } else {
+                0.0
+            };
             (n, per)
         }
 
@@ -7246,7 +7873,10 @@ mod tests {
         let (n_high, per_high) = run(20.0, 1);
 
         assert!(n_low > 0 && n_high > 0, "both runs should yield offspring");
-        assert!(n_high > n_low, "higher fecundity should yield more offspring (got {n_low} vs {n_high})");
+        assert!(
+            n_high > n_low,
+            "higher fecundity should yield more offspring (got {n_low} vs {n_high})"
+        );
 
         // Total structure across offspring should be roughly equal between
         // the two configs (same investment, same efficiencies). Therefore
@@ -7254,10 +7884,14 @@ mod tests {
         let total_low = per_low * n_low as f32;
         let total_high = per_high * n_high as f32;
         // Identical investment and efficiencies → totals equal up to f32 noise.
-        assert!((total_low - total_high).abs() < 1e-3,
-            "totals should match: {total_low} vs {total_high}");
-        assert!(per_high < per_low,
-            "per-offspring structure should fall with fecundity (got {per_low} -> {per_high})");
+        assert!(
+            (total_low - total_high).abs() < 1e-3,
+            "totals should match: {total_low} vs {total_high}"
+        );
+        assert!(
+            per_high < per_low,
+            "per-offspring structure should fall with fecundity (got {per_low} -> {per_high})"
+        );
     }
 
     #[test]
@@ -7318,8 +7952,20 @@ mod tests {
         let mut agents = vec![small, large];
 
         let mut carcasses = vec![
-            Carcass { id: 100, position: (8.0, 0.0), energy: 20.0, nutrient: 0.0, traits: zero_traits() },
-            Carcass { id: 101, position: (58.0, 0.0), energy: 20.0, nutrient: 0.0, traits: zero_traits() },
+            Carcass {
+                id: 100,
+                position: (8.0, 0.0),
+                energy: 20.0,
+                nutrient: 0.0,
+                traits: zero_traits(),
+            },
+            Carcass {
+                id: 101,
+                position: (58.0, 0.0),
+                energy: 20.0,
+                nutrient: 0.0,
+                traits: zero_traits(),
+            },
         ];
 
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -7327,7 +7973,13 @@ mod tests {
         grid.insert(1, (50.0, 0.0));
 
         let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
-        resolve_drains(&mut agents, &mut carcasses, &grid, &params, &mut nutrient_grid);
+        resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
 
         assert!(
             (carcasses[0].energy - 20.0).abs() < 1e-3,

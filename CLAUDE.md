@@ -18,4 +18,4 @@ How the crates divide responsibility (sim = pure deterministic stepper; genesis/
 
 ## Code style
 
-Do **not** run `cargo fmt` (even `-p <crate>`). The committed code is not rustfmt-clean, so `cargo fmt` reformats large swaths of pre-existing, untouched code and turns a focused diff into thousands of lines of unrelated churn (`cargo fmt --check` on HEAD reports diffs — fmt is not enforced in CI). Match the surrounding code's style by hand; if you tidy formatting, do it only within the lines you're already editing.
+The committed code is rustfmt-clean (`cargo fmt --check` passes on HEAD). Run `cargo fmt` freely and keep it clean — it no longer produces unrelated churn, so a focused diff stays focused. fmt is not enforced in CI, so it's on you to run it before committing.
