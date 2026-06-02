@@ -328,10 +328,17 @@ pub struct WorldParameters {
     pub light_competition_radius: f32,
     pub photo_maintenance_cost: f32,
     pub heterotrophy_maintenance_cost: f32,
-    #[serde(default)]
+    /// Total nutrient seeded into the world's spatial grid at genesis. A value
+    /// of 0.0 is a silent kill switch — no nutrient exists, so no agent clears
+    /// the reproduction nutrient gate and the nutrient economy never starts.
+    /// Required (no serde default) so an under-specified recipe fails loudly
+    /// rather than fabricating a corpse-world. (issue #327)
     pub initial_nutrient_pool: f32,
     /// Fraction of surplus reserve converted to structure each tick (0.0–1.0).
-    #[serde(default)]
+    /// A value of 0.0 is a silent kill switch — no agent builds structure, so
+    /// biomass, carcass energy, and the embodiment subsystem all go dark.
+    /// Required (no serde default) so an under-specified recipe fails loudly.
+    /// (issue #327)
     pub growth_efficiency: f32,
     #[serde(default = "default_wear_rate")]
     pub wear_rate: f32,
@@ -1692,7 +1699,9 @@ mod tests {
                 "initial_population_size": 0,
                 "light_competition_radius": 1000.0,
                 "photo_maintenance_cost": 0.0,
-                "heterotrophy_maintenance_cost": 0.0
+                "heterotrophy_maintenance_cost": 0.0,
+                "initial_nutrient_pool": 100.0,
+                "growth_efficiency": 0.5
             }"#,
         )
         .expect("params omitting reproduction_nutrient_threshold should deserialise");
@@ -1722,7 +1731,9 @@ mod tests {
                 "initial_population_size": 0,
                 "light_competition_radius": 1000.0,
                 "photo_maintenance_cost": 0.0,
-                "heterotrophy_maintenance_cost": 0.0
+                "heterotrophy_maintenance_cost": 0.0,
+                "initial_nutrient_pool": 100.0,
+                "growth_efficiency": 0.5
             }"#,
         )
         .expect("params omitting dispersal_reach_coefficient should deserialise");
@@ -1750,11 +1761,79 @@ mod tests {
                 "initial_population_size": 0,
                 "light_competition_radius": 1000.0,
                 "photo_maintenance_cost": 0.0,
-                "heterotrophy_maintenance_cost": 0.0
+                "heterotrophy_maintenance_cost": 0.0,
+                "initial_nutrient_pool": 100.0,
+                "growth_efficiency": 0.5
             }"#,
         )
         .expect("params omitting body_reach_coefficient should deserialise");
         assert_eq!(params.body_reach_coefficient, 0.0);
+    }
+
+    #[test]
+    fn growth_efficiency_is_required() {
+        // growth_efficiency = 0.0 is a silent kill switch: no agent builds
+        // structure, so biomass, carcass energy, and the embodiment subsystem
+        // all go dark. It must be a required field — a recipe that omits it is
+        // under-specified and must fail loudly rather than fabricate a
+        // corpse-world. (issue #327)
+        let result: Result<WorldParameters, _> = serde_json::from_str(
+            r#"{
+                "solar_flux_magnitude": 10.0,
+                "base_trophic_efficiency": 1.0,
+                "reproduction_efficiency": 0.7,
+                "base_metabolic_rate": 0.0,
+                "movement_cost_coefficient": 0.0,
+                "reproduction_energy_threshold": 50.0,
+                "mutation_rate": 0.0,
+                "mutation_magnitude": 0.0,
+                "contact_range_coefficient": 5.0,
+                "world_extent": 100.0,
+                "initial_population_size": 0,
+                "light_competition_radius": 1000.0,
+                "photo_maintenance_cost": 0.0,
+                "heterotrophy_maintenance_cost": 0.0,
+                "initial_nutrient_pool": 100.0
+            }"#,
+        );
+        let err = result.expect_err("params omitting growth_efficiency must fail to deserialise");
+        assert!(
+            err.to_string().contains("growth_efficiency"),
+            "error should name the missing field, got: {err}"
+        );
+    }
+
+    #[test]
+    fn initial_nutrient_pool_is_required() {
+        // initial_nutrient_pool = 0.0 is a silent kill switch: no nutrient
+        // exists anywhere, so no agent clears the reproduction nutrient gate and
+        // the nutrient economy never starts. It must be a required field so an
+        // under-specified recipe fails loudly. (issue #327)
+        let result: Result<WorldParameters, _> = serde_json::from_str(
+            r#"{
+                "solar_flux_magnitude": 10.0,
+                "base_trophic_efficiency": 1.0,
+                "reproduction_efficiency": 0.7,
+                "base_metabolic_rate": 0.0,
+                "movement_cost_coefficient": 0.0,
+                "reproduction_energy_threshold": 50.0,
+                "mutation_rate": 0.0,
+                "mutation_magnitude": 0.0,
+                "contact_range_coefficient": 5.0,
+                "world_extent": 100.0,
+                "initial_population_size": 0,
+                "light_competition_radius": 1000.0,
+                "photo_maintenance_cost": 0.0,
+                "heterotrophy_maintenance_cost": 0.0,
+                "growth_efficiency": 0.5
+            }"#,
+        );
+        let err =
+            result.expect_err("params omitting initial_nutrient_pool must fail to deserialise");
+        assert!(
+            err.to_string().contains("initial_nutrient_pool"),
+            "error should name the missing field, got: {err}"
+        );
     }
 
     #[test]
