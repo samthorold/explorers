@@ -76,7 +76,7 @@ An inert agent. A living agent becomes a carcass on death — it retains its str
 _Avoid_: corpse, remains, resource node
 
 **Decomposition**:
-**Consumption** where the target is a **carcass**. Not a separate mechanism — the same heterotrophy trait and physics apply (trait-space distance governs trophic transfer efficiency, stoichiometric mismatch causes nutrient excretion). The term is useful because it names the ecological role: decomposers are agents whose trait-space position makes them efficient consumers of carcasses. Decomposition closes the nutrient cycle by returning carcass nutrient to the available pool.
+**Consumption** where the target is a **carcass**. Not a separate mechanism — the same heterotrophy trait and physics apply (trait-space distance governs trophic transfer efficiency, stoichiometric mismatch causes nutrient excretion). The term is useful because it names the ecological role: a **decomposer** is an agent that, in practice, drains carcasses rather than living prey. Which agents do so is a matter of behaviour and circumstance, not a heritable niche — trait-space distance governs how efficiently any heterotroph transfers from a target, but does not mark out a carcass-eating region of trait space, because a carcass holds the *exact* trait vector of the agent that died (an agent efficient at a producer-carcass is equally efficient at the living producer beside it). Decomposition closes the nutrient cycle by returning carcass nutrient to the available pool.
 _Avoid_: recycling, decay (decay implies passive process)
 
 **Nutrient uptake**:
