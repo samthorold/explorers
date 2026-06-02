@@ -1,4 +1,5 @@
 use rand::Rng;
+use rayon::prelude::*;
 use serde::Serialize;
 
 use explorers_genesis::{
@@ -376,17 +377,25 @@ pub fn run_search(config: &SearchConfig, base_seed: u64, rng: &mut impl Rng) -> 
         },
     };
 
-    let mut parameterisations = Vec::new();
-    let mut fitnesses = Vec::new();
-
-    for (i, sample) in samples.iter().enumerate() {
-        let (wp, dist) = decode(sample, &config.ranges);
-        let seed = base_seed.wrapping_add(i as u64 * 1000);
-        let result = explorers_genesis::run_ensemble(&wp, &dist, &ensemble_config, seed);
-
-        fitnesses.push(result.median_fitness as f64);
-        parameterisations.push(to_evaluated(sample, &config.ranges, &result));
-    }
+    // The LHS batch sweep evaluates each candidate config independently
+    // (distinct seed offset, no shared state), so it parallelises cleanly
+    // (issue #350). An indexed par-iter collect keeps results in sample order —
+    // bit-identical to the sequential sweep — with no racy push. The per-sample
+    // seed is derived from the sample index, not loop position, so order is
+    // immaterial to the values and only matters for stable collection.
+    let (_fitnesses, mut parameterisations): (Vec<f64>, Vec<EvaluatedParameterisation>) = samples
+        .par_iter()
+        .enumerate()
+        .map(|(i, sample)| {
+            let (wp, dist) = decode(sample, &config.ranges);
+            let seed = base_seed.wrapping_add(i as u64 * 1000);
+            let result = explorers_genesis::run_ensemble(&wp, &dist, &ensemble_config, seed);
+            (
+                result.median_fitness as f64,
+                to_evaluated(sample, &config.ranges, &result),
+            )
+        })
+        .unzip();
 
     let evaluate_for_sobol = |unit: &[f64]| -> f64 {
         let (wp, dist) = decode(unit, &config.ranges);
@@ -641,6 +650,50 @@ mod tests {
             .unwrap();
         assert!((tc.min - 0.1).abs() < 1e-10);
         assert!((tc.max - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn lhs_batch_sweep_is_order_stable_and_reproducible() {
+        // Issue #350: the LHS config-evaluation sweep is parallelised with
+        // rayon. The collected parameterisations must stay order-stable and
+        // bit-identical across runs — an indexed collect over the sample range,
+        // never a racy push. Two runs with identical (config, base_seed, rng)
+        // must produce identical batch results: same configs, same per-config
+        // medians, same order.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = SearchConfig {
+            lhs_samples: 6,
+            ensemble_size: 2,
+            max_ticks: 15,
+            bayesopt_iterations: 1,
+            sensitivity_threshold: 0.05,
+            ..Default::default()
+        };
+
+        let mut rng1 = ChaCha8Rng::seed_from_u64(42);
+        let result1 = run_search(&config, 7, &mut rng1);
+        let mut rng2 = ChaCha8Rng::seed_from_u64(42);
+        let result2 = run_search(&config, 7, &mut rng2);
+
+        assert_eq!(
+            result1.parameterisations.len(),
+            result2.parameterisations.len()
+        );
+        for (a, b) in result1
+            .parameterisations
+            .iter()
+            .zip(result2.parameterisations.iter())
+        {
+            assert_eq!(a.median_fitness, b.median_fitness);
+            assert_eq!(a.parameters, b.parameters);
+            assert_eq!(a.run_breakdowns.len(), b.run_breakdowns.len());
+            for (ra, rb) in a.run_breakdowns.iter().zip(b.run_breakdowns.iter()) {
+                assert_eq!(ra.fitness, rb.fitness);
+                assert_eq!(ra.termination_tick, rb.termination_tick);
+            }
+        }
     }
 
     #[test]

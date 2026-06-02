@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 explorers-sim = { path = "../explorers-sim" }
 explorers-genesis = { path = "../explorers-genesis" }
+rayon = "1"
 rand = "0.9"
 rand_chacha = "0.9"
 serde = { version = "1", features = ["derive"] }

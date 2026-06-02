@@ -1,5 +1,6 @@
 pub use explorers_genesis_eval::{EvalConfig, FailureMode, FitnessBreakdown};
 pub use explorers_sim::{InitialDistribution, WorldParameters};
+use rayon::prelude::*;
 
 pub struct RunConfig {
     pub max_ticks: u64,
@@ -72,7 +73,14 @@ pub fn run_ensemble(
     config: &EnsembleConfig,
     base_seed: u64,
 ) -> EnsembleResult {
+    // The seed loop is embarrassingly parallel: each seed builds its own
+    // `World::new(…, seed)` with an independent RNG stream, so rollouts never
+    // interact (issue #350). `into_par_iter().collect()` over the contiguous
+    // seed range is order-stable — results land in seed order, bit-identical to
+    // the sequential map — because rayon's IndexedParallelIterator preserves
+    // index order on collect (no racy push).
     let run_results: Vec<RunResult> = (0..config.ensemble_size)
+        .into_par_iter()
         .map(|i| {
             let seed = base_seed.wrapping_add(i as u64);
             run_single(params, distribution, &config.run_config, seed)
@@ -251,6 +259,57 @@ mod tests {
         for (r1, r2) in result1.run_results.iter().zip(result2.run_results.iter()) {
             assert_eq!(r1.fitness, r2.fitness);
             assert_eq!(r1.termination_tick, r2.termination_tick);
+        }
+    }
+
+    #[test]
+    fn parallel_ensemble_matches_sequential_reference() {
+        // Central correctness property of issue #350: parallelising the outer
+        // (seed) loop with rayon must be bit-identical to a sequential run.
+        // Seeds are independent, so an order-stable indexed collect keeps every
+        // per-seed result in seed order and unchanged.
+        let params = WorldParameters {
+            initial_population_size: 20,
+            contact_range_coefficient: 8.0,
+            reproduction_energy_threshold: 15.0,
+            world_extent: 30.0,
+            solar_flux_magnitude: 8.0,
+            growth_efficiency: 0.5,
+            offspring_structure_fraction: 0.0,
+            ..test_params()
+        };
+        let distribution = InitialDistribution {
+            trait_covariance: 0.5,
+            initial_energy_per_agent: 60.0,
+            ..test_distribution()
+        };
+        let config = EnsembleConfig {
+            ensemble_size: 8,
+            run_config: RunConfig {
+                max_ticks: 120,
+                eval_config: EvalConfig::default(),
+            },
+        };
+        let base_seed: u64 = 7;
+
+        // Sequential reference, computed independently of run_ensemble.
+        let sequential: Vec<RunResult> = (0..config.ensemble_size)
+            .map(|i| {
+                let seed = base_seed.wrapping_add(i as u64);
+                run_single(&params, &distribution, &config.run_config, seed)
+            })
+            .collect();
+        let sequential_median = median(&sequential.iter().map(|r| r.fitness).collect::<Vec<_>>());
+
+        // The (now parallel) run_ensemble.
+        let parallel = run_ensemble(&params, &distribution, &config, base_seed);
+
+        assert_eq!(parallel.median_fitness, sequential_median);
+        assert_eq!(parallel.run_results.len(), sequential.len());
+        for (p, s) in parallel.run_results.iter().zip(sequential.iter()) {
+            assert_eq!(p.fitness, s.fitness);
+            assert_eq!(p.termination_tick, s.termination_tick);
+            assert_eq!(p.failure, s.failure);
         }
     }
 
