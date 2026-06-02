@@ -259,12 +259,64 @@ pub fn default_ranges() -> Vec<ParameterRange> {
     ]
 }
 
+/// A single named known-viable baseline `WorldParameters`, taken verbatim from
+/// the committed example4/example9 scenario template (the fully-specified,
+/// post-#309 set). Every field is given a sane non-zero value where the template
+/// is non-zero, so `decode()` can start from this and override only the searched
+/// dimensions — any parameter not in `default_ranges` inherits a viable value
+/// rather than the mechanically-fatal inline zeros it used to get (issue #326).
+fn viable_baseline() -> WorldParameters {
+    WorldParameters {
+        solar_flux_magnitude: 10.0,
+        base_trophic_efficiency: 0.8,
+        trophic_distance_decay: 1.0,
+        reproduction_efficiency: 0.7,
+        base_metabolic_rate: 0.3,
+        movement_cost_coefficient: 0.05,
+        sensing_range_coefficient: 10.0,
+        reproduction_energy_threshold: 15.0,
+        reproduction_nutrient_threshold: 1.0,
+        mutation_rate: 0.1,
+        mutation_magnitude: 0.05,
+        contact_range_coefficient: 3.0,
+        world_extent: 100.0,
+        initial_population_size: 0,
+        light_competition_radius: 8.0,
+        photo_maintenance_cost: 0.01,
+        heterotrophy_maintenance_cost: 0.01,
+        initial_nutrient_pool: 50000.0,
+        growth_efficiency: 0.3,
+        wear_rate: 0.0,
+        wear_degradation_steepness: 1.0,
+        somatic_maintenance_cost_coefficient: 0.1,
+        use_wear_rate: 0.0,
+        structure_maintenance_coefficient: 0.01,
+        repair_decay: 1.0,
+        base_nutrient_ratio: 0.1,
+        specification_nutrient_coefficient: 0.2,
+        reproductive_compatibility_distance: 2.0,
+        mobility_maintenance_cost: 0.0,
+        maintenance_cost_exponent: 2.0,
+        consumption_contact_half_saturation: 3.0,
+        nutrient_grid_cell_size: 10.0,
+        growth_retention_multiplier: 2.0,
+        offspring_structure_fraction: 0.2,
+        asexual_propensity_maintenance_cost: 0.01,
+        dispersal_propagule_cost_coefficient: 0.0,
+        dispersal_propagule_cost_exponent: 2.0,
+        dispersal_reach_coefficient: 10.0,
+        body_reach_coefficient: 0.0,
+    }
+}
+
 pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, InitialDistribution) {
     let v = |i: usize| -> f64 {
         let r = &ranges[i];
         r.min + values[i] * (r.max - r.min)
     };
 
+    // Start from the known-viable baseline and override only the searched
+    // dimensions, so non-searched fields inherit sane values rather than zero.
     let params = WorldParameters {
         solar_flux_magnitude: v(0) as f32,
         base_trophic_efficiency: v(1) as f32,
@@ -274,7 +326,6 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         movement_cost_coefficient: v(5) as f32,
         sensing_range_coefficient: v(6) as f32,
         reproduction_energy_threshold: v(7) as f32,
-        reproduction_nutrient_threshold: 1.0,
         mutation_rate: v(8) as f32,
         mutation_magnitude: v(9) as f32,
         contact_range_coefficient: v(10) as f32,
@@ -284,27 +335,12 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         photo_maintenance_cost: v(14) as f32,
         heterotrophy_maintenance_cost: v(15) as f32,
         reproductive_compatibility_distance: v(16) as f32,
-        initial_nutrient_pool: 0.0,
-        growth_efficiency: 0.0,
-        wear_rate: 0.0,
-        wear_degradation_steepness: 0.0,
-        somatic_maintenance_cost_coefficient: 0.0,
-        use_wear_rate: 0.0,
-        structure_maintenance_coefficient: 0.0,
-        repair_decay: 0.0,
         base_nutrient_ratio: v(24) as f32,
         specification_nutrient_coefficient: v(25) as f32,
-        mobility_maintenance_cost: 0.0,
         maintenance_cost_exponent: v(28) as f32,
-        consumption_contact_half_saturation: 0.001,
-        nutrient_grid_cell_size: 10.0,
         growth_retention_multiplier: v(29) as f32,
         offspring_structure_fraction: v(30) as f32,
-        asexual_propensity_maintenance_cost: 0.01,
-        dispersal_propagule_cost_coefficient: 0.0,
-        dispersal_propagule_cost_exponent: 2.0,
-        dispersal_reach_coefficient: 0.0,
-        body_reach_coefficient: 0.0,
+        ..viable_baseline()
     };
 
     let dist = InitialDistribution {
@@ -313,7 +349,9 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
             heterotrophy: v(18) as f32,
             mobility: v(19) as f32,
             kappa: v(20) as f32,
-            fecundity: 0.0,
+            // Founder fecundity inherits the known-viable template value; the
+            // search does not vary it, so it must not default to sterile (0.0).
+            fecundity: 0.35,
             asexual_propensity: v(26) as f32,
             dispersal: v(27) as f32,
         },
@@ -477,6 +515,33 @@ mod tests {
         assert!((decode_val(&values_at_zero, 0) - 10.0).abs() < 1e-10);
         assert!((decode_val(&values_at_one, 0) - 20.0).abs() < 1e-10);
         assert!((decode_val(&values_at_half, 1) - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn decode_never_zeros_load_bearing_fields() {
+        // The baseline must give viable values to the load-bearing fields at
+        // every unit-vector input, so the decoder can never silently seed a
+        // mechanically-fatal world (zero growth, zero nutrient, sterile founders).
+        let ranges = default_ranges();
+        for &u in &[0.0, 0.5, 1.0] {
+            let unit = vec![u; ranges.len()];
+            let (params, dist) = decode(&unit, &ranges);
+            assert!(
+                params.growth_efficiency > 0.0,
+                "growth_efficiency must be > 0 at unit input {u}, got {}",
+                params.growth_efficiency
+            );
+            assert!(
+                params.initial_nutrient_pool > 0.0,
+                "initial_nutrient_pool must be > 0 at unit input {u}, got {}",
+                params.initial_nutrient_pool
+            );
+            assert!(
+                dist.mean_traits.fecundity > 0.0,
+                "founder fecundity must be > 0 at unit input {u}, got {}",
+                dist.mean_traits.fecundity
+            );
+        }
     }
 
     #[test]
