@@ -1,0 +1,260 @@
+{
+  "metadata": {
+    "intent": "Minimal monoculture<->coexistence BRANCHING scenario (issue #359; Research Brief F, AC1 row 5 -- the one genuinely distribution-shaped failure mode). One producer cluster (high autotrophy) + one consumer cluster (high heterotrophy) co-located on the specification subspace (autotrophy x heterotrophy x mobility), within trophic-transfer reach so the well-mixed mean-field reading is testable (spatial decoupling deliberately minimised, unlike example8). The throwaway moment-closure + invasion-fitness prototype (crates/explorers-sim/src/bin/branching_detector.rs) reads THIS file's parameters and clusters and predicts whether a rare consumer can invade the producer monoculture -- evolutionary branching (Geritz adaptive dynamics): a positive distance-to-branching scalar D = disruptive selection splits the single peak into a producer peak + a consumer peak (coexistence). The committed base_trophic_efficiency = 0.8 sits just ABOVE F's predicted disruptive<->stabilising crossing base* ~ 0.63 (the prototype's base sweep), so F predicts BRANCHING (coexistence) but near the boundary -- the analogue of example10 committing above its Hopf crossing. The headless eval_scenarios run observes clustering_strength / coexistence_duration; the verdict is docs/research/F-branching-validation.md.",
+    "source_issue": 359,
+    "roster": "8 producers (photosynthetic_absorption 0.55, sessile, low reproduction) co-located near the field centre; 4 consumers (heterotrophy 0.5, lightly mobile 0.2, kappa 0.3) interleaved within feeding reach -- a single producer+consumer pair of clusters on the spec subspace, nothing else.",
+    "probes": "monoculture",
+    "prediction": "live",
+    "rationale": "F's invasion-fitness reading -- the producer monoculture sets a light + standing-biomass environment; a rare heterotroph mutant's resident-relative invasion fitness D (the leading-eigenvalue-equivalent distance-to-branching scalar of Brief F, AC1 row 5) is computed by central differences over the committed per-capita growth g assembled from photosynthesise (phase.rs:19) + resolve_drains/the exp-decay kernel (lib.rs:770) + metabolise (phase.rs:156) + grow (phase.rs:189). D > 0 ⇒ a consumer can invade ⇒ branching ⇒ coexistence direction. With trophic_distance_decay = 1.0, the prototype's base sweep places the predicted crossing at base* ~ 0.63; the committed base_trophic_efficiency = 0.8 sits just above it, so F predicts BRANCHING (D = +0.022) -- coexistence, near the boundary (see branching_detector output and docs/research/F-branching-validation.md). The prediction is an existence/multiplicity claim only (Brief F, AC3) -- it does NOT claim any per-seed distributional outcome (the sporadic decomposer guild remains genesis search's to report). A disagreement with the observed clustering_strength is a DIAGNOSTIC SIGNAL localising the missing physics (spatial in-reach geometry; wear-mediated structural fragility), not a defect in either lens (Brief F, AC5).",
+    "geometry": "Producers and consumers are co-located within a ~10-unit core so the consumer's feeding reach (eff_heterotrophy * contact_range_coefficient = 0.5 * 5.0 = 2.5 units) actually overlaps prey -- the spatial realisation of the well-mixed mass-action coupling the prototype assumes. This is the deliberate contrast with example8, where mobile consumers and a dispersed prey field decouple the loop.",
+    "status": "current -- every WorldParameter specified explicitly (example10 template). trophic_distance_decay is 1.0 and base_trophic_efficiency 0.8 so the committed point sits just above the predicted branching crossing base* ~ 0.63; base_metabolic_rate is low (0.1) so both levels clear maintenance."
+  },
+  "parameters": {
+    "solar_flux_magnitude": 8.0,
+    "base_trophic_efficiency": 0.8,
+    "trophic_distance_decay": 1.0,
+    "reproduction_efficiency": 0.7,
+    "base_metabolic_rate": 0.1,
+    "movement_cost_coefficient": 0.05,
+    "sensing_range_coefficient": 10.0,
+    "reproduction_energy_threshold": 15.0,
+    "reproduction_nutrient_threshold": 1.0,
+    "mutation_rate": 0.1,
+    "mutation_magnitude": 0.05,
+    "contact_range_coefficient": 5.0,
+    "world_extent": 100.0,
+    "initial_population_size": 0,
+    "light_competition_radius": 8.0,
+    "photo_maintenance_cost": 0.01,
+    "heterotrophy_maintenance_cost": 0.01,
+    "initial_nutrient_pool": 50000.0,
+    "growth_efficiency": 0.3,
+    "wear_rate": 0.0,
+    "wear_degradation_steepness": 1.0,
+    "somatic_maintenance_cost_coefficient": 0.1,
+    "use_wear_rate": 0.0,
+    "structure_maintenance_coefficient": 0.01,
+    "repair_decay": 1.0,
+    "base_nutrient_ratio": 0.1,
+    "specification_nutrient_coefficient": 0.2,
+    "reproductive_compatibility_distance": 2.0,
+    "mobility_maintenance_cost": 0.0,
+    "maintenance_cost_exponent": 2.0,
+    "consumption_contact_half_saturation": 3.0,
+    "nutrient_grid_cell_size": 10.0,
+    "growth_retention_multiplier": 2.0,
+    "offspring_structure_fraction": 0.2,
+    "asexual_propensity_maintenance_cost": 0.01,
+    "dispersal_propagule_cost_coefficient": 0.0,
+    "dispersal_propagule_cost_exponent": 2.0,
+    "dispersal_reach_coefficient": 10.0,
+    "body_reach_coefficient": 0.0
+  },
+  "agents": [
+    {
+      "position": [
+        0.0,
+        0.0
+      ],
+      "reserve": 20.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.55,
+        "mobility": 0.0,
+        "fecundity": 0.12,
+        "asexual_propensity": 0.1,
+        "dispersal": 0.5,
+        "kappa": 0.55,
+        "heterotrophy": 0.0
+      }
+    },
+    {
+      "position": [
+        3.0,
+        0.0
+      ],
+      "reserve": 20.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.55,
+        "mobility": 0.0,
+        "fecundity": 0.12,
+        "asexual_propensity": 0.1,
+        "dispersal": 0.5,
+        "kappa": 0.55,
+        "heterotrophy": 0.0
+      }
+    },
+    {
+      "position": [
+        -3.0,
+        0.0
+      ],
+      "reserve": 20.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.55,
+        "mobility": 0.0,
+        "fecundity": 0.12,
+        "asexual_propensity": 0.1,
+        "dispersal": 0.5,
+        "kappa": 0.55,
+        "heterotrophy": 0.0
+      }
+    },
+    {
+      "position": [
+        0.0,
+        3.0
+      ],
+      "reserve": 20.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.55,
+        "mobility": 0.0,
+        "fecundity": 0.12,
+        "asexual_propensity": 0.1,
+        "dispersal": 0.5,
+        "kappa": 0.55,
+        "heterotrophy": 0.0
+      }
+    },
+    {
+      "position": [
+        0.0,
+        -3.0
+      ],
+      "reserve": 20.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.55,
+        "mobility": 0.0,
+        "fecundity": 0.12,
+        "asexual_propensity": 0.1,
+        "dispersal": 0.5,
+        "kappa": 0.55,
+        "heterotrophy": 0.0
+      }
+    },
+    {
+      "position": [
+        3.0,
+        3.0
+      ],
+      "reserve": 20.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.55,
+        "mobility": 0.0,
+        "fecundity": 0.12,
+        "asexual_propensity": 0.1,
+        "dispersal": 0.5,
+        "kappa": 0.55,
+        "heterotrophy": 0.0
+      }
+    },
+    {
+      "position": [
+        -3.0,
+        3.0
+      ],
+      "reserve": 20.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.55,
+        "mobility": 0.0,
+        "fecundity": 0.12,
+        "asexual_propensity": 0.1,
+        "dispersal": 0.5,
+        "kappa": 0.55,
+        "heterotrophy": 0.0
+      }
+    },
+    {
+      "position": [
+        -3.0,
+        -3.0
+      ],
+      "reserve": 20.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.55,
+        "mobility": 0.0,
+        "fecundity": 0.12,
+        "asexual_propensity": 0.1,
+        "dispersal": 0.5,
+        "kappa": 0.55,
+        "heterotrophy": 0.0
+      }
+    },
+    {
+      "position": [
+        1.0,
+        1.0
+      ],
+      "reserve": 50.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.0,
+        "mobility": 0.2,
+        "fecundity": 0.2,
+        "asexual_propensity": 0.3,
+        "dispersal": 1.0,
+        "kappa": 0.3,
+        "heterotrophy": 0.5
+      }
+    },
+    {
+      "position": [
+        -1.0,
+        1.0
+      ],
+      "reserve": 50.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.0,
+        "mobility": 0.2,
+        "fecundity": 0.2,
+        "asexual_propensity": 0.3,
+        "dispersal": 1.0,
+        "kappa": 0.3,
+        "heterotrophy": 0.5
+      }
+    },
+    {
+      "position": [
+        1.0,
+        -1.0
+      ],
+      "reserve": 50.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.0,
+        "mobility": 0.2,
+        "fecundity": 0.2,
+        "asexual_propensity": 0.3,
+        "dispersal": 1.0,
+        "kappa": 0.3,
+        "heterotrophy": 0.5
+      }
+    },
+    {
+      "position": [
+        -1.0,
+        -1.0
+      ],
+      "reserve": 50.0,
+      "nutrient": 8.0,
+      "traits": {
+        "photosynthetic_absorption": 0.0,
+        "mobility": 0.2,
+        "fecundity": 0.2,
+        "asexual_propensity": 0.3,
+        "dispersal": 1.0,
+        "kappa": 0.3,
+        "heterotrophy": 0.5
+      }
+    }
+  ],
+  "max_ticks": 2000
+}
