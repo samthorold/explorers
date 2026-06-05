@@ -40,6 +40,7 @@ use explorers_genesis::{
 };
 use explorers_sim::WorldRecipe;
 
+use crate::prefilter::prefilter_cliff;
 use crate::search::{ParameterRange, decode, default_ranges};
 
 /// Bins per behaviour axis. Coarse, per the spike (20×20×20).
@@ -200,7 +201,15 @@ pub struct CellRecord {
 #[derive(Default)]
 pub struct Archive {
     cells: std::collections::HashMap<(usize, usize, usize), CellRecord>,
+    /// Observed deaths: configs that cleared the prefilter (or were never
+    /// prefiltered) and died in their seed-ensemble rollout, keyed by cliff.
     frontier: std::collections::HashMap<Cliff, usize>,
+    /// A priori deaths: configs the viability prefilter proved dead in closed
+    /// form, routed here without spending an ensemble (`crate::prefilter`). The
+    /// two tallies are kept apart so the atlas can distinguish a-priori from
+    /// observed deaths (genesis-search.md, "the dead frontier is the atlas's most
+    /// valuable layer").
+    apriori_frontier: std::collections::HashMap<Cliff, usize>,
     /// Archive learning rate (CMA-MAE α): how far each accepted solution drags
     /// the cell's acceptance threshold toward its fitness. 0 ⇒ classic hard
     /// elitism (threshold tracks the elite); 1 ⇒ threshold jumps to each elite.
@@ -212,8 +221,15 @@ impl Archive {
         Archive {
             cells: std::collections::HashMap::new(),
             frontier: std::collections::HashMap::new(),
+            apriori_frontier: std::collections::HashMap::new(),
             archive_learning_rate: archive_learning_rate.clamp(0.0, 1.0),
         }
+    }
+
+    /// Tally an **a priori** death: a config the viability prefilter proved dead
+    /// in closed form, routed to the dead frontier without spending an ensemble.
+    pub fn insert_apriori(&mut self, cliff: Cliff) {
+        *self.apriori_frontier.entry(cliff).or_insert(0) += 1;
     }
 
     /// Place one evaluated config. Gated → frontier tally; live → soft-archive
@@ -298,9 +314,22 @@ impl Archive {
     }
 
     /// The dead frontier as a label-keyed tally — the count of configs that died
-    /// on each cliff. The atlas's negative-space layer.
+    /// on each cliff, **a priori and observed combined**. The atlas's
+    /// negative-space layer.
     pub fn dead_frontier(&self) -> std::collections::HashMap<String, usize> {
-        self.frontier
+        let mut out: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (k, &v) in self.frontier.iter().chain(self.apriori_frontier.iter()) {
+            *out.entry(k.label().to_string()).or_insert(0) += v;
+        }
+        out
+    }
+
+    /// The **a priori** layer of the dead frontier: configs the viability
+    /// prefilter proved dead in closed form, keyed by cliff label. These spent no
+    /// ensemble. The complement (`dead_frontier` minus this) is the observed
+    /// deaths.
+    pub fn dead_frontier_apriori(&self) -> std::collections::HashMap<String, usize> {
+        self.apriori_frontier
             .iter()
             .map(|(k, &v)| (k.label().to_string(), v))
             .collect()
@@ -439,6 +468,42 @@ pub struct AtlasCell {
     pub unit: Vec<f64>,
 }
 
+/// Decide whether a cross-check rollout *disagrees* with the prefilter that gated
+/// the config. The prefilter said dead on `predicted`; if the rollout shows life
+/// (no failure mode and positive fitness), the two disagree and the case is
+/// returned for surfacing — a mis-drawn gate (viability.md). Agreement (the
+/// rollout also dies) returns `None`.
+fn crosscheck_disagreement(
+    predicted: Cliff,
+    rollout: &ConfigEval,
+    unit: &[f64],
+) -> Option<PrefilterDisagreement> {
+    if rollout.cliff.is_none() && rollout.median_fitness > 0.0 {
+        Some(PrefilterDisagreement {
+            predicted_cliff: predicted.label().to_string(),
+            observed_fitness: rollout.median_fitness,
+            unit: unit.to_vec(),
+        })
+    } else {
+        None
+    }
+}
+
+/// A surfaced prefilter disagreement: a config the viability prefilter proved
+/// dead on `predicted_cliff` that the agreement cross-check rollout nonetheless
+/// showed *alive* (positive fitness, no failure). This localises a mis-drawn gate
+/// — the prefilter says dead, the run shows life (viability.md). Surfaced, never
+/// swallowed.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PrefilterDisagreement {
+    /// The cliff the prefilter predicted (the gate that fired).
+    pub predicted_cliff: String,
+    /// The median fitness the cross-check rollout actually observed.
+    pub observed_fitness: f32,
+    /// The unit-cube point that disagreed.
+    pub unit: Vec<f64>,
+}
+
 /// The genesis [`Atlas`](../../CONTEXT.md): the live archive (cells binned on the
 /// three behaviour axes) paired with the dead frontier (keyed by cliff), plus the
 /// coverage / QD-score summary. This is the search's output — a map onto
@@ -446,8 +511,23 @@ pub struct AtlasCell {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Atlas {
     pub cells: Vec<AtlasCell>,
-    /// Dead-frontier tally: how many configs died on each cliff (by label).
+    /// Dead-frontier tally: how many configs died on each cliff (by label),
+    /// **a priori and observed combined**.
     pub dead_frontier: std::collections::HashMap<String, usize>,
+    /// The **a priori** layer of the dead frontier: configs the viability
+    /// prefilter (`crate::prefilter`) proved dead in closed form, by cliff label.
+    /// These spent no ensemble. The observed deaths are `dead_frontier` minus
+    /// this. Genesis-search.md: "the dead frontier is the atlas's most valuable
+    /// layer", and the a-priori-vs-observed split is its agreement cross-check.
+    pub dead_frontier_apriori: std::collections::HashMap<String, usize>,
+    /// Ensemble rollouts the prefilter skipped (the budget saved) — one per
+    /// a-priori death that was *not* drawn into the agreement cross-check sample.
+    pub rollouts_skipped: usize,
+    /// Prefilter disagreements surfaced: configs the prefilter proved dead that a
+    /// cross-check rollout nonetheless showed alive. A non-empty list localises a
+    /// mis-drawn gate (viability.md, *Place in the validation triad*); it is
+    /// reported, never swallowed.
+    pub prefilter_disagreements: Vec<PrefilterDisagreement>,
     /// Filled-cell count.
     pub coverage: usize,
     /// Total cells in the binning (`RESOLUTION³`).
@@ -513,6 +593,12 @@ pub struct QdConfig {
     pub sigma: f64,
     /// CMA-MAE archive learning rate (soft-acceptance threshold drag).
     pub archive_learning_rate: f32,
+    /// Fraction of prefilter-gated (a priori dead) configs that are *still* rolled
+    /// out as an agreement cross-check, in `[0, 1]`. A prefilter-says-dead /
+    /// rollout-shows-life disagreement on a sampled config localises a mis-drawn
+    /// gate and is surfaced on the atlas (viability.md, *Place in the validation
+    /// triad*). 0 disables the cross-check (every gated config is taken on faith).
+    pub prefilter_crosscheck_fraction: f32,
 }
 
 impl Default for QdConfig {
@@ -525,6 +611,7 @@ impl Default for QdConfig {
             generations: 10,
             sigma: 0.15,
             archive_learning_rate: 0.5,
+            prefilter_crosscheck_fraction: 0.05,
         }
     }
 }
@@ -545,6 +632,8 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
     let mut archive = Archive::new(config.archive_learning_rate);
     let mut emitter = CmaEmitter::new(dims, config.sigma);
     let mut config_index: u64 = 0;
+    let mut rollouts_skipped: usize = 0;
+    let mut disagreements: Vec<PrefilterDisagreement> = Vec::new();
 
     // Generation 0: a random bootstrap batch over the cube (the QD analogue of the
     // incumbent's LHS stage), drawn from the emitter's initial wide Gaussian.
@@ -561,22 +650,70 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
             })
             .collect();
 
-        // Evaluate the batch. Each config fans out over its seed ensemble inside
-        // `run_ensemble` (rayon), reused unchanged.
-        let evals: Vec<ConfigEval> = batch
+        // A priori viability prefilter: run the two committed closed-form gates
+        // (`crate::prefilter`) ahead of each rollout. A gated config is a proven
+        // a-priori death — it spends no ensemble — unless it is drawn into the
+        // agreement cross-check sample, which still rolls it out to falsify the
+        // gate. Drawing the cross-check coin here (sequentially, before the
+        // rollouts) keeps the search deterministic in `(config, base_seed, rng)`.
+        let crosscheck_fraction = config.prefilter_crosscheck_fraction.clamp(0.0, 1.0);
+        let gates: Vec<(Option<Cliff>, bool)> = batch
             .iter()
-            .zip(seeds.iter())
-            .map(|(unit, &seed)| {
-                let (wp, dist) = decode(unit, &config.ranges);
-                let result = run_ensemble(&wp, &dist, &ensemble_config, seed);
-                config_eval_from_ensemble(&result)
+            .map(|unit| {
+                let (wp, _) = decode(unit, &config.ranges);
+                let cliff = prefilter_cliff(&wp);
+                let crosscheck = cliff.is_some()
+                    && crosscheck_fraction > 0.0
+                    && rng.random::<f32>() < crosscheck_fraction;
+                (cliff, crosscheck)
             })
             .collect();
 
+        // Run only the rollouts that are actually needed: cleared configs, and the
+        // gated configs sampled for the cross-check. Gated-and-skipped configs run
+        // no sim — that is the saved budget.
+        let evals: Vec<Option<ConfigEval>> = batch
+            .iter()
+            .zip(seeds.iter())
+            .zip(gates.iter())
+            .map(|((unit, &seed), &(cliff, crosscheck))| {
+                if cliff.is_some() && !crosscheck {
+                    None
+                } else {
+                    let (wp, dist) = decode(unit, &config.ranges);
+                    let result = run_ensemble(&wp, &dist, &ensemble_config, seed);
+                    Some(config_eval_from_ensemble(&result))
+                }
+            })
+            .collect();
+
+        // Route each config and compute the emitter's improvement signal.
         let improvements: Vec<f32> = batch
             .iter()
+            .zip(gates.iter())
             .zip(evals.iter())
-            .map(|(unit, eval)| archive.insert(unit, eval))
+            .map(|((unit, &(cliff, crosscheck)), eval)| match cliff {
+                Some(cliff) => {
+                    // Proven dead a priori: it lands on the dead frontier as an
+                    // a-priori death regardless of whether it was cross-checked.
+                    archive.insert_apriori(cliff);
+                    if crosscheck {
+                        // The cross-check rolled it out: if the rollout shows life,
+                        // the prefilter and the rollout disagree — surface it (a
+                        // mis-drawn gate), never swallow it.
+                        if let Some(ev) = eval {
+                            if let Some(d) = crosscheck_disagreement(cliff, ev, unit) {
+                                disagreements.push(d);
+                            }
+                        }
+                    } else {
+                        rollouts_skipped += 1;
+                    }
+                    // An a-priori death never improves a cell.
+                    0.0
+                }
+                None => archive.insert(unit, eval.as_ref().expect("cleared config was rolled out")),
+            })
             .collect();
 
         if generation == config.generations {
@@ -625,6 +762,9 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
         qd_score: archive.qd_score(),
         best_fitness: archive.best_fitness(),
         dead_frontier: archive.dead_frontier(),
+        dead_frontier_apriori: archive.dead_frontier_apriori(),
+        rollouts_skipped,
+        prefilter_disagreements: disagreements,
         cells,
     }
 }
@@ -693,6 +833,37 @@ mod tests {
     }
 
     #[test]
+    fn apriori_death_is_tallied_separately_from_observed_death() {
+        // A prefilter-gated config lands on the dead frontier as an *a priori*
+        // death (spending no ensemble); an ensemble-observed death lands as an
+        // *observed* death. The total frontier counts both; the a-priori layer
+        // counts only the prefiltered ones (genesis-search.md, a-priori vs
+        // observed).
+        let mut archive = Archive::new(0.5);
+
+        archive.insert_apriori(Cliff::Extinction);
+        archive.insert_apriori(Cliff::Extinction);
+        archive.insert_apriori(Cliff::EnergyDeath);
+
+        // An observed extinction (a config that cleared the prefilter but died in
+        // rollout) is tallied to the same cliff, but as observed.
+        let mut observed = live(0.0, descr(0.0, 0.0, 0.0));
+        observed.cliff = Some(Cliff::Extinction);
+        archive.insert(&vec![0.5; 3], &observed);
+
+        // Total frontier: 3 extinction (2 a priori + 1 observed) + 1 energy death.
+        assert_eq!(archive.dead_frontier().get("extinction"), Some(&3));
+        assert_eq!(archive.dead_frontier().get("energy_death"), Some(&1));
+
+        // A-priori layer: only the prefiltered deaths.
+        assert_eq!(archive.dead_frontier_apriori().get("extinction"), Some(&2));
+        assert_eq!(
+            archive.dead_frontier_apriori().get("energy_death"),
+            Some(&1)
+        );
+    }
+
+    #[test]
     fn soft_threshold_lags_the_elite_so_near_misses_still_accept() {
         // CMA-MAE: the rolling threshold lags the elite by the learning rate, so a
         // solution that beats the *threshold* but not the sitting elite is still
@@ -743,6 +914,137 @@ mod tests {
             emitter.mean[0] > 0.5,
             "mean should move toward the improvers near 0.8, got {}",
             emitter.mean[0]
+        );
+    }
+
+    #[test]
+    fn prefilter_routes_apriori_deaths_and_skips_their_rollouts() {
+        // With ranges that force every config below the extinction flux floor
+        // (F ≤ B everywhere), the prefilter must route every config to the dead
+        // frontier as an a-priori extinction, spend ZERO ensembles, and report the
+        // full batch as budget saved. No live cell can form.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        // Pin solar_flux_magnitude ≤ base_metabolic_rate across the whole cube.
+        let mut ranges = default_ranges();
+        for r in &mut ranges {
+            if r.name == "solar_flux_magnitude" {
+                r.min = 0.05;
+                r.max = 0.1;
+            }
+            if r.name == "base_metabolic_rate" {
+                r.min = 0.4;
+                r.max = 0.5;
+            }
+        }
+
+        let config = QdConfig {
+            ranges,
+            ensemble_size: 3,
+            max_ticks: 50,
+            batch: 5,
+            generations: 1,
+            ..QdConfig::default()
+        };
+
+        let mut rng = ChaCha8Rng::seed_from_u64(1);
+        let atlas = run_qd(&config, 1, &mut rng);
+
+        // Two batches × 5 = 10 configs, every one prefiltered extinct a priori.
+        let total_evaluated = config.batch * (config.generations + 1);
+        assert_eq!(atlas.coverage, 0, "no live cell can form when all gated");
+        assert_eq!(
+            atlas.dead_frontier_apriori.get("extinction"),
+            Some(&total_evaluated),
+            "every config should be an a-priori extinction"
+        );
+        // Budget saved == every rollout skipped (none were run).
+        assert_eq!(atlas.rollouts_skipped, total_evaluated);
+        // No observed deaths — the prefilter caught them all, the frontier total
+        // equals the a-priori count.
+        let dead: usize = atlas.dead_frontier.values().sum();
+        assert_eq!(dead, total_evaluated);
+    }
+
+    #[test]
+    fn crosscheck_surfaces_disagreement_when_a_gated_config_shows_life() {
+        // The cross-check must SURFACE — not swallow — the case where the
+        // prefilter proved a config dead but the rollout shows life (positive
+        // fitness, no failure). That case localises a mis-drawn gate.
+        let unit = vec![0.5; 3];
+        let alive = live(0.42, descr(0.4, 0.5, 0.3)); // cliff None, fitness > 0
+        let d = crosscheck_disagreement(Cliff::Extinction, &alive, &unit)
+            .expect("prefilter-dead but rollout-alive must be surfaced");
+        assert_eq!(d.predicted_cliff, "extinction");
+        assert!((d.observed_fitness - 0.42).abs() < 1e-6);
+        assert_eq!(d.unit, unit);
+    }
+
+    #[test]
+    fn crosscheck_is_silent_when_the_rollout_agrees_with_the_gate() {
+        // Agreement (the rollout also dies) is NOT a disagreement — a correct gate
+        // produces no false alarm.
+        let unit = vec![0.5; 3];
+        let mut dead = live(0.0, descr(0.0, 0.0, 0.0));
+        dead.cliff = Some(Cliff::Extinction);
+        assert!(crosscheck_disagreement(Cliff::Extinction, &dead, &unit).is_none());
+
+        // A zero-fitness "live" verdict (no failure but no positive fitness) is not
+        // counted as life either — only positive fitness contradicts a dead gate.
+        let zero = live(0.0, descr(0.0, 0.0, 0.0));
+        assert!(crosscheck_disagreement(Cliff::EnergyDeath, &zero, &unit).is_none());
+    }
+
+    #[test]
+    fn slow_full_crosscheck_rolls_out_every_gated_config_and_confirms_the_gates() {
+        // With the cross-check fraction at 1.0, every prefilter-gated config is
+        // *also* rolled out (none are taken on faith) — so no budget is skipped.
+        // Because the extinction gate is correct, the rollouts agree (they die),
+        // so NO disagreement is surfaced: a true gate produces an empty
+        // disagreement list. `slow_` — it steps real sims for every config.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let mut ranges = default_ranges();
+        for r in &mut ranges {
+            if r.name == "solar_flux_magnitude" {
+                r.min = 0.05;
+                r.max = 0.1;
+            }
+            if r.name == "base_metabolic_rate" {
+                r.min = 0.4;
+                r.max = 0.5;
+            }
+        }
+
+        let config = QdConfig {
+            ranges,
+            ensemble_size: 2,
+            max_ticks: 40,
+            batch: 4,
+            generations: 1,
+            prefilter_crosscheck_fraction: 1.0,
+            ..QdConfig::default()
+        };
+
+        let mut rng = ChaCha8Rng::seed_from_u64(3);
+        let atlas = run_qd(&config, 3, &mut rng);
+
+        let total = config.batch * (config.generations + 1);
+        // Every gated config was cross-checked, so nothing was skipped.
+        assert_eq!(
+            atlas.rollouts_skipped, 0,
+            "full cross-check rolls out every gated config — no budget saved"
+        );
+        // Still all a-priori extinctions (the verdict the prefilter assigned).
+        assert_eq!(atlas.dead_frontier_apriori.get("extinction"), Some(&total));
+        // The gate is correct: rollouts of forced-extinct configs show no life,
+        // so the disagreement list is empty (agreement, not swallowed silence).
+        assert!(
+            atlas.prefilter_disagreements.is_empty(),
+            "a correct gate must surface zero disagreements, got {:?}",
+            atlas.prefilter_disagreements
         );
     }
 

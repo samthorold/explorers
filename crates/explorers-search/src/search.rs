@@ -34,6 +34,9 @@ pub struct SearchConfig {
     pub sigma: f64,
     /// CMA-MAE archive learning rate (soft per-cell acceptance threshold drag).
     pub archive_learning_rate: f32,
+    /// Fraction of prefilter-gated (a priori dead) configs still rolled out as the
+    /// agreement cross-check (viability.md). 0 disables it.
+    pub prefilter_crosscheck_fraction: f32,
 }
 
 impl Default for SearchConfig {
@@ -46,6 +49,7 @@ impl Default for SearchConfig {
             generations: 10,
             sigma: 0.15,
             archive_learning_rate: 0.5,
+            prefilter_crosscheck_fraction: 0.05,
         }
     }
 }
@@ -327,6 +331,7 @@ pub fn run_search(config: &SearchConfig, base_seed: u64, rng: &mut impl Rng) -> 
         generations: config.generations,
         sigma: config.sigma,
         archive_learning_rate: config.archive_learning_rate,
+        prefilter_crosscheck_fraction: config.prefilter_crosscheck_fraction,
     };
     run_qd(&qd_config, base_seed, rng)
 }
