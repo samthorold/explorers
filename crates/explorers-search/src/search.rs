@@ -1,15 +1,14 @@
 use rand::Rng;
-use rayon::prelude::*;
-use serde::Serialize;
 
-use explorers_genesis::{
-    EnsembleConfig, EnsembleResult, EvalConfig, InitialDistribution, RunConfig, WorldParameters,
-};
-use explorers_sim::{TraitVector, WorldRecipe};
+use explorers_genesis::{InitialDistribution, WorldParameters};
+use explorers_sim::TraitVector;
 
-use crate::bayesopt::BayesianOptimiser;
-use crate::lhs;
-use crate::sobol;
+use crate::qd::{Atlas, QdConfig, run_qd};
+
+/// The genesis search output is the [`Atlas`] (CONTEXT.md) — the live archive of
+/// behaviour cells plus the dead frontier. `SearchResult` is kept as the public
+/// alias the consumers name; `best_recipe` / `recipe_for_cell` live on `Atlas`.
+pub type SearchResult = Atlas;
 
 #[derive(Clone, Debug)]
 pub struct ParameterRange {
@@ -18,14 +17,23 @@ pub struct ParameterRange {
     pub max: f64,
 }
 
+/// Configuration for the genesis outer search. Post-#365 the outer loop is the
+/// QD (CMA-MAE) illuminator; the knobs are the QD ones. (The LHS/Sobol/GP-BO
+/// modules remain in the crate but are no longer on the production path — GP-BO
+/// is earmarked for a later refinement role, brief E / #349.)
 #[derive(Clone, Debug)]
 pub struct SearchConfig {
     pub ranges: Vec<ParameterRange>,
     pub ensemble_size: u32,
-    pub lhs_samples: usize,
     pub max_ticks: u64,
-    pub bayesopt_iterations: usize,
-    pub sensitivity_threshold: f64,
+    /// Solutions evaluated per generation (the batch size).
+    pub batch: usize,
+    /// Adaptation generations after the random bootstrap batch.
+    pub generations: usize,
+    /// Initial per-dimension emitter deviation (unit-cube coordinates).
+    pub sigma: f64,
+    /// CMA-MAE archive learning rate (soft per-cell acceptance threshold drag).
+    pub archive_learning_rate: f32,
 }
 
 impl Default for SearchConfig {
@@ -33,69 +41,11 @@ impl Default for SearchConfig {
         SearchConfig {
             ranges: default_ranges(),
             ensemble_size: 5,
-            lhs_samples: 50,
             max_ticks: 500,
-            bayesopt_iterations: 10,
-            sensitivity_threshold: 0.05,
-        }
-    }
-}
-
-#[derive(Serialize)]
-pub struct EvaluatedParameterisation {
-    pub parameters: Vec<f64>,
-    pub parameter_names: Vec<String>,
-    pub median_fitness: f32,
-    pub run_breakdowns: Vec<RunBreakdown>,
-}
-
-#[derive(Serialize)]
-pub struct RunBreakdown {
-    pub fitness: f32,
-    pub failure: Option<String>,
-    pub termination_tick: u64,
-    pub oscillation_strength: f32,
-    pub clustering_strength: f32,
-    pub coexistence_duration: f32,
-    pub turnover_score: f32,
-    pub trophic_balance_score: f32,
-}
-
-#[derive(Serialize)]
-pub struct SensitivityReport {
-    pub rankings: Vec<SensitivityEntry>,
-}
-
-#[derive(Serialize)]
-pub struct SensitivityEntry {
-    pub name: String,
-    pub first_order: f64,
-    pub total_effect: f64,
-}
-
-#[derive(Serialize)]
-pub struct SearchResult {
-    pub parameterisations: Vec<EvaluatedParameterisation>,
-    pub sensitivity: SensitivityReport,
-    pub optimised: Vec<EvaluatedParameterisation>,
-}
-
-impl SearchResult {
-    pub fn best_recipe(&self, ranges: &[ParameterRange], max_ticks: u64) -> WorldRecipe {
-        let best = &self.optimised[0];
-        let unit_values: Vec<f64> = best
-            .parameters
-            .iter()
-            .zip(ranges.iter())
-            .map(|(&actual, range)| (actual - range.min) / (range.max - range.min))
-            .collect();
-        let (parameters, initial_distribution) = decode(&unit_values, ranges);
-        WorldRecipe {
-            parameters,
-            initial_distribution: Some(initial_distribution),
-            agents: None,
-            carcasses: None,
-            max_ticks,
+            batch: 32,
+            generations: 10,
+            sigma: 0.15,
+            archive_learning_rate: 0.5,
         }
     }
 }
@@ -364,132 +314,21 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
     (params, dist)
 }
 
+/// The genesis outer search: QD (CMA-MAE) illumination over world-parameter
+/// space, returning the [`Atlas`]. Delegates to [`run_qd`], reusing [`decode`]
+/// and `run_ensemble` unchanged (issue #365). The LHS/Sobol/GP-BO path is retired
+/// from production — its modules stay in the crate, dormant.
 pub fn run_search(config: &SearchConfig, base_seed: u64, rng: &mut impl Rng) -> SearchResult {
-    let dims = config.ranges.len();
-
-    let samples = lhs::sample(dims, config.lhs_samples, rng);
-
-    let ensemble_config = EnsembleConfig {
+    let qd_config = QdConfig {
+        ranges: config.ranges.clone(),
         ensemble_size: config.ensemble_size,
-        run_config: RunConfig {
-            max_ticks: config.max_ticks,
-            eval_config: EvalConfig::default(),
-        },
+        max_ticks: config.max_ticks,
+        batch: config.batch,
+        generations: config.generations,
+        sigma: config.sigma,
+        archive_learning_rate: config.archive_learning_rate,
     };
-
-    // The LHS batch sweep evaluates each candidate config independently
-    // (distinct seed offset, no shared state), so it parallelises cleanly
-    // (issue #350). An indexed par-iter collect keeps results in sample order —
-    // bit-identical to the sequential sweep — with no racy push. The per-sample
-    // seed is derived from the sample index, not loop position, so order is
-    // immaterial to the values and only matters for stable collection.
-    let (_fitnesses, mut parameterisations): (Vec<f64>, Vec<EvaluatedParameterisation>) = samples
-        .par_iter()
-        .enumerate()
-        .map(|(i, sample)| {
-            let (wp, dist) = decode(sample, &config.ranges);
-            let seed = base_seed.wrapping_add(i as u64 * 1000);
-            let result = explorers_genesis::run_ensemble(&wp, &dist, &ensemble_config, seed);
-            (
-                result.median_fitness as f64,
-                to_evaluated(sample, &config.ranges, &result),
-            )
-        })
-        .unzip();
-
-    let evaluate_for_sobol = |unit: &[f64]| -> f64 {
-        let (wp, dist) = decode(unit, &config.ranges);
-        let result = explorers_genesis::run_ensemble(&wp, &dist, &ensemble_config, base_seed);
-        result.median_fitness as f64
-    };
-
-    let indices = sobol::sobol_indices(evaluate_for_sobol, dims, config.lhs_samples, rng);
-    let ranking = sobol::rank_by_total_effect(&indices);
-
-    let sensitivity = SensitivityReport {
-        rankings: ranking
-            .rankings
-            .iter()
-            .map(|&(idx, _)| SensitivityEntry {
-                name: config.ranges[idx].name.clone(),
-                first_order: indices.first_order[idx],
-                total_effect: indices.total_effect[idx],
-            })
-            .collect(),
-    };
-
-    let fixed: Vec<Option<f64>> = (0..dims)
-        .map(|d| {
-            if indices.total_effect[d] < config.sensitivity_threshold {
-                Some(0.5)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let bounds: Vec<(f64, f64)> = (0..dims).map(|_| (0.0, 1.0)).collect();
-
-    let mut optimiser = BayesianOptimiser::new(bounds, fixed);
-    let opt_result = optimiser.optimise(
-        |x| {
-            let (wp, dist) = decode(x, &config.ranges);
-            let result = explorers_genesis::run_ensemble(&wp, &dist, &ensemble_config, base_seed);
-            result.median_fitness as f64
-        },
-        config.bayesopt_iterations,
-        rng,
-    );
-
-    let (opt_wp, opt_dist) = decode(&opt_result.best_x, &config.ranges);
-    let opt_ensemble =
-        explorers_genesis::run_ensemble(&opt_wp, &opt_dist, &ensemble_config, base_seed);
-    let optimised = vec![to_evaluated(
-        &opt_result.best_x,
-        &config.ranges,
-        &opt_ensemble,
-    )];
-
-    parameterisations.sort_by(|a, b| b.median_fitness.partial_cmp(&a.median_fitness).unwrap());
-
-    SearchResult {
-        parameterisations,
-        sensitivity,
-        optimised,
-    }
-}
-
-fn to_evaluated(
-    sample: &[f64],
-    ranges: &[ParameterRange],
-    result: &EnsembleResult,
-) -> EvaluatedParameterisation {
-    EvaluatedParameterisation {
-        parameters: sample
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                let r = &ranges[i];
-                r.min + v * (r.max - r.min)
-            })
-            .collect(),
-        parameter_names: ranges.iter().map(|r| r.name.clone()).collect(),
-        median_fitness: result.median_fitness,
-        run_breakdowns: result
-            .run_results
-            .iter()
-            .map(|r| RunBreakdown {
-                fitness: r.fitness,
-                failure: r.failure.as_ref().map(|f| format!("{:?}", f)),
-                termination_tick: r.termination_tick,
-                oscillation_strength: r.breakdown.oscillation_strength,
-                clustering_strength: r.breakdown.clustering_strength,
-                coexistence_duration: r.breakdown.coexistence_duration,
-                turnover_score: r.breakdown.turnover_score,
-                trophic_balance_score: r.breakdown.trophic_balance_score,
-            })
-            .collect(),
-    }
+    run_qd(&qd_config, base_seed, rng)
 }
 
 #[cfg(test)]
@@ -579,55 +418,85 @@ mod tests {
     }
 
     #[test]
-    fn end_to_end_small_search_completes() {
+    fn slow_run_search_returns_an_atlas() {
+        // run_search is now the QD outer loop: its output is the Atlas (live cells
+        // + dead frontier + coverage / QD-score), not a ranked list. Every config
+        // routes to a cell or the frontier; the binning is RESOLUTION³.
         use rand::SeedableRng;
         use rand_chacha::ChaCha8Rng;
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let config = SearchConfig {
-            lhs_samples: 3,
             ensemble_size: 1,
             max_ticks: 10,
-            bayesopt_iterations: 2,
-            sensitivity_threshold: 0.05,
+            batch: 4,
+            generations: 1,
             ..Default::default()
         };
 
-        let result = run_search(&config, 42, &mut rng);
+        let atlas = run_search(&config, 42, &mut rng);
 
-        assert_eq!(result.parameterisations.len(), 3);
-        assert!(!result.sensitivity.rankings.is_empty());
-        assert!(!result.optimised.is_empty());
-
-        for p in &result.parameterisations {
-            assert_eq!(p.parameter_names.len(), config.ranges.len());
-            assert_eq!(p.parameters.len(), config.ranges.len());
+        assert_eq!(atlas.total_cells, crate::qd::RESOLUTION.pow(3));
+        let dead: usize = atlas.dead_frontier.values().sum();
+        assert!(atlas.coverage + dead >= 1);
+        // QD-score is the sum of elite fitnesses over filled cells.
+        assert!(atlas.qd_score >= 0.0);
+        // Live cells carry the per-cell decomposer distribution and sample count.
+        for cell in &atlas.cells {
+            assert!(cell.decomposer_fraction >= 0.0 && cell.decomposer_fraction <= 1.0);
+            assert_eq!(cell.sample_count, config.ensemble_size);
         }
     }
 
     #[test]
-    fn search_result_converts_to_valid_recipe() {
+    fn slow_atlas_best_recipe_is_the_argmax_cell_projection() {
         use rand::SeedableRng;
         use rand_chacha::ChaCha8Rng;
 
         let mut rng = ChaCha8Rng::seed_from_u64(42);
         let config = SearchConfig {
-            lhs_samples: 3,
             ensemble_size: 1,
             max_ticks: 10,
-            bayesopt_iterations: 2,
-            sensitivity_threshold: 0.05,
+            batch: 6,
+            generations: 1,
             ..Default::default()
         };
 
-        let result = run_search(&config, 42, &mut rng);
-        let recipe = result.best_recipe(&config.ranges, config.max_ticks);
+        let atlas = run_search(&config, 42, &mut rng);
+        if let Some(recipe) = atlas.best_recipe(&config.ranges, config.max_ticks) {
+            let json = serde_json::to_string_pretty(&recipe).unwrap();
+            let recovered: explorers_sim::WorldRecipe = serde_json::from_str(&json).unwrap();
+            assert_eq!(recipe, recovered);
+            assert!(recipe.parameters.solar_flux_magnitude > 0.0);
+            assert!(recipe.parameters.initial_population_size > 0);
+        }
+    }
 
-        let json = serde_json::to_string_pretty(&recipe).unwrap();
-        let recovered: explorers_sim::WorldRecipe = serde_json::from_str(&json).unwrap();
-        assert_eq!(recipe, recovered);
-        assert!(recipe.parameters.solar_flux_magnitude > 0.0);
-        assert!(recipe.parameters.initial_population_size > 0);
+    #[test]
+    fn slow_run_search_is_reproducible() {
+        // Issue #350 + #365: the QD outer loop must be bit-reproducible for a
+        // fixed (config, base_seed, rng) — same coverage, dead frontier, and best
+        // fitness across two runs.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = SearchConfig {
+            ensemble_size: 2,
+            max_ticks: 15,
+            batch: 4,
+            generations: 1,
+            ..Default::default()
+        };
+
+        let mut rng1 = ChaCha8Rng::seed_from_u64(42);
+        let atlas1 = run_search(&config, 7, &mut rng1);
+        let mut rng2 = ChaCha8Rng::seed_from_u64(42);
+        let atlas2 = run_search(&config, 7, &mut rng2);
+
+        assert_eq!(atlas1.coverage, atlas2.coverage);
+        assert_eq!(atlas1.dead_frontier, atlas2.dead_frontier);
+        assert_eq!(atlas1.best_fitness, atlas2.best_fitness);
+        assert_eq!(atlas1.qd_score, atlas2.qd_score);
     }
 
     #[test]
@@ -650,50 +519,6 @@ mod tests {
             .unwrap();
         assert!((tc.min - 0.1).abs() < 1e-10);
         assert!((tc.max - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn lhs_batch_sweep_is_order_stable_and_reproducible() {
-        // Issue #350: the LHS config-evaluation sweep is parallelised with
-        // rayon. The collected parameterisations must stay order-stable and
-        // bit-identical across runs — an indexed collect over the sample range,
-        // never a racy push. Two runs with identical (config, base_seed, rng)
-        // must produce identical batch results: same configs, same per-config
-        // medians, same order.
-        use rand::SeedableRng;
-        use rand_chacha::ChaCha8Rng;
-
-        let config = SearchConfig {
-            lhs_samples: 6,
-            ensemble_size: 2,
-            max_ticks: 15,
-            bayesopt_iterations: 1,
-            sensitivity_threshold: 0.05,
-            ..Default::default()
-        };
-
-        let mut rng1 = ChaCha8Rng::seed_from_u64(42);
-        let result1 = run_search(&config, 7, &mut rng1);
-        let mut rng2 = ChaCha8Rng::seed_from_u64(42);
-        let result2 = run_search(&config, 7, &mut rng2);
-
-        assert_eq!(
-            result1.parameterisations.len(),
-            result2.parameterisations.len()
-        );
-        for (a, b) in result1
-            .parameterisations
-            .iter()
-            .zip(result2.parameterisations.iter())
-        {
-            assert_eq!(a.median_fitness, b.median_fitness);
-            assert_eq!(a.parameters, b.parameters);
-            assert_eq!(a.run_breakdowns.len(), b.run_breakdowns.len());
-            for (ra, rb) in a.run_breakdowns.iter().zip(b.run_breakdowns.iter()) {
-                assert_eq!(ra.fitness, rb.fitness);
-                assert_eq!(ra.termination_tick, rb.termination_tick);
-            }
-        }
     }
 
     #[test]

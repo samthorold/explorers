@@ -24,6 +24,20 @@ pub struct FitnessBreakdown {
     pub turnover_score: f32,
     pub trophic_balance_score: f32,
     pub ticks_survived: u64,
+    /// Genesis behaviour axis iii (genesis-search.md): the dead pool's share of
+    /// conserved nutrient, as the trailing-window mean of the per-tick carcass
+    /// fraction the lockup gate reads. An additive, read-only descriptor — the
+    /// atlas bins worlds on it but it is never summed into fitness. Zero on the
+    /// gated (degenerate) path, where no behaviour coordinate is meaningful.
+    pub carcass_locked_fraction: f32,
+    /// Genesis decomposer-guild signal (genesis-search.md, the authority
+    /// boundary): whether a persistent decomposer guild was present, read off the
+    /// full-log `TopologyProjection` the evaluator already builds. A reported
+    /// observable — never a behaviour axis, never a fitness term. The atlas
+    /// aggregates it across a cell's seed ensemble into a *fraction of seeds*,
+    /// honouring the existence-vs-distributional boundary. False on the gated
+    /// path.
+    pub has_decomposer_guild: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -74,6 +88,10 @@ pub fn evaluate_from_log(
         turnover_score: 0.0,
         trophic_balance_score: 0.0,
         ticks_survived,
+        // A degenerate world has no meaningful behaviour coordinate (it is routed
+        // to the dead frontier by cliff, not binned), so the descriptors are zero.
+        carcass_locked_fraction: 0.0,
+        has_decomposer_guild: false,
     };
 
     if agents.is_empty() {
@@ -203,6 +221,22 @@ pub fn evaluate_from_log(
 
     let fitness = 0.2 * os + 0.2 * cs + 0.2 * cd + 0.2 * ts + 0.2 * tb;
 
+    // Behaviour axis iii: the carcass-locked fraction the lockup gate reads, as
+    // the trailing-window mean of the per-tick series the caller sampled (same
+    // window). An additive descriptor — read off, never summed into fitness.
+    let carcass_locked_fraction =
+        trailing_mean(carcass_fraction_per_tick, config.nutrient_lock_window);
+
+    // Decomposer-guild signal: read off the full-log topology projection the
+    // evaluator already built. A persistent guild reads as ≥1 surviving agent
+    // classified `Decomposer` by realised diet over the whole run. A reported
+    // observable, aggregated into a per-cell seed fraction by the atlas — never an
+    // axis, never a fitness term (the authority boundary, genesis-search.md).
+    let has_decomposer_guild = topo
+        .trophic_roles(agents)
+        .values()
+        .any(|&r| r == explorers_sim::topology::TrophicRole::Decomposer);
+
     FitnessBreakdown {
         fitness,
         failure: None,
@@ -212,7 +246,21 @@ pub fn evaluate_from_log(
         turnover_score: ts,
         trophic_balance_score: tb,
         ticks_survived,
+        carcass_locked_fraction,
+        has_decomposer_guild,
     }
+}
+
+/// Mean of the trailing `window` samples (the whole series if shorter), 0 on an
+/// empty series. Matches the trailing window the lockup gate inspects, so the
+/// carcass-locked-fraction descriptor reads the same tail the gate does.
+fn trailing_mean(series: &[f32], window: usize) -> f32 {
+    if series.is_empty() {
+        return 0.0;
+    }
+    let start = series.len().saturating_sub(window);
+    let tail = &series[start..];
+    tail.iter().sum::<f32>() / tail.len() as f32
 }
 
 pub fn is_extinct(agent_count: usize) -> bool {
@@ -794,6 +842,59 @@ mod tests {
             alive.failure,
             Some(FailureMode::EnergyDeath),
             "a sustained free-energy stock is not energy death"
+        );
+    }
+
+    #[test]
+    fn evaluate_from_log_reports_carcass_locked_fraction_as_trailing_window_mean() {
+        // Genesis behaviour axis iii (genesis-search.md): the breakdown must
+        // carry the carcass-locked fraction the lockup gate reads — the
+        // trailing-window mean of the per-tick carcass-fraction series — as an
+        // additive read-only descriptor, never folded into fitness. A surviving
+        // world with a healthy free-energy stock and a low, turned-over dead pool
+        // reports a low (but recorded) carcass fraction; raising the late dead-pool
+        // share raises the reported descriptor, monotonically.
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 0.0,
+            nutrient_lock_window: 4,
+            ..EvalConfig::default()
+        };
+        let max_ticks = 20;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let _ = run_collecting_free_energy(&mut world, max_ticks);
+        if world.agents().is_empty() {
+            return; // need a surviving world to reach the descriptor branch
+        }
+        let n = world.tick() as usize;
+        let healthy_energy: Vec<f32> = vec![100.0; n];
+
+        // A flat low carcass series: the trailing-window mean is that level, and
+        // it is not high enough (or non-receding) to gate as lockup.
+        let low: Vec<f32> = vec![0.1; n];
+        let low_bd = evaluate_from_log(&world, &healthy_energy, &low, &config, max_ticks);
+        assert_ne!(low_bd.failure, Some(FailureMode::NutrientLockup));
+        assert!(
+            (low_bd.carcass_locked_fraction - 0.1).abs() < 1e-5,
+            "carcass_locked_fraction should be the trailing-window mean (0.1), got {}",
+            low_bd.carcass_locked_fraction
+        );
+        // It must not be summed into fitness (the descriptor is read-only).
+        let expected_fitness = 0.2
+            * (low_bd.oscillation_strength
+                + low_bd.clustering_strength
+                + low_bd.coexistence_duration
+                + low_bd.turnover_score
+                + low_bd.trophic_balance_score);
+        assert!((low_bd.fitness - expected_fitness).abs() < 1e-5);
+
+        // A flat higher carcass series reports a higher fraction (monotone read).
+        let high: Vec<f32> = vec![0.3; n];
+        let high_bd = evaluate_from_log(&world, &healthy_energy, &high, &config, max_ticks);
+        assert!(
+            high_bd.carcass_locked_fraction > low_bd.carcass_locked_fraction,
+            "a higher dead-pool share should report a higher carcass fraction"
         );
     }
 
@@ -1453,6 +1554,8 @@ mod tests {
             turnover_score: ts,
             trophic_balance_score: tb,
             ticks_survived: 100,
+            carcass_locked_fraction: 0.0,
+            has_decomposer_guild: false,
         };
         assert!((result.fitness - expected).abs() < 1e-5);
     }
@@ -1542,6 +1645,8 @@ mod tests {
             turnover_score: 0.5,
             trophic_balance_score: 0.5,
             ticks_survived: 100,
+            carcass_locked_fraction: 0.0,
+            has_decomposer_guild: false,
         };
         assert!((breakdown.fitness - 0.5).abs() < 1e-5);
     }
@@ -1557,6 +1662,8 @@ mod tests {
             turnover_score: 0.4,
             trophic_balance_score: 0.5,
             ticks_survived: 50,
+            carcass_locked_fraction: 0.0,
+            has_decomposer_guild: false,
         };
         assert_eq!(breakdown.oscillation_strength, 0.1);
         assert_eq!(breakdown.clustering_strength, 0.2);
