@@ -613,11 +613,9 @@ name = "explorers-search"
 version = "0.1.0"
 dependencies = [
  "explorers-genesis",
- "explorers-genesis-eval",
  "explorers-sim",
  "rand",
  "rand_chacha",
- "rayon",
  "serde",
  "serde_json",
 ]

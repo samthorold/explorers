@@ -6,12 +6,6 @@ edition = "2024"
 [dependencies]
 explorers-sim = { path = "../explorers-sim" }
 explorers-genesis = { path = "../explorers-genesis" }
-# Used only by the throwaway `mapelites_spike` bin (issue #363): it mirrors
-# `run_single`'s rollout loop and calls `evaluate_from_log` directly to read the
-# carcass-locked-fraction per-tick series that `run_ensemble` discards. Not used
-# by the production search path.
-explorers-genesis-eval = { path = "../explorers-genesis-eval" }
-rayon = "1"
 rand = "0.9"
 rand_chacha = "0.9"
 serde = { version = "1", features = ["derive"] }

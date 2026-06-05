@@ -9,20 +9,24 @@ use explorers_search::search::{SearchConfig, default_ranges, run_search};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    let mut lhs_samples = 50;
     let mut ensemble_size = 5;
     let mut max_ticks = 500;
-    let mut bayesopt_iterations = 10;
+    let mut batch = 32;
+    let mut generations = 10;
     let mut seed = 42u64;
-    let mut output_path = PathBuf::from("search_results.json");
+    let mut output_path = PathBuf::from("atlas.json");
     let mut recipe_output_path = PathBuf::from("recipe.json");
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--samples" => {
+            "--batch" => {
                 i += 1;
-                lhs_samples = args[i].parse().unwrap();
+                batch = args[i].parse().unwrap();
+            }
+            "--generations" => {
+                i += 1;
+                generations = args[i].parse().unwrap();
             }
             "--ensemble" => {
                 i += 1;
@@ -31,10 +35,6 @@ fn main() {
             "--max-ticks" => {
                 i += 1;
                 max_ticks = args[i].parse().unwrap();
-            }
-            "--bayesopt-iterations" => {
-                i += 1;
-                bayesopt_iterations = args[i].parse().unwrap();
             }
             "--seed" => {
                 i += 1;
@@ -62,130 +62,101 @@ fn main() {
     }
 
     let config = SearchConfig {
-        lhs_samples,
         ensemble_size,
         max_ticks,
-        bayesopt_iterations,
+        batch,
+        generations,
         ..Default::default()
     };
 
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-    eprintln!("Running parameter search...");
-    eprintln!("  LHS samples: {lhs_samples}");
+    eprintln!("Running QD genesis search (CMA-MAE atlas)...");
+    eprintln!("  Batch size: {batch}");
+    eprintln!("  Generations: {generations}");
     eprintln!("  Ensemble size: {ensemble_size}");
     eprintln!("  Max ticks: {max_ticks}");
-    eprintln!("  Bayesian opt iterations: {bayesopt_iterations}");
     eprintln!("  Seed: {seed}");
 
-    let result = run_search(&config, seed, &mut rng);
+    let atlas = run_search(&config, seed, &mut rng);
 
-    let json = serde_json::to_string_pretty(&result).unwrap();
+    let json = serde_json::to_string_pretty(&atlas).unwrap();
     fs::write(&output_path, &json).unwrap();
 
-    let recipe = result.best_recipe(&default_ranges(), config.max_ticks);
-    let recipe_json = serde_json::to_string_pretty(&recipe).unwrap();
-    fs::write(&recipe_output_path, &recipe_json).unwrap();
-
-    eprintln!("Results written to {}", output_path.display());
-    eprintln!("Recipe written to {}", recipe_output_path.display());
-    eprintln!("Top parameterisations by fitness:");
-    for (i, p) in result.parameterisations.iter().take(5).enumerate() {
-        eprintln!("  {}. fitness = {:.4}", i + 1, p.median_fitness);
-    }
-
-    // Diagnostic: summarise failure modes and component scores
-    let total_runs: usize = result
-        .parameterisations
-        .iter()
-        .map(|p| p.run_breakdowns.len())
-        .sum();
-    let mut failures: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut surviving_runs = Vec::new();
-    for p in &result.parameterisations {
-        for r in &p.run_breakdowns {
-            if let Some(f) = &r.failure {
-                *failures.entry(f.clone()).or_default() += 1;
-            } else {
-                surviving_runs.push(r);
-            }
-        }
-    }
-    eprintln!("\nDiagnostics ({total_runs} total runs):");
-    eprintln!("  Failures:");
-    if failures.is_empty() {
-        eprintln!("    (none)");
-    }
-    let mut failure_vec: Vec<_> = failures.into_iter().collect();
-    failure_vec.sort_by(|a, b| b.1.cmp(&a.1));
-    for (mode, count) in &failure_vec {
-        eprintln!("    {mode}: {count}");
-    }
-    eprintln!("  Survived: {}", surviving_runs.len());
-
-    if !surviving_runs.is_empty() {
-        let mut os_zero = 0;
-        let mut cs_zero = 0;
-        let mut cd_zero = 0;
-        let mut ts_zero = 0;
-        let mut tb_zero = 0;
-        let mut os_sum = 0.0_f32;
-        let mut cs_sum = 0.0_f32;
-        let mut cd_sum = 0.0_f32;
-        let mut ts_sum = 0.0_f32;
-        let mut tb_sum = 0.0_f32;
-        for r in &surviving_runs {
-            if r.oscillation_strength == 0.0 {
-                os_zero += 1;
-            }
-            if r.clustering_strength == 0.0 {
-                cs_zero += 1;
-            }
-            if r.coexistence_duration == 0.0 {
-                cd_zero += 1;
-            }
-            if r.turnover_score == 0.0 {
-                ts_zero += 1;
-            }
-            if r.trophic_balance_score == 0.0 {
-                tb_zero += 1;
-            }
-            os_sum += r.oscillation_strength;
-            cs_sum += r.clustering_strength;
-            cd_sum += r.coexistence_duration;
-            ts_sum += r.turnover_score;
-            tb_sum += r.trophic_balance_score;
-        }
-        let n = surviving_runs.len() as f32;
-        eprintln!("  Component scores (surviving runs — zero count / mean):");
-        eprintln!("    oscillation:  {os_zero} zero, mean {:.4}", os_sum / n);
-        eprintln!("    clustering:   {cs_zero} zero, mean {:.4}", cs_sum / n);
-        eprintln!("    coexistence:  {cd_zero} zero, mean {:.4}", cd_sum / n);
-        eprintln!("    turnover:     {ts_zero} zero, mean {:.4}", ts_sum / n);
-        eprintln!("    trophic_bal:  {tb_zero} zero, mean {:.4}", tb_sum / n);
-    }
-
-    if !result.sensitivity.rankings.is_empty() {
-        eprintln!("\nSensitivity ranking (by total-effect):");
-        for entry in result.sensitivity.rankings.iter().take(10) {
+    match atlas.best_recipe(&default_ranges(), config.max_ticks) {
+        Some(recipe) => {
+            let recipe_json = serde_json::to_string_pretty(&recipe).unwrap();
+            fs::write(&recipe_output_path, &recipe_json).unwrap();
             eprintln!(
-                "  {} — S1: {:.3}, ST: {:.3}",
-                entry.name, entry.first_order, entry.total_effect
+                "Recipe (best live cell) written to {}",
+                recipe_output_path.display()
+            );
+        }
+        None => {
+            eprintln!(
+                "No live cell found — the atlas is all dead frontier; no recipe written. \
+                 Try a larger budget (more generations / batch)."
             );
         }
     }
+
+    eprintln!("Atlas written to {}", output_path.display());
+
+    // Atlas summary: coverage / QD-score, the top live cells, and the dead
+    // frontier (the failure tally) — the search's output is a map, not a ranked
+    // list.
+    eprintln!(
+        "\nCoverage: {} / {} cells ({:.3}%)",
+        atlas.coverage,
+        atlas.total_cells,
+        100.0 * atlas.coverage as f64 / atlas.total_cells as f64
+    );
+    eprintln!("QD-score (Σ elite fitness): {:.3}", atlas.qd_score);
+    eprintln!("Best fitness: {:.4}", atlas.best_fitness);
+
+    let mut top: Vec<_> = atlas.cells.iter().collect();
+    top.sort_by(|a, b| b.fitness.partial_cmp(&a.fitness).unwrap());
+    eprintln!("\nTop live cells (by fitness):");
+    if top.is_empty() {
+        eprintln!("  (none — all configs died)");
+    }
+    for cell in top.iter().take(10) {
+        eprintln!(
+            "  cell {:?}: fitness={:.4} osc={:.3} clus={:.3} carcass={:.3} \
+             decomposer_frac={:.2} (n={})",
+            cell.cell,
+            cell.fitness,
+            cell.oscillation,
+            cell.clustering,
+            cell.carcass,
+            cell.decomposer_fraction,
+            cell.sample_count,
+        );
+    }
+
+    eprintln!("\nDead frontier (configs by cliff):");
+    let mut frontier: Vec<_> = atlas.dead_frontier.iter().collect();
+    frontier.sort_by(|a, b| b.1.cmp(a.1));
+    if frontier.is_empty() {
+        eprintln!("  (none)");
+    }
+    let dead_total: usize = frontier.iter().map(|(_, n)| **n).sum();
+    for (cliff, n) in &frontier {
+        eprintln!("  {cliff:<22} {n}");
+    }
+    eprintln!("  {:<22} {dead_total}", "(total dead configs)");
 }
 
 fn print_usage() {
     eprintln!("Usage: explorers-search [OPTIONS]");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --samples N              LHS sample count (default: 50)");
-    eprintln!("  --ensemble N             Ensemble size per parameterisation (default: 5)");
-    eprintln!("  --max-ticks N            Max simulation ticks per run (default: 500)");
-    eprintln!("  --bayesopt-iterations N  Bayesian optimisation iterations (default: 10)");
-    eprintln!("  --seed N                 Random seed (default: 42)");
-    eprintln!("  --output PATH            Output JSON path (default: search_results.json)");
-    eprintln!("  --recipe-output PATH     Recipe JSON path (default: recipe.json)");
-    eprintln!("  --help, -h               Show this help");
+    eprintln!("  --batch N           Solutions evaluated per generation (default: 32)");
+    eprintln!("  --generations N     Adaptation generations after bootstrap (default: 10)");
+    eprintln!("  --ensemble N        Ensemble size per parameterisation (default: 5)");
+    eprintln!("  --max-ticks N       Max simulation ticks per run (default: 500)");
+    eprintln!("  --seed N            Random seed (default: 42)");
+    eprintln!("  --output PATH       Atlas JSON path (default: atlas.json)");
+    eprintln!("  --recipe-output PATH  Recipe JSON path (default: recipe.json)");
+    eprintln!("  --help, -h          Show this help");
 }
