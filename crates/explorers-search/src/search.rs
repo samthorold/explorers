@@ -37,6 +37,10 @@ pub struct SearchConfig {
     /// Fraction of prefilter-gated (a priori dead) configs still rolled out as the
     /// agreement cross-check (viability.md). 0 disables it.
     pub prefilter_crosscheck_fraction: f32,
+    /// Carcass-directed bootstrap seeds (`carcass_seed_count` in [`QdConfig`]) —
+    /// how many guaranteed high-carcass starting points to inject so the atlas's
+    /// nutrient-lockup layer is reached by running (it cannot be prefiltered).
+    pub carcass_seed_count: usize,
 }
 
 impl Default for SearchConfig {
@@ -50,6 +54,7 @@ impl Default for SearchConfig {
             sigma: 0.15,
             archive_learning_rate: 0.5,
             prefilter_crosscheck_fraction: 0.05,
+            carcass_seed_count: 2,
         }
     }
 }
@@ -332,6 +337,7 @@ pub fn run_search(config: &SearchConfig, base_seed: u64, rng: &mut impl Rng) -> 
         sigma: config.sigma,
         archive_learning_rate: config.archive_learning_rate,
         prefilter_crosscheck_fraction: config.prefilter_crosscheck_fraction,
+        carcass_seed_count: config.carcass_seed_count,
     };
     run_qd(&qd_config, base_seed, rng)
 }

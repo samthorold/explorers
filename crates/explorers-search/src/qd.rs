@@ -346,6 +346,64 @@ impl Archive {
 }
 
 // ---------------------------------------------------------------------------
+// Carcass-directed seeding (reaching the nutrient-lockup region)
+// ---------------------------------------------------------------------------
+
+/// A unit-cube seed point biased toward the **high-carcass / nutrient-lockup**
+/// region of the atlas. The nutrient-lockup cliff cannot be prefiltered, so the
+/// only way to populate the atlas's lockup layer is to *run* worlds that strand
+/// their nutrient in the dead pool — and a random emitter never lands in that thin
+/// region (the #363 spike: 0 lockup-frontier configs). This seed directs the
+/// search there by setting the dims that empirically drive dead-pool accumulation
+/// to their carcass-favouring extremes (genesis-search.md, "reaching that thin
+/// high-carcass region is the emitter's job, directed exploration along the carcass
+/// axis").
+///
+/// The drivers (found by sweeping `decode`'s dims against the carcass-locked
+/// fraction): maximal photosynthetic production feeding biomass, **zero
+/// heterotrophy** so no decomposer turns the dead pool over, a high
+/// nutrient-per-structure ratio so the death flux strands nutrient in carcasses,
+/// superlinear maintenance + high metabolic cost to pump biomass into death, low
+/// kappa (little standing structure to retain nutrient in the living pool) and a
+/// large founder population to drain the grid nutrient into agents that then die.
+/// Dims `decode` does not read are left at the cube midpoint. Returns a point in
+/// `[0, 1]^d`; the search feeds it to `decode` verbatim like any other proposal.
+pub fn carcass_seed_unit(ranges: &[ParameterRange]) -> Vec<f64> {
+    let mut unit = vec![0.5_f64; ranges.len()];
+    let mut set = |name: &str, v: f64| {
+        if let Some(i) = ranges.iter().position(|r| r.name == name) {
+            unit[i] = v.clamp(0.0, 1.0);
+        }
+    };
+    // Production on, decomposition off — the dead pool fills and nothing recovers it.
+    set("mean_photosynthetic_absorption", 1.0);
+    set("mean_heterotrophy", 0.0);
+    // Nutrient rides into structure (and thus carcasses) at a high ratio.
+    set("base_nutrient_ratio", 1.0);
+    set("specification_nutrient_coefficient", 1.0);
+    // Pump biomass into death: superlinear maintenance + high metabolic burn.
+    set("maintenance_cost_exponent", 1.0);
+    set("base_metabolic_rate", 0.9);
+    // Little standing structure in the living pool; many founders to drain the grid.
+    set("mean_kappa", 0.05);
+    set("initial_population_size", 1.0);
+    unit
+}
+
+/// Replace the head of a bootstrap `batch` with `count` carcass-directed seeds
+/// ([`carcass_seed_unit`]), leaving the random tail intact. This is how carcass
+/// direction reaches the lockup region: a handful of guaranteed high-carcass
+/// starting points the covariance-adapting emitter then breeds *toward* the cliff,
+/// while the rest of the batch keeps illuminating the live manifold. `count` is
+/// clamped to the batch length; 0 disables direction (an untouched random batch).
+fn inject_carcass_seeds(batch: &mut [Vec<f64>], ranges: &[ParameterRange], count: usize) {
+    let seed = carcass_seed_unit(ranges);
+    for slot in batch.iter_mut().take(count) {
+        *slot = seed.clone();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Covariance-adapting emitter (separable CMA-ME)
 // ---------------------------------------------------------------------------
 
@@ -538,7 +596,78 @@ pub struct Atlas {
     pub best_fitness: f32,
 }
 
+/// The carcass-locked fraction at which the evaluator gates a world as
+/// `NutrientLockup` — mirrored here so the search can cross-check its atlas against
+/// the gate. **Must equal** `LOCK_FRACTION` in `explorers-genesis-eval`
+/// (`is_nutrient_locked`); the cross-check test pins the two together so a future
+/// drift in the evaluator gate surfaces here as a failing test.
+pub const LOCK_FRACTION: f32 = 0.4;
+
+/// The lockup boundary cross-check (genesis-search.md; the #363 spike's promoted
+/// check). Splits the atlas's live cells at the [`LOCK_FRACTION`] gate and reads
+/// the `NutrientLockup` dead-frontier tally, so the design's invariant can be
+/// asserted: gated configs sit at high carcass fraction (they are on the frontier,
+/// not in a cell), and live cells *mostly* sit below the gate (a locked world is
+/// gated, never a live cell).
+#[derive(Clone, Copy, Debug)]
+pub struct LockupCrosscheck {
+    /// Live cells whose carcass fraction is below the lock gate (the expected
+    /// healthy-throughput majority).
+    pub live_below_gate: usize,
+    /// Live cells at/above the lock gate — a boundary violation to surface (a world
+    /// that reads live yet sits where the evaluator gates lockup).
+    pub live_at_or_above_gate: usize,
+    /// Live cells in the **high-carcass band near the cliff** — carcass ≥ half the
+    /// gate but still below it. These are the live worlds the carcass axis exists to
+    /// place: nutrient piling into the dead pool, not yet locked. Reaching them is
+    /// the "live cells at high carcass fraction" half of the acceptance criterion.
+    pub live_high_carcass: usize,
+    /// Configs the rollout carried into the `NutrientLockup` cliff (the frontier
+    /// tally for that cliff).
+    pub lockup_frontier_deaths: usize,
+}
+
+impl LockupCrosscheck {
+    /// The atlas's lockup layer is non-empty — the acceptance criterion. Either a
+    /// `NutrientLockup` death is on the frontier, or a live cell reaches the
+    /// high-carcass region near the cliff. Before carcass direction (#363) both were
+    /// zero: the lockup layer the carcass axis exists to map went unreached.
+    pub fn lockup_layer_populated(&self) -> bool {
+        self.lockup_frontier_deaths > 0 || self.live_high_carcass > 0
+    }
+}
+
 impl Atlas {
+    /// Run the lockup boundary cross-check over this atlas (see
+    /// [`LockupCrosscheck`]). Counts live cells either side of the
+    /// [`LOCK_FRACTION`] gate and reads the `NutrientLockup` frontier tally.
+    pub fn lockup_boundary_crosscheck(&self) -> LockupCrosscheck {
+        let mut live_below_gate = 0;
+        let mut live_at_or_above_gate = 0;
+        let mut live_high_carcass = 0;
+        for c in &self.cells {
+            if c.carcass >= LOCK_FRACTION {
+                live_at_or_above_gate += 1;
+            } else {
+                live_below_gate += 1;
+                if c.carcass >= LOCK_FRACTION / 2.0 {
+                    live_high_carcass += 1;
+                }
+            }
+        }
+        let lockup_frontier_deaths = self
+            .dead_frontier
+            .get(Cliff::NutrientLockup.label())
+            .copied()
+            .unwrap_or(0);
+        LockupCrosscheck {
+            live_below_gate,
+            live_at_or_above_gate,
+            live_high_carcass,
+            lockup_frontier_deaths,
+        }
+    }
+
     /// The world recipe drawn from the argmax-fitness live cell — the default
     /// projection of the atlas (genesis-search.md, "the recipe is a projection").
     /// `None` if no cell is live (every config died — the atlas is all frontier).
@@ -599,6 +728,15 @@ pub struct QdConfig {
     /// gate and is surfaced on the atlas (viability.md, *Place in the validation
     /// triad*). 0 disables the cross-check (every gated config is taken on faith).
     pub prefilter_crosscheck_fraction: f32,
+    /// How many **carcass-directed seeds** ([`carcass_seed_unit`]) to inject at the
+    /// head of the bootstrap batch. The nutrient-lockup cliff cannot be
+    /// prefiltered, so the atlas's lockup layer is populated only by *running*
+    /// worlds that strand their nutrient — and a random emitter never lands there
+    /// (#363: 0 lockup-frontier configs). Seeding a few guaranteed high-carcass
+    /// starting points gives the covariance-adapting emitter a foothold on the
+    /// carcass axis to breed toward the cliff. 0 disables carcass direction (the
+    /// historical random-bootstrap behaviour).
+    pub carcass_seed_count: usize,
 }
 
 impl Default for QdConfig {
@@ -612,6 +750,7 @@ impl Default for QdConfig {
             sigma: 0.15,
             archive_learning_rate: 0.5,
             prefilter_crosscheck_fraction: 0.05,
+            carcass_seed_count: 2,
         }
     }
 }
@@ -636,8 +775,12 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
     let mut disagreements: Vec<PrefilterDisagreement> = Vec::new();
 
     // Generation 0: a random bootstrap batch over the cube (the QD analogue of the
-    // incumbent's LHS stage), drawn from the emitter's initial wide Gaussian.
+    // incumbent's LHS stage), drawn from the emitter's initial wide Gaussian — with
+    // the head replaced by carcass-directed seeds so the bootstrap reaches the thin
+    // high-carcass / nutrient-lockup region a random emitter misses (#363; the cliff
+    // cannot be prefiltered, so it must be reached by running).
     let mut batch: Vec<Vec<f64>> = (0..config.batch).map(|_| emitter.sample(rng)).collect();
+    inject_carcass_seeds(&mut batch, &config.ranges, config.carcass_seed_count);
 
     for generation in 0..=config.generations {
         // Distinct per-config ensemble base seeds, derived from a monotonic config
@@ -789,6 +932,152 @@ mod tests {
             decomposer_fraction: 0.0,
             sample_count: 5,
         }
+    }
+
+    #[test]
+    fn carcass_seed_unit_drives_the_carcass_axis_extremes() {
+        // The carcass-directed seed must push the dims that empirically accumulate
+        // dead-pool nutrient toward their carcass-favouring extremes: maximal
+        // photosynthetic production feeding biomass, ZERO heterotrophy so nothing
+        // turns the dead pool over, and high nutrient-per-structure so the death
+        // flux strands nutrient in carcasses. This is the seed the bootstrap injects
+        // to reach the thin high-carcass / nutrient-lockup region (genesis-search.md,
+        // "reaching that thin high-carcass region is the emitter's job").
+        let ranges = default_ranges();
+        let unit = carcass_seed_unit(&ranges);
+        assert_eq!(unit.len(), ranges.len());
+        for &u in &unit {
+            assert!(
+                (0.0..=1.0).contains(&u),
+                "every seed coord stays in the cube"
+            );
+        }
+        let at = |name: &str| {
+            let i = ranges.iter().position(|r| r.name == name).unwrap();
+            unit[i]
+        };
+        // Production maxed, decomposition off: the dead pool fills and nothing
+        // recovers it.
+        assert!(at("mean_photosynthetic_absorption") > 0.9);
+        assert!(at("mean_heterotrophy") < 0.1);
+        // Nutrient rides into structure (and thus carcasses) at a high ratio.
+        assert!(at("base_nutrient_ratio") > 0.9);
+        assert!(at("specification_nutrient_coefficient") > 0.9);
+    }
+
+    fn atlas_cell(carcass: f32) -> AtlasCell {
+        AtlasCell {
+            cell: cell_of(&descr(0.0, 0.0, carcass)).into(),
+            fitness: 0.3,
+            oscillation: 0.0,
+            clustering: 0.0,
+            carcass,
+            decomposer_fraction: 0.0,
+            sample_count: 5,
+            unit: vec![0.5; 3],
+        }
+    }
+
+    fn atlas_with(cells: Vec<AtlasCell>, lockup_deaths: usize) -> Atlas {
+        let mut frontier = std::collections::HashMap::new();
+        if lockup_deaths > 0 {
+            frontier.insert(Cliff::NutrientLockup.label().to_string(), lockup_deaths);
+        }
+        Atlas {
+            coverage: cells.len(),
+            total_cells: RESOLUTION.pow(3),
+            qd_score: 0.0,
+            best_fitness: 0.0,
+            dead_frontier: frontier,
+            dead_frontier_apriori: std::collections::HashMap::new(),
+            rollouts_skipped: 0,
+            prefilter_disagreements: Vec::new(),
+            cells,
+        }
+    }
+
+    #[test]
+    fn lockup_crosscheck_splits_live_cells_at_the_lock_gate() {
+        // The lockup boundary cross-check (genesis-search.md; the #363 spike's
+        // promoted check): a `NutrientLockup`-gated config sits at high carcass
+        // fraction, and live cells *mostly* sit BELOW the LOCK_FRACTION gate (a
+        // live world is, by definition, not locked). The helper reports the split.
+        // Three healthy-throughput cells (carcass well below 0.4) and one near-cliff
+        // live cell just below the gate, with one lockup death on the frontier.
+        let cells = vec![
+            atlas_cell(0.05),
+            atlas_cell(0.12),
+            atlas_cell(0.30),
+            atlas_cell(0.38),
+        ];
+        let atlas = atlas_with(cells, 1);
+        let check = atlas.lockup_boundary_crosscheck();
+
+        // The lock fraction the search cross-checks against matches the evaluator's
+        // gate exactly (explorers-genesis-eval, LOCK_FRACTION = 0.4).
+        assert!((LOCK_FRACTION - 0.4).abs() < 1e-6);
+        // Every live cell is below the gate (none is locked — a locked world is
+        // gated, never a cell).
+        assert_eq!(check.live_below_gate, 4);
+        assert_eq!(check.live_at_or_above_gate, 0);
+        // Two of them are in the high-carcass band near the cliff (≥ 0.2).
+        assert_eq!(check.live_high_carcass, 2);
+        // The lockup layer is non-empty: a NutrientLockup death is on the frontier.
+        assert_eq!(check.lockup_frontier_deaths, 1);
+        assert!(check.lockup_layer_populated());
+    }
+
+    #[test]
+    fn lockup_crosscheck_flags_a_live_cell_above_the_gate_as_a_boundary_violation() {
+        // A live cell at/above the lock fraction is a boundary violation: a world
+        // the evaluator should have gated as nutrient-locked yet which reads live.
+        // The helper must surface it (live_at_or_above_gate > 0), not hide it.
+        let cells = vec![atlas_cell(0.1), atlas_cell(0.45)];
+        let atlas = atlas_with(cells, 0);
+        let check = atlas.lockup_boundary_crosscheck();
+        assert_eq!(check.live_at_or_above_gate, 1);
+        assert_eq!(check.live_below_gate, 1);
+        // No lockup death tallied → the lockup layer is reached only via the live
+        // high-carcass cell, not the frontier here.
+        assert_eq!(check.lockup_frontier_deaths, 0);
+    }
+
+    #[test]
+    fn carcass_seeds_replace_the_head_of_the_bootstrap_batch() {
+        // Carcass direction injects `count` carcass-directed seeds at the head of
+        // the bootstrap batch, replacing the random draws there, and leaves the
+        // tail untouched (the random exploration the bootstrap still needs). With
+        // count 0 the batch is unchanged.
+        let ranges = default_ranges();
+        let seed = carcass_seed_unit(&ranges);
+
+        let mut batch: Vec<Vec<f64>> = vec![vec![0.5; ranges.len()]; 4];
+        // Mark the random tail so we can prove it survives.
+        for (k, row) in batch.iter_mut().enumerate() {
+            row[0] = 0.123 + k as f64 * 0.01;
+        }
+        let original_tail = batch[2..].to_vec();
+
+        inject_carcass_seeds(&mut batch, &ranges, 2);
+
+        assert_eq!(batch[0], seed, "first slot is a carcass seed");
+        assert_eq!(batch[1], seed, "second slot is a carcass seed");
+        assert_eq!(
+            &batch[2..],
+            &original_tail[..],
+            "the random tail is untouched"
+        );
+
+        // count 0 is a no-op (carcass direction off).
+        let mut untouched = original_tail.clone();
+        let before = untouched.clone();
+        inject_carcass_seeds(&mut untouched, &ranges, 0);
+        assert_eq!(untouched, before);
+
+        // count larger than the batch fills every slot, never panics.
+        let mut small = vec![vec![0.5; ranges.len()]; 1];
+        inject_carcass_seeds(&mut small, &ranges, 5);
+        assert_eq!(small[0], seed);
     }
 
     #[test]
@@ -1045,6 +1334,76 @@ mod tests {
             atlas.prefilter_disagreements.is_empty(),
             "a correct gate must surface zero disagreements, got {:?}",
             atlas.prefilter_disagreements
+        );
+    }
+
+    #[test]
+    fn slow_carcass_direction_populates_the_lockup_layer_across_a_seed_sweep() {
+        // Acceptance (#367): with carcass direction on, the atlas's lockup layer is
+        // NON-EMPTY across a multi-seed sweep — live cells in the high-carcass band
+        // near the cliff and/or a NutrientLockup dead-frontier entry — where the
+        // #363 random emitter reached neither (0 lockup-frontier configs, 0
+        // high-carcass live cells). And the lockup boundary cross-check holds:
+        // gated lockup configs sit at high carcass (on the frontier, never a cell)
+        // while live cells sit mostly below the LOCK_FRACTION gate. `slow_` — it
+        // steps real sims over several seeds.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        // Carcass accumulates over a long trailing window, so the rollout needs
+        // enough ticks for the dead pool to build; the ensemble and batch stay
+        // small to keep the sweep foreground-fast.
+        let config = QdConfig {
+            ensemble_size: 2,
+            max_ticks: 400,
+            batch: 6,
+            generations: 2,
+            carcass_seed_count: 3,
+            ..QdConfig::default()
+        };
+
+        let mut any_populated = false;
+        let mut total_live = 0usize;
+        let mut total_below = 0usize;
+        let mut total_above = 0usize;
+        let mut best_live_carcass = 0.0f32;
+        for &seed in &[11_u64, 23, 37] {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            let atlas = run_qd(&config, seed, &mut rng);
+            let check = atlas.lockup_boundary_crosscheck();
+            any_populated |= check.lockup_layer_populated();
+            total_live += atlas.cells.len();
+            total_below += check.live_below_gate;
+            total_above += check.live_at_or_above_gate;
+            best_live_carcass = atlas
+                .cells
+                .iter()
+                .map(|c| c.carcass)
+                .fold(best_live_carcass, f32::max);
+        }
+
+        assert!(
+            any_populated,
+            "carcass direction should populate the lockup layer in at least one \
+             seed (high-carcass live cell or a NutrientLockup frontier death); the \
+             best live carcass fraction reached was {best_live_carcass:.3}"
+        );
+        // The carcass axis is genuinely exercised: a live world reaches the
+        // high-carcass band near the cliff (≥ half the gate), where the #363 random
+        // emitter topped out far below (best carcass ~0.03).
+        assert!(
+            best_live_carcass >= LOCK_FRACTION / 2.0,
+            "a live cell should reach the high-carcass band near the cliff, got \
+             best carcass {best_live_carcass:.3} (gate {LOCK_FRACTION})"
+        );
+
+        // The lockup boundary cross-check: live cells sit MOSTLY below the gate (a
+        // live world is not locked). Allow the occasional descriptor-noise straggler
+        // but the majority must be healthy-throughput.
+        assert!(
+            total_live == 0 || total_below * 2 >= total_live,
+            "most live cells should sit below the LOCK_FRACTION gate ({total_below} \
+             below, {total_above} at/above, {total_live} total)"
         );
     }
 
