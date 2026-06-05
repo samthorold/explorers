@@ -13,6 +13,7 @@ The implementation (the code) encodes this design. It is close to the codebase �
 - [Execution Model](execution-model.md) — how the world rules are realised through time: monolithic tick loop, phase ordering, interaction coordination, event recording
 - [Expected Properties](expected-properties.md) — the emergent properties we expect from those rules, the failure modes that indicate miscalibration, and the initial conditions that enable or prevent healthy ecology
 - [Viability](viability.md) — the *a priori* lens: closed-form gates on the world parameters that decide which parameterizations cannot produce the expected properties at all, before any simulation runs
+- [Genesis Search](genesis-search.md) — the *empirical* lens: the shape of what the parameter search produces — an atlas illuminating where viable worlds live and which failure modes border them, not a single tuned recipe
 
 ## How the ecology layer maps here
 
