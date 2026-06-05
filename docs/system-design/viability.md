@@ -103,7 +103,9 @@ Viability is one of three complementary lenses on the quality of the system desi
 
 1. **A priori viability** (this document) — nearly free; rules regions out in closed form.
 2. **Diagnostic examples** (`scenarios/`) — a hand-built initial condition probing a specific failure mode, run headless to observe whether it occurs or the system recovers.
-3. **Genesis search** — the broad, expensive empirical sweep of parameter space.
+3. **[Genesis search](genesis-search.md)** — the broad, expensive empirical sweep of parameter space. It does not return one tuned config; it **illuminates** the space into an *atlas* — a map onto the failure-mode coordinates with a dead frontier of where worlds fail and on which cliff. The atlas's dead frontier is the empirical realisation of this document's negative gates.
+
+This document's gates are not merely *checked* by lens 3 — they are **wired into** it. The two committed closed-form gates (extinction's `F ≤ B`; energy death's `N_total` floor) run as a **prefilter** ahead of the genesis rollouts: a provably-dead config is routed to the atlas's dead frontier without spending an ensemble, shrinking the search box exactly as this document's [payoff](#what-this-document-is-and-is-not) promises. Because the prefilter and the rollout verdict the *same* config, every genesis sweep continuously falsifies the gates — a config gated extinct that survives a rollout localises a mis-drawn gate. The lockup cliff is deliberately *not* prefiltered: it has no cheap gate (it is decomposer-mass-dependent and emergent per seed), so the atlas maps it by running, not gating.
 
 The three are bound together by the **example file**, the only shared concrete object: the *same* initial condition can be predicted by viability, observed by a simulation run, and located relative to the search. That makes the example the unit of cross-validation — a viability gate is a *falsifiable prediction*, and the cheapest place to test it is a single example run. Agreement across the lenses raises confidence; disagreement is diagnostic:
 

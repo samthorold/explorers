@@ -262,7 +262,19 @@ A thin declaration emitted by an agent each tick, naming what it wants to do wit
 _Avoid_: action, command, request (intent emphasises that the outcome is not guaranteed — the coordinator arbitrates)
 
 **World genesis**:
-The process of generating a playable world. A parameterisation is evaluated as an ensemble of replicate runs (same parameters, different random seeds). Each run simulates a random initial population forward (off-screen). Degenerate runs are detected and terminated early. A parameterisation is accepted only when most runs in the ensemble produce sensible worlds. The player drops into a world with history.
+The process of generating a playable world. A parameterisation is evaluated as an ensemble of replicate runs (same parameters, different random seeds). Each run simulates a random initial population forward (off-screen). Degenerate runs are detected and terminated early. A parameterisation is accepted only when most runs in the ensemble produce sensible worlds. The player drops into a world with history. Genesis does not hunt for a single best parameterisation — it **illuminates** parameter space, producing an **atlas** of where viable worlds live and which failure modes border them; a recipe is drawn from that atlas.
+
+**Atlas**:
+The output of world genesis — a map from world-parameter space onto the failure-mode coordinates. It pairs an **archive** of the best surviving worlds found, each binned by its position on the three **behaviour axes**, with a **dead frontier** recording which regions fail and on which cliff. The atlas is the deliverable: it shows the *structure* of viability — many viable worlds across a manifold, not one tuned point. A single **world recipe** is one projection of it (the best-scoring cell), but the map's value is its plurality. Each cell also carries the reported **decomposer**-guild distribution across its seed ensemble, never folded into the cell's score.
+_Avoid_: search result, ranked list (the atlas is a map onto behaviour, not an ordering by fitness), archive (the archive is the live half of the atlas; the atlas also holds the dead frontier)
+
+**Behaviour axis**:
+One of the three coordinates the atlas bins surviving worlds on, each a cheap per-run observable that indexes a dynamics failure mode: **oscillation strength** (frozen ↔ oscillating), **clustering strength** (monoculture ↔ coexistence), and **carcass-locked fraction** (healthy throughput ↔ nutrient lockup). Distinct from a fitness criterion — an axis locates *what kind* of world a parameterisation produces, whether or not that world is good. Two of the three (oscillation, clustering) are also **sensible-world** criteria; the carcass-locked fraction is an axis only.
+_Avoid_: behaviour descriptor (acceptable, but "axis" names its role in the atlas), feature, dimension (overloaded with trait-space dimensions)
+
+**Dead frontier**:
+The half of the **atlas** that records non-viable parameter regions — the **degenerate configurations**, tallied by which failure mode (cliff) they hit, rather than placed in a behaviour cell (a degenerate world has no meaningful behaviour coordinate). It is where parameter space stops being survivable. Entries arrive two ways: ruled out a priori by a **viability** gate before any run, or observed when a run carries a config into a cliff — the two must agree, and the disagreement is diagnostic.
+_Avoid_: failure list, dead zone (the frontier is the *boundary* structure keyed by cliff, not an undifferentiated region)
 
 **Degenerate configuration**:
 A simulation outcome that fails to produce a functioning ecology. Six canonical failure modes: extinction (all agents die), monoculture (trait space collapses to a single cluster), energy death (free energy trends irreversibly toward zero), population explosion (unbounded growth), frozen dynamics (no turnover despite agents surviving), generalist dominance (one or more clusters with high values across multiple specification traits outcompete specialists — indicates superlinear maintenance costs are too weak to enforce trade-offs).
@@ -273,7 +285,7 @@ A world that exhibits the positive patterns expected of a functioning ecology. F
 _Avoid_: balanced world, stable world (stability is not the goal — dynamic persistence is)
 
 **World recipe**:
-The output artifact of world genesis. A combination of **world parameters**, an **initial distribution**, and a **max ticks** count — the minimal specification needed to deterministically create a world given a seed. Does not contain a seed (each playthrough generates a fresh one). Max ticks is the tick count at which genesis certified the ecology as sensible — the app fast-forwards to this point before the player enters. The simulation is deterministic: the same recipe + seed always produces the same world history.
+A playable world drawn from the **atlas** — the elite of one of its cells. A combination of **world parameters**, an **initial distribution**, and a **max ticks** count — the minimal specification needed to deterministically create a world given a seed. Does not contain a seed (each playthrough generates a fresh one). Max ticks is the tick count at which genesis certified the ecology as sensible — the app fast-forwards to this point before the player enters. The simulation is deterministic: the same recipe + seed always produces the same world history. The default pick is the highest-scoring cell, but any viable cell yields a recipe — the recipe is a projection of the atlas, not the atlas's purpose.
 _Avoid_: save file, world state, snapshot (a recipe is instructions for creating a world, not a captured moment of one)
 
 **Death**:
