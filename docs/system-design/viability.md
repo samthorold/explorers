@@ -97,6 +97,14 @@ A static gate *would* become available if the design committed a **cross-trait i
 
 This is recorded as the first product of the lens: an a priori check that caught a place where the stated mechanism did not produce the expected property, and drove a system-design correction rather than a viability one.
 
+**Empirical confirmation — the prediction holds (#325).** The above was, until tested, a *prediction*: that fragility + incompatibility confine generalists without the interaction term. The example lens now confirms it. `scenarios/example12_generalist_dominance.json` seeds four archetypes in one viable, differentiated world (`clustering_strength` 1.0, `trophic_balance_score` 1.0, survives 2000 ticks on all 8 seeds): specialist producers, specialist mobile consumers, **broad** generalists (autotrophy + heterotrophy + mobility), and **compatible** sessile mixotrophs (autotrophy + heterotrophy) — the broad and compatible pair seeded identically but for mobility (0.5 vs 0.0), an in-run control on the sessile/mobile incompatibility axis. Reading the energy-weighted breadth measure off survivor traits (`probe_generalist`), with `mobility_maintenance_cost = 0`, `wear_rate = 0`, and **no cross-trait interaction term committed**:
+
+- **broad generalists are eliminated** — 0 survivors, 0.0% energy share on every seed, despite an energy advantage and co-location with both light and prey;
+- **compatible (sessile) mixotrophs persist but never dominate** — 13–31% of energy (median 20%), always below the 50% dominance line — the real "possible-but-non-dominant" mixotroph;
+- specialists hold the majority; the evaluator's own `generalist_dominance` gate reads 0/8.
+
+So the committed structural fragility (#9) and functional incompatibility (#2) suffice on their own: the differentiated state is stable and the broadest generalist cannot establish. **The interaction term stays in reserve** — the contingency that would promote it (genesis search finding generalists dominating where they should be confined) has not fired. See [`scenarios/verdicts.md`](../../scenarios/verdicts.md) for the per-seed read.
+
 ## Place in the validation triad
 
 Viability is one of three complementary lenses on the quality of the system design (see [expected properties](expected-properties.md#how-we-test-for-these-properties)):

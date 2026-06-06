@@ -51,6 +51,7 @@ carcass-fall it could not previously touch (every remaining file keeps
 | example7 | not-sensible | none (8/8) | n/a (undecided) | roster mismatch (no decomposer); 0 births fails turnover |
 | example8 | not-sensible | none (8/8) | disagree | roster mismatch (no decomposer); 0 births fails turnover |
 | example9_detrital_pathway | wiring test (not emergence evidence) | nutrient_lockup (8/8) | n/a — by construction | wiring healthy locally (the producer→carcass→decomposer pathway closes; `detrital_share` stays majority-detrital ≈0.9–1.0 by geometry), but the lone obligate decomposer cannot reach the producer ring's carcass-fall, so nutrient sequesters irreversibly into the dead pool — the field-level failure the scenario's own pathway is meant to prevent (now registered, #342) |
+| example12_generalist_dominance | sensible — confirms prediction (#325) | none (8/8) | agree (predicted live → confined), 8/8 | none — broad generalists eliminated (0% energy, 8/8), sessile mixotrophs persist but stay a minority (median 20% energy); design holds, interaction term stays in reserve |
 
 ## Per-scenario fault localisation
 
@@ -121,6 +122,35 @@ carcass-fall it could not previously touch (every remaining file keeps
   arise without being hand-built — now comes from the genesis search (71/120 viable random worlds
   produced decomposers, guilds up to 235, including from full-random founders), not from this file; a
   dedicated genesis-emergence regression is a deferred follow-up.
+- **example12_generalist_dominance** — **Sensible; confirms the design prediction (#325).** The
+  probe pits four archetypes in one viable world (survives 2000 ticks on every seed, `failure=none`
+  8/8, `clustering_strength` 1.0 and `trophic_balance_score` 1.0 throughout — a *differentiated*,
+  multi-cluster state, not collapse from above): specialist producers, specialist mobile consumers,
+  **broad** generalists (autotrophy + heterotrophy + mobility — the rooted-producer + roving-hunter)
+  and **compatible** generalists (autotrophy + heterotrophy, sessile). Broad and compatible
+  generalists are seeded identically (reserve 80, autotrophy 0.5, heterotrophy 0.5) and differ *only*
+  in mobility (0.5 vs 0.0), so their fates isolate the sessile/mobile incompatibility axis as an
+  in-run control. The breadth/dominance measure is read directly off survivor traits by
+  `probe_generalist` (a *trophic generalist* invests in both autotrophy and heterotrophy, photo > 0.25
+  ∧ het > 0.25; a *broad generalist* additionally invests mobility > 0.25; share is energy-weighted):
+  - **Broad generalists are eliminated — 0 survivors and 0.0% energy share on all 8 seeds.** The
+    energy-advantaged, light-and-prey-co-located rooted-rover cannot establish.
+  - **Compatible (sessile) mixotrophs persist but never dominate** — energy share 13–31% across seeds
+    (median 20%), always well below the 50% dominance line. Exactly the design's "possible-but-non-
+    dominant" mixotroph.
+  - Specialist producers hold the majority (~70–86% of energy); specialist *mobile* consumers also die
+    out (0 survivors, 8/8) — a side fact that the pure mobile-hunter niche is non-viable in this
+    particular economy, not part of the generalist verdict.
+  This happens with `mobility_maintenance_cost = 0`, `wear_rate = 0`, and **no cross-trait interaction
+  maintenance term** — so the confinement is delivered by the committed structural fragility (#9,
+  higher trait-entropy → higher peak-relative death threshold; survivor mean fragility ≈0.84) and the
+  emergent sessile/mobile functional incompatibility (#2), plus the breadth-neutral movement cost,
+  *without* the reserve lever. The evaluator's own `generalist_dominance` gate also reads 0/8 (final
+  pop 21–24 clears its 20-agent floor). **Verdict: generalists stay confined; the design prediction
+  holds and the cross-trait interaction term stays in reserve** (see
+  [`viability.md`](../docs/system-design/viability.md), "Resolved finding — generalist dominance has
+  no static gate"). Regenerate the breadth read with
+  `cargo run -p explorers-genesis-eval --bin probe_generalist -- scenarios/example12_generalist_dominance.json`.
 - **example7** — Not-sensible (prediction `undecided`). Roster mismatch is primary: intent is
   "three trophic roles incl. a decomposer", but the roster is 3 *undifferentiated* mobile consumers —
   no decomposer exists, so the detrital pathway it means to probe is absent and carcasses accumulate.
