@@ -69,7 +69,7 @@ All citations are against `crates/explorers-sim/` at the time of writing.
   (`phase.rs:752`) → apply_wear (`phase.rs:309`) → check_death_thresholds (`phase.rs:687`) → two
   conservation ledgers (energy + closed nutrient).
 - **State is a point cloud, not a density.** `Vec<Agent>` + `Vec<Carcass>`. Each `Agent` carries
-  `reserve, structure, peak_structure, nutrient, position, traits, contact_time, wear[3],
+  `reserve, structure, peak_structure, nutrient, position, traits, wear[3],
   repro_reserve, repro_nutrient`; each `Carcass` carries the **exact `TraitVector`** of the agent
   that died (`lib.rs:683+`; CONTEXT.md, *Carcass*, *Decomposition*). F's job is to lift this cloud
   to a density `n(x, θ)` over physical position `x` and trait vector `θ`, plus the scalar carcass and
@@ -82,9 +82,10 @@ All citations are against `crates/explorers-sim/` at the time of writing.
 - **Trophic transfer is a committed bilinear form.** `trophic_transfer_efficiency =
   base_trophic_efficiency · exp(−trophic_distance_decay · d)` (`lib.rs:768`), `d` = trait-space
   distance consumer→target — now owned by `world-rules.md` flow 7 and promoted into system design
-  (#294). Drain demand carries a sustained-contact Michaelis term `eff · ct/(ct+K)`
-  (`phase.rs:460`). These are the *kernel coefficients* of F's nonlinear term — already in closed
-  form, which is exactly why F is feasible.
+  (#294). Drain demand is a **binary-reach drain** (#380): while a target is within feeding reach the
+  consumer drains it at its full effective heterotrophy `eff` each tick — no contact-duration term.
+  This is the *kernel coefficient* of F's nonlinear term — already in closed form, which is exactly
+  why F is feasible.
 - **Nutrient is closed and conserved** (`lib.rs` nutrient ledger, balanced every tick to 5e-3
   relative). Energy is open: solar flux in, dissipation + transfer-loss out. This closure is the
   backbone of the lockup flux balance.
@@ -213,7 +214,7 @@ approximation and the source of the authority boundary in AC3.)
    `trophic_eff = base_trophic_efficiency · exp(−trophic_distance_decay · d)` (`lib.rs:768`). In
    density form this is a **bilinear integral operator**: the flux from trait-region θ′ into θ is
    `∫ K(θ, θ′) n(θ) n(θ′) dθ′`, kernel `K` = the committed exp-decay-in-trait-distance form times the
-   spatial in-reach indicator times the Michaelis contact term. **This quadratic term is what makes
+   spatial in-reach indicator (the binary-reach drain, #380 — no contact-duration factor). **This quadratic term is what makes
    `𝒯` nonlinear, and therefore what makes the Jacobian density-dependent — it is the seat of the
    Hopf bifurcation** (the predator-prey coupling) and the engine of disruptive selection (a consumer
    peak feeds on the producer peak, deepening the gap). The living pass `B(n,n)` and the carcass pass
@@ -358,8 +359,8 @@ Concretely, two cross-checks are writable today against existing files:
    it the headless run should freeze to a fixed population, above it it should oscillate (the
    `oscillation` score in `observed.json`, computed by the same evaluator). The example carries F's
    predicted crossing value in `metadata.rationale`; the run is swept across it; agreement confirms
-   the Hopf reading, a shifted crossing localises whether the contact-Michaelis term or the spatial
-   in-reach geometry is mis-modelled. This is the canonical "predicted bifurcation made falsifiable
+   the Hopf reading, a shifted crossing localises the spatial in-reach geometry (the binary-reach
+   drain carries no contact-duration term to mis-model, #380). This is the canonical "predicted bifurcation made falsifiable
    on a single example" the AC asks for, and it reuses the existing `--scenario … --trace` headless
    harness and `eval_scenarios` evidence pipeline with no new machinery.
 

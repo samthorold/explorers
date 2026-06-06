@@ -73,12 +73,6 @@ use explorers_sim::{TraitVector, WorldParameters, WorldRecipe};
 /// known degeneracy of any mean-field lumping, called out in the verdict.
 const REFERENCE_BODY_MASS: f32 = 1.0;
 
-/// Representative sustained-contact duration (ticks) at which the contact
-/// Michaelis ramp `ct/(ct+K)` (`phase.rs:460`) is evaluated for the steady drain.
-/// Co-located clusters hold contact, so the ramp sits near its asymptote; this is
-/// the *named term* the verdict implicates if the observed crossing is shifted.
-const SUSTAINED_CONTACT_TICKS: f32 = 10.0;
-
 /// The lumped coefficients of the 2-compartment map, each derived from committed
 /// fluxes (citations on the fields). Everything here is a mean-field reading of
 /// an existing phase; nothing introduces new physics.
@@ -92,9 +86,8 @@ struct Compartments {
     /// — the biomass at which the density-dependent light share (photosynthesise)
     /// just meets the metabolic floor.
     k_p: f32,
-    /// Mass-action attack rate: steady per-consumer demand
-    /// `eff_heterotrophy · ct/(ct+K)` (resolve_drains + the contact Michaelis
-    /// `phase.rs:460`), per unit reference biomass.
+    /// Mass-action attack rate: steady per-consumer demand `eff_heterotrophy`
+    /// (resolve_drains' binary-reach drain, #380), per unit reference biomass.
     a: f32,
     /// Consumer per-tick removal rate: its metabolic floor (metabolise) it must
     /// out-ingest or decline toward the death threshold (check_death_thresholds).
@@ -138,17 +131,11 @@ impl Compartments {
         let r_p = kappa_p * gamma * (flux - b_p).max(0.0) / REFERENCE_BODY_MASS;
         let k_p = if b_p > 0.0 { flux / b_p } else { f32::INFINITY };
 
-        // Bilinear trophic term: steady per-consumer demand = eff_heterotrophy ×
-        // contact-Michaelis (resolve_drains + phase.rs:460), as a mass-action
-        // attack rate per unit reference biomass.
+        // Bilinear trophic term: steady per-consumer demand = eff_heterotrophy
+        // (resolve_drains' binary-reach drain, #380), as a mass-action attack rate
+        // per unit reference biomass.
         let eff_het = consumer.heterotrophy.max(0.0);
-        let k_half = p.consumption_contact_half_saturation;
-        let michaelis = if k_half > 0.0 {
-            SUSTAINED_CONTACT_TICKS / (SUSTAINED_CONTACT_TICKS + k_half)
-        } else {
-            1.0
-        };
-        let a = eff_het * michaelis / REFERENCE_BODY_MASS;
+        let a = eff_het / REFERENCE_BODY_MASS;
 
         // Consumer removal: the metabolic floor it must out-ingest (metabolise →
         // death). Without prey it declines at this per-tick fractional rate.

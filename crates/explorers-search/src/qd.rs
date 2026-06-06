@@ -1518,10 +1518,15 @@ mod tests {
 
         // Carcass accumulates over a long trailing window, so the rollout needs
         // enough ticks for the dead pool to build; the ensemble and batch stay
-        // small to keep the sweep foreground-fast.
+        // small to keep the sweep foreground-fast. Under the binary-reach drain
+        // (#380) any heterotroph that reaches a carcass now drains it every tick
+        // (no contact-duration warm-up), so the dead pool turns over faster than it
+        // did under the ramp bug — the rollout needs a longer horizon (600 ticks)
+        // and a wider seed sweep to still land a config in the thin high-carcass
+        // band the lockup layer lives in.
         let config = QdConfig {
             ensemble_size: 2,
-            max_ticks: 400,
+            max_ticks: 600,
             batch: 6,
             generations: 2,
             carcass_seed_count: 3,
@@ -1533,7 +1538,7 @@ mod tests {
         let mut total_below = 0usize;
         let mut total_above = 0usize;
         let mut best_live_carcass = 0.0f32;
-        for &seed in &[11_u64, 23, 37] {
+        for &seed in &[11_u64, 23, 37, 5, 19] {
             let mut rng = ChaCha8Rng::seed_from_u64(seed);
             let atlas = run_qd(&config, seed, &mut rng);
             let check = atlas.lockup_boundary_crosscheck();

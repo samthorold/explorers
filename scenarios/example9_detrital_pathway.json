@@ -41,7 +41,6 @@
     "reproductive_compatibility_distance": 2.0,
     "mobility_maintenance_cost": 0.0,
     "maintenance_cost_exponent": 2.0,
-    "consumption_contact_half_saturation": 3.0,
     "nutrient_grid_cell_size": 10.0,
     "growth_retention_multiplier": 2.0,
     "offspring_structure_fraction": 0.2,

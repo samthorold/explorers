@@ -166,9 +166,6 @@ fn default_reproduction_nutrient_threshold() -> f32 {
 fn default_maintenance_cost_exponent() -> f32 {
     2.0
 }
-fn default_consumption_contact_half_saturation() -> f32 {
-    3.0
-}
 fn default_nutrient_grid_cell_size() -> f32 {
     10.0
 }
@@ -376,16 +373,6 @@ pub struct WorldParameters {
     /// enforcing the specialist-generalist trade-off.
     #[serde(default = "default_maintenance_cost_exponent")]
     pub maintenance_cost_exponent: f32,
-    /// Michaelis-Menten half-saturation constant (in ticks of sustained
-    /// contact) for contact-duration scaling of consumption demand.
-    /// demand = eff_heterotrophy * ct / (ct + K).
-    /// At ct = K, demand equals half of eff_heterotrophy; raising K lengthens
-    /// the ramp so consumers need more sustained contact before approaching
-    /// their full extraction rate. The default (K ~ 3) produces a recognisable
-    /// multi-tick ramp; very small values collapse the curve into a step at
-    /// ct = 1, and K = 0 disables the scaling entirely.
-    #[serde(default = "default_consumption_contact_half_saturation")]
-    pub consumption_contact_half_saturation: f32,
     /// Cell size for the spatial nutrient grid. Nutrient is distributed across
     /// a grid of cells; co-located agents share their cell's pool proportionally.
     #[serde(default = "default_nutrient_grid_cell_size")]
@@ -568,7 +555,6 @@ pub struct Agent {
     pub peak_structure: f32,
     pub nutrient: f32,
     pub traits: TraitVector,
-    pub contact_time: u64,
     /// Per-functional-trait somatic wear accumulation.
     pub wear: [f32; FUNCTIONAL_TRAIT_COUNT],
     /// Reproduction reserve: accumulates (1-kappa) fraction of surplus each tick.
@@ -606,7 +592,6 @@ impl Agent {
             peak_structure: structure,
             nutrient,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -860,7 +845,6 @@ impl World {
                         .clamp(0.0, 1.0),
                         dispersal: (centroid.dispersal + trait_dist.sample(&mut rng)).max(0.0),
                     },
-                    contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                     repro_reserve: 0.0,
                     repro_nutrient: 0.0,
@@ -920,7 +904,6 @@ impl World {
                         peak_structure: structure,
                         nutrient: spec.nutrient,
                         traits: spec.traits,
-                        contact_time: 0,
                         wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                         repro_reserve: 0.0,
                         repro_nutrient: 0.0,
@@ -1579,7 +1562,6 @@ mod tests {
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
-            consumption_contact_half_saturation: 0.0,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
             offspring_structure_fraction: 0.2,
@@ -1741,7 +1723,6 @@ mod tests {
             peak_structure: 0.0,
             nutrient: 5.0,
             traits: zero_traits(),
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -1923,7 +1904,6 @@ mod tests {
             peak_structure: 0.0,
             nutrient: 5.0,
             traits: zero_traits(),
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 7.0,
@@ -1945,7 +1925,6 @@ mod tests {
             peak_structure: 4.0,
             nutrient: 5.0,
             traits: zero_traits(),
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 7.0,
@@ -2187,7 +2166,6 @@ mod tests {
                     kappa: 0.7,
                     ..zero_traits()
                 },
-                contact_time: 10,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 0.0,
                 repro_nutrient: 0.0,
@@ -2255,7 +2233,6 @@ mod tests {
                 photosynthetic_absorption: 0.8,
                 ..zero_traits()
             },
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -2324,7 +2301,6 @@ mod tests {
                 heterotrophy: 0.6,
                 ..zero_traits()
             },
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -2341,7 +2317,6 @@ mod tests {
                 photosynthetic_absorption: 0.5,
                 ..zero_traits()
             },
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -2398,7 +2373,6 @@ mod tests {
                 mobility: 0.5,
                 ..zero_traits()
             },
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -2459,7 +2433,6 @@ mod tests {
                 mobility: 0.5,
                 ..zero_traits()
             },
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -2514,7 +2487,6 @@ mod tests {
                 photosynthetic_absorption: 1.0,
                 ..zero_traits()
             },
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -2857,7 +2829,6 @@ mod tests {
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
-            consumption_contact_half_saturation: 0.0,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
             offspring_structure_fraction: 0.2,
@@ -2881,7 +2852,6 @@ mod tests {
                     fecundity: 1.0,
                     ..zero_traits()
                 },
-                contact_time: 50,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 5.0,
                 repro_nutrient: 0.0,
@@ -2903,7 +2873,6 @@ mod tests {
                     fecundity: 1.0,
                     ..zero_traits()
                 },
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 5.0,
                 repro_nutrient: 0.0,
@@ -2942,7 +2911,6 @@ mod tests {
                 kappa: 0.7,
                 ..zero_traits()
             },
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -3133,7 +3101,6 @@ mod tests {
                 kappa: 0.7,
                 ..zero_traits()
             },
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -3170,7 +3137,6 @@ mod tests {
                 kappa: 0.5,
                 ..zero_traits()
             },
-            contact_time: 50,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -3188,7 +3154,6 @@ mod tests {
                 kappa: 0.7,
                 ..zero_traits()
             },
-            contact_time: 50,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -3227,7 +3192,6 @@ mod tests {
                 kappa: 0.7,
                 ..zero_traits()
             },
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
@@ -3273,7 +3237,6 @@ mod tests {
                 asexual_propensity: 1.0, // guaranteed asexual reproduction
                 ..zero_traits()
             },
-            contact_time: 50,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             // Funded above the #310 viability gate (fecundity 5 × death threshold).
             repro_reserve: 350.0,
@@ -3334,7 +3297,6 @@ mod tests {
                 asexual_propensity: 1.0,
                 ..zero_traits()
             },
-            contact_time: 50,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,

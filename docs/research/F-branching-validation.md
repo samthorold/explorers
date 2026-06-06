@@ -142,6 +142,10 @@ an 8-seed ensemble. From `scenarios/observed.json` (`example4`, `example8`) and 
      field dispersed across the world; their *realised* contact rate is far below the
      well-mixed mass-action `B(n,n)` the invasibility margin assumes. The bilinear term is an
      integral over an in-reach indicator (Brief F, AC2 §4) the mean field replaces with 1.
+     (**Re-validation caveat, #380:** under the contact-duration ramp these mobile consumers
+     could not feed *at all* — #379 — so the `example8` monoculture read is confounded and
+     should be re-run now that the binary-reach drain lets mobile consumers feed; the in-reach
+     geometry argument itself is unaffected, as it concerns encounter, not the drain magnitude.)
      `example11` was built **co-located** precisely to close this gap — and there F's branching
      read does match a (borderline) observed coexistence, isolating geometry as the `example8`
      fault.

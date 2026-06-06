@@ -76,11 +76,6 @@ use explorers_sim::{AgentSpec, TraitVector, WorldParameters, WorldRecipe};
 /// lumping, called out in the verdict.
 const REF_STRUCTURE: f32 = 1.0;
 
-/// Representative sustained-contact duration (ticks) at which the contact
-/// Michaelis ramp `ct/(ct+K)` (`phase.rs:460`) is evaluated. Co-located clusters
-/// hold contact, so the ramp sits near its asymptote.
-const SUSTAINED_CONTACT_TICKS: f32 = 10.0;
-
 /// Finite-difference step for the selection gradient / Hessian over the spec
 /// subspace. Small enough to resolve curvature, large enough to stay above f32
 /// round-off in the committed `g`.
@@ -152,17 +147,6 @@ fn maintenance(t: &TraitVector, p: &WorldParameters) -> f32 {
         + REF_STRUCTURE * p.structure_maintenance_coefficient
 }
 
-/// The contact Michaelis ramp `ct/(ct+K)` (`phase.rs:460`) at the representative
-/// sustained-contact duration.
-fn michaelis(p: &WorldParameters) -> f32 {
-    let k = p.consumption_contact_half_saturation;
-    if k > 0.0 {
-        SUSTAINED_CONTACT_TICKS / (SUSTAINED_CONTACT_TICKS + k)
-    } else {
-        1.0
-    }
-}
-
 /// The committed per-capita net growth rate `g(θ; E)` — the AC2 operator diagonal,
 /// assembled from real phases and held in the *frozen* resident environment `E`:
 ///
@@ -181,7 +165,6 @@ fn michaelis(p: &WorldParameters) -> f32 {
 fn g(theta: &TraitVector, env: &Environment, p: &WorldParameters) -> f32 {
     let kappa = theta.kappa.clamp(0.0, 1.0);
     let gamma = p.growth_efficiency;
-    let mich = michaelis(p);
 
     // Photosynthesis income (phase.rs:19): density-dependent light share.
     let w = eff(theta.photosynthetic_absorption) * REF_STRUCTURE;
@@ -199,12 +182,12 @@ fn g(theta: &TraitVector, env: &Environment, p: &WorldParameters) -> f32 {
     for (r_traits, r_mass) in &env.residents {
         if eff_het > 0.0 {
             let te = explorers_sim::trophic_transfer_efficiency(theta, r_traits, p);
-            income_trophic += r_mass * eff_het * mich * te;
+            income_trophic += r_mass * eff_het * te;
         }
         let r_het = eff(r_traits.heterotrophy);
         if r_het > 0.0 {
             let te = explorers_sim::trophic_transfer_efficiency(r_traits, theta, p);
-            pred_loss += r_mass * r_het * mich * te;
+            pred_loss += r_mass * r_het * te;
         }
     }
 
@@ -940,8 +923,7 @@ mod tests {
             "initial_nutrient_pool": 50000.0,
             "growth_efficiency": 0.3,
             "structure_maintenance_coefficient": 0.01,
-            "maintenance_cost_exponent": 2.0,
-            "consumption_contact_half_saturation": 3.0
+            "maintenance_cost_exponent": 2.0
         }"#;
         serde_json::from_str(json).unwrap()
     }

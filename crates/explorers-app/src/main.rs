@@ -379,31 +379,6 @@ fn compute_energy_budget(world: &World) -> EnergyBudget {
     }
 }
 
-/// Contact-time aggregation across the living population for the status line:
-/// the mean and the longest sustained contact. Contact time accrues while an
-/// agent is in consuming range of a target. Framework-agnostic and unit-testable.
-#[derive(Debug, PartialEq, Default)]
-struct ContactTimeStats {
-    average: f64,
-    max: u64,
-}
-
-impl ContactTimeStats {
-    /// Compute the contact-time average and maximum for a slice of agents. An
-    /// empty population yields zeroes.
-    fn of(agents: &[explorers_sim::Agent]) -> Self {
-        if agents.is_empty() {
-            return Self::default();
-        }
-        let sum: f64 = agents.iter().map(|a| a.contact_time as f64).sum();
-        let max = agents.iter().map(|a| a.contact_time).max().unwrap_or(0);
-        Self {
-            average: sum / agents.len() as f64,
-            max,
-        }
-    }
-}
-
 /// The living population split by behavioural trophic role for the status line.
 /// Roles come from the topology projection's [`TopologyProjection::trophic_roles`]
 /// — a reading of what each agent eats (green predation vs brown decomposition),
@@ -500,7 +475,6 @@ fn default_recipe() -> WorldRecipe {
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
-            consumption_contact_half_saturation: 0.001,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
             offspring_structure_fraction: 0.2,
@@ -949,12 +923,10 @@ impl ExplorersApp {
         });
     }
 
-    /// Status line: tick, role breakdown, carcass count, contact-time avg/max,
-    /// and ticks-per-second.
+    /// Status line: tick, role breakdown, carcass count, and ticks-per-second.
     fn debug_status_line(&self, ui: &mut egui::Ui) {
         let agents = self.world.agents();
         let breakdown = RoleBreakdown::from_roles(&self.topology.trophic_roles(agents));
-        let contact = ContactTimeStats::of(agents);
 
         ui.label(format!("Tick: {}", self.tick_count));
         ui.label(format!(
@@ -962,10 +934,6 @@ impl ExplorersApp {
             breakdown.total, breakdown.producers, breakdown.consumers, breakdown.decomposers
         ));
         ui.label(format!("Carcasses: {}", self.world.carcasses().len()));
-        ui.label(format!(
-            "Contact time: avg {:.0} / max {}",
-            contact.average, contact.max
-        ));
         let paused = if self.clock.is_paused() {
             " | PAUSED"
         } else {
@@ -1154,7 +1122,6 @@ impl ExplorersApp {
                         ui.label(format!("Nutrient: {:.1}", agent.nutrient));
                         ui.label(format!("Repro reserve: {:.1}", agent.repro_reserve));
                         ui.label(format!("Repro nutrient: {:.1}", agent.repro_nutrient));
-                        ui.label(format!("Contact time: {}", agent.contact_time));
                         ui.label(format!("Dominant role: {}", dominant_role(&agent.traits)));
                         let threshold = self.world.params().reproduction_energy_threshold;
                         let demand = explorers_sim::stoichiometric_demand(
@@ -1349,26 +1316,6 @@ mod tests {
             asexual_propensity: 0.0,
             dispersal: 0.0,
         }
-    }
-
-    #[test]
-    fn contact_time_stats_average_and_max() {
-        let mut a = agent_at(1, (0.0, 0.0));
-        a.contact_time = 2;
-        let mut b = agent_at(2, (0.0, 0.0));
-        b.contact_time = 4;
-        let mut c = agent_at(3, (0.0, 0.0));
-        c.contact_time = 6;
-        let stats = ContactTimeStats::of(&[a, b, c]);
-        assert!((stats.average - 4.0).abs() < 1e-6, "avg of 2,4,6 is 4");
-        assert_eq!(stats.max, 6);
-    }
-
-    #[test]
-    fn contact_time_stats_of_empty_population_is_zero() {
-        let stats = ContactTimeStats::of(&[]);
-        assert_eq!(stats.average, 0.0);
-        assert_eq!(stats.max, 0);
     }
 
     #[test]
@@ -1859,7 +1806,6 @@ mod tests {
                 asexual_propensity: 0.0,
                 dispersal: 0.0,
             },
-            contact_time: 0,
             wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
             repro_reserve,
             repro_nutrient,
@@ -1977,7 +1923,6 @@ mod tests {
                 asexual_propensity: 0.0,
                 dispersal: 0.0,
             },
-            contact_time: 0,
             wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
