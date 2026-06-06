@@ -57,11 +57,6 @@ use explorers_sim::TraitVector;
 /// any mean-field lumping, called out in both spike verdicts.
 const REFERENCE_BODY_MASS: f32 = 1.0;
 
-/// Representative sustained-contact duration (ticks) at which the contact
-/// Michaelis ramp `ct/(ct+K)` (`phase.rs:460`) is evaluated for the steady drain.
-/// Co-located clusters hold contact, so the ramp sits near its asymptote.
-const SUSTAINED_CONTACT_TICKS: f32 = 10.0;
-
 /// Effective trait value in the mean field: clamped non-negative (the committed
 /// `effective_trait_with_steepness` reduces to this with no wear — and wear is off
 /// for every searched config).
@@ -82,17 +77,6 @@ fn maintenance(t: &TraitVector, p: &WorldParameters) -> f32 {
         + eff(t.mobility).powf(exp) * p.mobility_maintenance_cost
         + eff(t.asexual_propensity).powf(exp) * p.asexual_propensity_maintenance_cost
         + REFERENCE_BODY_MASS * p.structure_maintenance_coefficient
-}
-
-/// The contact Michaelis ramp `ct/(ct+K)` (`phase.rs:460`) at the representative
-/// sustained-contact duration.
-fn michaelis(p: &WorldParameters) -> f32 {
-    let k = p.consumption_contact_half_saturation;
-    if k > 0.0 {
-        SUSTAINED_CONTACT_TICKS / (SUSTAINED_CONTACT_TICKS + k)
-    } else {
-        1.0
-    }
 }
 
 // ===========================================================================
@@ -125,9 +109,9 @@ struct PoolCoupling {
     /// at which the density-dependent light share just meets the metabolic floor.
     k_p: f32,
     /// Mass-action draw rate: living mass draws the pool down at the founder's
-    /// consumption capacity `eff_heterotrophy · ct/(ct+K)` (resolve_drains + the
-    /// contact Michaelis), per unit reference biomass. Zero for a pure autotroph —
-    /// then the loop is direct uptake with no bilinear feedback (no Hopf).
+    /// consumption capacity `eff_heterotrophy` (resolve_drains' binary-reach drain),
+    /// per unit reference biomass. Zero for a pure autotroph — then the loop is
+    /// direct uptake with no bilinear feedback (no Hopf).
     a: f32,
     /// Living-mass per-tick removal rate: the founder's metabolic floor it must
     /// out-take or decline toward the death threshold (metabolise → death).
@@ -153,8 +137,10 @@ impl PoolCoupling {
         let k_p = if b > 0.0 { flux / b } else { f32::INFINITY };
 
         // Living-mass draw (consumer) bilinear: the founder's consumption rate.
+        // Binary-reach drain (#380): a co-located cluster drains at its full
+        // effective heterotrophy each tick, so no contact-duration factor enters.
         let eff_het = eff(founder.heterotrophy);
-        let a = eff_het * michaelis(p) / REFERENCE_BODY_MASS;
+        let a = eff_het / REFERENCE_BODY_MASS;
 
         let m = b / REFERENCE_BODY_MASS;
 
@@ -300,7 +286,6 @@ impl Environment {
 fn g(theta: &TraitVector, env: &Environment, p: &WorldParameters) -> f32 {
     let kappa = theta.kappa.clamp(0.0, 1.0);
     let gamma = p.growth_efficiency;
-    let mich = michaelis(p);
 
     let w = eff(theta.photosynthetic_absorption) * REFERENCE_BODY_MASS;
     let income_photo = if w > 0.0 {
@@ -315,12 +300,12 @@ fn g(theta: &TraitVector, env: &Environment, p: &WorldParameters) -> f32 {
     for (r_traits, r_mass) in &env.residents {
         if eff_het > 0.0 {
             let te = explorers_sim::trophic_transfer_efficiency(theta, r_traits, p);
-            income_trophic += r_mass * eff_het * mich * te;
+            income_trophic += r_mass * eff_het * te;
         }
         let r_het = eff(r_traits.heterotrophy);
         if r_het > 0.0 {
             let te = explorers_sim::trophic_transfer_efficiency(r_traits, theta, p);
-            pred_loss += r_mass * r_het * mich * te;
+            pred_loss += r_mass * r_het * te;
         }
     }
 

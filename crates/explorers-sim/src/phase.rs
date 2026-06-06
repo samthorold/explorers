@@ -452,16 +452,12 @@ pub fn resolve_drains(
                 {
                     continue;
                 }
-                // Sustained contact scaling: demand = eff * ct / (ct + K),
-                // where K is the half-saturation contact duration (in ticks).
-                // K = 0 disables the ramp and uses raw eff_heterotrophy.
-                let half_sat = params.consumption_contact_half_saturation;
-                let demand = if half_sat > 0.0 {
-                    let ct = agents[consumer_idx].contact_time as f32;
-                    eff_heterotrophy * ct / (ct + half_sat)
-                } else {
-                    eff_heterotrophy
-                };
+                // Binary-reach drain (#380): while the target is within feeding
+                // reach, the consumer drains it at its effective heterotrophy each
+                // tick — no warm-up, no contact-duration ramp. Predation vs grazing
+                // emerges downstream from the size of this drain relative to the
+                // target's structural death threshold, not from contact duration.
+                let demand = eff_heterotrophy;
                 let trophic_eff = crate::trophic_transfer_efficiency(
                     &agents[consumer_idx].traits,
                     &agents[target_idx].traits,
@@ -594,16 +590,10 @@ pub fn resolve_drains(
                 {
                     continue;
                 }
-                // Sustained contact scaling: demand = eff * ct / (ct + K),
-                // where K is the half-saturation contact duration (in ticks).
-                // K = 0 disables the ramp and uses raw eff_heterotrophy.
-                let half_sat = params.consumption_contact_half_saturation;
-                let demand = if half_sat > 0.0 {
-                    let ct = agents[consumer_idx].contact_time as f32;
-                    eff_heterotrophy * ct / (ct + half_sat)
-                } else {
-                    eff_heterotrophy
-                };
+                // Binary-reach drain (#380): a carcass within feeding reach is
+                // drained at the consumer's effective heterotrophy each tick — no
+                // contact-duration ramp.
+                let demand = eff_heterotrophy;
                 let trophic_eff = crate::trophic_transfer_efficiency(
                     &agents[consumer_idx].traits,
                     &carcasses[carcass_idx].traits,
@@ -772,8 +762,7 @@ pub fn move_agents(
         let eff_heterotrophy = agents[i].effective_trait_with_steepness(1, k);
 
         if eff_mobility <= 0.0 {
-            // Stationary: increment contact time
-            agents[i].contact_time += 1;
+            // Sessile: no locomotion this tick.
             continue;
         }
 
@@ -848,7 +837,6 @@ pub fn move_agents(
         // Normalize direction and scale by effective mobility
         let dir_mag = (dir_x * dir_x + dir_y * dir_y).sqrt();
         if dir_mag < 1e-6 {
-            agents[i].contact_time += 1;
             continue;
         }
 
@@ -874,10 +862,7 @@ pub fn move_agents(
 
         if moved {
             agents[i].position = new_pos;
-            agents[i].contact_time = 0;
             move_distance[i] = distance;
-        } else {
-            agents[i].contact_time += 1;
         }
 
         events.push(Event {
@@ -1129,7 +1114,6 @@ pub fn resolve_reproduction(
                 peak_structure: prov.structure,
                 nutrient: prov.free_nutrient,
                 traits: child_traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 0.0,
                 repro_nutrient: 0.0,
@@ -1485,7 +1469,6 @@ pub fn resolve_reproduction(
                 peak_structure: prov.structure,
                 nutrient: prov.free_nutrient,
                 traits: child_traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 0.0, // offspring born with zero repro_reserve
                 repro_nutrient: 0.0,
@@ -1586,7 +1569,6 @@ mod tests {
             reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
-            consumption_contact_half_saturation: 0.0,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
             offspring_structure_fraction: 0.2,
@@ -1848,24 +1830,24 @@ mod tests {
     }
 
     #[test]
-    fn absorb_nutrients_zero_contact_time_still_receives_nutrients() {
-        // Mobile agents with contact_time=0 should still absorb nutrients —
-        // unviability of mobile autotrophs emerges from superlinear maintenance
-        // costs, not from a contact_time gate.
+    fn absorb_nutrients_is_not_contact_gated() {
+        // Nutrient uptake is driven by autotrophy and local nutrient availability,
+        // not by any contact/stillness gate — a freshly-placed agent absorbs on
+        // its first tick. (Unviability of mobile autotrophs emerges downstream from
+        // superlinear maintenance costs, not from a feeding-duration gate.)
         let params = test_params();
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
             ..zero_traits()
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
-        agents[0].contact_time = 0;
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
         let events = absorb_nutrients(&mut agents, &mut grid, &params);
         assert_eq!(
             events.len(),
             1,
-            "agent with autotrophy should get nutrients regardless of contact_time"
+            "agent with autotrophy should absorb nutrients on its first tick"
         );
         assert!(
             agents[0].nutrient_total(&params) > 0.0,
@@ -3665,47 +3647,6 @@ mod tests {
     }
 
     #[test]
-    fn move_contact_time_resets_on_movement() {
-        let mut params = test_params();
-        params.movement_cost_coefficient = 0.0;
-        let traits = TraitVector {
-            mobility: 0.5,
-            ..zero_traits()
-        };
-        let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
-        agents[0].contact_time = 10; // had been stationary
-        let carcasses = vec![];
-        let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
-
-        let _result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
-
-        assert_eq!(
-            agents[0].contact_time, 0,
-            "contact_time should reset to 0 after moving, got {}",
-            agents[0].contact_time
-        );
-    }
-
-    #[test]
-    fn move_contact_time_increments_when_stationary() {
-        let params = test_params();
-        // Zero mobility -> stationary
-        let traits = TraitVector { ..zero_traits() };
-        let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
-        agents[0].contact_time = 5;
-        let carcasses = vec![];
-        let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
-
-        let _result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
-
-        assert_eq!(
-            agents[0].contact_time, 6,
-            "contact_time should increment when stationary, got {}",
-            agents[0].contact_time
-        );
-    }
-
-    #[test]
     fn move_toroidal_wrapping_applied() {
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
@@ -5037,11 +4978,6 @@ mod tests {
                 child.structure == 0.0,
                 "offspring should have zero structure"
             );
-            // Zero contact time
-            assert!(
-                child.contact_time == 0,
-                "offspring should have zero contact time"
-            );
             // Position within world bounds
             let half = params.world_extent / 2.0;
             assert!(
@@ -5249,7 +5185,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
@@ -5852,7 +5787,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
@@ -5912,7 +5846,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
@@ -5965,7 +5898,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: 20.0,
@@ -5978,7 +5910,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: 20.0,
@@ -6030,7 +5961,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: initial_repro,
             repro_nutrient: 10.0,
@@ -6090,7 +6020,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             // Funded above the #310 viability gate (fecundity 3 × generalist
             // death threshold), identical across dispersal values so the
@@ -6159,7 +6088,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             // Funded above the #310 viability gate, identical across dispersal
             // values so the propagule-cost comparison stays valid.
@@ -6279,7 +6207,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
@@ -6325,7 +6252,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
@@ -6385,7 +6311,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits: traits_a,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: 20.0,
@@ -6398,7 +6323,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits: traits_b,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: 20.0,
@@ -6462,7 +6386,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: initial_free,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: initial_earmark,
@@ -6547,7 +6470,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: free_store,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: earmark_a,
@@ -6560,7 +6482,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: free_store,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: earmark_b,
@@ -6637,7 +6558,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 50.0,
                 repro_nutrient: 50.0,
@@ -6690,7 +6610,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
@@ -6760,7 +6679,6 @@ mod tests {
                     peak_structure: 5.0,
                     nutrient: 100.0,
                     traits: traits_a,
-                    contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                     repro_reserve: 30.0,
                     repro_nutrient: 30.0,
@@ -6773,7 +6691,6 @@ mod tests {
                     peak_structure: 5.0,
                     nutrient: 100.0,
                     traits: traits_b,
-                    contact_time: 0,
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                     repro_reserve: 30.0,
                     repro_nutrient: 30.0,
@@ -6856,7 +6773,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 30.0,
                 repro_nutrient: 30.0,
@@ -6869,7 +6785,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 30.0,
                 repro_nutrient: 30.0,
@@ -6934,7 +6849,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 30.0,
                 repro_nutrient: 30.0,
@@ -6947,7 +6861,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 30.0,
                 repro_nutrient: 30.0,
@@ -7000,7 +6913,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 50.0,
             repro_nutrient: 50.0,
@@ -7050,7 +6962,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
@@ -7313,186 +7224,6 @@ mod tests {
     }
 
     #[test]
-    fn sustained_contact_higher_ct_drains_more() {
-        // Two consumers with identical heterotrophy but different contact_times
-        // targeting the same agent. The one with higher contact_time should
-        // drain more because demand = eff_heterotrophy * ct / (ct + K).
-        let params = WorldParameters {
-            consumption_contact_half_saturation: 10.0, // large K so contact_time matters
-            base_trophic_efficiency: 1.0,              // no trophic loss for clarity
-            trophic_distance_decay: 0.0,
-            ..test_params()
-        };
-        let consumer_traits = TraitVector {
-            heterotrophy: 1.0,
-            ..zero_traits()
-        };
-        let target_traits = TraitVector {
-            photosynthetic_absorption: 0.5,
-            ..zero_traits()
-        };
-        // Consumer A: contact_time = 5, Consumer B: contact_time = 50
-        let mut agents = vec![
-            make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
-            make_agent(2, (1.0, 0.0), 10.0, consumer_traits),
-            make_agent(3, (0.5, 0.0), 10.0, target_traits),
-        ];
-        agents[0].contact_time = 5; // low contact
-        agents[1].contact_time = 50; // high contact
-        agents[2].structure = 100.0; // plenty of structure so no proportional split
-
-        let mut carcasses: Vec<Carcass> = Vec::new();
-        let mut grid = SpatialGrid::new(100.0, 10.0);
-        grid.insert(0, (0.0, 0.0));
-        grid.insert(1, (1.0, 0.0));
-        grid.insert(2, (0.5, 0.0));
-
-        let initial_reserve_a = agents[0].reserve;
-        let initial_reserve_b = agents[1].reserve;
-
-        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
-        let _result = resolve_drains(
-            &mut agents,
-            &mut carcasses,
-            &grid,
-            &params,
-            &mut nutrient_grid,
-        );
-
-        let gained_a = agents[0].reserve - initial_reserve_a;
-        let gained_b = agents[1].reserve - initial_reserve_b;
-
-        assert!(
-            gained_b > gained_a,
-            "consumer with higher contact_time should drain more: \
-             low_ct gained {gained_a}, high_ct gained {gained_b}"
-        );
-        // Verify both gained something (both are consuming)
-        assert!(
-            gained_a > 0.0,
-            "low-ct consumer should still drain something"
-        );
-    }
-
-    #[test]
-    fn sustained_contact_asymptote_at_high_ct() {
-        // At very high contact_time, demand should approach eff_heterotrophy.
-        // ct/(ct+K) -> 1 as ct -> infinity.
-        let half_sat = 10.0;
-        let params = WorldParameters {
-            consumption_contact_half_saturation: half_sat,
-            base_trophic_efficiency: 1.0,
-            trophic_distance_decay: 0.0,
-            ..test_params()
-        };
-        let consumer_traits = TraitVector {
-            heterotrophy: 0.8,
-            ..zero_traits()
-        };
-        let target_traits = TraitVector {
-            photosynthetic_absorption: 0.5,
-            ..zero_traits()
-        };
-        let mut agents = vec![
-            make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
-            make_agent(2, (1.0, 0.0), 10.0, target_traits),
-        ];
-        agents[0].contact_time = 10_000; // very high ct
-        agents[1].structure = 100.0;
-
-        let mut carcasses: Vec<Carcass> = Vec::new();
-        let mut grid = SpatialGrid::new(100.0, 10.0);
-        grid.insert(0, (0.0, 0.0));
-        grid.insert(1, (1.0, 0.0));
-
-        let initial_reserve = agents[0].reserve;
-        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
-        let _result = resolve_drains(
-            &mut agents,
-            &mut carcasses,
-            &grid,
-            &params,
-            &mut nutrient_grid,
-        );
-
-        let gained = agents[0].reserve - initial_reserve;
-        // Expected demand: 0.8 * 10000 / (10000 + 10) = 0.8 * 0.999... ≈ 0.7992
-        // With trophic_efficiency=1.0, gained should equal demand
-        let expected = 0.8 * 10_000.0 / (10_000.0 + half_sat);
-        assert!(
-            (gained - expected).abs() < 1e-3,
-            "at very high ct, demand should approach eff_heterotrophy: \
-             gained {gained}, expected ~{expected}"
-        );
-        // Should be very close to eff_heterotrophy (0.8) but not exceed it
-        assert!(gained < 0.8, "demand must not exceed eff_heterotrophy");
-        assert!(
-            gained > 0.799,
-            "demand should be within 0.1% of eff_heterotrophy at ct=10000"
-        );
-    }
-
-    #[test]
-    fn sustained_contact_default_produces_visible_ramp() {
-        // The shipped default for consumption_contact_half_saturation should
-        // produce a multi-tick Michaelis-Menten ramp, not a step at ct=1.
-        // Using the default value (parsed from JSON via serde), demand at ct=1
-        // should be meaningfully less than at ct=10, and both should asymptote
-        // toward eff_heterotrophy as ct grows large.
-        let default_params: WorldParameters = serde_json::from_str(
-            r#"{
-                "solar_flux_magnitude": 10.0,
-                "base_trophic_efficiency": 1.0,
-                "reproduction_efficiency": 0.7,
-                "base_metabolic_rate": 0.0,
-                "movement_cost_coefficient": 0.0,
-                "reproduction_energy_threshold": 50.0,
-                "mutation_rate": 0.0,
-                "mutation_magnitude": 0.0,
-                "contact_range_coefficient": 5.0,
-                "world_extent": 100.0,
-                "initial_population_size": 0,
-                "light_competition_radius": 1000.0,
-                "photo_maintenance_cost": 0.0,
-                "heterotrophy_maintenance_cost": 0.0,
-                "initial_nutrient_pool": 100.0,
-                "growth_efficiency": 0.5
-            }"#,
-        )
-        .expect("default params should deserialise");
-        let half_sat = default_params.consumption_contact_half_saturation;
-        assert!(
-            half_sat >= 1.0,
-            "default half-saturation must be large enough to give a visible ramp, \
-             got K={half_sat}"
-        );
-
-        let eff_heterotrophy = 1.0_f32;
-        let demand_at_ct = |ct: f32| eff_heterotrophy * ct / (ct + half_sat);
-
-        let d1 = demand_at_ct(1.0);
-        let d10 = demand_at_ct(10.0);
-        let d1000 = demand_at_ct(1000.0);
-
-        // ct=1 should be meaningfully less than eff_heterotrophy (not a step).
-        assert!(
-            d1 < 0.8 * eff_heterotrophy,
-            "demand at ct=1 should be well below eff_heterotrophy, got {d1}"
-        );
-        // ct=10 should be meaningfully larger than ct=1 (multi-tick ramp).
-        assert!(
-            d10 > d1 + 0.1,
-            "demand at ct=10 ({d10}) should be meaningfully larger than at ct=1 ({d1})"
-        );
-        // Monotonic and asymptoting toward eff_heterotrophy.
-        assert!(d10 < d1000, "demand should keep rising past ct=10");
-        assert!(
-            d1000 > 0.99 * eff_heterotrophy,
-            "demand should approach eff_heterotrophy at high ct, got {d1000}"
-        );
-    }
-
-    #[test]
     fn drain_demand_only_proportional_split() {
         // Two consumers with equal raw demand (heterotrophy=1.0) but different
         // trait distances to the target. The split is by demand only; trophic
@@ -7652,7 +7383,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: initial_repro_reserve,
             repro_nutrient: 10.0,
@@ -7726,7 +7456,6 @@ mod tests {
             peak_structure: 5.0,
             nutrient: 100.0,
             traits,
-            contact_time: 0,
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: initial_repro_reserve,
             repro_nutrient: 10.0,
@@ -7795,7 +7524,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: invest_a,
                 repro_nutrient: 10.0,
@@ -7808,7 +7536,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 100.0,
                 traits,
-                contact_time: 0,
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: invest_b,
                 repro_nutrient: 10.0,
@@ -7872,7 +7599,6 @@ mod tests {
                 peak_structure: 5.0,
                 nutrient: 1000.0,
                 traits,
-                contact_time: 0,
                 // Funded above the #310 viability gate for fecundity up to 20.
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 600.0,
@@ -7957,7 +7683,6 @@ mod tests {
         let mut params = test_params();
         params.contact_range_coefficient = 5.0;
         params.body_reach_coefficient = 2.0;
-        params.consumption_contact_half_saturation = 0.0; // no contact-time ramp
 
         let het = TraitVector {
             heterotrophy: 1.0,

@@ -105,9 +105,20 @@ metric (`crates/explorers-genesis-eval/src/lib.rs:374`). The result, 8 seeds,
 
 ## Does the observed crossing match F's prediction? No — and *why* is the result
 
+> **Re-validation caveat (#380).** The per-seed observations below were recorded
+> under the contact-duration feeding ramp, which (per #379) zeroed the intake of
+> any consumer with `mobility > 0` — so the "consumers go extinct at every swept
+> efficiency" trace is confounded: the low-mobility consumer could not feed *at
+> all*, independent of reach. The binary-reach drain (#380) removes that confound;
+> the example10 crossing sweep should be re-run before this verdict's per-seed
+> numbers are trusted. The *structural* finding (the well-mixed mass-action term is
+> an integral over a spatial in-reach indicator the mean field replaces with 1)
+> stands regardless.
+
 **The observable cannot see the bifurcation, for two compounding reasons, both of
 which the disagreement localises precisely (Brief F, AC5: a shift localises the
-fault to the contact-Michaelis term or the spatial in-reach geometry).**
+fault to the spatial in-reach geometry — the binary-reach drain carries no
+contact-duration term, #380).**
 
 1. **The spatial in-reach geometry decouples the predator (primary fault).** A
    per-seed trace shows the **consumers go extinct by tick 2000 at *every* swept
@@ -146,9 +157,10 @@ finding — every minimal regime hits one horn:
   unconditional stability) — even though mobility is exactly what the spatial
   coupling needs.
 
-The contact-Michaelis term (`phase.rs:460`) is **not** strongly implicated: the
-mismatch survives any reasonable sustained-contact value, because the binding
-constraint is encounter (reach), not extraction ramp.
+Extraction rate is **not** the binding constraint: the binding constraint is
+encounter (reach), not the per-tick drain magnitude. With the contact-duration
+ramp removed (#380) the drain is simply the consumer's effective heterotrophy
+while in reach, so there is no extraction-ramp term left to implicate at all.
 
 ## Verdict
 

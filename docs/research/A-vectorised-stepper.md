@@ -33,7 +33,7 @@ All citations are against `crates/explorers-sim/` at the time of writing.
 
 - **Representation is Array-of-Structs.** `Vec<Agent>` plus a parallel `Vec<Carcass>`
   (`lib.rs:780–781`). `Agent` (`lib.rs:551–578`) holds `reserve, structure, peak_structure,
-  nutrient, position, traits, contact_time, wear[3], repro_reserve, repro_nutrient`. `TraitVector`
+  nutrient, position, traits, wear[3], repro_reserve, repro_nutrient`. `TraitVector`
   is a 7-field value struct (`lib.rs:42–69`), copied into every agent and every carcass.
 - **`Carcass` carries the full `TraitVector`** (`lib.rs:683–690`) — identical layout to a living
   agent's traits. This is the free win, confirmed.
@@ -121,10 +121,10 @@ Classifying every phase by how it maps to SoA:
 **Sparse scatter-gather with a barrier (the real engineering, but tractable):**
 - **resolve_drains** (`phase.rs:386–681`) — two passes (living, then carcass), each: per-target
   gather of in-range consumers (variable fan-in), `total_demand` per target (**segment reduction**),
-  proportional split, then **scatter** drains onto targets and gains onto consumers. The
-  sustained-contact term (`demand ∝ contact_time/(contact_time+K)`, `phase.rs:460–465`) and
-  trait-distance trophic efficiency (`phase.rs:466–470`) are per-(consumer,target) edge weights —
-  standard for a segment-reduction kernel. Within-pass death marking is a mask flip. **The two-pass
+  proportional split, then **scatter** drains onto targets and gains onto consumers. The drain demand
+  is the consumer's effective heterotrophy while in reach (the binary-reach drain, #380 — no
+  contact-duration term) and the trait-distance trophic efficiency is a per-(consumer,target) edge
+  weight — standard for a segment-reduction kernel. Within-pass death marking is a mask flip. **The two-pass
   "deaths immediately reflected" rule maps to a hard barrier between the drain pass and the
   reproduction pass** — but it is a *per-lane* barrier (each seed syncs independently), so it costs
   nothing across the batch.

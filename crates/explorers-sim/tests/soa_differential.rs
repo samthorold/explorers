@@ -35,7 +35,6 @@ fn warmed_agents(recipe: &WorldRecipe, seed: u64, warmup: u64) -> (Vec<Agent>, W
 #[track_caller]
 fn assert_agent_bit_identical(a: &Agent, b: &Agent, ctx: &str) {
     assert_eq!(a.id, b.id, "{ctx}: id");
-    assert_eq!(a.contact_time, b.contact_time, "{ctx}: contact_time");
     bit_eq(a.position.0, b.position.0, ctx, "position.0");
     bit_eq(a.position.1, b.position.1, ctx, "position.1");
     bit_eq(a.reserve, b.reserve, ctx, "reserve");

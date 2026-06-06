@@ -34,7 +34,6 @@ pub struct AgentSoA {
     pub nutrient: Vec<f32>,
     pub repro_reserve: Vec<f32>,
     pub repro_nutrient: Vec<f32>,
-    pub contact_time: Vec<u64>,
     // Trait lanes, one column per trait dimension (TraitVector::NUM_DIMS).
     pub t_photo: Vec<f32>,
     pub t_hetero: Vec<f32>,
@@ -69,7 +68,6 @@ impl AgentSoA {
             nutrient: Vec::with_capacity(n),
             repro_reserve: Vec::with_capacity(n),
             repro_nutrient: Vec::with_capacity(n),
-            contact_time: Vec::with_capacity(n),
             t_photo: Vec::with_capacity(n),
             t_hetero: Vec::with_capacity(n),
             t_mobility: Vec::with_capacity(n),
@@ -100,7 +98,6 @@ impl AgentSoA {
         self.nutrient.push(a.nutrient);
         self.repro_reserve.push(a.repro_reserve);
         self.repro_nutrient.push(a.repro_nutrient);
-        self.contact_time.push(a.contact_time);
         self.t_photo.push(a.traits.photosynthetic_absorption);
         self.t_hetero.push(a.traits.heterotrophy);
         self.t_mobility.push(a.traits.mobility);
@@ -125,7 +122,6 @@ impl AgentSoA {
         self.nutrient.swap_remove(i);
         self.repro_reserve.swap_remove(i);
         self.repro_nutrient.swap_remove(i);
-        self.contact_time.swap_remove(i);
         self.t_photo.swap_remove(i);
         self.t_hetero.swap_remove(i);
         self.t_mobility.swap_remove(i);
@@ -161,7 +157,6 @@ impl AgentSoA {
             peak_structure: self.peak_structure[i],
             nutrient: self.nutrient[i],
             traits: self.traits_at(i),
-            contact_time: self.contact_time[i],
             wear: [self.wear[0][i], self.wear[1][i], self.wear[2][i]],
             repro_reserve: self.repro_reserve[i],
             repro_nutrient: self.repro_nutrient[i],
