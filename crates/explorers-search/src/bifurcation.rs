@@ -133,6 +133,11 @@ impl PoolCoupling {
         let flux = p.solar_flux_magnitude;
 
         // Pool-fill (producer) diagonal: a productive founder cycles the pool fast.
+        // NOTE (#384): exact at `reserve_mobilisation_rate = 1.0` (the committed
+        // default). For `f < 1` this per-tick conversion diagonal is slowed by the
+        // bounded mobilisation flow (DEB energy conductance, flow 9); the factor is
+        // not folded in here — see the matching note in `g()`. Follow-up before
+        // f<1 search relies on the Hopf descriptor.
         let r_p = kappa * gamma * (flux - b).max(0.0) / REFERENCE_BODY_MASS;
         let k_p = if b > 0.0 { flux / b } else { f32::INFINITY };
 
@@ -311,6 +316,18 @@ fn g(theta: &TraitVector, env: &Environment, p: &WorldParameters) -> f32 {
 
     let cost = maintenance(theta, p);
     let net_energy = income_photo + income_trophic - cost;
+    // NOTE (#384): this mean-field reproduction/growth term is the per-tick
+    // selection diagonal `kappa·gamma·net_energy` and is exact at the committed
+    // default `reserve_mobilisation_rate = 1.0` (whole above-buffer surplus
+    // mobilised each tick — every current scenario and the atlas). When genesis
+    // search explores `f < 1`, only a bounded fraction of standing reserve is
+    // mobilised per tick (DEB energy conductance, flow 9), which slows this
+    // diagonal; the conductance factor is deliberately NOT folded in here because
+    // the steady-state relationship between net income and mobilised flow is not a
+    // simple scalar (it depends on the reserve/buffer accumulation, not on raw net
+    // income), and getting it wrong would mis-locate the bifurcation. Folding `f`
+    // into the analytic operators is tracked as follow-up before f<1 search relies
+    // on these descriptors.
     kappa * gamma * net_energy - pred_loss
 }
 

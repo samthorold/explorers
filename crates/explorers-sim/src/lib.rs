@@ -172,6 +172,9 @@ fn default_nutrient_grid_cell_size() -> f32 {
 fn default_growth_retention_multiplier() -> f32 {
     2.0
 }
+fn default_reserve_mobilisation_rate() -> f32 {
+    1.0
+}
 fn default_offspring_structure_fraction() -> f32 {
     0.2
 }
@@ -383,6 +386,19 @@ pub struct WorldParameters {
     /// Default 2.0 preserves historical behaviour.
     #[serde(default = "default_growth_retention_multiplier")]
     pub growth_retention_multiplier: f32,
+    /// Reserve mobilisation rate `f` (flow 9): the fraction of the above-buffer
+    /// reserve excess that is mobilised — and so split by kappa into soma and
+    /// reproductive allocation — each tick. `mobilised = f * (reserve - buffer)`;
+    /// the remainder stays in reserve to be mobilised on later ticks. This is
+    /// DEB's energy conductance: a large reserve is drawn down as a *rate*, never
+    /// the whole stock in one step. The bounded rate makes reserve a feast-famine
+    /// buffer — it lets a consumer (discrete-meal income) survive the gaps between
+    /// meals instead of having its provisioning liquidated on its first well-fed
+    /// tick. Default 1.0 is the degenerate one-tick liquidation (`mobilised =
+    /// reserve - buffer`) — a no-op against existing recipes; search moves to
+    /// `f < 1` where buffering produces more viable consumer ecologies.
+    #[serde(default = "default_reserve_mobilisation_rate")]
+    pub reserve_mobilisation_rate: f32,
     /// Fraction of each offspring's per-offspring energy share (after
     /// reproduction_efficiency loss) that is committed to structure rather
     /// than reserve at birth. The structure commitment is converted from
@@ -1564,6 +1580,7 @@ mod tests {
             maintenance_cost_exponent: 1.0,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
+            reserve_mobilisation_rate: 1.0,
             offspring_structure_fraction: 0.2,
         }
     }
@@ -2831,6 +2848,7 @@ mod tests {
             maintenance_cost_exponent: 1.0,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
+            reserve_mobilisation_rate: 1.0,
             offspring_structure_fraction: 0.2,
         }
     }

@@ -477,6 +477,7 @@ fn default_recipe() -> WorldRecipe {
             maintenance_cost_exponent: 1.0,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
+            reserve_mobilisation_rate: 1.0,
             offspring_structure_fraction: 0.2,
             asexual_propensity_maintenance_cost: 0.01,
             dispersal_propagule_cost_coefficient: 0.0,

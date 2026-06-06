@@ -232,7 +232,11 @@ pub fn grow_soa(s: &mut AgentSoA, params: &WorldParameters) -> (Vec<Event>, f32)
         }
         let metabolic_cost = maintenance_cost(s, i, params, exp);
         let retention = metabolic_cost * params.growth_retention_multiplier;
-        let surplus = (s.reserve[i] - retention).max(0.0);
+        // Mobilise only a bounded fraction of the above-buffer excess this tick
+        // (DEB energy conductance — flow 9); the remainder stays a feast-famine
+        // cushion. At rate 1.0 the whole excess is mobilised (historical no-op).
+        let excess = (s.reserve[i] - retention).max(0.0);
+        let surplus = excess * params.reserve_mobilisation_rate;
         if surplus <= 0.0 {
             continue;
         }
