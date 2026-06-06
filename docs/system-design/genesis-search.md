@@ -138,6 +138,30 @@ prototype's producer↔consumer pair (which needs two clusters a config lacks, a
 showed decouples at scale anyway). Both reuse the committed kernel (`trophic_transfer_efficiency`) and
 `TraitVector::distance` verbatim.
 
+**Conductance-aware under flow 9.** The [reserve mobilisation rate](world-rules.md) `f` (flow 9) sets
+how fast above-buffer reserve is mobilised into the growth flow. Both readings are aware of it, and the
+asymmetry between them is a direct consequence of reserve conservation. At any reserve fixed point the
+mobilised flow per tick *equals* net income `I − b` (inflow must balance outflow when reserve returns to
+the same value each tick), so `f` only sets where reserve sits (`R* = ρb + (I − b)/f`, larger as `f → 0`)
+and how fast it relaxes (`~1/f`), **not** the steady-state throughput. The selection diagonals are
+steady-state objects — invasion fitness and Jacobian eigenvalues are asymptotic, read after the reserve
+transient — so the **branching margin `D` and the interior fixed-point location are f-invariant**: a
+naïve scalar `f` on `net_energy` would be wrong, because the throughput the operator reads is net income
+regardless of `f`. The **oscillation reading is not** f-invariant in the same way: the conductance rate
+turns reserve into a genuine slow state on the consumer's income→structure pathway (the flow `f`
+governs), so the Hopf coupling is a three-compartment available-pool↔reserve↔living-mass map whose third
+eigenvalue (`≈ 1 − f`) and lagged structure-building shift the **Hopf boundary** with `f` even though the
+fixed point does not move. The reduction is exact at `f = 1` (reserve is slaved within one tick and the
+map collapses to the two-compartment pool↔living-mass form). The reserve buffer sits only on the consumer
+growth pathway: the producer's photosynthetic income refills reserve every tick, so the pool-fill
+diagonal is f-invisible (flow 9 names this producer/consumer asymmetry), and maintenance stays lumped on
+the living-mass decay term rather than drawn from reserve, which is what keeps the `f = 1` reduction
+exact. Because the oscillation observable is `WeakObservable` at current scale, the predicted-vs-observed
+crosscheck across `f` is exercised for the branching axis (its realised steady-state rate is directly
+measurable and reads f-invariant); for the oscillation axis the rollout crosscheck stays gated on the
+hardened cycle-detector, and the descriptor is held to its analytic invariants (fixed-point
+f-invariance, exact `f = 1` reduction, a monotone boundary shift in `f`).
+
 **The cross-check, regime-tagged.** For every *live* config the predicted sign is compared against the
 observed behaviour-axis boundary, and every disagreement is surfaced (`bifurcation_disagreements`),
 never swallowed — the validation-triad cross-check both spikes prize. Each disagreement carries a
