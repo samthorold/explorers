@@ -203,7 +203,12 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
                 * params.asexual_propensity_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
         let retention = metabolic_cost * params.growth_retention_multiplier;
-        let surplus = (agent.reserve - retention).max(0.0);
+        // Reserve above the buffer is mobilisable; of that excess only a bounded
+        // fraction `reserve_mobilisation_rate` is mobilised this tick (DEB energy
+        // conductance — flow 9). The remainder stays in reserve as a feast-famine
+        // cushion. At rate 1.0 the whole excess is mobilised (historical no-op).
+        let excess = (agent.reserve - retention).max(0.0);
+        let surplus = excess * params.reserve_mobilisation_rate;
         if surplus <= 0.0 {
             continue;
         }
@@ -736,8 +741,7 @@ pub struct MoveResult {
 /// all energy-affecting phases but before wear and the death check. Agents reposition based on
 /// spatial context (nearby agents and carcasses), traits (chemotaxis, consumption,
 /// scavenging, mobility), and a random walk component. Movement costs energy
-/// proportional to distance. Contact time resets on movement, increments when
-/// stationary.
+/// proportional to distance.
 pub fn move_agents(
     agents: &mut [Agent],
     carcasses: &[Carcass],
@@ -1571,6 +1575,7 @@ mod tests {
             maintenance_cost_exponent: 1.0,
             nutrient_grid_cell_size: 10.0,
             growth_retention_multiplier: 2.0,
+            reserve_mobilisation_rate: 1.0,
             offspring_structure_fraction: 0.2,
             asexual_propensity_maintenance_cost: 0.0,
             dispersal_propagule_cost_coefficient: 0.0,
@@ -2410,6 +2415,76 @@ mod tests {
         assert!(
             (agents[0].structure - 5.0).abs() < 1e-6,
             "surplus (5.0) should become structure"
+        );
+    }
+
+    #[test]
+    fn reserve_mobilisation_rate_leaves_a_cushion_above_retention() {
+        // Flow 9: at a reserve mobilisation rate < 1.0, grow mobilises only
+        // `rate * (reserve - retention)` per tick instead of the whole excess,
+        // so reserve is drawn down to retention + (1 - rate) * excess rather than
+        // all the way to the bare retention buffer. This is DEB's energy
+        // conductance: a large reserve mobilises a fraction per tick, never all
+        // at once. metabolic_cost = 1.0, retention = 2.0 (default multiplier),
+        // reserve = 12.0, excess = 10.0. At rate 0.25, mobilised = 2.5, so
+        // reserve ends at 12.0 - 2.5 = 9.5 (a 7.5 cushion above retention).
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            mobility_maintenance_cost: 1.0,
+            movement_cost_coefficient: 0.0,
+            growth_efficiency: 0.0, // surplus → repro_reserve only; reserve drawdown is what matters
+            reserve_mobilisation_rate: 0.25,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            mobility: 1.0,
+            kappa: 0.0, // all mobilised surplus → repro_reserve, none to growth/repair
+            ..zero_traits()
+        };
+        // metabolic_cost = 1.0; retention = 1.0 * 2.0 = 2.0; excess = 12.0 - 2.0 = 10.0
+        // mobilised = 0.25 * 10.0 = 2.5; reserve ends at 12.0 - 2.5 = 9.5
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 12.0, traits)];
+        let (_events, _dissipated) = grow(&mut agents, &params);
+        assert!(
+            (agents[0].reserve - 9.5).abs() < 1e-5,
+            "reserve should keep a cushion above retention (expected 9.5, got {})",
+            agents[0].reserve
+        );
+        assert!(
+            (agents[0].repro_reserve - 2.5).abs() < 1e-5,
+            "only the mobilised flow (2.5) is split by kappa into repro_reserve, got {}",
+            agents[0].repro_reserve
+        );
+    }
+
+    #[test]
+    fn reserve_mobilisation_rate_default_is_one_and_liquidates_whole_excess() {
+        // Default f = 1.0 reproduces the historical one-tick liquidation: the
+        // entire above-buffer excess is mobilised, leaving reserve at the bare
+        // retention buffer. metabolic_cost = 1.0, retention = 2.0, reserve = 12.0
+        // -> whole excess (10.0) mobilised, reserve ends at 2.0.
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            mobility_maintenance_cost: 1.0,
+            movement_cost_coefficient: 0.0,
+            growth_efficiency: 0.0,
+            ..test_params()
+        };
+        assert!(
+            (params.reserve_mobilisation_rate - 1.0).abs() < 1e-6,
+            "default reserve mobilisation rate must be 1.0 (no-op)"
+        );
+        let traits = TraitVector {
+            mobility: 1.0,
+            kappa: 0.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 12.0, traits)];
+        let (_events, _dissipated) = grow(&mut agents, &params);
+        assert!(
+            (agents[0].reserve - 2.0).abs() < 1e-5,
+            "at f=1.0 reserve is drawn down to the bare retention buffer (2.0), got {}",
+            agents[0].reserve
         );
     }
 

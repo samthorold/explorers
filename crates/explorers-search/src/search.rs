@@ -216,6 +216,16 @@ pub fn default_ranges() -> Vec<ParameterRange> {
             min: 0.05,
             max: 0.5,
         }, // 30
+        ParameterRange {
+            name: "reserve_mobilisation_rate".into(),
+            // Reserve mobilisation rate `f` (flow 9). The lower bound stays above
+            // zero so reserve always drains *some* surplus per tick (rate 0 would
+            // freeze growth and reproduction entirely); 1.0 is the historical
+            // one-tick liquidation. Search explores `f < 1` for the buffering that
+            // lets discrete-meal consumers survive between meals.
+            min: 0.05,
+            max: 1.0,
+        }, // 31
     ]
 }
 
@@ -259,6 +269,7 @@ fn viable_baseline() -> WorldParameters {
         maintenance_cost_exponent: 2.0,
         nutrient_grid_cell_size: 10.0,
         growth_retention_multiplier: 2.0,
+        reserve_mobilisation_rate: 1.0,
         offspring_structure_fraction: 0.2,
         asexual_propensity_maintenance_cost: 0.01,
         dispersal_propagule_cost_coefficient: 0.0,
@@ -299,6 +310,7 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         maintenance_cost_exponent: v(28) as f32,
         growth_retention_multiplier: v(29) as f32,
         offspring_structure_fraction: v(30) as f32,
+        reserve_mobilisation_rate: v(31) as f32,
         ..viable_baseline()
     };
 
@@ -425,6 +437,36 @@ mod tests {
         let ones = vec![1.0; ranges.len()];
         let (params_hi, _) = decode(&ones, &ranges);
         assert!((params_hi.solar_flux_magnitude - 20.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn decode_explores_reserve_mobilisation_rate_below_one() {
+        // Issue #384: the reserve mobilisation rate `f` must be a searchable
+        // dimension so genesis can find the buffering regime `f < 1`. At unit input
+        // 0.0 the decoder must produce a rate strictly below 1.0 (the lower end of
+        // its range), and the dimension must round-trip through its own index — not
+        // inherit the baseline's no-op 1.0.
+        let ranges = default_ranges();
+        let mut unit = vec![0.5; ranges.len()];
+        let idx = ranges
+            .iter()
+            .position(|r| r.name == "reserve_mobilisation_rate")
+            .expect("reserve_mobilisation_rate must be a searched parameter");
+        unit[idx] = 0.0; // minimum of the range
+        let (params, _) = decode(&unit, &ranges);
+        assert!(
+            params.reserve_mobilisation_rate < 1.0,
+            "search must be able to reach f < 1 (got {})",
+            params.reserve_mobilisation_rate
+        );
+        // And the top of the range reproduces the historical no-op exactly.
+        unit[idx] = 1.0;
+        let (params_hi, _) = decode(&unit, &ranges);
+        assert!(
+            (params_hi.reserve_mobilisation_rate - 1.0).abs() < 1e-5,
+            "f at the top of its range must be 1.0 (historical no-op), got {}",
+            params_hi.reserve_mobilisation_rate
+        );
     }
 
     #[test]
