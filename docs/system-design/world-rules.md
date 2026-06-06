@@ -289,11 +289,21 @@ The network carries both perception and physical channels.
 - **Network perception** — signals propagated through network connections. Chemical alerts, resource-state information. An agent connected to the network can perceive the states of connected agents regardless of surface distance.
 - **Network transfer** — resource movement through network connections. Required for network redistribution (flow 5). This is what makes the network more than a signalling system — it is infrastructure that moves energy and nutrient.
 
-### Sustained contact
+### Consumption is incremental, and its character emerges from target and size
 
-Some physical interactions are not instantaneous — consumption drains structure over time through continued physical contact. The effectiveness of sustained-contact interactions increases with duration. Moving breaks sustained contact.
+Consumption is not instantaneous, but neither does it run on a duration clock. A consumer drains a target's structure tick by tick for as long as the target stays within its feeding reach (flow 3). "Over time" is just repetition: reach is binary each tick (in range or not), and the cumulative effect is the sum of the per-tick drains while contact persists. The per-tick drain is the consumer's effective heterotrophy — capped by the structure actually present and shared proportionally among co-feeders — with no warm-up, ramp, or reward for staying put.
 
-Sustained contact creates a trade-off for consumption on the surface: mobile agents can reach more targets but cannot maintain contact long enough for slow, high-yield feeding. Sessile consumers sacrifice reach but gain the deep contact needed for sustained feeding.
+The three heterotrophic interactions ecology names — predation, grazing, scavenging — are not separate mechanisms or traits but one capability differentiated by **target state** and **the size of the drain relative to the target** ([trophic roles](../ecology/trophic-roles.md), *Body size and the geometry of heterotrophic interactions*):
+
+- **Predation** — the per-tick drain is large relative to the target's structure, so the target crosses its complexity-dependent death threshold (trade-off #9) within a tick or a few: lethal, and the consumer takes essentially the whole body. The wolf-and-hare event.
+- **Grazing** — the drain is small relative to the target's structure, leaving it above the death threshold: non-lethal, the target survives and regrows, and the consumer exploits a renewable flow across repeated visits. The caterpillar-and-tree relationship; the 5–15% of net primary production the grazer chain carries.
+- **Scavenging / decomposition** — the target is a carcass; the same drain physics apply to dead structure.
+
+All three fall out of mechanisms already committed — the death threshold (#9) decides lethality, trait-space distance decides transfer efficiency (flow 7) — so the lethal/non-lethal divide is emergent, not prescribed, and one heterotrophy trait spans all three exactly as the domain requires.
+
+The sessile-versus-mobile feeding trade-off lives in **feeding reach** (flow 3), not in any contact duration. Feeding has two physical solutions: a mobile consumer reaches food by locomotion (the contact-range term) and pays movement cost to do so; a sessile consumer reaches food by growing its body through the substrate (the body-extent term — a decomposer's mycelium is its foraging organ). A roving predator and a rooted fungus feed by the same per-tick drain but close the gap to food in opposite ways — the wolf runs, the mycelium grows.
+
+A tempting alternative — making feeding effectiveness ramp with contact *duration*, so staying put feeds better — is deliberately **not** used, and not merely as a calibration choice. It corresponds to no variable in the domain: ecology says predation-versus-grazing is a size-ratio phenomenon, not a duration one. And any duration ramp keyed to stillness forbids mobile feeding outright — a chemotactic pursuer that moves to reach prey resets its own clock every tick and never eats, defeating the very pursuit predators the sensing and chemotaxis machinery exists to serve. The autotroph's stillness requirement (trade-off #2) is expressed through the cost structure and through reach, never through a temporal gate; the same holds for heterotrophy.
 
 ## Cost structure (trade-offs)
 
