@@ -1,4 +1,5 @@
 pub mod bayesopt;
+pub mod bifurcation;
 pub mod gp;
 pub mod lhs;
 pub mod prefilter;
