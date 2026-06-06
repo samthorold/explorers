@@ -84,21 +84,34 @@ fn maintenance(t: &TraitVector, p: &WorldParameters) -> f32 {
 // coupling (lift of hopf_prototype.rs, #358).
 // ===========================================================================
 
-/// The lumped coefficients of the 2-compartment living-mass↔available-pool map,
-/// each derived from committed fluxes. This is the Hopf prototype's
+/// The lumped coefficients of the 3-compartment available-pool↔reserve↔living-mass
+/// map, each derived from committed fluxes. This is the Hopf prototype's
 /// [`Compartments`] reparametrised for a single founder: the **available pool `A`**
 /// (the resource, role `P`) is filled/cycled by the founder's photosynthetic
-/// production and bounded by the metabolic ceiling, and the **living mass `M`**
-/// (the consumer, role `C`) draws it down through the founder's own consumption
-/// (the bilinear trophic draw, `phase.rs:386`). Both sides are the same founder
-/// biomass, so the trait-space distance is `0` and the committed kernel sits at
-/// its maximum — the self-contained coupling F AC1 names.
+/// production and bounded by the metabolic ceiling, the **consumer reserve `R`**
+/// receives the bilinear trophic draw and mobilises it into growth at the flow-9
+/// conductance rate, and the **living mass `M`** (the consumer, role `C`) is built
+/// from that mobilised flow. Both sides are the same founder biomass, so the
+/// trait-space distance is `0` and the committed kernel sits at its maximum — the
+/// self-contained coupling F AC1 names.
 ///
-/// The discrete map (identical in form to the Hopf prototype):
+/// The discrete map (`f = reserve_mobilisation_rate`, `ρb` the retention buffer):
 /// ```text
 ///   A' = A + r_P · A · (1 − A/K_P)  −  a · A · M
-///   M' = M + κ · γ · e · a · A · M  −  m · M
+///   R' = (1 − f) · (R + e · a · A · M)  +  f · ρb
+///   M' = M + κ · γ · f · (R + e · a · A · M − ρb)  −  m · M
 /// ```
+/// The reserve sits **only on the consumer growth pathway** (the income→structure
+/// flow that flow 9's conductance governs): the producer's photosynthetic income
+/// refills reserve every tick, so the pool-fill diagonal `r_P` is f-invisible, and
+/// maintenance stays lumped on the `m · M` decay rather than drawn from reserve —
+/// both are what make the map collapse **exactly** to the prototype's
+/// 2-compartment form at `f = 1` (reserve is slaved within one tick: `R' = ρb`,
+/// `R + e·a·A·M − ρb = e·a·A·M`, so `M'` recovers `M + κγe·a·A·M − m·M`). At
+/// `f < 1` reserve is a genuine slow mode (relaxation `~f`) whose lag shifts the
+/// Hopf boundary; the interior fixed point `(A*, M*)` is unchanged (reserve
+/// conservation fixes throughput at net income — see [`g`] and
+/// `docs/system-design/genesis-search.md`).
 struct PoolCoupling {
     /// Available-pool intrinsic recovery: the founder's net photosynthetic
     /// production cycles nutrient through living mass back to the pool — the
@@ -133,11 +146,12 @@ impl PoolCoupling {
         let flux = p.solar_flux_magnitude;
 
         // Pool-fill (producer) diagonal: a productive founder cycles the pool fast.
-        // NOTE (#384): exact at `reserve_mobilisation_rate = 1.0` (the committed
-        // default). For `f < 1` this per-tick conversion diagonal is slowed by the
-        // bounded mobilisation flow (DEB energy conductance, flow 9); the factor is
-        // not folded in here — see the matching note in `g()`. Follow-up before
-        // f<1 search relies on the Hopf descriptor.
+        // This is f-invariant (#387): the reserve mobilisation rate `f` (flow 9) is
+        // invisible on the producer pathway — photosynthetic income refills reserve
+        // every tick regardless of draw-down speed, so the pool-fill rate is not
+        // slowed by a bounded mobilisation flow. The conductance factor enters the
+        // Hopf reading only through the *consumer* reserve compartment in
+        // `jacobian` (the income→structure growth flow), never here.
         let r_p = kappa * gamma * (flux - b).max(0.0) / REFERENCE_BODY_MASS;
         let k_p = if b > 0.0 { flux / b } else { f32::INFINITY };
 
@@ -194,39 +208,116 @@ impl PoolCoupling {
         Some((a_star, m_star))
     }
 
-    /// The 2×2 Jacobian of the discrete map at the interior fixed point, rows/cols
-    /// ordered `(A, M)`. Verbatim the Hopf prototype's `jacobian`.
-    fn jacobian(&self, p: &WorldParameters) -> Option<[[f32; 2]; 2]> {
+    /// The 3×3 Jacobian of the discrete map at the interior fixed point, rows/cols
+    /// ordered `(A, M, R)` — available pool, living mass, consumer reserve.
+    ///
+    /// The reserve row is what the flow-9 conductance factor `f`
+    /// (`reserve_mobilisation_rate`) enters: trophic income `e·a·A·M` is received
+    /// into reserve and only the mobilised flow `f·(R − ρb)` leaves it to build
+    /// structure, all within one tick (income is added before mobilisation, as the
+    /// stepper's photosynthesise→metabolise→grow order does). So reserve relaxes at
+    /// rate `f` and feeds the living-mass growth with the same factor:
+    /// ```text
+    ///   ∂M'/∂A = β·f·M*      ∂M'/∂M = 1 − m + β·f·A*      ∂M'/∂R = κγ·f
+    ///   ∂R'/∂A = (1−f)·e·a·M* ∂R'/∂M = (1−f)·e·a·A*        ∂R'/∂R = 1 − f
+    /// ```
+    /// At `f = 1` the reserve row's first two entries and its diagonal all vanish,
+    /// the reserve eigenvalue collapses to `0`, and the leading 2×2 block recovers
+    /// the prototype's frozen↔oscillation reading exactly. At `f < 1` reserve is a
+    /// genuine slow third mode (eigenvalue `≈ 1 − f`) whose lag shifts the Hopf
+    /// boundary even though the interior fixed point `(A*, M*)` does not move (it is
+    /// `f`-invariant — reserve conservation fixes throughput at net income; see the
+    /// note in [`g`] and `docs/system-design/genesis-search.md`).
+    fn jacobian(&self, p: &WorldParameters) -> Option<[[f32; 3]; 3]> {
         let (a_star, m_star) = self.interior_fixed_point(p)?;
         let beta = self.beta(p);
-        let j11 = 1.0 + self.r_p - 2.0 * self.r_p * a_star / self.k_p - self.a * m_star;
-        let j12 = -self.a * a_star;
-        let j21 = beta * m_star;
-        let j22 = 1.0 + beta * a_star - self.m;
-        Some([[j11, j12], [j21, j22]])
+        let e = self.e(p);
+        let f = p.reserve_mobilisation_rate;
+        let kg = self.kappa * self.gamma;
+
+        // Row A (available pool): logistic recovery − consumer draw; reserve does
+        // not enter the pool equation, so ∂A'/∂R = 0.
+        let jaa = 1.0 + self.r_p - 2.0 * self.r_p * a_star / self.k_p - self.a * m_star;
+        let jam = -self.a * a_star;
+        // Row M (living mass): structure is built from the mobilised flow S = f·(R−ρb).
+        let jma = beta * f * m_star;
+        let jmm = 1.0 - self.m + beta * f * a_star;
+        let jmr = kg * f;
+        // Row R (consumer reserve): trophic income in, mobilised flow out; the 1−f
+        // diagonal is the conductance relaxation (the slow mode f introduces).
+        let jra = (1.0 - f) * e * self.a * m_star;
+        let jrm = (1.0 - f) * e * self.a * a_star;
+        let jrr = 1.0 - f;
+
+        Some([[jaa, jam, 0.0], [jma, jmm, jmr], [jra, jrm, jrr]])
     }
 }
 
-/// The spectral radius of a 2×2 Jacobian (leading `|λ|`). Verbatim the Hopf
-/// prototype's `spectrum` modulus: a complex pair has modulus `√det`; two reals
-/// take the larger absolute eigenvalue.
-fn spectral_radius(j: &[[f32; 2]; 2]) -> f32 {
-    let trace = j[0][0] + j[1][1];
-    let det = j[0][0] * j[1][1] - j[0][1] * j[1][0];
-    let disc = trace * trace - 4.0 * det;
-    if disc < 0.0 {
-        det.max(0.0).sqrt()
+/// The spectral radius (leading `|λ|`) of a 3×3 Jacobian: the largest modulus
+/// over the three roots of its characteristic cubic, solved in closed form
+/// (Cardano). A Neimark–Sacker / discrete-Hopf crossing is a complex-conjugate
+/// pair leaving the unit circle, so the modulus must be read over *complex*
+/// roots — a real-only method (power iteration) cannot see the pair. The cubic
+/// is solved in `f64` for conditioning and the result returned as `f32`. The
+/// coupling carries an explicit reserve compartment (the flow-9 conductance mode,
+/// [`PoolCoupling::jacobian`]), so the Jacobian is 3×3 rather than the prototype's
+/// 2×2; at `reserve_mobilisation_rate = 1` the reserve eigenvalue collapses to `0`
+/// and this reduces to the leading 2×2 modulus.
+fn spectral_radius(j: &[[f32; 3]; 3]) -> f32 {
+    // Characteristic polynomial of `j`:  λ³ − c2·λ² + c1·λ − c0,
+    // with c2 = trace, c1 = sum of principal 2×2 minors, c0 = determinant.
+    let m = |a: f64, b: f64, c: f64, d: f64| a * d - b * c;
+    let (j00, j01, j02) = (j[0][0] as f64, j[0][1] as f64, j[0][2] as f64);
+    let (j10, j11, j12) = (j[1][0] as f64, j[1][1] as f64, j[1][2] as f64);
+    let (j20, j21, j22) = (j[2][0] as f64, j[2][1] as f64, j[2][2] as f64);
+    let c2 = j00 + j11 + j22;
+    let c1 = m(j11, j12, j21, j22) + m(j00, j02, j20, j22) + m(j00, j01, j10, j11);
+    let c0 =
+        j00 * m(j11, j12, j21, j22) - j01 * m(j10, j12, j20, j22) + j02 * m(j10, j11, j20, j21);
+    let r = max_modulus_cubic(c2, c1, c0);
+    if r.is_finite() { r as f32 } else { 0.0 }
+}
+
+/// Largest root modulus of the monic cubic `λ³ − c2·λ² + c1·λ − c0` (Cardano).
+/// Depress to `t³ + p·t + q` via `λ = t + c2/3`; a positive discriminant
+/// `4p³ + 27q²` gives one real root and a complex-conjugate pair (the Hopf case),
+/// otherwise three real roots read by the trigonometric form. All in `f64`.
+fn max_modulus_cubic(c2: f64, c1: f64, c0: f64) -> f64 {
+    let shift = c2 / 3.0;
+    let p = c1 - c2 * c2 / 3.0;
+    let q = -2.0 * c2 * c2 * c2 / 27.0 + c2 * c1 / 3.0 - c0;
+
+    let disc = 4.0 * p * p * p + 27.0 * q * q;
+    if disc > 0.0 {
+        // One real root + a complex-conjugate pair.
+        let s = (q * q / 4.0 + p * p * p / 27.0).sqrt();
+        let u = (-q / 2.0 + s).cbrt();
+        let v = (-q / 2.0 - s).cbrt();
+        let real_root = (u + v + shift).abs();
+        let re = -(u + v) / 2.0 + shift;
+        let im = 3.0_f64.sqrt() / 2.0 * (u - v);
+        let pair_mod = (re * re + im * im).sqrt();
+        real_root.max(pair_mod)
+    } else if p.abs() < 1e-12 {
+        // Degenerate (triple root): t³ + q ≈ 0.
+        ((-q).cbrt() + shift).abs()
     } else {
-        let root = disc.sqrt();
-        let l1 = (trace + root).abs() / 2.0;
-        let l2 = (trace - root).abs() / 2.0;
-        l1.max(l2)
+        // Three real roots (trigonometric form; p < 0 here since disc ≤ 0).
+        let scale = 2.0 * (-p / 3.0).sqrt();
+        let arg = (3.0 * q / (p * scale)).clamp(-1.0, 1.0);
+        let theta = arg.acos() / 3.0;
+        let mut best = 0.0_f64;
+        for k in 0..3 {
+            let t = scale * (theta - 2.0 * std::f64::consts::PI * k as f64 / 3.0).cos();
+            best = best.max((t + shift).abs());
+        }
+        best
     }
 }
 
 /// Signed distance to the **frozen↔oscillation** (Neimark–Sacker / discrete Hopf)
-/// boundary of the living-mass↔available-pool coupling: `|λ| − 1` of the 2×2
-/// Jacobian at the interior fixed point.
+/// boundary of the available-pool↔reserve↔living-mass coupling: `|λ| − 1` of the
+/// 3×3 Jacobian at the interior fixed point.
 ///
 /// - `< 0` ⇒ the interior point is a stable node/spiral — **frozen**;
 /// - `> 0` ⇒ a limit cycle — **oscillation**;
@@ -234,7 +325,10 @@ fn spectral_radius(j: &[[f32; 2]; 2]) -> f32 {
 ///   pure autotroph has no consumer-resource loop to oscillate) or the reading is
 ///   non-finite (NaN-guarded).
 ///
-/// Sign convention matches the spike (`|λ|` crossing the unit circle).
+/// Sign convention matches the spike (`|λ|` crossing the unit circle). Conductance-
+/// aware (#387): the reserve compartment carries the flow-9 mobilisation rate `f`,
+/// so the boundary shifts with `f` while the fixed point stays put — at `f = 1`
+/// this reduces exactly to the prototype's 2×2 reading.
 pub fn oscillation_distance(params: &WorldParameters, founder_mean: &TraitVector) -> f32 {
     let coupling = PoolCoupling::from_founder(founder_mean, params);
     let distance = match coupling.jacobian(params) {
@@ -316,18 +410,21 @@ fn g(theta: &TraitVector, env: &Environment, p: &WorldParameters) -> f32 {
 
     let cost = maintenance(theta, p);
     let net_energy = income_photo + income_trophic - cost;
-    // NOTE (#384): this mean-field reproduction/growth term is the per-tick
-    // selection diagonal `kappa·gamma·net_energy` and is exact at the committed
-    // default `reserve_mobilisation_rate = 1.0` (whole above-buffer surplus
-    // mobilised each tick — every current scenario and the atlas). When genesis
-    // search explores `f < 1`, only a bounded fraction of standing reserve is
-    // mobilised per tick (DEB energy conductance, flow 9), which slows this
-    // diagonal; the conductance factor is deliberately NOT folded in here because
-    // the steady-state relationship between net income and mobilised flow is not a
-    // simple scalar (it depends on the reserve/buffer accumulation, not on raw net
-    // income), and getting it wrong would mis-locate the bifurcation. Folding `f`
-    // into the analytic operators is tracked as follow-up before f<1 search relies
-    // on these descriptors.
+    // This mean-field reproduction/growth term is the per-tick selection diagonal
+    // `kappa·gamma·net_energy`, and it is f-invariant — correct for every
+    // `reserve_mobilisation_rate` (#387), so the conductance factor `f` is
+    // deliberately absent. The reason is reserve conservation, not a coincidence:
+    // at any reserve fixed point the mobilised growth flow per tick equals net
+    // income `I − b` (inflow must balance outflow when reserve returns to the same
+    // value each tick), so `f` only sets the reserve level `R* = ρb + (I − b)/f`
+    // and the relaxation timescale `~1/f`, never the steady-state throughput. The
+    // branching margin is an invasion-fitness reading — an asymptotic quantity read
+    // after the mutant's reserve has relaxed — so it sees that steady-state
+    // throughput. A naïve scalar `f` on `net_energy` would therefore be *wrong*
+    // (the intuition that f<1 "slows the diagonal" holds only for the transient,
+    // which the descriptor does not read). The f-dependence is real but confined to
+    // *stability*: it enters the Hopf reading through the reserve compartment in
+    // `PoolCoupling::jacobian`. See `docs/system-design/genesis-search.md`.
     kappa * gamma * net_energy - pred_loss
 }
 
@@ -528,5 +625,178 @@ mod tests {
             let d = oscillation_distance(&params, &dist.mean_traits);
             assert!(d.is_finite(), "|λ|−1 must be finite at unit {u}, got {d}");
         }
+    }
+
+    // --- Branching: conductance throughput crosscheck against the sim ---------
+
+    #[test]
+    fn branching_throughput_is_invariant_to_the_reserve_mobilisation_rate_in_rollout() {
+        use explorers_sim::{InitialDistribution, World};
+        // Reserve conservation predicts the realised steady-state mobilised surplus
+        // per tick equals net income regardless of f — only the reserve level and
+        // the transient length change. A single sessile autotroph with kappa = 0
+        // routes its entire mobilised surplus into the reproductive allocation, so
+        // the per-tick growth of repro_reserve at steady state IS that surplus.
+        // Reproduction is gated off (huge threshold) so the allocation accumulates
+        // monotonically and its slope is readable. The slope must not drift with f:
+        // the empirical confirmation that g()'s throughput term needs no f factor
+        // (the branching descriptor is f-invariant). Same seed + zero trait
+        // covariance ⇒ the agent is identical across the f runs, so any drift is f.
+        let mut params = baseline_params();
+        params.solar_flux_magnitude = 15.0;
+        params.reproduction_energy_threshold = 1.0e9; // never reproduce
+        let founder = TraitVector {
+            photosynthetic_absorption: 0.6,
+            heterotrophy: 0.0,
+            mobility: 0.0,
+            kappa: 0.0,
+            fecundity: 0.35,
+            asexual_propensity: 0.0,
+            dispersal: 0.0,
+        };
+        let dist = InitialDistribution {
+            mean_traits: founder,
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 10.0,
+        };
+
+        // Steady-state per-tick accumulation of the reproductive allocation, read
+        // after the reserve transient (which lengthens as f → 0).
+        let rate_at = |f: f32| -> f32 {
+            let mut p = params.clone();
+            p.reserve_mobilisation_rate = f;
+            let mut world = World::new(p, dist.clone(), 42);
+            let sum_repro = |w: &World| w.agents().iter().map(|a| a.repro_reserve).sum::<f32>();
+            for _ in 0..100 {
+                world.step();
+            }
+            let r1 = sum_repro(&world);
+            for _ in 0..100 {
+                world.step();
+            }
+            let r2 = sum_repro(&world);
+            (r2 - r1) / 100.0
+        };
+
+        let base = rate_at(1.0);
+        assert!(
+            base > 0.0,
+            "autotroph should accumulate reproductive allocation at f=1, got {base}"
+        );
+        for &f in &[0.5_f32, 0.25, 0.1] {
+            let r = rate_at(f);
+            assert!(
+                (r - base).abs() <= 0.02 * base + 1e-4,
+                "realised steady-state mobilised surplus drifted with f={f}: {r} vs f=1 {base}"
+            );
+        }
+    }
+
+    // --- 3×3 spectral radius (Cardano) ---------------------------------------
+
+    #[test]
+    fn spectral_radius_reads_the_largest_real_eigenvalue_of_a_diagonal() {
+        // A diagonal matrix's eigenvalues are its diagonal; the spectral radius is
+        // the largest modulus among them.
+        let j = [[0.5, 0.0, 0.0], [0.0, -0.9, 0.0], [0.0, 0.0, 0.2]];
+        assert!((spectral_radius(&j) - 0.9).abs() < 1e-5);
+    }
+
+    #[test]
+    fn spectral_radius_reads_the_modulus_of_a_complex_pair() {
+        // A 2×2 rotation-scaling block 0.6 ± 0.5i (modulus √0.61 ≈ 0.78102) plus a
+        // smaller real eigenvalue 0.3. The Neimark–Sacker crossing is exactly this
+        // complex pair, so the modulus must be read over the complex roots.
+        let j = [[0.6, -0.5, 0.0], [0.5, 0.6, 0.0], [0.0, 0.0, 0.3]];
+        let expected = (0.61_f32).sqrt();
+        assert!(
+            (spectral_radius(&j) - expected).abs() < 1e-5,
+            "expected complex-pair modulus {expected}, got {}",
+            spectral_radius(&j)
+        );
+    }
+
+    #[test]
+    fn interior_fixed_point_is_invariant_to_the_reserve_mobilisation_rate() {
+        // Reserve conservation fixes the mobilised throughput at net income for
+        // every f, so the interior coexistence point (A*, M*) does not move with
+        // the conductance factor — only the reserve level R* and the relaxation
+        // timescale do. f therefore enters stability (the Jacobian), never the
+        // fixed-point location. This is the analytic invariant the branching
+        // descriptor's f-invariance also rests on.
+        let founder = founder(0.5, 0.5, 0.5);
+        let mut base = baseline_params();
+        base.solar_flux_magnitude = 15.0;
+        base.base_trophic_efficiency = 0.9;
+
+        let mut p1 = base.clone();
+        p1.reserve_mobilisation_rate = 1.0;
+        let (a_ref, m_ref) = PoolCoupling::from_founder(&founder, &p1)
+            .interior_fixed_point(&p1)
+            .expect("interior fixed point should exist at f=1");
+
+        for &f in &[0.75_f32, 0.5, 0.25, 0.1, 0.05] {
+            let mut p = base.clone();
+            p.reserve_mobilisation_rate = f;
+            let (a, m) = PoolCoupling::from_founder(&founder, &p)
+                .interior_fixed_point(&p)
+                .expect("interior fixed point should exist");
+            assert!(
+                (a - a_ref).abs() < 1e-6 && (m - m_ref).abs() < 1e-6,
+                "fixed point moved with f={f}: ({a}, {m}) vs f=1 ({a_ref}, {m_ref})"
+            );
+        }
+    }
+
+    #[test]
+    fn slower_mobilisation_moves_the_oscillation_reading_toward_the_hopf_boundary() {
+        // The reserve compartment is a slow mode (relaxation ~f). As mobilisation
+        // slows (f → 0) it pulls |λ|−1 monotonically toward the neutral boundary
+        // from both sides: an oscillatory config's positive reading falls toward 0
+        // (the feast-famine buffer damps the living-mass↔pool cycle), and a frozen
+        // config's negative reading rises toward 0. Signs are preserved across the
+        // sweep, so the reading stays a faithful side-of-boundary descriptor, and
+        // every reading is finite.
+        let founder = founder(0.5, 0.5, 0.5);
+        let fs = [1.0_f32, 0.75, 0.5, 0.25, 0.1];
+
+        let read = |eff: f32, f: f32| {
+            let mut p = baseline_params();
+            p.solar_flux_magnitude = 15.0;
+            p.base_trophic_efficiency = eff;
+            p.reserve_mobilisation_rate = f;
+            oscillation_distance(&p, &founder)
+        };
+        let osc: Vec<f32> = fs.iter().map(|&f| read(0.9, f)).collect();
+        let frz: Vec<f32> = fs.iter().map(|&f| read(0.15, f)).collect();
+
+        for w in osc.windows(2) {
+            assert!(
+                w[0] > w[1] && w[1] > 0.0,
+                "oscillatory side: |λ|−1 should fall toward 0 as f decreases, got {osc:?}"
+            );
+        }
+        for w in frz.windows(2) {
+            assert!(
+                w[0] < w[1] && w[1] < 0.0,
+                "frozen side: |λ|−1 should rise toward 0 as f decreases, got {frz:?}"
+            );
+        }
+        for &d in osc.iter().chain(frz.iter()) {
+            assert!(
+                d.is_finite(),
+                "|λ|−1 must be finite across the f-sweep, got {d}"
+            );
+        }
+    }
+
+    #[test]
+    fn spectral_radius_reads_a_complex_pair_outside_the_unit_circle() {
+        // A complex pair 0.8 ± 0.7i (modulus √1.13 ≈ 1.0630) — the oscillatory side
+        // of a Hopf crossing — dominates a small real root.
+        let j = [[0.8, -0.7, 0.0], [0.7, 0.8, 0.0], [0.0, 0.0, 0.1]];
+        let expected = (1.13_f32).sqrt();
+        assert!((spectral_radius(&j) - expected).abs() < 1e-5);
     }
 }
