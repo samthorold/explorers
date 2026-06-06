@@ -156,6 +156,40 @@ fn decomposer_drains_carcass_after_a_death_reindexes_agents() {
     );
 }
 
+/// Determinism guard (issue #343): the deterministic stepper's load-bearing
+/// invariant is *same seed -> same run*. example9 is the only scenario combining
+/// a dense, high-birth sexual producer ring with an active decomposition pathway,
+/// so it is the only one that exercised the sexual mate-pairing phase's
+/// nondeterministic iteration order. Running the same seed twice in the same
+/// process must reproduce identical demographics down to the count; if it does
+/// not, an iteration-order-dependent RNG draw has leaked into the stepper.
+#[test]
+fn example9_is_bit_deterministic_across_repeated_runs() {
+    fn run_demographics(seed: u64) -> (u64, usize) {
+        let recipe = load_pathway();
+        let mut world = World::from_recipe(&recipe, seed);
+        let mut total_births: u64 = 0;
+        let ticks = recipe.max_ticks.min(PATHWAY_TEST_MAX_TICKS);
+        for _ in 0..ticks {
+            world.step();
+            total_births += world.last_tick_births() as u64;
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+        (total_births, world.agents().len())
+    }
+
+    let seed = 1;
+    let first = run_demographics(seed);
+    let second = run_demographics(seed);
+    assert_eq!(
+        first, second,
+        "example9 must be deterministic per seed: (total_births, final_population) \
+         diverged between two identical runs of seed {seed} — first {first:?}, second {second:?}"
+    );
+}
+
 // ----------------------------------------------------------------------------
 // example9_detrital_pathway.json (issue #311): majority-detrital BY CONSTRUCTION.
 //

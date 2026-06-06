@@ -1125,9 +1125,24 @@ pub fn resolve_reproduction(
 
     let compatibility_distance = params.reproductive_compatibility_distance;
 
+    // Iterate in a stable, index-sorted order (mirroring `eligible_sorted` in the
+    // asexual phase). `sexual_eligible` is a HashSet, whose iteration order is
+    // seeded per-process by RandomState and is therefore nondeterministic — and
+    // that order is load-bearing: it sets the build order of `pair_candidates`,
+    // which the trait-distance sort below only partially reorders (clonal
+    // producers share traits, so their pairs tie on distance and keep their
+    // pre-sort order under the unstable sort). The resulting pair set then drives
+    // RNG consumption (Poisson fecundity + seed-parent coin flips), so an
+    // unstable mate order diverges the whole run's RNG stream (issue #343).
+    let sexual_eligible_sorted: Vec<usize> = {
+        let mut v: Vec<usize> = sexual_eligible.iter().copied().collect();
+        v.sort();
+        v
+    };
+
     let mut pair_candidates: Vec<(usize, usize, f32)> = Vec::new();
 
-    for &i in &sexual_eligible {
+    for &i in &sexual_eligible_sorted {
         let agent_i = &agents[i];
         // Mate-finding reach is the spatial eligibility axis of mating. The
         // mobility term uses effective (wear-adjusted) mobility, matching how
@@ -1180,8 +1195,18 @@ pub fn resolve_reproduction(
         }
     }
 
-    // Sort by trait distance (closest pairs first)
-    pair_candidates.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+    // Sort by trait distance (closest pairs first), with a total-order tiebreak
+    // on the (low, high) agent indices. Clonal producers share traits, so many
+    // candidate pairs tie on trait distance; without an explicit tiebreak the
+    // greedy assignment below would depend on the candidates' build order (and so
+    // on `sexual_eligible`'s HashSet iteration order). Keying ties on indices
+    // makes the resolved pair set a pure function of world state (issue #343).
+    pair_candidates.sort_by(|a, b| {
+        a.2.partial_cmp(&b.2)
+            .unwrap()
+            .then(a.0.cmp(&b.0))
+            .then(a.1.cmp(&b.1))
+    });
 
     // Greedily assign pairs: each agent can only reproduce once per tick
     let mut paired = std::collections::HashSet::new();
