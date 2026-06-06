@@ -169,6 +169,34 @@ At the tick boundary, the energy ledger verifies:
 
 Conservation verification is an orthogonal concern — a wrapper around the tick loop, not a participant in it. It can be disabled in release builds without affecting the simulation.
 
+## Stochasticity and determinism
+
+The simulation is stochastic in exactly three phases — movement (random-walk jitter) and the two reproduction paths (asexual: propensity roll, fecundity, mutation, dispersal; sexual: fecundity, seed-parent choice, crossover, mutation, dispersal) — yet its load-bearing invariant is *the same run seed reproduces the same trajectory, exactly*. Everything above the simulation (the genesis search, deterministic replay, the differential tests) relies on bit-identical replay. How randomness is sourced is therefore part of the execution model, not an implementation detail to be left implicit.
+
+### Keyed-stateless per-agent-per-phase derivation
+
+Randomness is **keyed-stateless**. At each stochastic site the simulation derives a key from the run seed, the acting agent's *stable identity*, the current tick, and a *phase tag*, and seeds a fresh local generator from that key for that one unit of work. No RNG state is stored on the agent or threaded through the tick. Each agent's draws come off its own local stream in deterministic code order; draws belonging to different agents never share a stream.
+
+The key is a pure function of `(run seed, identity, tick, phase tag)`. The single entropy source for a run is still its seed — the per-site key derivation expands that one seed into independent streams, it does not introduce new entropy. The hash that folds the key fields and the generator that consumes the key are implementation choices the code owns and freezes; what this document fixes is the *shape* of the key and the architecture around it.
+
+**Why key on per-agent identity rather than draw off one shared stream.** The natural implementation — one generator threaded through the tick, every phase drawing off it in consumption order — makes each agent's outcome depend on *which agents drew before it, and in what order*. Determinism then silently rests on every stochastic phase iterating agents in a stable, world-state-derived order forever. That is a fragile, invisible contract: any phase that iterates agents in an order derived from a hash set, a spatial-grid bucket, or an unstable sort breaks replay without any local code looking wrong. Keying each draw on stable identity dissolves the contract — iteration order stops being load-bearing because the stream an agent draws from is determined by *who the agent is*, not *when it is reached*. (This is the general form of a concrete replay bug whose narrow symptom was once patched with a sorted-iteration fix; per-agent keying removes the whole class.)
+
+**Why a phase tag.** The phase tag makes the three stochastic phases draw from disjoint streams even for the same agent and tick. This is a firewall: adding, removing, or reordering a draw inside one phase cannot perturb another phase's stream. Movement and the two reproduction paths evolve independently.
+
+**Single-agent versus ordered-pair keying.** Movement jitter and asexual reproduction are single-agent events: they key on the one acting agent's identity. Sexual reproduction is a *pair* event, and its key is the **symmetric ordered pair** of the two parents' identities — the pair is sorted into a canonical (low, high) order before keying, so the stream is independent of which parent the resolution loop happens to visit as "first". A direct consequence, and an intended one: the seed-parent choice (which parent's position and dispersal kernel place the brood) becomes a pure function of the parent pair and the tick. Every per-pair decision that reads from this stream — fecundity, the seed coin, crossover, mutation, dispersal — likewise binds its branches to the parents' stable identities rather than to their slice positions, so a permuted agent ordering cannot flip which parent contributes what.
+
+### Order-independent newborn identity
+
+Keyed draws are necessary but not sufficient for order-independent reproduction, because newborns also need *identities*, and identity assignment is itself an ordering hazard. If newborns took their id from a counter advanced in iteration order, a reordered reproduction loop would mint the same offspring with different ids — and since the next tick keys every newborn's stochastic outcome on its id, divergent ids diverge the entire downstream trajectory.
+
+Newborn ids are therefore assigned in a **canonical order**, not in birth order. All offspring produced in a tick — asexual and sexual together — are sorted by a world-state-derived key (the producing parent's identity, or the producing pair's ordered identities, then the offspring's slot within that brood), and only then handed sequential ids from the population's id counter. Ids stay compact, monotonic, and unique, and the same brood receives the same ids no matter what order the parents were resolved in.
+
+### What this buys, and what stays out of scope
+
+Together these make every RNG-derived quantity — every jitter, every offspring's traits and placement, every agent's identity — a pure function of world state, invariant under any permutation of agent iteration order. A trajectory-level guard exercises exactly this: it permutes agent order within the stochastic phases across a full run and asserts the demographics and identities are unchanged.
+
+Re-seeding is a one-time event. Because outcomes are keyed differently than a shared-stream design would key them, adopting keyed-stateless RNG shifts every birth count and population number once — expected, and not a regression. What must *not* shift is classification: each scenario keeps its qualitative verdict across the seed ensemble. Two boundaries are deliberately preserved: the non-stochastic phases (acquisition, metabolism, growth, drains, wear, the death check) remain RNG-free and must never begin consuming randomness; and floating-point summation in the coordinated non-RNG phases is associative-order-sensitive at the level of a unit in the last place, so summed-energy state can differ by rounding under a reordering — that is ordinary floating-point behaviour in phases this model leaves untouched, not a determinism leak, and it is distinct from the RNG-derived quantities, which are exactly invariant.
+
 ## Event vocabulary
 
 The domain vocabulary serves as the observation language. Events are produced by each phase and appended to the log at the end of the tick.

@@ -603,9 +603,9 @@
       "nutrient_lockup": 0
     },
     "oscillation_strength": {
-      "median": 0.18090165,
-      "min": 0.12149714,
-      "max": 0.24797806
+      "median": 0.14105421,
+      "min": 0.1218642,
+      "max": 0.24718028
     },
     "clustering_strength": {
       "median": 1.0,
@@ -613,14 +613,14 @@
       "max": 1.0
     },
     "coexistence_duration": {
-      "median": 0.446,
-      "min": 0.156,
+      "median": 0.48049998,
+      "min": 0.297,
       "max": 0.994
     },
     "turnover_score": {
-      "median": 0.0485,
-      "min": 0.045,
-      "max": 0.062
+      "median": 0.051,
+      "min": 0.047,
+      "max": 0.057
     },
     "trophic_balance_score": {
       "median": 1.0,
@@ -628,9 +628,9 @@
       "max": 1.0
     },
     "fitness": {
-      "median": 0.5368952,
-      "min": 0.49196434,
-      "max": 0.64701945
+      "median": 0.5419158,
+      "min": 0.49717283,
+      "max": 0.63683784
     },
     "ticks_survived": {
       "median": 1000.0,
@@ -640,33 +640,33 @@
     "final_population": {
       "median": 8.0,
       "min": 6.0,
-      "max": 11.0
+      "max": 9.0
     },
     "total_births": {
-      "median": 34.5,
-      "min": 30.0,
-      "max": 48.0
+      "median": 37.5,
+      "min": 31.0,
+      "max": 43.0
     },
     "total_deaths": {
-      "median": 48.5,
-      "min": 45.0,
-      "max": 62.0
+      "median": 51.0,
+      "min": 47.0,
+      "max": 57.0
     },
     "per_seed": [
       {
         "seed": 1,
         "failure_mode": "none",
         "ticks_survived": 1000,
-        "final_population": 11,
-        "total_births": 34,
-        "total_deaths": 45,
+        "final_population": 8,
+        "total_births": 38,
+        "total_deaths": 52,
         "scores": {
-          "oscillation_strength": 0.12149714,
+          "oscillation_strength": 0.14091907,
           "clustering_strength": 1.0,
-          "coexistence_duration": 0.337,
-          "turnover_score": 0.045,
+          "coexistence_duration": 0.297,
+          "turnover_score": 0.052,
           "trophic_balance_score": 1.0,
-          "fitness": 0.50069946
+          "fitness": 0.4979838
         }
       },
       {
@@ -674,15 +674,15 @@
         "failure_mode": "none",
         "ticks_survived": 1000,
         "final_population": 9,
-        "total_births": 43,
-        "total_deaths": 56,
+        "total_births": 39,
+        "total_deaths": 52,
         "scores": {
-          "oscillation_strength": 0.24782157,
+          "oscillation_strength": 0.12275887,
           "clustering_strength": 1.0,
-          "coexistence_duration": 0.156,
-          "turnover_score": 0.056,
+          "coexistence_duration": 0.402,
+          "turnover_score": 0.052,
           "trophic_balance_score": 1.0,
-          "fitness": 0.49196434
+          "fitness": 0.5153518
         }
       },
       {
@@ -690,95 +690,95 @@
         "failure_mode": "none",
         "ticks_survived": 1000,
         "final_population": 8,
-        "total_births": 35,
-        "total_deaths": 49,
+        "total_births": 43,
+        "total_deaths": 57,
         "scores": {
-          "oscillation_strength": 0.24797806,
+          "oscillation_strength": 0.24718028,
           "clustering_strength": 1.0,
-          "coexistence_duration": 0.179,
-          "turnover_score": 0.049,
+          "coexistence_duration": 0.624,
+          "turnover_score": 0.057,
           "trophic_balance_score": 1.0,
-          "fitness": 0.49519563
+          "fitness": 0.5856361
         }
       },
       {
         "seed": 4,
         "failure_mode": "none",
         "ticks_survived": 1000,
-        "final_population": 6,
-        "total_births": 32,
-        "total_deaths": 48,
+        "final_population": 8,
+        "total_births": 37,
+        "total_deaths": 51,
         "scores": {
-          "oscillation_strength": 0.16570602,
+          "oscillation_strength": 0.1218642,
           "clustering_strength": 1.0,
-          "coexistence_duration": 0.776,
-          "turnover_score": 0.048,
+          "coexistence_duration": 0.313,
+          "turnover_score": 0.051,
           "trophic_balance_score": 1.0,
-          "fitness": 0.5979412
+          "fitness": 0.49717283
         }
       },
       {
         "seed": 5,
         "failure_mode": "none",
         "ticks_survived": 1000,
-        "final_population": 8,
-        "total_births": 48,
-        "total_deaths": 62,
+        "final_population": 7,
+        "total_births": 32,
+        "total_deaths": 47,
         "scores": {
-          "oscillation_strength": 0.2464101,
+          "oscillation_strength": 0.1984549,
           "clustering_strength": 1.0,
-          "coexistence_duration": 0.555,
-          "turnover_score": 0.062,
+          "coexistence_duration": 0.42,
+          "turnover_score": 0.047,
           "trophic_balance_score": 1.0,
-          "fitness": 0.572682
+          "fitness": 0.533091
         }
       },
       {
         "seed": 6,
         "failure_mode": "none",
         "ticks_survived": 1000,
-        "final_population": 8,
-        "total_births": 38,
-        "total_deaths": 52,
+        "final_population": 7,
+        "total_births": 35,
+        "total_deaths": 50,
         "scores": {
-          "oscillation_strength": 0.1655421,
+          "oscillation_strength": 0.14118934,
           "clustering_strength": 1.0,
-          "coexistence_duration": 0.288,
-          "turnover_score": 0.052,
+          "coexistence_duration": 0.993,
+          "turnover_score": 0.05,
           "trophic_balance_score": 1.0,
-          "fitness": 0.5011084
+          "fitness": 0.63683784
         }
       },
       {
         "seed": 7,
         "failure_mode": "none",
         "ticks_survived": 1000,
-        "final_population": 7,
-        "total_births": 30,
-        "total_deaths": 45,
+        "final_population": 6,
+        "total_births": 31,
+        "total_deaths": 47,
         "scores": {
-          "oscillation_strength": 0.19609725,
+          "oscillation_strength": 0.16570224,
           "clustering_strength": 1.0,
-          "coexistence_duration": 0.994,
-          "turnover_score": 0.045,
+          "coexistence_duration": 0.541,
+          "turnover_score": 0.047,
           "trophic_balance_score": 1.0,
-          "fitness": 0.64701945
+          "fitness": 0.5507405
         }
       },
       {
         "seed": 8,
         "failure_mode": "none",
         "ticks_survived": 1000,
-        "final_population": 7,
-        "total_births": 33,
-        "total_deaths": 48,
+        "final_population": 9,
+        "total_births": 38,
+        "total_deaths": 51,
         "scores": {
-          "oscillation_strength": 0.16541818,
+          "oscillation_strength": 0.12352102,
           "clustering_strength": 1.0,
-          "coexistence_duration": 0.689,
-          "turnover_score": 0.048,
+          "coexistence_duration": 0.994,
+          "turnover_score": 0.051,
           "trophic_balance_score": 1.0,
-          "fitness": 0.5804837
+          "fitness": 0.63370425
         }
       }
     ]
@@ -1422,28 +1422,28 @@
       "max": 2000.0
     },
     "final_population": {
-      "median": 88.5,
-      "min": 82.0,
-      "max": 97.0
+      "median": 86.0,
+      "min": 77.0,
+      "max": 102.0
     },
     "total_births": {
-      "median": 2283.5,
-      "min": 1998.0,
-      "max": 2370.0
+      "median": 2245.0,
+      "min": 1954.0,
+      "max": 2527.0
     },
     "total_deaths": {
-      "median": 2210.5,
-      "min": 1931.0,
-      "max": 2299.0
+      "median": 2178.0,
+      "min": 1886.0,
+      "max": 2442.0
     },
     "per_seed": [
       {
         "seed": 1,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 89,
-        "total_births": 2219,
-        "total_deaths": 2147,
+        "final_population": 77,
+        "total_births": 2203,
+        "total_deaths": 2143,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1457,9 +1457,9 @@
         "seed": 2,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 88,
-        "total_births": 2292,
-        "total_deaths": 2221,
+        "final_population": 85,
+        "total_births": 1954,
+        "total_deaths": 1886,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1473,9 +1473,9 @@
         "seed": 3,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 82,
-        "total_births": 2162,
-        "total_deaths": 2097,
+        "final_population": 83,
+        "total_births": 1969,
+        "total_deaths": 1903,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1489,9 +1489,9 @@
         "seed": 4,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 92,
-        "total_births": 2275,
-        "total_deaths": 2200,
+        "final_population": 91,
+        "total_births": 2287,
+        "total_deaths": 2213,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1505,9 +1505,9 @@
         "seed": 5,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 97,
-        "total_births": 2370,
-        "total_deaths": 2290,
+        "final_population": 99,
+        "total_births": 2403,
+        "total_deaths": 2321,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1521,9 +1521,9 @@
         "seed": 6,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 84,
-        "total_births": 2366,
-        "total_deaths": 2299,
+        "final_population": 102,
+        "total_births": 2527,
+        "total_deaths": 2442,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1537,9 +1537,9 @@
         "seed": 7,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 84,
-        "total_births": 1998,
-        "total_deaths": 1931,
+        "final_population": 87,
+        "total_births": 2495,
+        "total_deaths": 2425,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1553,9 +1553,9 @@
         "seed": 8,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 91,
-        "total_births": 2321,
-        "total_deaths": 2247,
+        "final_population": 83,
+        "total_births": 2097,
+        "total_deaths": 2031,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,

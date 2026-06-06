@@ -10,7 +10,6 @@ use crate::{
     Agent, Carcass, FUNCTIONAL_TRAIT_COUNT, FUNCTIONAL_TRAIT_INDICES, TraitVector, WorldParameters,
 };
 use rand::Rng;
-use rand_chacha::ChaCha8Rng;
 use rand_distr::{Distribution, Normal, Poisson};
 
 /// Photosynthesise: agents with nonzero effective photosynthetic absorption
@@ -754,7 +753,8 @@ pub fn move_agents(
     carcasses: &[Carcass],
     grid: &SpatialGrid,
     params: &WorldParameters,
-    rng: &mut ChaCha8Rng,
+    run_seed: u64,
+    tick: u64,
 ) -> MoveResult {
     let mut events = Vec::new();
     let mut total_dissipated = 0.0_f32;
@@ -830,7 +830,16 @@ pub fn move_agents(
 
         sensing_throughput[i] = detected_count;
 
-        // Random walk component
+        // Random walk component. Keyed-stateless: a fresh local stream seeded
+        // from this agent's stable id + tick + the movement phase tag, so the
+        // jitter is a pure function of identity and is independent of where this
+        // agent sits in the iteration order (see `keyed_rng`).
+        let mut rng = crate::keyed_rng::agent_rng(
+            run_seed,
+            agents[i].id,
+            tick,
+            crate::keyed_rng::PhaseTag::Movement,
+        );
         let angle: f32 = rng.random::<f32>() * std::f32::consts::TAU;
         let random_magnitude: f32 = rng.random::<f32>();
         dir_x += angle.cos() * random_magnitude;
@@ -912,11 +921,22 @@ pub fn resolve_reproduction(
     dead_ids: &std::collections::HashSet<u64>,
     grid: &SpatialGrid,
     params: &WorldParameters,
-    rng: &mut ChaCha8Rng,
+    run_seed: u64,
+    tick: u64,
 ) -> ReproductionResult {
     let mut events = Vec::new();
     let mut dissipated = 0.0_f32;
-    let mut offspring = Vec::new();
+    // Offspring are collected with a world-state-derived sort key so that their
+    // final ids can be assigned in a canonical order, independent of the order
+    // in which parents are iterated. Each entry is `(key, agent)` where
+    // `key = (k0, k1, birth_slot)`:
+    //   * asexual: `(parent_id, SINGLE_AGENT_SENTINEL, slot)`
+    //   * sexual:  `(min_pair_id, max_pair_id, slot)`
+    // `birth_slot` is the offspring's position within a single parent/pair's
+    // brood (the brood's draw order off its own local stream — deterministic).
+    // Without canonical assignment, a shuffled reproduction loop would mint the
+    // same offspring with different ids, diverging every downstream keyed stream.
+    let mut keyed_offspring: Vec<((u64, u64, usize), Agent)> = Vec::new();
     let extent = params.world_extent;
 
     // Build eligible set: alive, with both reproductive earmarks above their
@@ -943,8 +963,9 @@ pub fn resolve_reproduction(
     // Track which agents have already reproduced this tick (at most once each).
     let mut reproduced = std::collections::HashSet::new();
 
-    // Next agent ID: find max existing ID + 1
-    let mut next_id = agents.iter().map(|a| a.id).max().unwrap_or(0) + 1;
+    // Next agent ID: find max existing ID + 1. Offspring receive canonical ids
+    // from this counter *after* being sorted by their world-state key below.
+    let next_id = agents.iter().map(|a| a.id).max().unwrap_or(0) + 1;
 
     let sensing_coeff = params.sensing_range_coefficient;
     let dispersal_reach_coeff = params.dispersal_reach_coefficient;
@@ -960,6 +981,20 @@ pub fn resolve_reproduction(
     };
 
     for &i in &eligible_sorted {
+        // Keyed-stateless: a fresh local stream keyed on this agent's stable id
+        // + tick + the asexual phase tag. Every asexual draw for this agent —
+        // the propensity roll, the Poisson fecundity, per-offspring mutation and
+        // dispersal — comes off this one stream, so the outcome is a pure
+        // function of identity, independent of iteration order. A distinct
+        // phase tag from the sexual path firewalls the two streams (#376).
+        let parent_id = agents[i].id;
+        let mut rng = crate::keyed_rng::agent_rng(
+            run_seed,
+            parent_id,
+            tick,
+            crate::keyed_rng::PhaseTag::AsexualReproduction,
+        );
+
         let propensity = agents[i].traits.asexual_propensity.clamp(0.0, 1.0);
         if propensity <= 0.0 || rng.random::<f32>() >= propensity {
             continue; // asexual attempt failed — will try sexual below
@@ -972,7 +1007,6 @@ pub fn resolve_reproduction(
         let parent_repro = agents[i].repro_reserve;
         let parent_repro_nutrient = agents[i].repro_nutrient.max(0.0);
         let parent_pos = agents[i].position;
-        let parent_id = agents[i].id;
 
         let investment = parent_repro.max(0.0);
         if investment <= 0.0 {
@@ -984,7 +1018,7 @@ pub fn resolve_reproduction(
         // energy is still consumed but no offspring result.
         let fecundity = parent_traits.fecundity.max(0.1);
         let poisson = Poisson::new(fecundity as f64).unwrap();
-        let offspring_count = poisson.sample(rng) as usize;
+        let offspring_count = poisson.sample(&mut rng) as usize;
 
         // The committed investment is always consumed from the parent.
         agents[i].repro_reserve -= investment;
@@ -1046,13 +1080,13 @@ pub fn resolve_reproduction(
         // Dispersal: sigma proportional to parent's dispersal trait
         let dispersal_radius = parent_traits.dispersal;
 
-        for _ in 0..offspring_count {
+        for birth_slot in 0..offspring_count {
             // Asexual offspring: parent traits + mutation only (no crossover)
             let mut child_traits = parent_traits;
             for dim in 0..TraitVector::NUM_DIMS {
                 if params.mutation_rate > 0.0 && rng.random::<f32>() < params.mutation_rate {
                     let normal = Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
-                    let mutated = (child_traits.get(dim) + normal.sample(rng)).max(0.0);
+                    let mutated = (child_traits.get(dim) + normal.sample(&mut rng)).max(0.0);
                     // Clamp kappa and asexual_propensity to [0, 1]
                     let val = if dim == 3 || dim == 5 {
                         mutated.clamp(0.0, 1.0)
@@ -1066,7 +1100,7 @@ pub fn resolve_reproduction(
             // Dispersal position
             let (dx, dy) = if dispersal_radius > 0.0 {
                 let normal = Normal::new(0.0_f32, dispersal_radius).unwrap();
-                (normal.sample(rng), normal.sample(rng))
+                (normal.sample(&mut rng), normal.sample(&mut rng))
             } else {
                 (0.0, 0.0)
             };
@@ -1084,7 +1118,9 @@ pub fn resolve_reproduction(
             dissipated += prov.heat;
 
             let child = Agent {
-                id: next_id,
+                // Placeholder id; the canonical id is assigned after all
+                // offspring are sorted by their world-state key below.
+                id: 0,
                 position: pos,
                 reserve: prov.reserve,
                 structure: prov.structure,
@@ -1098,8 +1134,15 @@ pub fn resolve_reproduction(
                 repro_reserve: 0.0,
                 repro_nutrient: 0.0,
             };
-            next_id += 1;
-            offspring.push(child);
+            // Sort key: single parent id, sentinel high slot, brood position.
+            keyed_offspring.push((
+                (
+                    parent_id,
+                    crate::keyed_rng::SINGLE_AGENT_SENTINEL,
+                    birth_slot,
+                ),
+                child,
+            ));
         }
 
         // Asexual event: target is None (no mate)
@@ -1125,22 +1168,24 @@ pub fn resolve_reproduction(
 
     let compatibility_distance = params.reproductive_compatibility_distance;
 
-    // Iterate in a stable, index-sorted order (mirroring `eligible_sorted` in the
-    // asexual phase). `sexual_eligible` is a HashSet, whose iteration order is
-    // seeded per-process by RandomState and is therefore nondeterministic — and
-    // that order is load-bearing: it sets the build order of `pair_candidates`,
-    // which the trait-distance sort below only partially reorders (clonal
-    // producers share traits, so their pairs tie on distance and keep their
-    // pre-sort order under the unstable sort). The resulting pair set then drives
-    // RNG consumption (Poisson fecundity + seed-parent coin flips), so an
-    // unstable mate order diverges the whole run's RNG stream (issue #343).
+    // Iterate eligible agents in **stable-id** order, and resolve every
+    // pairing tie on agent ids rather than slice indices (#376). Slice indices
+    // are not stable identity — a shuffled `agents` slice gives the same agent a
+    // different index — so keying mate-finding on indices makes the resolved
+    // pair set (and the RNG streams it drives) depend on iteration order, the
+    // very leak this refactor removes. Sorting by id makes the pair set a pure
+    // function of world state. (This subsumes #343's index tiebreak: ids are the
+    // stable key; #343's HashSet-order fix was the symptom, not the invariant.)
     let sexual_eligible_sorted: Vec<usize> = {
         let mut v: Vec<usize> = sexual_eligible.iter().copied().collect();
-        v.sort();
+        v.sort_by_key(|&i| agents[i].id);
         v
     };
 
-    let mut pair_candidates: Vec<(usize, usize, f32)> = Vec::new();
+    // Candidate tuple carries both the (low, high) slice indices used to drive
+    // the resolution, and the (low, high) ids used as the order-independent
+    // tiebreak.
+    let mut pair_candidates: Vec<(usize, usize, f32, u64, u64)> = Vec::new();
 
     for &i in &sexual_eligible_sorted {
         let agent_i = &agents[i];
@@ -1158,7 +1203,10 @@ pub fn resolve_reproduction(
         let reach = eff_mobility * sensing_coeff + agent_i.traits.dispersal * dispersal_reach_coeff;
 
         let nearby = grid.query_radius(agent_i.position, reach);
-        let mut best: Option<(usize, f32)> = None;
+        // Best mate: closest in trait space, tiebroken on the candidate's stable
+        // id (not slice index), so co-located clonal mates at equal trait
+        // distance resolve to the same choice regardless of iteration order.
+        let mut best: Option<(usize, f32, u64)> = None;
         let mut seen = std::collections::HashSet::new();
         seen.insert(i); // exclude self
 
@@ -1180,39 +1228,43 @@ pub fn resolve_reproduction(
             if compatibility_distance > 0.0 && trait_dist > compatibility_distance {
                 continue;
             }
-            match best {
-                None => best = Some((j, trait_dist)),
-                Some((_, best_dist)) if trait_dist < best_dist => {
-                    best = Some((j, trait_dist));
+            let j_id = agents[j].id;
+            let better = match best {
+                None => true,
+                Some((_, best_dist, best_id)) => {
+                    trait_dist < best_dist || (trait_dist == best_dist && j_id < best_id)
                 }
-                _ => {}
+            };
+            if better {
+                best = Some((j, trait_dist, j_id));
             }
         }
 
-        if let Some((j, dist)) = best {
+        if let Some((j, dist, _)) = best {
             let (a, b) = if i < j { (i, j) } else { (j, i) };
-            pair_candidates.push((a, b, dist));
+            let id_lo = agents[a].id.min(agents[b].id);
+            let id_hi = agents[a].id.max(agents[b].id);
+            pair_candidates.push((a, b, dist, id_lo, id_hi));
         }
     }
 
-    // Sort by trait distance (closest pairs first), with a total-order tiebreak
-    // on the (low, high) agent indices. Clonal producers share traits, so many
-    // candidate pairs tie on trait distance; without an explicit tiebreak the
-    // greedy assignment below would depend on the candidates' build order (and so
-    // on `sexual_eligible`'s HashSet iteration order). Keying ties on indices
-    // makes the resolved pair set a pure function of world state (issue #343).
+    // Sort by trait distance (closest pairs first), tiebroken on the (low, high)
+    // agent **ids**. Clonal producers share traits, so many candidate pairs tie
+    // on trait distance; keying the tiebreak on stable ids (not slice indices)
+    // makes the greedy assignment below a pure function of world state, invariant
+    // under any agent-slice permutation (#376).
     pair_candidates.sort_by(|a, b| {
         a.2.partial_cmp(&b.2)
             .unwrap()
-            .then(a.0.cmp(&b.0))
-            .then(a.1.cmp(&b.1))
+            .then(a.3.cmp(&b.3))
+            .then(a.4.cmp(&b.4))
     });
 
     // Greedily assign pairs: each agent can only reproduce once per tick
     let mut paired = std::collections::HashSet::new();
     let mut final_pairs: Vec<(usize, usize)> = Vec::new();
 
-    for (a, b, _) in &pair_candidates {
+    for (a, b, _, _, _) in &pair_candidates {
         if !paired.contains(a) && !paired.contains(b) {
             paired.insert(*a);
             paired.insert(*b);
@@ -1234,6 +1286,24 @@ pub fn resolve_reproduction(
         let a_id = agents[*a_idx].id;
         let b_id = agents[*b_idx].id;
 
+        // Keyed-stateless: a fresh local stream keyed on the symmetric ordered
+        // pair (min id, max id) + tick + the sexual phase tag. Every sexual draw
+        // for this pair — Poisson fecundity, the seed-parent coin, per-offspring
+        // crossover, mutation and dispersal — comes off this one stream, so the
+        // pair's outcome (including which parent seeds placement) is a pure
+        // function of `(min_id, max_id, tick)`, independent of iteration order
+        // and of which parent is `a` vs `b`. A distinct phase tag from the
+        // asexual path firewalls the two streams (#376).
+        let mut rng = crate::keyed_rng::pair_rng(
+            run_seed,
+            a_id,
+            b_id,
+            tick,
+            crate::keyed_rng::PhaseTag::SexualReproduction,
+        );
+        let pair_key_lo = a_id.min(b_id);
+        let pair_key_hi = a_id.max(b_id);
+
         // Investment: each parent invests their entire repro_reserve
         let invest_a = a_repro.max(0.0);
         let invest_b = b_repro.max(0.0);
@@ -1248,7 +1318,7 @@ pub fn resolve_reproduction(
         // but no offspring result.
         let avg_fecundity = ((a_traits.fecundity + b_traits.fecundity) / 2.0).max(0.1);
         let poisson = Poisson::new(avg_fecundity as f64).unwrap();
-        let offspring_count = poisson.sample(rng) as usize;
+        let offspring_count = poisson.sample(&mut rng) as usize;
 
         // The committed investment is always consumed from both parents.
         agents[*a_idx].repro_reserve -= invest_a;
@@ -1319,17 +1389,39 @@ pub fn resolve_reproduction(
         // but that reach geometry must not leak into placement (offspring must
         // not land in the empty space between distant parents). Co-located
         // parents are unaffected: either seed sits at effectively the same spot.
-        let (seed_pos, seed_dispersal) = if rng.random::<bool>() {
-            (a_pos, a_traits.dispersal)
+        // The coin must select between the two parents by *stable id*, not by
+        // which one happens to be the lower slice index (`a` vs `b`): under a
+        // permuted agents slice the same pair can arrive with `a`/`b` swapped,
+        // and binding the coin's branches to slice order would then flip which
+        // physical parent seeds placement — an iteration-order leak (#376). Bind
+        // the `true` branch to the low-id parent so the choice, like the coin
+        // itself, is a pure function of `(min_id, max_id, tick)`.
+        let (lo_pos, lo_disp, hi_pos, hi_disp) = if a_id < b_id {
+            (a_pos, a_traits.dispersal, b_pos, b_traits.dispersal)
         } else {
-            (b_pos, b_traits.dispersal)
+            (b_pos, b_traits.dispersal, a_pos, a_traits.dispersal)
+        };
+        let (seed_pos, seed_dispersal) = if rng.random::<bool>() {
+            (lo_pos, lo_disp)
+        } else {
+            (hi_pos, hi_disp)
         };
 
         // Dispersal: sigma = the seed parent's own dispersal trait, independent
         // of the mate's dispersal and of the inter-parent distance.
         let dispersal_radius = seed_dispersal;
 
-        for _ in 0..offspring_count {
+        // Crossover, like the seed coin, draws each allele from one of the two
+        // parents on a pair-keyed coin. Bind the `true` branch to the low-id
+        // parent (not slice order) so a permuted slice can't flip which parent
+        // donates a given dimension (#376).
+        let (lo_traits, hi_traits) = if a_id < b_id {
+            (a_traits, b_traits)
+        } else {
+            (b_traits, a_traits)
+        };
+
+        for birth_slot in 0..offspring_count {
             // Trait crossover: each dimension from one parent (uniform crossover)
             let mut child_traits = TraitVector {
                 photosynthetic_absorption: 0.0,
@@ -1342,15 +1434,15 @@ pub fn resolve_reproduction(
             };
             for dim in 0..TraitVector::NUM_DIMS {
                 let parent_val = if rng.random::<bool>() {
-                    a_traits.get(dim)
+                    lo_traits.get(dim)
                 } else {
-                    b_traits.get(dim)
+                    hi_traits.get(dim)
                 };
                 // Mutation
                 let mut val =
                     if params.mutation_rate > 0.0 && rng.random::<f32>() < params.mutation_rate {
                         let normal = Normal::new(0.0_f32, params.mutation_magnitude).unwrap();
-                        (parent_val + normal.sample(rng)).max(0.0)
+                        (parent_val + normal.sample(&mut rng)).max(0.0)
                     } else {
                         parent_val
                     };
@@ -1364,7 +1456,7 @@ pub fn resolve_reproduction(
             // Dispersal position
             let (dx, dy) = if dispersal_radius > 0.0 {
                 let normal = Normal::new(0.0_f32, dispersal_radius).unwrap();
-                (normal.sample(rng), normal.sample(rng))
+                (normal.sample(&mut rng), normal.sample(&mut rng))
             } else {
                 (0.0, 0.0)
             };
@@ -1382,7 +1474,9 @@ pub fn resolve_reproduction(
             dissipated += prov.heat;
 
             let child = Agent {
-                id: next_id,
+                // Placeholder id; the canonical id is assigned after all
+                // offspring are sorted by their world-state key below.
+                id: 0,
                 position: pos,
                 reserve: prov.reserve,
                 structure: prov.structure,
@@ -1396,8 +1490,8 @@ pub fn resolve_reproduction(
                 repro_reserve: 0.0, // offspring born with zero repro_reserve
                 repro_nutrient: 0.0,
             };
-            next_id += 1;
-            offspring.push(child);
+            // Sort key: symmetric ordered pair (min id, max id), brood position.
+            keyed_offspring.push(((pair_key_lo, pair_key_hi, birth_slot), child));
         }
 
         // Sexual event: target is Some(mate_id)
@@ -1414,6 +1508,27 @@ pub fn resolve_reproduction(
             target_was_carcass: false,
         });
     }
+
+    // ---------- Canonical newborn-id assignment (#376) ----------
+    // Sort every offspring produced this tick (asexual + sexual) by its
+    // world-state-derived key — `(asexual_parent_id | min_pair_id, sentinel |
+    // max_pair_id, birth_slot)`. Then hand out sequential ids from `next_id` in
+    // that sorted order. The key is a pure function of world state, so the same
+    // brood gets the same ids regardless of the order parents were iterated;
+    // ids stay compact, monotonic and unique. The keys collide across the two
+    // phases only if an asexual parent shares a `(parent_id, SENTINEL)` with a
+    // sexual pair's `(min, max)` — impossible, since SENTINEL = u64::MAX is not
+    // a reachable id, so the asexual/sexual orderings never interleave on a tie.
+    keyed_offspring.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut next_id = next_id;
+    let offspring: Vec<Agent> = keyed_offspring
+        .into_iter()
+        .map(|(_, mut child)| {
+            child.id = next_id;
+            next_id += 1;
+            child
+        })
+        .collect();
 
     ReproductionResult {
         events,
@@ -2438,7 +2553,6 @@ mod tests {
 
     #[test]
     fn reproduction_draws_from_repro_reserve_not_reserve() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_efficiency: 1.0,
             reproduction_energy_threshold: 10.0,
@@ -2468,9 +2582,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
 
         assert!(!result.offspring.is_empty(), "should reproduce");
         // Reserve should be unchanged
@@ -2489,7 +2602,6 @@ mod tests {
 
     #[test]
     fn offspring_born_with_zero_repro_reserve() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
@@ -2519,9 +2631,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         for child in &result.offspring {
             assert!(
@@ -2541,7 +2652,6 @@ mod tests {
     // peak structure), so no extra investment gate is needed.
     #[test]
     fn example6_decomposer_offspring_survives_its_birth_tick() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             growth_efficiency: 0.3,
             reproduction_efficiency: 0.7,
@@ -2579,9 +2689,8 @@ mod tests {
             let dead_ids = std::collections::HashSet::new();
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (0.0, 0.0));
-            let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, seed, 0);
             if result.offspring.is_empty() {
                 continue;
             }
@@ -2611,7 +2720,6 @@ mod tests {
 
     #[test]
     fn asexual_offspring_born_with_zero_wear() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
@@ -2643,9 +2751,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(
             !result.offspring.is_empty(),
@@ -2664,7 +2771,6 @@ mod tests {
 
     #[test]
     fn sexual_offspring_born_with_zero_wear() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
@@ -2696,9 +2802,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         // Confirm we actually exercised the sexual path (target = mate id).
         assert!(
@@ -3394,7 +3499,6 @@ mod tests {
     #[test]
     fn move_direction_attracted_to_nearby_living_agent_by_heterotrophy() {
         // Agent with heterotrophy and chemotaxis should move toward a nearby living agent.
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0; // isolate direction test
         let mover_traits = TraitVector {
@@ -3416,9 +3520,8 @@ mod tests {
         let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (20.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+        let result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
 
         // Agent should have moved in the +x direction (toward target)
         assert!(
@@ -3433,7 +3536,6 @@ mod tests {
     #[test]
     fn move_direction_attracted_to_carcass_by_heterotrophy() {
         // Agent with heterotrophy and chemotaxis should move toward a nearby carcass.
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         let mover_traits = TraitVector {
@@ -3451,9 +3553,8 @@ mod tests {
         }];
         let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+        let _result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
 
         // Agent should have moved in the +y direction (toward carcass)
         assert!(
@@ -3466,7 +3567,6 @@ mod tests {
     #[test]
     fn move_zero_structure_pays_zero_movement_cost() {
         // Newborns (structure=0) should move for free regardless of coefficient.
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 2.0;
         let traits = TraitVector {
@@ -3478,9 +3578,8 @@ mod tests {
         assert_eq!(agents[0].structure, 0.0);
         let carcasses = vec![];
         let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+        let result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
 
         // Zero structure means zero movement cost
         assert!(
@@ -3499,7 +3598,6 @@ mod tests {
     fn move_large_agent_pays_more_than_small_agent() {
         // Two agents with same mobility but different structure: the larger one
         // should pay proportionally more movement cost.
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 1.0;
         let traits = TraitVector {
@@ -3512,14 +3610,12 @@ mod tests {
         small[0].structure = 2.0;
         let carcasses = vec![];
         let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
-        let mut rng1 = ChaCha8Rng::seed_from_u64(42);
-        let result_small = move_agents(&mut small, &carcasses, &grid, &params, &mut rng1);
+        let result_small = move_agents(&mut small, &carcasses, &grid, &params, 0, 0);
 
         // Large agent (structure=10)
         let mut large = vec![make_agent(0, (0.0, 0.0), 100.0, traits)];
         large[0].structure = 10.0;
-        let mut rng2 = ChaCha8Rng::seed_from_u64(42);
-        let result_large = move_agents(&mut large, &carcasses, &grid, &params, &mut rng2);
+        let result_large = move_agents(&mut large, &carcasses, &grid, &params, 0, 0);
 
         // Large agent should pay 5x more (10/2)
         let small_cost = 100.0 - small[0].reserve;
@@ -3543,7 +3639,6 @@ mod tests {
 
     #[test]
     fn move_energy_cost_proportional_to_distance_and_structure() {
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 2.0;
         let traits = TraitVector {
@@ -3554,9 +3649,8 @@ mod tests {
         agents[0].structure = 3.0;
         let carcasses = vec![];
         let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+        let result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
 
         // eff_mobility = 0.5 (no wear, k=0 so exp(0)=1)
         // cost = distance * coefficient * structure = 0.5 * 2.0 * 3.0 = 3.0
@@ -3572,7 +3666,6 @@ mod tests {
 
     #[test]
     fn move_contact_time_resets_on_movement() {
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         let traits = TraitVector {
@@ -3583,9 +3676,8 @@ mod tests {
         agents[0].contact_time = 10; // had been stationary
         let carcasses = vec![];
         let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+        let _result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
 
         assert_eq!(
             agents[0].contact_time, 0,
@@ -3596,7 +3688,6 @@ mod tests {
 
     #[test]
     fn move_contact_time_increments_when_stationary() {
-        use rand::SeedableRng;
         let params = test_params();
         // Zero mobility -> stationary
         let traits = TraitVector { ..zero_traits() };
@@ -3604,9 +3695,8 @@ mod tests {
         agents[0].contact_time = 5;
         let carcasses = vec![];
         let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+        let _result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
 
         assert_eq!(
             agents[0].contact_time, 6,
@@ -3617,7 +3707,6 @@ mod tests {
 
     #[test]
     fn move_toroidal_wrapping_applied() {
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         // Agent near the edge with mobility — should wrap around
@@ -3630,9 +3719,8 @@ mod tests {
         let mut agents = vec![make_agent(0, (48.0, 0.0), 100.0, traits)];
         let carcasses = vec![];
         let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let _result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+        let _result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
 
         // Position should be within bounds after wrapping
         let extent = params.world_extent;
@@ -3651,7 +3739,6 @@ mod tests {
 
     #[test]
     fn move_deterministic_with_seeded_rng() {
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         let traits = TraitVector {
@@ -3665,11 +3752,8 @@ mod tests {
         let carcasses = vec![];
         let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
 
-        let mut rng1 = ChaCha8Rng::seed_from_u64(123);
-        let mut rng2 = ChaCha8Rng::seed_from_u64(123);
-
-        let _r1 = move_agents(&mut agents1, &carcasses, &grid, &params, &mut rng1);
-        let _r2 = move_agents(&mut agents2, &carcasses, &grid, &params, &mut rng2);
+        let _r1 = move_agents(&mut agents1, &carcasses, &grid, &params, 0, 0);
+        let _r2 = move_agents(&mut agents2, &carcasses, &grid, &params, 0, 0);
 
         assert!(
             (agents1[0].position.0 - agents2[0].position.0).abs() < 1e-6,
@@ -3680,7 +3764,6 @@ mod tests {
 
     #[test]
     fn move_sensing_throughput_counts_detected_entities() {
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         let traits = TraitVector {
@@ -3710,9 +3793,8 @@ mod tests {
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (10.0, 0.0));
         grid.insert(2, (5.0, 5.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+        let result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
 
         // Agent 0 should detect 2 living agents + 1 carcass = 3
         assert!(
@@ -4431,7 +4513,6 @@ mod tests {
 
     #[test]
     fn reproduction_two_compatible_agents_produce_offspring_with_correct_energy() {
-        use rand::SeedableRng;
         // This test focuses on the reproduction_efficiency loss only;
         // structure provisioning is exercised by the conservation tests.
         let params = WorldParameters {
@@ -4466,9 +4547,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
 
         // Each parent invests entire repro_reserve (15.0)
         // Total = 30.0, offspring energy = 30.0 * 0.7 = 21.0
@@ -4501,7 +4581,6 @@ mod tests {
 
     #[test]
     fn reproduction_dead_agents_excluded() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -4532,9 +4611,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(
             result.offspring.is_empty(),
@@ -4548,7 +4626,6 @@ mod tests {
 
     #[test]
     fn reproduction_below_energy_threshold_excluded() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 200.0, // higher than agent reserve
             ..test_params()
@@ -4575,9 +4652,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(
             result.offspring.is_empty(),
@@ -4590,7 +4666,6 @@ mod tests {
         // The reproduction gate reads the reproductive-nutrient earmark, not the
         // free store. An agent with an ample free store but an earmark below the
         // threshold cannot reproduce.
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 5.0,
@@ -4623,9 +4698,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(
             result.offspring.is_empty(),
@@ -4638,7 +4712,6 @@ mod tests {
         // The old body-support gate (`nutrient >= structure * demand`) is gone:
         // a near-empty free store no longer blocks reproduction so long as the
         // reproductive-nutrient earmark clears its threshold.
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 5.0,
@@ -4667,9 +4740,8 @@ mod tests {
         let dead_ids = std::collections::HashSet::new();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(
             !result.offspring.is_empty(),
@@ -4679,7 +4751,6 @@ mod tests {
 
     #[test]
     fn reproduction_invests_entire_repro_reserve() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_efficiency: 0.7,
             reproduction_energy_threshold: 10.0,
@@ -4711,9 +4782,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
 
         // Each parent invests entire repro_reserve: 20.0 each
         // Total = 40.0, offspring energy = 40.0 * 0.7 = 28.0
@@ -4745,7 +4815,6 @@ mod tests {
 
     #[test]
     fn reproduction_mate_pairing_selects_closest_trait_distance() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -4789,9 +4858,8 @@ mod tests {
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (2.0, 0.0));
         grid.insert(2, (4.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         // A and B should pair (trait distance=0), C has no mate
         assert_eq!(result.events.len(), 1, "should produce exactly one pair");
@@ -4812,7 +4880,6 @@ mod tests {
 
     #[test]
     fn reproduction_offspring_traits_are_crossover_of_parents() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -4852,9 +4919,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
 
         assert!(!result.offspring.is_empty());
         let child = &result.offspring[0];
@@ -4871,7 +4937,6 @@ mod tests {
 
     #[test]
     fn reproduction_fecundity_controls_offspring_count() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -4904,9 +4969,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         // With Poisson(5.0), expect multiple offspring (statistically unlikely to get 1)
         assert!(
@@ -4928,7 +4992,6 @@ mod tests {
 
     #[test]
     fn reproduction_offspring_zero_wear_and_dispersed() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -4960,9 +5023,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty());
         for child in &result.offspring {
@@ -5007,7 +5069,6 @@ mod tests {
 
     #[test]
     fn reproduction_emits_reproduced_events() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -5036,9 +5097,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].kind, EventKind::Reproduced);
@@ -5050,7 +5110,6 @@ mod tests {
 
     #[test]
     fn reproduction_deterministic_with_seeded_rng() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -5083,9 +5142,8 @@ mod tests {
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (0.0, 0.0));
             grid.insert(1, (1.0, 0.0));
-            let mut rng = ChaCha8Rng::seed_from_u64(seed);
 
-            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, seed, 0);
             let positions: Vec<(f32, f32)> = result.offspring.iter().map(|o| o.position).collect();
             let energies: Vec<f32> = result.offspring.iter().map(|o| o.reserve).collect();
             (positions, energies)
@@ -5107,7 +5165,6 @@ mod tests {
 
     #[test]
     fn reproduction_is_lossy_energy_dissipated() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -5139,9 +5196,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
 
         // Total investment = 15.0 + 15.0 = 30.0 (entire repro_reserve)
         // Offspring energy = 30.0 * 0.5 = 15.0
@@ -5166,7 +5222,6 @@ mod tests {
 
     #[test]
     fn asexual_zero_poisson_draw_consumes_energy_yields_no_offspring() {
-        use rand::SeedableRng;
         // World-rules flow 4: reproductive failure (zero offspring despite energy
         // investment) must be possible. With fecundity at its floor (0.1) the
         // Poisson mean is 0.1, so a zero draw is overwhelmingly likely. The energy
@@ -5201,9 +5256,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         // Zero offspring produced (reproductive failure).
         assert!(
@@ -5228,7 +5282,6 @@ mod tests {
 
     #[test]
     fn sexual_zero_poisson_draw_consumes_energy_yields_no_offspring() {
-        use rand::SeedableRng;
         // Sexual reproductive failure: both parents commit their repro_reserve but
         // a zero Poisson draw yields no offspring. The full combined investment is
         // dissipated.
@@ -5263,9 +5316,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         // Zero offspring (reproductive failure).
         assert!(
@@ -5294,7 +5346,6 @@ mod tests {
     fn move_sensing_range_derived_from_mobility() {
         // Sensing range = mobility * sensing_range_coefficient.
         // Agent with high mobility detects agents further away.
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         params.sensing_range_coefficient = 10.0;
@@ -5326,9 +5377,8 @@ mod tests {
             let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (0.0, 0.0));
             grid.insert(1, (5.0, 0.0));
-            let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-            let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+            let result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
             result.sensing_throughput[0]
         };
 
@@ -5347,7 +5397,6 @@ mod tests {
     #[test]
     fn move_zero_mobility_gets_zero_sensing() {
         // An agent with zero mobility has zero sensing range and detects nothing.
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         let traits = TraitVector {
@@ -5365,9 +5414,8 @@ mod tests {
         agents[1].structure = 5.0;
         let carcasses = vec![];
         let grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+        let result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
 
         // Zero mobility -> stationary, no sensing
         assert_eq!(
@@ -5382,7 +5430,6 @@ mod tests {
     fn reproduction_uses_world_param_compatibility_distance() {
         // Agents whose trait-space distance exceeds reproductive_compatibility_distance
         // cannot mate, regardless of spatial proximity.
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -5430,9 +5477,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(
             result.offspring.is_empty(),
@@ -5444,7 +5490,6 @@ mod tests {
     fn reproduction_compatible_within_world_param_distance() {
         // Agents whose trait-space distance is within reproductive_compatibility_distance
         // can mate.
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -5477,9 +5522,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
 
         assert!(
             !result.offspring.is_empty(),
@@ -5494,7 +5538,6 @@ mod tests {
         // A mobility-0 (sessile) agent has zero mobility-derived reach, but a
         // sufficient dispersal trait extends its mate-search radius so it can
         // pair with a compatible neighbour. Reach = dispersal * coefficient.
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -5528,9 +5571,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (3.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
 
         assert!(
             !result.offspring.is_empty(),
@@ -5544,7 +5586,6 @@ mod tests {
         // zero-dispersal agents sit at a gap that falls inside their *nominal*
         // reach but outside their *effective* reach once mobility wear is applied.
         // With wear, they must fail to pair — proving reach uses effective mobility.
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -5580,8 +5621,7 @@ mod tests {
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (0.0, 0.0));
             grid.insert(1, (8.0, 0.0));
-            let mut rng = ChaCha8Rng::seed_from_u64(42);
-            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
             !result.offspring.is_empty()
         };
 
@@ -5603,7 +5643,6 @@ mod tests {
         // OR-style pairing: a wide-reach agent pairs with a compatible neighbour
         // that has zero reach of its own (mobility 0, dispersal 0), as long as the
         // neighbour falls within the wide agent's reach.
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -5643,8 +5682,7 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (6.0, 0.0));
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
         assert!(
             !result.offspring.is_empty(),
             "a wide-reach broadcaster should pair with a zero-reach neighbour inside its reach"
@@ -5658,7 +5696,6 @@ mod tests {
         // by the dispersal trait around the seed parent (issue #283). Running the
         // same scenario with different dispersal_reach_coefficient values must
         // yield identical offspring positions.
-        use rand::SeedableRng;
         let base = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -5698,8 +5735,7 @@ mod tests {
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (10.0, 10.0));
             grid.insert(1, (14.0, 10.0));
-            let mut rng = ChaCha8Rng::seed_from_u64(7);
-            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
             result.offspring.iter().map(|o| o.position).collect()
         };
 
@@ -5729,7 +5765,6 @@ mod tests {
     fn move_chemotaxis_proportional_to_mobility() {
         // Chemotaxis strength is derived from mobility. Higher mobility agents
         // have stronger directional bias toward detected signals.
-        use rand::SeedableRng;
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         params.sensing_range_coefficient = 100.0; // ensure both can sense
@@ -5739,24 +5774,29 @@ mod tests {
             ..zero_traits()
         };
 
+        // Strong chemotaxis signal: a close, attractive target and high
+        // heterotrophy so the deterministic directional bias dominates the
+        // bounded (unit-magnitude) random-walk jitter. The keyed-stateless RNG
+        // (#376) makes the jitter a fixed per-agent vector, so the test must
+        // ensure chemotaxis clearly outweighs it rather than relying on a
+        // particular seed's jitter happening to point the right way.
         let run = |mob: f32| -> f32 {
             let mover = TraitVector {
-                heterotrophy: 0.5,
+                heterotrophy: 5.0,
                 mobility: mob,
                 ..zero_traits()
             };
             let mut agents = vec![
                 make_agent(0, (0.0, 0.0), 100.0, mover),
-                make_agent(1, (5.0, 0.0), 100.0, target_traits),
+                make_agent(1, (1.0, 0.0), 100.0, target_traits),
             ];
             agents[1].structure = 5.0;
             let carcasses = vec![];
             let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (0.0, 0.0));
-            grid.insert(1, (5.0, 0.0));
-            let mut rng = ChaCha8Rng::seed_from_u64(42);
+            grid.insert(1, (1.0, 0.0));
 
-            let _ = move_agents(&mut agents, &carcasses, &grid, &params, &mut rng);
+            let _ = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
             agents[0].position.0 // x position after move
         };
 
@@ -5788,7 +5828,6 @@ mod tests {
 
     #[test]
     fn asexual_reproduction_succeeds_with_high_propensity() {
-        use rand::SeedableRng;
         // An agent with asexual_propensity=1.0 should always reproduce asexually.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
@@ -5820,9 +5859,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         // Should have reproduced
         assert!(
@@ -5848,7 +5886,6 @@ mod tests {
 
     #[test]
     fn asexual_offspring_have_parent_traits_no_crossover() {
-        use rand::SeedableRng;
         // With mutation_rate=0, asexual offspring should have exact parent traits.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
@@ -5882,9 +5919,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty());
         for child in &result.offspring {
@@ -5901,7 +5937,6 @@ mod tests {
 
     #[test]
     fn asexual_failure_falls_through_to_sexual() {
-        use rand::SeedableRng;
         // Two eligible agents with asexual_propensity=0.0 should use sexual reproduction.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
@@ -5953,9 +5988,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, agents[0].position);
         grid.insert(1, agents[1].position);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
 
         // Should have sexual reproduction event with target=Some(mate_id)
         assert!(
@@ -5971,7 +6005,6 @@ mod tests {
 
     #[test]
     fn asexual_reproduction_energy_from_single_parent() {
-        use rand::SeedableRng;
         // Verify that asexual reproduction draws from single parent's repro_reserve only.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
@@ -6004,9 +6037,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         // Parent's repro_reserve should be 0
         assert!(
@@ -6031,7 +6063,6 @@ mod tests {
     /// trait and propagule-cost coefficient, returning total energy provisioned
     /// into offspring (reserve + structure).
     fn asexual_offspring_energy(dispersal: f32, propagule_coeff: f32) -> f32 {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -6069,8 +6100,7 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
         assert!(
             !result.offspring.is_empty(),
             "fixture should produce offspring"
@@ -6099,7 +6129,6 @@ mod tests {
     /// given dispersal trait and propagule coefficient; returns total offspring
     /// energy provisioned (reserve + structure).
     fn sexual_offspring_energy(dispersal: f32, propagule_coeff: f32) -> f32 {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -6142,8 +6171,7 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, agents[0].position);
         grid.insert(1, agents[1].position);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
         assert!(
             !result.offspring.is_empty(),
             "fixture should produce offspring"
@@ -6228,7 +6256,6 @@ mod tests {
 
     #[test]
     fn zero_asexual_propensity_never_reproduces_alone() {
-        use rand::SeedableRng;
         // An agent with asexual_propensity=0.0 and no mate should not reproduce.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
@@ -6259,9 +6286,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(
             result.events.is_empty(),
@@ -6276,7 +6302,6 @@ mod tests {
 
     #[test]
     fn asexual_propensity_is_heritable() {
-        use rand::SeedableRng;
         // Offspring of asexual reproduction should inherit asexual_propensity.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
@@ -6307,9 +6332,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
 
         assert!(!result.offspring.is_empty());
         for child in &result.offspring {
@@ -6322,7 +6346,6 @@ mod tests {
 
     #[test]
     fn sexual_offspring_use_crossover_not_clone() {
-        use rand::SeedableRng;
         // Two parents with different traits: sexual offspring should have mixed traits
         // (from crossover), not a clone of either parent.
         let params = WorldParameters {
@@ -6385,9 +6408,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, agents[0].position);
         grid.insert(1, agents[1].position);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
 
         assert!(!result.offspring.is_empty());
         // Sexual event should have target
@@ -6413,7 +6435,6 @@ mod tests {
 
     #[test]
     fn asexual_nutrient_from_single_parent() {
-        use rand::SeedableRng;
         // Verify nutrient donation comes from single parent in asexual reproduction.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
@@ -6448,9 +6469,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(
             !result.offspring.is_empty(),
@@ -6493,7 +6513,6 @@ mod tests {
 
     #[test]
     fn sexual_nutrient_donated_from_both_earmarks() {
-        use rand::SeedableRng;
         // Both parents donate their entire reproductive-nutrient earmark; the
         // combined donation is split equally among offspring. Free stores are
         // untouched.
@@ -6551,9 +6570,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(
             !result.offspring.is_empty(),
@@ -6593,7 +6611,6 @@ mod tests {
     fn dispersal_trait_controls_offspring_spread() {
         // Higher dispersal trait produces wider offspring placement.
         // Compare mean distance from parent position for low vs high dispersal.
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -6627,9 +6644,8 @@ mod tests {
             }];
             let dead_ids = std::collections::HashSet::new();
             let grid = SpatialGrid::new(100.0, 10.0);
-            let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
             // Mean distance from parent position (0,0)
             let total_dist: f32 = result
                 .offspring
@@ -6651,7 +6667,6 @@ mod tests {
 
     #[test]
     fn zero_dispersal_places_offspring_at_parent_position() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -6682,9 +6697,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty());
         for child in &result.offspring {
@@ -6707,7 +6721,6 @@ mod tests {
         // seed parent's own dispersal kernel. With both parents sharing the same
         // dispersal trait, a wider trait must produce a wider scatter regardless
         // of which parent is seeded.
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -6770,9 +6783,8 @@ mod tests {
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, agents[0].position);
             grid.insert(1, agents[1].position);
-            let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
             // Scatter is measured from whichever parent each offspring is
             // closest to — the seed anchor is a real parent position, so the
             // distance to the nearest parent is the scatter magnitude.
@@ -6813,7 +6825,6 @@ mod tests {
         // broadcast (reproductive reach, #285). With zero dispersal, each
         // offspring should originate at one of the two parents' positions —
         // never in the empty space between them (the old midpoint behaviour).
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -6868,9 +6879,8 @@ mod tests {
         let mut grid = SpatialGrid::new(1000.0, 10.0);
         grid.insert(0, a_pos);
         grid.insert(1, b_pos);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
         for child in &result.offspring {
@@ -6895,7 +6905,6 @@ mod tests {
         // placement is indistinguishable from the old midpoint behaviour: with
         // zero dispersal every offspring lands on that shared spot — near both
         // parents (issue #283 acceptance: co-located parents unchanged).
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -6948,9 +6957,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, shared);
         grid.insert(1, shared);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
         for child in &result.offspring {
@@ -6968,7 +6976,6 @@ mod tests {
     fn dispersal_is_independent_of_mobility() {
         // A sessile agent (zero mobility) with high dispersal should still
         // disperse offspring widely. This tests independence.
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -7000,9 +7007,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty());
         // Offspring should be dispersed despite zero mobility
@@ -7021,7 +7027,6 @@ mod tests {
 
     #[test]
     fn dispersal_is_heritable_asexual() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -7052,9 +7057,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty());
         for child in &result.offspring {
@@ -7071,7 +7075,6 @@ mod tests {
         // with a dispersal kernel wide enough to push some across the seam,
         // must produce offspring wrapped to within the world bounds — not
         // placed off the edge of the torus (issue #283).
-        use rand::SeedableRng;
         let extent = 100.0_f32;
         let params = WorldParameters {
             reproduction_efficiency: 1.0,
@@ -7108,9 +7111,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, agents[0].position);
         grid.insert(1, agents[1].position);
-        let mut rng = ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
         let half = extent / 2.0;
@@ -7623,7 +7625,6 @@ mod tests {
     /// (offspring energy → offspring structure conversion).
     #[test]
     fn asexual_reproduction_conserves_energy_with_structure_provisioning() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -7658,9 +7659,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
 
@@ -7695,7 +7695,6 @@ mod tests {
     /// vanishing, so committed == reserve + structure + dissipated.
     #[test]
     fn dispersal_propagule_cost_conserves_energy() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -7734,9 +7733,8 @@ mod tests {
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
         let offspring_reserve_sum: f32 = result.offspring.iter().map(|c| c.reserve).sum();
@@ -7765,7 +7763,6 @@ mod tests {
     ///     + result.dissipated
     #[test]
     fn sexual_reproduction_conserves_energy_with_structure_provisioning() {
-        use rand::SeedableRng;
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
@@ -7821,9 +7818,8 @@ mod tests {
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(1, (0.0, 0.0));
         grid.insert(2, (1.0, 0.0));
-        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
 
-        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+        let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(!result.offspring.is_empty(), "should produce offspring");
         for child in &result.offspring {
@@ -7847,7 +7843,6 @@ mod tests {
     /// halve per-offspring structure.
     #[test]
     fn per_offspring_structure_scales_inversely_with_offspring_count() {
-        use rand::SeedableRng;
         // Use mutation-free, deterministic setup. We fix the offspring count
         // by setting fecundity high enough that Poisson rounding is the same
         // across runs — easier: assert ratio across two configurations.
@@ -7885,8 +7880,7 @@ mod tests {
             }];
             let dead_ids = std::collections::HashSet::new();
             let grid = SpatialGrid::new(100.0, 10.0);
-            let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
-            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, &mut rng);
+            let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, seed, 0);
             let n = result.offspring.len();
             let per = if n > 0 {
                 result.offspring[0].structure
