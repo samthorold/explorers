@@ -40,6 +40,7 @@ use explorers_genesis::{
 };
 use explorers_sim::WorldRecipe;
 
+use crate::bifurcation::{branching_distance, oscillation_distance};
 use crate::prefilter::prefilter_cliff;
 use crate::search::{ParameterRange, decode, default_ranges};
 
@@ -124,6 +125,21 @@ pub struct ConfigEval {
     pub decomposer_fraction: f32,
     /// The per-cell sample count (the seed-ensemble size).
     pub sample_count: u32,
+    /// Observed coexistence duration of the median seed
+    /// ([`FitnessBreakdown::coexistence_duration`]) — carried only to tag the
+    /// branching cross-check's regime (the #359 small-N borderline signature).
+    pub coexistence_duration: f32,
+    /// Predicted signed distance to the frozen↔oscillation (Hopf) boundary of the
+    /// living-mass↔available-pool coupling ([`crate::bifurcation::oscillation_distance`]),
+    /// computed once from the decoded `(WorldParameters, founder mean)`. A
+    /// **descriptor**, never summed into fitness nor binned on. 0 on the gated
+    /// (degenerate) path.
+    pub predicted_oscillation_distance: f32,
+    /// Predicted signed distance-to-branching `D` (the monoculture↔coexistence
+    /// invasion margin, [`crate::bifurcation::branching_distance`]), computed once
+    /// from the decoded `(WorldParameters, founder mean)`. A **descriptor**, never
+    /// summed into fitness nor binned on. 0 on the gated path.
+    pub predicted_branching_distance: f32,
 }
 
 /// Reduce a `run_ensemble` result to a [`ConfigEval`], reading the three axes and
@@ -164,6 +180,9 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
             },
             decomposer_fraction: 0.0,
             sample_count: 0,
+            coexistence_duration: 0.0,
+            predicted_oscillation_distance: 0.0,
+            predicted_branching_distance: 0.0,
         };
     }
     let rep = &result.run_results[idx[idx.len() / 2]];
@@ -177,6 +196,12 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
         },
         decomposer_fraction,
         sample_count,
+        coexistence_duration: rep.breakdown.coexistence_duration,
+        // Predicted bifurcation coordinates are filled by the caller, which holds
+        // the decoded `(WorldParameters, founder mean)`; the ensemble result alone
+        // cannot compute them. Default 0 until then.
+        predicted_oscillation_distance: 0.0,
+        predicted_branching_distance: 0.0,
     }
 }
 
@@ -189,6 +214,10 @@ pub struct CellRecord {
     pub unit: Vec<f64>,
     pub decomposer_fraction: f32,
     pub sample_count: u32,
+    /// Predicted bifurcation descriptors of the elite (see [`ConfigEval`]) —
+    /// reported on the cell, never binned on nor summed into fitness.
+    pub predicted_oscillation_distance: f32,
+    pub predicted_branching_distance: f32,
     /// The cell's rolling acceptance threshold. A new solution is accepted when
     /// its fitness clears this (not merely the sitting elite); the threshold is
     /// then nudged toward the accepted fitness by the archive learning rate.
@@ -256,6 +285,8 @@ impl Archive {
                                 unit: unit.to_vec(),
                                 decomposer_fraction: eval.decomposer_fraction,
                                 sample_count: eval.sample_count,
+                                predicted_oscillation_distance: eval.predicted_oscillation_distance,
+                                predicted_branching_distance: eval.predicted_branching_distance,
                                 threshold: eval.median_fitness,
                             },
                         );
@@ -276,6 +307,10 @@ impl Archive {
                                 rec.unit = unit.to_vec();
                                 rec.decomposer_fraction = eval.decomposer_fraction;
                                 rec.sample_count = eval.sample_count;
+                                rec.predicted_oscillation_distance =
+                                    eval.predicted_oscillation_distance;
+                                rec.predicted_branching_distance =
+                                    eval.predicted_branching_distance;
                             }
                             improvement
                         } else {
@@ -522,6 +557,13 @@ pub struct AtlasCell {
     pub decomposer_fraction: f32,
     /// The seed-ensemble sample count behind that fraction.
     pub sample_count: u32,
+    /// Predicted signed distance to the frozen↔oscillation (Hopf) boundary
+    /// ([`crate::bifurcation::oscillation_distance`]) — a reported descriptor, never
+    /// a binning axis nor a fitness term (genesis-search.md, the authority boundary).
+    pub predicted_oscillation_distance: f32,
+    /// Predicted signed distance-to-branching `D`
+    /// ([`crate::bifurcation::branching_distance`]) — likewise a reported descriptor.
+    pub predicted_branching_distance: f32,
     /// The unit-cube elite — the recipe projection for this cell.
     pub unit: Vec<f64>,
 }
@@ -562,6 +604,96 @@ pub struct PrefilterDisagreement {
     pub unit: Vec<f64>,
 }
 
+/// The regime a bifurcation cross-check disagreement falls in — the #358/#359
+/// localisation tag. A disagreement in the [`CrosscheckRegime::WeakObservable`]
+/// regime localises to the genesis *observable* (or its geometry), not to F's
+/// closed-form spectral reading; a [`CrosscheckRegime::Validated`]-regime
+/// disagreement implicates the indicator itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum CrosscheckRegime {
+    /// The observable is trustworthy here (the spike's validated regime), so a
+    /// disagreement implicates F's reading.
+    Validated,
+    /// The observable is known-weak here (#358's flat, demographic-pulsing-
+    /// dominated `oscillation_strength`; #359's `clustering_strength` silently
+    /// zeroing below n=4), so a disagreement localises to the observable, not F.
+    WeakObservable,
+}
+
+/// A surfaced **bifurcation** cross-check disagreement: a live config whose
+/// predicted distance-to-bifurcation contradicts the observed behaviour-axis
+/// boundary on that axis. Modelled on [`PrefilterDisagreement`] — surfaced, never
+/// summed into fitness, never a binning axis. The `regime` tag is what makes the
+/// disagreement actionable (see [`CrosscheckRegime`]).
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct BifurcationDisagreement {
+    /// Which axis disagreed: `"branching"` (monoculture↔coexistence) or
+    /// `"oscillation"` (frozen↔oscillation).
+    pub axis: String,
+    /// The predicted signed distance-to-bifurcation on that axis.
+    pub predicted: f32,
+    /// The observed behaviour-axis descriptor the prediction is read against
+    /// (`clustering_strength` for branching, `oscillation_strength` for oscillation).
+    pub observed: f32,
+    /// The localisation tag (see [`CrosscheckRegime`]).
+    pub regime: CrosscheckRegime,
+}
+
+/// Run the bifurcation cross-check over one **live** config, returning every
+/// predicted-vs-observed disagreement (0–2: branching and/or oscillation).
+///
+/// - **Branching axis.** Disagreement when `sign(predicted_branching_distance)`
+///   contradicts the observed `clustering_strength` boundary (`> 0` ⇒ a clustered,
+///   coexistence reading). Regime is [`CrosscheckRegime::WeakObservable`] exactly on
+///   the #359 small-N borderline signature — `clustering_strength == 0` while
+///   `coexistence_duration > 0` (the multi-peak test silently zeroes below n=4
+///   even though coexistence persists) — else [`CrosscheckRegime::Validated`]. Wear
+///   is off for every searched config, so the other validated-regime condition
+///   #359 named already holds.
+/// - **Oscillation axis.** Disagreement when `sign(predicted_oscillation_distance)`
+///   contradicts the observed `oscillation_strength` boundary (`> 0` ⇒ an
+///   oscillatory reading). The regime is **always** [`CrosscheckRegime::WeakObservable`]
+///   at current genesis scale: #358's verdict is that `oscillation_strength` is flat
+///   and demographic-pulsing-dominated and cannot adjudicate the Hopf crossing. The
+///   tag flips to `Validated` once a hardened cycle-detector lands (separate issue,
+///   the #358 objective-promotion gate).
+fn bifurcation_crosscheck(eval: &ConfigEval) -> Vec<BifurcationDisagreement> {
+    let mut out = Vec::new();
+
+    // Branching axis: predicted D vs the observed clustering boundary.
+    let predicted_coexistence = eval.predicted_branching_distance > 0.0;
+    let observed_coexistence = eval.descriptors.clustering > 0.0;
+    if predicted_coexistence != observed_coexistence {
+        let regime = if eval.descriptors.clustering == 0.0 && eval.coexistence_duration > 0.0 {
+            CrosscheckRegime::WeakObservable
+        } else {
+            CrosscheckRegime::Validated
+        };
+        out.push(BifurcationDisagreement {
+            axis: "branching".to_string(),
+            predicted: eval.predicted_branching_distance,
+            observed: eval.descriptors.clustering,
+            regime,
+        });
+    }
+
+    // Oscillation axis: predicted |λ|−1 vs the observed oscillation boundary. The
+    // observable cannot adjudicate the crossing at genesis scale (#358), so the
+    // regime is constant WeakObservable until a hardened cycle-detector lands.
+    let predicted_oscillation = eval.predicted_oscillation_distance > 0.0;
+    let observed_oscillation = eval.descriptors.oscillation > 0.0;
+    if predicted_oscillation != observed_oscillation {
+        out.push(BifurcationDisagreement {
+            axis: "oscillation".to_string(),
+            predicted: eval.predicted_oscillation_distance,
+            observed: eval.descriptors.oscillation,
+            regime: CrosscheckRegime::WeakObservable,
+        });
+    }
+
+    out
+}
+
 /// The genesis [`Atlas`](../../CONTEXT.md): the live archive (cells binned on the
 /// three behaviour axes) paired with the dead frontier (keyed by cliff), plus the
 /// coverage / QD-score summary. This is the search's output — a map onto
@@ -586,6 +718,13 @@ pub struct Atlas {
     /// mis-drawn gate (viability.md, *Place in the validation triad*); it is
     /// reported, never swallowed.
     pub prefilter_disagreements: Vec<PrefilterDisagreement>,
+    /// Bifurcation cross-check disagreements surfaced: live configs whose predicted
+    /// distance-to-bifurcation contradicts the observed behaviour-axis boundary,
+    /// each tagged with a [`CrosscheckRegime`]. This is the validation-triad
+    /// cross-check #358/#359 prize — a disagreement in the `WeakObservable` regime
+    /// localises to the observable, not F's spectral reading. Reported, never
+    /// swallowed; never summed into fitness nor a binning axis.
+    pub bifurcation_disagreements: Vec<BifurcationDisagreement>,
     /// Filled-cell count.
     pub coverage: usize,
     /// Total cells in the binning (`RESOLUTION³`).
@@ -773,6 +912,7 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
     let mut config_index: u64 = 0;
     let mut rollouts_skipped: usize = 0;
     let mut disagreements: Vec<PrefilterDisagreement> = Vec::new();
+    let mut bif_disagreements: Vec<BifurcationDisagreement> = Vec::new();
 
     // Generation 0: a random bootstrap batch over the cube (the QD analogue of the
     // incumbent's LHS stage), drawn from the emitter's initial wide Gaussian — with
@@ -825,7 +965,15 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
                 } else {
                     let (wp, dist) = decode(unit, &config.ranges);
                     let result = run_ensemble(&wp, &dist, &ensemble_config, seed);
-                    Some(config_eval_from_ensemble(&result))
+                    let mut eval = config_eval_from_ensemble(&result);
+                    // Predicted bifurcation coordinates — a closed-form reading of
+                    // the decoded `(WorldParameters, founder mean)`, negligible vs
+                    // the rollout (~5–10 ms vs ~0.85 s). Surfaced only for live
+                    // cells; a gated cross-check rollout discards them.
+                    eval.predicted_oscillation_distance =
+                        oscillation_distance(&wp, &dist.mean_traits);
+                    eval.predicted_branching_distance = branching_distance(&wp, &dist.mean_traits);
+                    Some(eval)
                 }
             })
             .collect();
@@ -855,7 +1003,16 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
                     // An a-priori death never improves a cell.
                     0.0
                 }
-                None => archive.insert(unit, eval.as_ref().expect("cleared config was rolled out")),
+                None => {
+                    // A live config: cross-check its predicted distance-to-
+                    // bifurcation against the observed behaviour-axis boundaries
+                    // before placing it (the check is per-config, independent of
+                    // whether it wins its cell). Disagreements are surfaced with a
+                    // regime tag, never swallowed.
+                    let ev = eval.as_ref().expect("cleared config was rolled out");
+                    bif_disagreements.extend(bifurcation_crosscheck(ev));
+                    archive.insert(unit, ev)
+                }
             })
             .collect();
 
@@ -895,6 +1052,8 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
             carcass: rec.descriptors.carcass,
             decomposer_fraction: rec.decomposer_fraction,
             sample_count: rec.sample_count,
+            predicted_oscillation_distance: rec.predicted_oscillation_distance,
+            predicted_branching_distance: rec.predicted_branching_distance,
             unit: rec.unit.clone(),
         })
         .collect();
@@ -908,6 +1067,7 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
         dead_frontier_apriori: archive.dead_frontier_apriori(),
         rollouts_skipped,
         prefilter_disagreements: disagreements,
+        bifurcation_disagreements: bif_disagreements,
         cells,
     }
 }
@@ -931,6 +1091,9 @@ mod tests {
             descriptors: d,
             decomposer_fraction: 0.0,
             sample_count: 5,
+            coexistence_duration: 0.0,
+            predicted_oscillation_distance: 0.0,
+            predicted_branching_distance: 0.0,
         }
     }
 
@@ -974,6 +1137,8 @@ mod tests {
             carcass,
             decomposer_fraction: 0.0,
             sample_count: 5,
+            predicted_oscillation_distance: 0.0,
+            predicted_branching_distance: 0.0,
             unit: vec![0.5; 3],
         }
     }
@@ -992,6 +1157,7 @@ mod tests {
             dead_frontier_apriori: std::collections::HashMap::new(),
             rollouts_skipped: 0,
             prefilter_disagreements: Vec::new(),
+            bifurcation_disagreements: Vec::new(),
             cells,
         }
     }
@@ -1442,6 +1608,50 @@ mod tests {
         assert_eq!(atlas1.coverage, atlas2.coverage);
         assert_eq!(atlas1.dead_frontier, atlas2.dead_frontier);
         assert_eq!(atlas1.best_fitness, atlas2.best_fitness);
+
+        // The predicted bifurcation coordinates on live cells are finite and
+        // bit-reproducible, and every surfaced bifurcation disagreement carries a
+        // regime tag (never an untagged disagreement). (The new #372 fields.)
+        // Cell iteration order is a HashMap order (not stable across runs), so
+        // compare the coords as a sorted set.
+        let sorted_coords = |atlas: &Atlas| -> Vec<(f32, f32)> {
+            let mut v: Vec<(f32, f32)> = atlas
+                .cells
+                .iter()
+                .map(|c| {
+                    assert!(
+                        c.predicted_oscillation_distance.is_finite()
+                            && c.predicted_branching_distance.is_finite(),
+                        "live-cell predicted coords must be finite"
+                    );
+                    (
+                        c.predicted_oscillation_distance,
+                        c.predicted_branching_distance,
+                    )
+                })
+                .collect();
+            v.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            v
+        };
+        assert_eq!(
+            sorted_coords(&atlas1),
+            sorted_coords(&atlas2),
+            "predicted coords must be reproducible"
+        );
+        assert_eq!(
+            atlas1.bifurcation_disagreements.len(),
+            atlas2.bifurcation_disagreements.len(),
+            "the disagreement set must be reproducible"
+        );
+        for d in &atlas1.bifurcation_disagreements {
+            assert!(
+                matches!(
+                    d.regime,
+                    CrosscheckRegime::Validated | CrosscheckRegime::WeakObservable
+                ),
+                "every bifurcation disagreement must carry a regime tag"
+            );
+        }
     }
 
     #[test]
@@ -1513,5 +1723,174 @@ mod tests {
                 .unwrap();
             assert_eq!(recipe, cell_recipe);
         }
+    }
+
+    // --- Bifurcation cross-check (#372) -------------------------------------
+
+    /// Build a live eval with explicit predicted coords + observed descriptors,
+    /// for cross-check unit tests.
+    fn live_with(
+        clustering: f32,
+        oscillation: f32,
+        coexistence_duration: f32,
+        predicted_branching: f32,
+        predicted_oscillation: f32,
+    ) -> ConfigEval {
+        let mut ev = live(0.3, descr(oscillation, clustering, 0.1));
+        ev.coexistence_duration = coexistence_duration;
+        ev.predicted_branching_distance = predicted_branching;
+        ev.predicted_oscillation_distance = predicted_oscillation;
+        ev
+    }
+
+    #[test]
+    fn branching_disagreement_in_the_small_n_regime_is_tagged_weak_observable() {
+        // #359's known-weak signature: the predicted margin says COEXISTENCE
+        // (D > 0) but the observed clustering_strength is 0 while coexistence
+        // genuinely persists (coexistence_duration > 0) — the multi-peak test
+        // silently zeroes below n=4. The disagreement must surface, tagged
+        // WeakObservable (it localises to the observable, not F's reading).
+        let eval = live_with(0.0, 0.0, 12.0, 0.5, -0.2);
+        let ds = bifurcation_crosscheck(&eval);
+        let b = ds
+            .iter()
+            .find(|d| d.axis == "branching")
+            .expect("branching disagreement must surface");
+        assert_eq!(b.regime, CrosscheckRegime::WeakObservable);
+        assert!((b.predicted - 0.5).abs() < 1e-6);
+        assert_eq!(b.observed, 0.0);
+    }
+
+    #[test]
+    fn branching_disagreement_with_a_live_observable_is_tagged_validated() {
+        // Predicted MONOCULTURE (D < 0) but the observed clustering_strength is
+        // positive (a multi-peak coexistence reading the observable trusts here):
+        // the disagreement implicates F's reading, so it is tagged Validated.
+        let eval = live_with(0.4, 0.0, 8.0, -0.3, -0.2);
+        let ds = bifurcation_crosscheck(&eval);
+        let b = ds
+            .iter()
+            .find(|d| d.axis == "branching")
+            .expect("branching disagreement must surface");
+        assert_eq!(b.regime, CrosscheckRegime::Validated);
+    }
+
+    #[test]
+    fn oscillation_disagreement_is_always_tagged_weak_observable() {
+        // #358's verdict: oscillation_strength cannot adjudicate the Hopf crossing
+        // at genesis scale, so an oscillation-axis disagreement is constant
+        // WeakObservable. Here F predicts a limit cycle (|λ|−1 > 0) but the
+        // observable reads frozen (oscillation_strength == 0).
+        let eval = live_with(0.0, 0.0, 0.0, -0.1, 0.3);
+        let ds = bifurcation_crosscheck(&eval);
+        let o = ds
+            .iter()
+            .find(|d| d.axis == "oscillation")
+            .expect("oscillation disagreement must surface");
+        assert_eq!(o.regime, CrosscheckRegime::WeakObservable);
+        assert!((o.predicted - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn crosscheck_is_silent_when_predictions_agree_with_the_observables() {
+        // Both signs match the observables (coexistence predicted and observed;
+        // oscillation predicted and observed): no disagreement is fabricated.
+        let eval = live_with(0.4, 0.5, 10.0, 0.3, 0.2);
+        assert!(
+            bifurcation_crosscheck(&eval).is_empty(),
+            "agreement must produce no disagreement"
+        );
+    }
+
+    #[test]
+    fn decomposer_fraction_feeds_neither_binning_nor_fitness_nor_the_crosscheck() {
+        // Authority boundary: the decomposer fraction is a reported distribution,
+        // never a behaviour axis, fitness term, or cross-check input. Two configs
+        // identical in every binning/fitness/descriptor field but with opposite
+        // decomposer fractions must bin to the same cell, yield the same archive
+        // fitness, and surface the same bifurcation cross-check.
+        let d = descr(0.5, 0.6, 0.2);
+        let mut no_guild = live(0.4, d);
+        let mut all_guild = live(0.4, d);
+        no_guild.decomposer_fraction = 0.0;
+        all_guild.decomposer_fraction = 1.0;
+        // Same predicted coords + observed boundary so the only difference is the
+        // decomposer fraction.
+        for ev in [&mut no_guild, &mut all_guild] {
+            ev.predicted_branching_distance = 0.5; // coexistence predicted
+            ev.predicted_oscillation_distance = -0.2; // frozen predicted
+            ev.coexistence_duration = 5.0;
+        }
+
+        // Binning: same cell.
+        assert_eq!(
+            cell_of(&no_guild.descriptors),
+            cell_of(&all_guild.descriptors)
+        );
+
+        // Fitness / archive improvement: identical regardless of decomposer fraction.
+        let mut a0 = Archive::new(0.0);
+        let mut a1 = Archive::new(0.0);
+        let imp0 = a0.insert(&vec![0.5; 3], &no_guild);
+        let imp1 = a1.insert(&vec![0.5; 3], &all_guild);
+        assert_eq!(imp0, imp1);
+        assert_eq!(a0.best_fitness(), a1.best_fitness());
+        assert_eq!(a0.qd_score(), a1.qd_score());
+
+        // Cross-check: identical disagreements regardless of decomposer fraction.
+        let ds0 = bifurcation_crosscheck(&no_guild);
+        let ds1 = bifurcation_crosscheck(&all_guild);
+        assert_eq!(ds0.len(), ds1.len());
+        for (x, y) in ds0.iter().zip(ds1.iter()) {
+            assert_eq!(x.axis, y.axis);
+            assert_eq!(x.regime, y.regime);
+            assert_eq!(x.predicted, y.predicted);
+            assert_eq!(x.observed, y.observed);
+        }
+    }
+
+    #[test]
+    fn slow_sweep_populates_predicted_coords_and_regime_tagged_disagreements() {
+        // A small multi-seed QD run: every live cell carries finite predicted
+        // coords, and any surfaced bifurcation disagreement carries a regime tag.
+        // `slow_` — it steps real sims over several seeds.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = QdConfig {
+            ensemble_size: 2,
+            max_ticks: 60,
+            batch: 6,
+            generations: 2,
+            ..QdConfig::default()
+        };
+
+        let mut saw_live = false;
+        for &seed in &[5_u64, 17, 29] {
+            let mut rng = ChaCha8Rng::seed_from_u64(seed);
+            let atlas = run_qd(&config, seed, &mut rng);
+            for c in &atlas.cells {
+                saw_live = true;
+                assert!(
+                    c.predicted_oscillation_distance.is_finite(),
+                    "live cell oscillation coord must be finite"
+                );
+                assert!(
+                    c.predicted_branching_distance.is_finite(),
+                    "live cell branching coord must be finite"
+                );
+            }
+            for d in &atlas.bifurcation_disagreements {
+                assert!(
+                    d.axis == "branching" || d.axis == "oscillation",
+                    "disagreement axis must be one of the two bifurcation axes"
+                );
+                assert!(matches!(
+                    d.regime,
+                    CrosscheckRegime::Validated | CrosscheckRegime::WeakObservable
+                ));
+            }
+        }
+        assert!(saw_live, "the sweep should populate at least one live cell");
     }
 }

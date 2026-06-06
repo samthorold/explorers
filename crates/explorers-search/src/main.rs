@@ -145,6 +145,47 @@ fn main() {
         eprintln!("  {cliff:<22} {n}");
     }
     eprintln!("  {:<22} {dead_total}", "(total dead configs)");
+
+    // Predicted bifurcation coordinates (#372): the closed-form distance-to-
+    // bifurcation readings F validated (#358 Hopf, #359 branching), wired in as
+    // per-cell *descriptors* plus a predicted-vs-observed cross-check — never a
+    // fitness term, never a binning axis. Report the spread over live cells and
+    // the disagreement count split by regime.
+    eprintln!("\nPredicted bifurcation coordinates (live-cell spread):");
+    if atlas.cells.is_empty() {
+        eprintln!("  (none — no live cells)");
+    } else {
+        let spread = |get: &dyn Fn(&explorers_search::qd::AtlasCell) -> f32| {
+            let vals: Vec<f32> = atlas.cells.iter().map(get).collect();
+            let n = vals.len() as f32;
+            let min = vals.iter().copied().fold(f32::INFINITY, f32::min);
+            let max = vals.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let mean = vals.iter().sum::<f32>() / n;
+            (min, mean, max)
+        };
+        let (omin, omean, omax) = spread(&|c| c.predicted_oscillation_distance);
+        let (bmin, bmean, bmax) = spread(&|c| c.predicted_branching_distance);
+        eprintln!("  oscillation |lambda|-1  min={omin:+.4} mean={omean:+.4} max={omax:+.4}");
+        eprintln!("  branching D             min={bmin:+.4} mean={bmean:+.4} max={bmax:+.4}");
+    }
+
+    let (mut n_validated, mut n_weak) = (0usize, 0usize);
+    for d in &atlas.bifurcation_disagreements {
+        match d.regime {
+            explorers_search::qd::CrosscheckRegime::Validated => n_validated += 1,
+            explorers_search::qd::CrosscheckRegime::WeakObservable => n_weak += 1,
+        }
+    }
+    eprintln!(
+        "Bifurcation cross-check disagreements: {} total ({} validated-regime, {} weak-observable)",
+        atlas.bifurcation_disagreements.len(),
+        n_validated,
+        n_weak
+    );
+    eprintln!(
+        "  (a weak-observable disagreement localises to the genesis observable, not F's reading; \
+         objective-promotion stays gated on observable-hardening — #358/#359.)"
+    );
 }
 
 fn print_usage() {

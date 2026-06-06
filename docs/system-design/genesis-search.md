@@ -107,6 +107,56 @@ Because each cell's elite is selected on a noisy median-over-seeds, a lucky elit
 cell. The archive tolerates this descriptor noise by design (a soft per-cell acceptance threshold rather
 than a single sticky occupant) rather than pretending each cell is a noise-free point.
 
+## Predicted bifurcation coordinates and the cross-check
+
+The atlas's three behaviour axes are *observed* — read off a rollout's per-seed breakdown. Two of the
+dynamics failure modes also admit a cheap *closed-form prediction* of which side of their bifurcation a
+config sits on, lifted from the two validated research spikes ([#358 Hopf](../research/F-hopf-validation.md),
+[#359 branching](../research/F-branching-validation.md)) into `crates/explorers-search/src/bifurcation.rs`:
+
+- **`oscillation_distance` = `|λ| − 1`** of the living-mass↔available-pool 2×2 Jacobian (Brief F AC1's
+  self-contained coupling) — `< 0` frozen, `> 0` limit cycle.
+- **`branching_distance` = `D`**, the adaptive-dynamics invasion margin of a rare heterotroph into the
+  founder monoculture — `> 0` coexistence, `< 0` monoculture.
+
+Both are **descriptors, not objectives, and not binning axes.** This is the deliberate choice, and it is
+the one the committed research permits. Both #358 and #359 returned a *Qualified GO* that explicitly
+gates objective-promotion on work this design does **not** yet do: hardening the genesis observables
+(#358 — `oscillation_strength` is flat and demographic-pulsing-dominated at search scale; #359 —
+`clustering_strength` silently zeroes below n=4) and putting spatial in-reach geometry plus a wear
+penalty into the objective's environment. So the readings enter as per-cell descriptors plus a
+predicted-vs-observed cross-check, never summed into fitness — exactly as [viability](viability.md) keeps
+`C*` a *characterisation* rather than a gate. **Objective-promotion remains gated** on that
+observable-hardening (#358/#359); the cross-check's regime tag (below) makes the gate's status legible on
+every sweep.
+
+**Reduced coordinates for a single-founder config.** A QD config carries one founder *mean* trait vector
+— no producer/consumer pair (that is emergent). So branching `D` is computed on the founder mean
+directly (sweep a rare heterotroph against the founder-as-producer in the founder-monoculture
+environment), and the Hopf reading uses the living-biomass↔available-pool coupling rather than the
+prototype's producer↔consumer pair (which needs two clusters a config lacks, and whose observable #358
+showed decouples at scale anyway). Both reuse the committed kernel (`trophic_transfer_efficiency`) and
+`TraitVector::distance` verbatim.
+
+**The cross-check, regime-tagged.** For every *live* config the predicted sign is compared against the
+observed behaviour-axis boundary, and every disagreement is surfaced (`bifurcation_disagreements`),
+never swallowed — the validation-triad cross-check both spikes prize. Each disagreement carries a
+**regime**:
+
+- `Validated` — the observable is trustworthy here, so the disagreement implicates F's spectral reading.
+- `WeakObservable` — the observable is known-weak here, so the disagreement localises to the
+  observable (or its geometry), not F. The **branching** axis is `WeakObservable` exactly on #359's
+  small-N borderline (`clustering_strength == 0` while `coexistence_duration > 0`), else `Validated`
+  (wear is off for every searched config, satisfying #359's other validated-regime condition). The
+  **oscillation** axis is *constant* `WeakObservable` at current genesis scale — #358's verdict is that
+  `oscillation_strength` cannot adjudicate the Hopf crossing — and flips to `Validated` only once a
+  hardened cycle-detector lands (a separate issue).
+
+**Authority boundary.** Like the three axes and `C*`, these readings arbitrate **existence/stability
+only**. They never read the decomposer guild or any per-seed distributional property, are never summed
+into fitness, and are never a binning axis — the same existence-vs-distributional boundary the rest of
+the atlas respects.
+
 ## The recipe is a projection of the atlas
 
 A single playable [world recipe](../../CONTEXT.md) is still drawn from the search, because the app needs
