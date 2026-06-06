@@ -1422,28 +1422,28 @@
       "max": 2000.0
     },
     "final_population": {
-      "median": 94.0,
-      "min": 86.0,
-      "max": 99.0
+      "median": 88.5,
+      "min": 82.0,
+      "max": 97.0
     },
     "total_births": {
-      "median": 2281.5,
-      "min": 2155.0,
-      "max": 2409.0
+      "median": 2283.5,
+      "min": 1998.0,
+      "max": 2370.0
     },
     "total_deaths": {
-      "median": 2204.0,
-      "min": 2080.0,
-      "max": 2330.0
+      "median": 2210.5,
+      "min": 1931.0,
+      "max": 2299.0
     },
     "per_seed": [
       {
         "seed": 1,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 90,
-        "total_births": 2207,
-        "total_deaths": 2134,
+        "final_population": 89,
+        "total_births": 2219,
+        "total_deaths": 2147,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1457,9 +1457,9 @@
         "seed": 2,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 94,
-        "total_births": 2264,
-        "total_deaths": 2187,
+        "final_population": 88,
+        "total_births": 2292,
+        "total_deaths": 2221,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1473,9 +1473,9 @@
         "seed": 3,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 86,
-        "total_births": 2176,
-        "total_deaths": 2107,
+        "final_population": 82,
+        "total_births": 2162,
+        "total_deaths": 2097,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1489,9 +1489,9 @@
         "seed": 4,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 96,
-        "total_births": 2409,
-        "total_deaths": 2330,
+        "final_population": 92,
+        "total_births": 2275,
+        "total_deaths": 2200,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1505,9 +1505,9 @@
         "seed": 5,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 96,
-        "total_births": 2300,
-        "total_deaths": 2221,
+        "final_population": 97,
+        "total_births": 2370,
+        "total_deaths": 2290,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1521,9 +1521,9 @@
         "seed": 6,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 94,
-        "total_births": 2299,
-        "total_deaths": 2222,
+        "final_population": 84,
+        "total_births": 2366,
+        "total_deaths": 2299,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1537,9 +1537,9 @@
         "seed": 7,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 92,
-        "total_births": 2155,
-        "total_deaths": 2080,
+        "final_population": 84,
+        "total_births": 1998,
+        "total_deaths": 1931,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
@@ -1553,9 +1553,9 @@
         "seed": 8,
         "failure_mode": "nutrient_lockup",
         "ticks_survived": 2000,
-        "final_population": 99,
-        "total_births": 2331,
-        "total_deaths": 2249,
+        "final_population": 91,
+        "total_births": 2321,
+        "total_deaths": 2247,
         "scores": {
           "oscillation_strength": 0.0,
           "clustering_strength": 0.0,
