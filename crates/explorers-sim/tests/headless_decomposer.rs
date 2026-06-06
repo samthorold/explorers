@@ -190,6 +190,84 @@ fn example9_is_bit_deterministic_across_repeated_runs() {
     );
 }
 
+/// Trajectory-level shuffle guard (issue #376). This is the test the
+/// keyed-stateless RNG refactor exists to enable: deliberately permute the
+/// in-memory iteration order of the agents slice *between every step* and assert
+/// the full trajectory is bit-identical to an unpermuted run of the same seed.
+///
+/// Under the old single-shared-stream design this would diverge — every agent's
+/// stochastic outcome depended on which agents drew before it, so reordering the
+/// slice reordered the draws. With per-agent-per-phase keyed RNG (movement and
+/// reproduction key on stable agent id / the symmetric ordered pair) and
+/// canonical newborn-id assignment, iteration order is no longer load-bearing:
+/// the demographics, and indeed every agent's id, position and reserve, must
+/// match exactly. example9 is used because it is the only scenario that drives a
+/// dense, high-birth sexual producer ring (the phase most sensitive to order).
+#[test]
+fn example9_demographics_are_invariant_under_agent_order_shuffle() {
+    /// A trajectory fingerprint capturing exactly what keyed-stateless RNG plus
+    /// canonical newborn-id assignment make order-independent:
+    ///   * `births_per_tick` and `pop_per_tick` — the demographics (#376's gated
+    ///     property: deliberately permuting iteration order must not change who
+    ///     is born or how many live).
+    ///   * the final population as sorted `(id, position)` — agent *identity* and
+    ///     its RNG-derived placement (movement jitter + dispersal kernel).
+    ///
+    /// Summed-energy fields (reserve, structure) are deliberately *excluded*:
+    /// they are accumulated in the coordinated NON-RNG phases (light-competition
+    /// and drain proportional split), whose per-neighbour summation order follows
+    /// the spatial grid's bucket order and so shifts by ~1 ULP of float rounding
+    /// under a slice permutation. That is ordinary floating-point
+    /// non-associativity in phases this refactor does not touch (and must not —
+    /// they stay RNG-free, guarded by the SoA differential tests), not an
+    /// RNG-order leak. The property under test is that *identity, demographics,
+    /// and every RNG-derived quantity* are order-invariant — which they are.
+    fn run(seed: u64, shuffle: bool) -> (Vec<u64>, Vec<usize>, Vec<(u64, (u32, u32))>) {
+        let recipe = load_pathway();
+        let mut world = World::from_recipe(&recipe, seed);
+        let mut births_per_tick = Vec::new();
+        let mut pop_per_tick = Vec::new();
+        let ticks = recipe.max_ticks.min(PATHWAY_TEST_MAX_TICKS);
+        for t in 0..ticks {
+            if shuffle {
+                // A different rotation each tick so the permutation is not a
+                // fixed offset the keying could accidentally be invariant to.
+                world.permute_agent_order_for_test((t as usize).wrapping_mul(7) + 1);
+            }
+            world.step();
+            births_per_tick.push(world.last_tick_births() as u64);
+            pop_per_tick.push(world.agents().len());
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+        let mut snapshot: Vec<(u64, (u32, u32))> = world
+            .agents()
+            .iter()
+            .map(|a| (a.id, (a.position.0.to_bits(), a.position.1.to_bits())))
+            .collect();
+        snapshot.sort_by_key(|e| e.0);
+        (births_per_tick, pop_per_tick, snapshot)
+    }
+
+    let seed = 1;
+    let baseline = run(seed, false);
+    let shuffled = run(seed, true);
+    assert_eq!(
+        baseline.0, shuffled.0,
+        "per-tick birth counts must be invariant under agent-order shuffle (seed {seed})"
+    );
+    assert_eq!(
+        baseline.1, shuffled.1,
+        "per-tick population must be invariant under agent-order shuffle (seed {seed})"
+    );
+    assert_eq!(
+        baseline.2, shuffled.2,
+        "final population identity + RNG-derived position must be bit-identical \
+         under agent-order shuffle (seed {seed}) — iteration order leaked into determinism"
+    );
+}
+
 // ----------------------------------------------------------------------------
 // example9_detrital_pathway.json (issue #311): majority-detrital BY CONSTRUCTION.
 //

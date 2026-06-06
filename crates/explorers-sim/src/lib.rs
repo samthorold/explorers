@@ -1,5 +1,6 @@
 pub mod energy_ledger;
 pub mod event;
+pub mod keyed_rng;
 pub mod nutrient_ledger;
 pub mod phase;
 pub mod soa;
@@ -1099,7 +1100,8 @@ impl World {
             &drain_dead_ids,
             &repro_grid,
             &self.params,
-            &mut self.rng,
+            self.seed,
+            self.tick,
         );
         self.dissipated_energy += repro_result.dissipated;
         self.last_tick_births = repro_result.offspring.len();
@@ -1126,7 +1128,8 @@ impl World {
             &self.carcasses,
             &move_grid,
             &self.params,
-            &mut self.rng,
+            self.seed,
+            self.tick,
         );
         self.dissipated_energy += move_result.dissipated;
         // move_result.move_distance is aligned by index with self.agents at move
@@ -1400,6 +1403,25 @@ impl World {
 
     pub fn agents(&self) -> &[Agent] {
         &self.agents
+    }
+
+    /// Test support (#376): deliberately permute the in-memory order of the
+    /// `agents` slice without changing any agent's identity or state. The
+    /// keyed-stateless RNG keys every stochastic outcome on stable agent id (and
+    /// the symmetric ordered pair for sexual reproduction), and newborn ids are
+    /// assigned in a canonical, world-state-derived order — so the trajectory
+    /// must be invariant under this permutation. The trajectory-level shuffle
+    /// test calls this between steps; a divergence means iteration order leaked
+    /// back into determinism. The permutation is a deterministic rotate-by-`k`,
+    /// so the test itself stays reproducible.
+    pub fn permute_agent_order_for_test(&mut self, k: usize) {
+        if !self.agents.is_empty() {
+            let n = self.agents.len();
+            // Reverse, then rotate by k: a non-cyclic permutation that changes
+            // both adjacency and absolute position of every agent in the slice.
+            self.agents.reverse();
+            self.agents.rotate_left(k % n);
+        }
     }
 
     pub fn carcasses(&self) -> &[Carcass] {
