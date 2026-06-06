@@ -51,7 +51,7 @@ carcass-fall it could not previously touch (every remaining file keeps
 | example7 | not-sensible | none (8/8) | n/a (undecided) | roster mismatch (no decomposer); 0 births fails turnover |
 | example8 | not-sensible | none (8/8) | disagree | roster mismatch (no decomposer); 0 births fails turnover |
 | example9_detrital_pathway | wiring test (not emergence evidence) | nutrient_lockup (8/8) | n/a — by construction | wiring healthy locally (the producer→carcass→decomposer pathway closes; `detrital_share` stays majority-detrital ≈0.9–1.0 by geometry), but the lone obligate decomposer cannot reach the producer ring's carcass-fall, so nutrient sequesters irreversibly into the dead pool — the field-level failure the scenario's own pathway is meant to prevent (now registered, #342) |
-| example12_generalist_dominance | sensible — confirms prediction (#325) | none (8/8) | agree (predicted live → confined), 8/8 | none — broad generalists eliminated (0% energy, 8/8), sessile mixotrophs persist but stay a minority (median 20% energy); design holds, interaction term stays in reserve |
+| example12_generalist_dominance | sensible — confirms prediction, now un-confounded (#325; re-validated post-#380) | none (8/8) | agree (predicted live → confined), 8/8 | none — broad (mobile) generalists eliminated (0% energy, 8/8) *even with mobile feeding fixed*; sessile compatible mixotrophs rise to parity (median 44% energy) but don't run away; design holds, interaction term stays in reserve |
 
 ## Per-scenario fault localisation
 
@@ -67,16 +67,20 @@ carcass-fall it could not previously touch (every remaining file keeps
   scenario needs). The drift/isolation question is untested.
 - **example4** — Partially-sensible, and the most diagnostic row. The fully-specified file
   (20 producers + 2 consumers, heterogeneous traits), and the only one with real turnover.
-  Across the 8-seed ensemble it reads `failure=none` on **every** seed (median **34 births, 48
-  deaths**, median final pop 8 spanning 6–11, median fitness 0.537 spanning 0.49–0.65). Its
+  Across the 8-seed ensemble it reads `failure=none` on **every** seed (median **44 births, 59
+  deaths**, median final pop 8 spanning 6–9, median fitness 0.636 spanning 0.48–0.67). Its
   free-energy stock is sustained by an actively reproducing living system, so the previous
   `energy_death` label is confirmed to have been a detector artifact (the old Consumed-only series
   read all-zero once predation tapered in the tail). #313's peak-relative death threshold raised its
   survivors — newborns that the absolute floor used to kill on arrival now live — which is the
-  expected ecological direction of the root fix. The coexistence and oscillation medians (0.446,
-  0.181) sit below the old over-mortality run's sharp predator-prey cycle: with more survivors the
-  system settles toward a steadier trajectory. The ensemble makes its modest seed-to-seed wobble
-  legible (pop 6–11) without changing the read — it is unanimously `none`, never collapsing. It is
+  expected ecological direction of the root fix. **Re-checked after #380** (this scenario was flagged
+  degenerate under the mobile-feeding bug): with consumption now a binary-reach drain the mobile
+  consumers actually feed, and **coexistence rises from a median 0.45 to 0.99** — the predator–prey
+  pair now co-exists nearly the full run on most seeds (one seed dips to 0.14, the source of the
+  spread) rather than the prey escaping once the starving consumers died off. Turnover lifts with it
+  (births 34→44, deaths 48→59, fitness 0.54→0.64); the oscillation median (0.15) stays a gentle cycle
+  rather than the old over-mortality run's sharp swing. The ensemble makes its modest seed-to-seed
+  wobble legible (pop 6–9) without changing the read — it is unanimously `none`, never collapsing. It is
   still not a *complete* sensible world — no decomposer role, lower coexistence — but it remains the
   closest the legacy set has to a live ecology, and the detector now treats it as such. (This file is the former
   `example4_consumer_tuning`, promoted to the canonical `example4` slot; the legacy degenerate
@@ -122,34 +126,52 @@ carcass-fall it could not previously touch (every remaining file keeps
   arise without being hand-built — now comes from the genesis search (71/120 viable random worlds
   produced decomposers, guilds up to 235, including from full-random founders), not from this file; a
   dedicated genesis-emergence regression is a deferred follow-up.
-- **example12_generalist_dominance** — **Sensible; confirms the design prediction (#325).** The
-  probe pits four archetypes in one viable world (survives 2000 ticks on every seed, `failure=none`
-  8/8, `clustering_strength` 1.0 and `trophic_balance_score` 1.0 throughout — a *differentiated*,
-  multi-cluster state, not collapse from above): specialist producers, specialist mobile consumers,
-  **broad** generalists (autotrophy + heterotrophy + mobility — the rooted-producer + roving-hunter)
-  and **compatible** generalists (autotrophy + heterotrophy, sessile). Broad and compatible
-  generalists are seeded identically (reserve 80, autotrophy 0.5, heterotrophy 0.5) and differ *only*
-  in mobility (0.5 vs 0.0), so their fates isolate the sessile/mobile incompatibility axis as an
-  in-run control. The breadth/dominance measure is read directly off survivor traits by
-  `probe_generalist` (a *trophic generalist* invests in both autotrophy and heterotrophy, photo > 0.25
-  ∧ het > 0.25; a *broad generalist* additionally invests mobility > 0.25; share is energy-weighted):
+- **example12_generalist_dominance** — **Sensible; confirms the design prediction (#325), now
+  un-confounded after the #380 mobile-feeding fix.** The probe pits four archetypes in one viable
+  world (survives 2000 ticks on every seed, `failure=none` 8/8, `clustering_strength` 1.0 and
+  `trophic_balance_score` 1.0 throughout — a *differentiated*, multi-cluster state, not collapse from
+  above): specialist producers, specialist mobile consumers, **broad** generalists (autotrophy +
+  heterotrophy + mobility — the rooted-producer + roving-hunter) and **compatible** generalists
+  (autotrophy + heterotrophy, sessile). Broad and compatible generalists are seeded identically
+  (reserve 80, autotrophy 0.5, heterotrophy 0.5) and differ *only* in mobility (0.5 vs 0.0), so their
+  fates isolate the sessile/mobile incompatibility axis as an in-run control. The breadth/dominance
+  measure is read directly off survivor traits by `probe_generalist` (a *trophic generalist* invests
+  in both autotrophy and heterotrophy, photo > 0.25 ∧ het > 0.25; a *broad generalist* additionally
+  invests mobility > 0.25; share is energy-weighted):
   - **Broad generalists are eliminated — 0 survivors and 0.0% energy share on all 8 seeds.** The
-    energy-advantaged, light-and-prey-co-located rooted-rover cannot establish.
-  - **Compatible (sessile) mixotrophs persist but never dominate** — energy share 13–31% across seeds
-    (median 20%), always well below the 50% dominance line. Exactly the design's "possible-but-non-
-    dominant" mixotroph.
-  - Specialist producers hold the majority (~70–86% of energy); specialist *mobile* consumers also die
-    out (0 survivors, 8/8) — a side fact that the pure mobile-hunter niche is non-viable in this
-    particular economy, not part of the generalist verdict.
+    energy-advantaged, light-and-prey-co-located rooted-rover cannot establish. Crucially this now
+    holds *with mobile consumers able to feed* (see un-confounding note below), so the confinement is
+    attributable to incompatibility + fragility, not to broken feeding.
+  - **Compatible (sessile) mixotrophs persist and rise to rough parity** — energy share 33–56% across
+    seeds (median 44%), at or just under the 50% line and tipping past it on one seed (seed 4: 56%).
+    This roughly doubled from the pre-fix read (median 20%): with mobile feeding restored, the whole
+    energy economy shifted. They are a *legal*, non-incompatible combination, so the design never
+    predicted them confined; fragility alone holds them off runaway, and it does — they co-exist with
+    specialists at parity rather than displacing them. Watch this share in future sweeps: a decisive
+    crossing into dominance would put fragility-alone under pressure.
+  - Specialist producers hold a slim majority on most seeds (~44–67% of energy, median ~56%);
+    specialist *mobile* consumers die out here (0 survivors, 8/8) — a **competitive** loss in this
+    particular economy, **not** a feeding failure (the predator–prey `example10` shows the mobile
+    consumer niche is viable when the scenario supports it), and not part of the generalist verdict.
   This happens with `mobility_maintenance_cost = 0`, `wear_rate = 0`, and **no cross-trait interaction
   maintenance term** — so the confinement is delivered by the committed structural fragility (#9,
-  higher trait-entropy → higher peak-relative death threshold; survivor mean fragility ≈0.84) and the
+  higher trait-entropy → higher peak-relative death threshold; survivor mean fragility ≈0.86) and the
   emergent sessile/mobile functional incompatibility (#2), plus the breadth-neutral movement cost,
-  *without* the reserve lever. The evaluator's own `generalist_dominance` gate also reads 0/8 (final
-  pop 21–24 clears its 20-agent floor). **Verdict: generalists stay confined; the design prediction
-  holds and the cross-trait interaction term stays in reserve** (see
-  [`viability.md`](../docs/system-design/viability.md), "Resolved finding — generalist dominance has
-  no static gate"). Regenerate the breadth read with
+  *without* the reserve lever. Final population is now 12–15 (down from 21–24 pre-fix, as restored
+  consumption thins the standing stock), which sits *below* the evaluator's own `generalist_dominance`
+  gate's 20-agent floor — so that gate now abstains rather than affirmatively reading 0/8; the
+  dominance verdict rests on the floor-free `probe_generalist` trait read (which is exactly why that
+  binary exists). **Un-confounding (post-#380):** the earlier confirmation predated the #379 fix, in
+  which a contact-duration consumption ramp reset on every move and left *any* mobile consumer unable
+  to feed at all — confounding this in-run control (broad generalists + specialist mobile consumers
+  are mobile; the surviving compatible mixotrophs are sessile). With consumption now a binary-reach
+  drain (#380), mobile consumers demonstrably feed (`example10_predator_prey_hopf` survives all 8
+  seeds with the signature Hopf oscillation, median `oscillation_strength` 0.36, where it was
+  degenerate under the bug; plus a dedicated `mobile_consumer_feeds` integration test). The broad
+  generalist is therefore eliminated *despite being able to feed*. **Verdict: generalists stay
+  confined; the design prediction holds — now on a clean, un-confounded control — and the cross-trait
+  interaction term stays in reserve** (see [`viability.md`](../docs/system-design/viability.md),
+  "Resolved finding — generalist dominance has no static gate"). Regenerate the breadth read with
   `cargo run -p explorers-genesis-eval --bin probe_generalist -- scenarios/example12_generalist_dominance.json`.
 - **example7** — Not-sensible (prediction `undecided`). Roster mismatch is primary: intent is
   "three trophic roles incl. a decomposer", but the roster is 3 *undifferentiated* mobile consumers —
