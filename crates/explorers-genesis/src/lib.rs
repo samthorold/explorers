@@ -32,31 +32,32 @@ pub fn run_single(
 ) -> RunResult {
     let mut world = explorers_sim::World::new(params.clone(), distribution.clone(), seed);
 
-    // Sample free (non-carcass-locked) energy each tick for the energy-death
-    // detector's stock-trend signal (issue #302); the world stays history-free.
-    let mut free_energy_per_tick: Vec<f32> = Vec::with_capacity(run_config.max_ticks as usize);
-    // Sample the dead pool's share of system nutrient each tick for the
-    // nutrient-lockup detector's stock-trend signal (issue #342); the world
-    // stays history-free, mirroring the free-energy sampling above.
-    let mut carcass_fraction_per_tick: Vec<f32> = Vec::with_capacity(run_config.max_ticks as usize);
-    // Sample the producer (autotroph) share of living energy each tick for the
-    // oscillation descriptor's producer↔consumer rhythm signal (issue #392); a
-    // scale-invariant ratio, so it stays history-free and seed-invariant.
-    let mut producer_share_per_tick: Vec<f32> = Vec::with_capacity(run_config.max_ticks as usize);
-    // Snapshot the living population's raw trait vectors at a coarse interval for
-    // the coexistence descriptor (issue #394). Pure observation — genesis does NOT
-    // cluster; the evaluator runs DBSCAN on each snapshot. A sparse (tick, traits)
-    // series, not a per-tick scalar, because clustering every tick of every seed of
-    // every config is disproportionate for one noisy 0.2-weight term.
+    // Per-tick series the rollout observes for the descriptors that need a
+    // temporal trace: free energy (issue #302), carcass fraction (#342) and
+    // producer share (#392) sampled every tick, plus a coarse-interval trait-
+    // vector snapshot for coexistence (#394). The world stays history-free — the
+    // series live here, bundled as `RolloutObservations` for the evaluator. The
+    // snapshots are pure observation; genesis does NOT cluster, the evaluator runs
+    // DBSCAN on each.
+    let cap = run_config.max_ticks as usize;
+    let mut observations = explorers_genesis_eval::RolloutObservations {
+        free_energy: Vec::with_capacity(cap),
+        carcass_fraction: Vec::with_capacity(cap),
+        producer_share: Vec::with_capacity(cap),
+        cluster_snapshots: Vec::new(),
+    };
     let interval = run_config.eval_config.coexistence_sample_interval.max(1);
-    let mut cluster_snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = Vec::new();
     for _ in 0..run_config.max_ticks {
         world.step();
-        free_energy_per_tick.push(world.free_energy());
-        carcass_fraction_per_tick.push(world.carcass_locked_nutrient_fraction());
-        producer_share_per_tick.push(world.producer_energy_share());
+        observations.free_energy.push(world.free_energy());
+        observations
+            .carcass_fraction
+            .push(world.carcass_locked_nutrient_fraction());
+        observations
+            .producer_share
+            .push(world.producer_energy_share());
         if world.tick() % interval as u64 == 0 {
-            cluster_snapshots.push((
+            observations.cluster_snapshots.push((
                 world.tick(),
                 world.agents().iter().map(|a| a.traits).collect(),
             ));
@@ -71,10 +72,7 @@ pub fn run_single(
 
     let breakdown = explorers_genesis_eval::evaluate_from_log(
         &world,
-        &free_energy_per_tick,
-        &carcass_fraction_per_tick,
-        &producer_share_per_tick,
-        &cluster_snapshots,
+        &observations,
         &run_config.eval_config,
         run_config.max_ticks,
     );
