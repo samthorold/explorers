@@ -43,11 +43,24 @@ pub fn run_single(
     // oscillation descriptor's producer↔consumer rhythm signal (issue #392); a
     // scale-invariant ratio, so it stays history-free and seed-invariant.
     let mut producer_share_per_tick: Vec<f32> = Vec::with_capacity(run_config.max_ticks as usize);
+    // Snapshot the living population's raw trait vectors at a coarse interval for
+    // the coexistence descriptor (issue #394). Pure observation — genesis does NOT
+    // cluster; the evaluator runs DBSCAN on each snapshot. A sparse (tick, traits)
+    // series, not a per-tick scalar, because clustering every tick of every seed of
+    // every config is disproportionate for one noisy 0.2-weight term.
+    let interval = run_config.eval_config.coexistence_sample_interval.max(1);
+    let mut cluster_snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = Vec::new();
     for _ in 0..run_config.max_ticks {
         world.step();
         free_energy_per_tick.push(world.free_energy());
         carcass_fraction_per_tick.push(world.carcass_locked_nutrient_fraction());
         producer_share_per_tick.push(world.producer_energy_share());
+        if world.tick() % interval as u64 == 0 {
+            cluster_snapshots.push((
+                world.tick(),
+                world.agents().iter().map(|a| a.traits).collect(),
+            ));
+        }
         if world.agents().is_empty() {
             break;
         }
@@ -61,6 +74,7 @@ pub fn run_single(
         &free_energy_per_tick,
         &carcass_fraction_per_tick,
         &producer_share_per_tick,
+        &cluster_snapshots,
         &run_config.eval_config,
         run_config.max_ticks,
     );
@@ -217,12 +231,14 @@ mod tests {
             initial_energy_per_agent: 100.0,
             ..test_distribution()
         };
+        // A live post-grace window (the default 0.2 grace) so the seed-driven
+        // differences in the post-grace descriptors actually surface — under a
+        // full-run grace (1.0) the oscillation and coexistence guards zero those
+        // descriptors for a world that survives exactly to max_ticks, masking the
+        // trajectory difference this test asserts.
         let config = RunConfig {
             max_ticks: 200,
-            eval_config: EvalConfig {
-                grace_period_fraction: 1.0,
-                ..EvalConfig::default()
-            },
+            eval_config: EvalConfig::default(),
         };
         let result_a = run_single(&params, &dist, &config, 1);
         let result_b = run_single(&params, &dist, &config, 12345);
