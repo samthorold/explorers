@@ -52,6 +52,7 @@ carcass-fall it could not previously touch (every remaining file keeps
 | example8 | not-sensible | none (8/8) | disagree | roster mismatch (no decomposer); 0 births fails turnover |
 | example9_detrital_pathway | wiring test (not emergence evidence) | nutrient_lockup (8/8) | n/a — by construction | wiring healthy locally (the producer→carcass→decomposer pathway closes; `detrital_share` stays majority-detrital ≈0.9–1.0 by geometry), but the lone obligate decomposer cannot reach the producer ring's carcass-fall, so nutrient sequesters irreversibly into the dead pool — the field-level failure the scenario's own pathway is meant to prevent (now registered, #342) |
 | example12_generalist_dominance | sensible — confirms prediction, now un-confounded (#325; re-validated post-#380) | none (8/8) | agree (predicted live → confined), 8/8 | none — broad (mobile) generalists eliminated (0% energy, 8/8) *even with mobile feeding fixed*; sessile compatible mixotrophs rise to parity (median 44% energy) but don't run away; design holds, interaction term stays in reserve |
+| example13_closed_web | sensible — first persisting decomposer lineage in a live web; brown loop closes structurally + partially (#136) | none (8/8) | agree (predicted live → loop closes), 8/8 | none for the closure itself — guild persists (8/8), carcass-locked nutrient cut ~40% vs example12 baseline; residual: closure is *partial* (dead pool reduced not eliminated), reach-limited by `body_reach_coefficient=0` |
 
 ## Per-scenario fault localisation
 
@@ -67,22 +68,27 @@ carcass-fall it could not previously touch (every remaining file keeps
   scenario needs). The drift/isolation question is untested.
 - **example4** — Partially-sensible, and the most diagnostic row. The fully-specified file
   (20 producers + 2 consumers, heterogeneous traits), and the only one with real turnover.
-  Across the 8-seed ensemble it reads `failure=none` on **every** seed (median **44 births, 59
-  deaths**, median final pop 8 spanning 6–9, median fitness 0.636 spanning 0.48–0.67). Its
+  Across the 8-seed ensemble it reads `failure=none` on **every** seed (median **43 births, 58
+  deaths**, median final pop 7 spanning 6–8, median fitness **0.490** spanning 0.46–0.52). Its
   free-energy stock is sustained by an actively reproducing living system, so the previous
   `energy_death` label is confirmed to have been a detector artifact (the old Consumed-only series
   read all-zero once predation tapered in the tail). #313's peak-relative death threshold raised its
   survivors — newborns that the absolute floor used to kill on arrival now live — which is the
   expected ecological direction of the root fix. **Re-checked after #380** (this scenario was flagged
   degenerate under the mobile-feeding bug): with consumption now a binary-reach drain the mobile
-  consumers actually feed, and **coexistence rises from a median 0.45 to 0.99** — the predator–prey
-  pair now co-exists nearly the full run on most seeds (one seed dips to 0.14, the source of the
-  spread) rather than the prey escaping once the starving consumers died off. Turnover lifts with it
-  (births 34→44, deaths 48→59, fitness 0.54→0.64); the oscillation median (0.15) stays a gentle cycle
-  rather than the old over-mortality run's sharp swing. The ensemble makes its modest seed-to-seed
-  wobble legible (pop 6–9) without changing the read — it is unanimously `none`, never collapsing. It is
-  still not a *complete* sensible world — no decomposer role, lower coexistence — but it remains the
-  closest the legacy set has to a live ecology, and the detector now treats it as such. (This file is the former
+  consumers actually feed, and the predator–prey pair persists nearly the full run on most seeds
+  rather than the prey escaping once the starving consumers died off; turnover lifts with it
+  (births 34→43, deaths 48→58). Its `oscillation_strength` median is **0.40** under the #393
+  producer-share descriptor. **Metric note (#394):** `coexistence_duration` now reads **0** here. The
+  earlier high reading (≈0.99) was the lineage-clade false positive #394 removed — two persisting
+  lineages (producers + consumers) counted as "coexistence." Under the trait-space cluster metric the
+  living population does not resolve into ≥2 *persistent* clusters across the post-grace window, even
+  though `clustering_strength` is 1.0 (the final snapshot is multimodal): existence ≠ persistence, and
+  a predator–prey trophic split is not a trait-space niche split. The ensemble makes its modest
+  seed-to-seed wobble legible (pop 6–8) without changing the read — it is unanimously `none`, never
+  collapsing. It is still not a *complete* sensible world — no decomposer role, and no registered
+  trait-cluster coexistence — but it remains the closest the legacy set has to a live ecology, and the
+  detector now treats it as such. (This file is the former
   `example4_consumer_tuning`, promoted to the canonical `example4` slot; the legacy degenerate
   example4 — triple-zeroed mate-limited producers, 0 births — has been retired.)
 - **example5** — Not-sensible; disagrees with "live". Roster/probe mismatch ranks first: it declares
@@ -166,13 +172,21 @@ carcass-fall it could not previously touch (every remaining file keeps
   to feed at all — confounding this in-run control (broad generalists + specialist mobile consumers
   are mobile; the surviving compatible mixotrophs are sessile). With consumption now a binary-reach
   drain (#380), mobile consumers demonstrably feed (`example10_predator_prey_hopf` survives all 8
-  seeds with the signature Hopf oscillation, median `oscillation_strength` 0.36, where it was
-  degenerate under the bug; plus a dedicated `mobile_consumer_feeds` integration test). The broad
-  generalist is therefore eliminated *despite being able to feed*. **Verdict: generalists stay
+  seeds — where it was degenerate under the bug — plus a dedicated `mobile_consumer_feeds` integration
+  test). The broad generalist is therefore eliminated *despite being able to feed*. **⚠ Oscillation
+  flag (#393 regression candidate):** the earlier read credited `example10` with "the signature Hopf
+  oscillation, median `oscillation_strength` 0.36." Under the current producer-share oscillation
+  descriptor (#393) it now reads **0.006** (7 of 8 seeds ≈0, one seed 0.28) — the canonical Hopf
+  scenario no longer registers as oscillating. The survival/feeding evidence above stands; the
+  oscillation claim does not, and the descriptor's blindness to this cycle warrants a dedicated look. **Verdict: generalists stay
   confined; the design prediction holds — now on a clean, un-confounded control — and the cross-trait
   interaction term stays in reserve** (see [`viability.md`](../docs/system-design/viability.md),
   "Resolved finding — generalist dominance has no static gate"). Regenerate the breadth read with
   `cargo run -p explorers-genesis-eval --bin probe_generalist -- scenarios/example12_generalist_dominance.json`.
+- **example13_closed_web** — **Sensible; the first scenario to close the trophic web inside a *living* differentiated world (#136).** It takes `example12`'s viable four-archetype world verbatim and adds the one role the suite has never combined with a live green web — a lean guild of 8 sessile **facultative** detritivores (photo 0.25 + het 0.6, heterotroph-dominant so the sim classifies them as decomposers) seeded on the producer ring, *within* the 2.5-unit reach of the ring's carcass rain. This is the deliberate inversion of `example9` (whose decomposer was held *out* of reach to force a pure-detrital diet on a hand-placed deposit). Across the 8-seed ensemble it reads `failure=none` on every seed, **fitness 0.565** (median, [0.55–0.58] — at or above example12's 0.556; the figure is lower than the 0.686 reported pre-#394 because the lineage-clade `coexistence_duration` that inflated it is gone — example13's trait-cluster `coexistence_duration` is 0, as it is across the suite), `clustering_strength` 1.0 **and** `trophic_balance_score` 1.0 (a producer-led pyramid, ~9–11 producers > 8 decomposers, *not* inverted), and turnover roughly doubles (median 555 births / 596 deaths vs example12's 389/429). Two findings make this a genuine advance, both established by trace inspection:
+  - **A persisting decomposer lineage.** The guild survives to tick 2000 on every seed (8–9 of 8 alive — it reproduces), where `example9` sustained only a single non-reproducing individual on a 12000-energy deposit. The decomposer role is part of the living standing community, not a wiring artifact.
+  - **The brown loop carries flux.** Carcass-locked nutrient is cut **~40%** vs the no-decomposer `example12` baseline (median `nutrient_carcasses` ≈2300 vs ≈3900) — the decomposers are demonstrably draining the dead pool and returning nutrient (the higher carcass *count*, ~610 vs ~410, with *lower* locked nutrient is the signature of active decomposition: many drained husks).
+  **Honest caveats, three.** (1) Closure is **partial, not complete** — the dead pool is reduced, not eliminated; 8 sessile decomposers with a structure-independent 2.5-unit reach (`body_reach_coefficient=0`) cannot blanket the ~190-unit ring circumference, so much carcass-fall is never reached. Full field-scale closure is **reach-limited** — precisely the endogenous *decomposer reach* term [`viability.md`](../docs/system-design/viability.md) names as the under-committed knob (committing `body_reach_coefficient > 0`, or a mobile detritivore the autotrophy–mobility incompatibility currently kills, is what full closure would require). (2) The decomposer physiology is a **narrow honest band**, found by sweep: an *obligate* saprotroph (photo 0) starves out by ~tick 40 even placed in-reach (confirming `example9`'s deposit-dependence — the living rain alone cannot feed one), while a too-autotrophic or too-numerous guild (e.g. 16 × photo 0.3) inverts the pyramid (`trophic_balance_score` → 0). Only a lean, heterotroph-dominant facultative guild both persists *and* preserves a producer-led pyramid. (3) Because the heterotrophic guild now anchors the ring, this scenario no longer foregrounds `example12`'s generalist-dominance control — it is a *web-closure* scenario, not a generalist probe; `example12` remains the canonical generalist test. **Verdict: the brown loop closes structurally and partially-functionally inside a live web — the suite's first — with the residual gap cleanly localised to one mechanism the viability lens already flags.**
 - **example7** — Not-sensible (prediction `undecided`). Roster mismatch is primary: intent is
   "three trophic roles incl. a decomposer", but the roster is 3 *undifferentiated* mobile consumers —
   no decomposer exists, so the detrital pathway it means to probe is absent and carcasses accumulate.
@@ -220,3 +234,15 @@ With the detector corrected, cross-lens *agreement* improves; for the suite to *
 worlds it still needs the README's repairs — migrate every file to fully-specified params (the
 example4 template, #295) and seed a real decomposer roster (#136) so the detrital,
 trophic-structure, and coexistence criteria can be exercised at all.
+
+**Update (#136, partially closed).** `example13_closed_web` is the first scenario to seed a working
+decomposer roster *into a live differentiated green web* (it extends `example12` verbatim with a lean
+facultative detritivore guild), and the brown loop now demonstrably carries flux there: the guild
+persists as a reproducing lineage on all 8 seeds and cuts carcass-locked nutrient ~40% vs the
+no-decomposer baseline, while keeping a producer-led pyramid (`trophic_balance_score` 1.0, fitness
+0.565). So the "no scenario contains a working decomposer in a live web" gap is closed for the
+*structural and partial-functional* case. What remains open is **full field-scale** closure: 8 sessile
+decomposers cannot reach the whole ring's carcass rain (reach-limited by `body_reach_coefficient=0`),
+so the dead pool is reduced, not eliminated. Completing it is a *design* question — commit a decomposer
+reach term (or admit a mobile detritivore) — exactly the under-committed knob
+[`viability.md`](../docs/system-design/viability.md) flags, not a further scenario tweak.
