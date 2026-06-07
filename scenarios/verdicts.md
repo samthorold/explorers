@@ -171,14 +171,21 @@ carcass-fall it could not previously touch (every remaining file keeps
   which a contact-duration consumption ramp reset on every move and left *any* mobile consumer unable
   to feed at all — confounding this in-run control (broad generalists + specialist mobile consumers
   are mobile; the surviving compatible mixotrophs are sessile). With consumption now a binary-reach
-  drain (#380), mobile consumers demonstrably feed (`example10_predator_prey_hopf` survives all 8
-  seeds — where it was degenerate under the bug — plus a dedicated `mobile_consumer_feeds` integration
-  test). The broad generalist is therefore eliminated *despite being able to feed*. **⚠ Oscillation
-  flag (#393 regression candidate):** the earlier read credited `example10` with "the signature Hopf
-  oscillation, median `oscillation_strength` 0.36." Under the current producer-share oscillation
-  descriptor (#393) it now reads **0.006** (7 of 8 seeds ≈0, one seed 0.28) — the canonical Hopf
-  scenario no longer registers as oscillating. The survival/feeding evidence above stands; the
-  oscillation claim does not, and the descriptor's blindness to this cycle warrants a dedicated look. **Verdict: generalists stay
+  drain (#380), mobile consumers demonstrably feed — proven by the dedicated `mobile_consumer_feeds`
+  integration test, in which a moving consumer co-located with prey draws real predation energy and
+  survives past tick 2. The broad generalist is therefore eliminated *despite being able to feed*.
+  **Oscillation claim retracted (#400 — resolves the #393 flag):** an earlier read credited `example10`
+  with "the signature Hopf oscillation, median `oscillation_strength` 0.36" and cited its 8/8 survival
+  as feeding evidence. A per-tick trace (issue #400) retires both. example10's three consumers go
+  **extinct by tick 2** on every seed — the low-mobility consumer cannot sustain intake from the sparse,
+  trait-distant standing crop (spatial decoupling, [`F-hopf-validation.md`](../docs/research/F-hopf-validation.md))
+  — so the run is a **producer monoculture** from tick 2 on. Its 8/8 "survival" is the *producers*
+  persisting, not the consumers feeding; and with producer energy share pinned ~1.0 the #393 descriptor
+  *correctly* reads ~0. The old 0.36 was the prior count-based descriptor catching finite-N
+  producer-reproduction pulsing (producer-*count* `oscillation_strength` still reads 0.09–0.40 today),
+  never the trophic cycle — whose mean-field prediction `F-hopf-validation.md` already records as
+  falsified. #393 is an improvement, not a regression, and example10 is **not** an oscillation
+  reference. **Verdict: generalists stay
   confined; the design prediction holds — now on a clean, un-confounded control — and the cross-trait
   interaction term stays in reserve** (see [`viability.md`](../docs/system-design/viability.md),
   "Resolved finding — generalist dominance has no static gate"). Regenerate the breadth read with
