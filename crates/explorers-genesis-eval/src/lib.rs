@@ -76,15 +76,44 @@ impl Default for EvalConfig {
     }
 }
 
+/// The per-tick series a rollout observes about a world, sampled over time and
+/// handed to the evaluator as one bundle. Each field is one signal the caller
+/// samples once per tick (or, for `cluster_snapshots`, at a coarse interval)
+/// during the rollout; the evaluator reads them to compute the descriptors that
+/// need a temporal trace rather than just the final state. Bundling them keeps
+/// `evaluate_from_log`'s signature from accreting a new slice parameter every
+/// time a descriptor grows a per-tick appetite — the series are conceptually one
+/// thing: what the rollout observed, sampled over time.
+#[derive(Clone, Debug, Default)]
+pub struct RolloutObservations {
+    /// Free (non-carcass-locked) energy stock per tick, for the energy-death
+    /// stock-trend signal (issue #302).
+    pub free_energy: Vec<f32>,
+    /// Dead pool's share of system nutrient per tick, for the nutrient-lockup
+    /// stock-trend signal (issue #342).
+    pub carcass_fraction: Vec<f32>,
+    /// Producer (autotroph) share of living energy per tick, for the oscillation
+    /// producer↔consumer rhythm signal (issue #392).
+    pub producer_share: Vec<f32>,
+    /// Living-population trait vectors snapshotted at a coarse interval, each
+    /// tagged with its tick, for the coexistence descriptor (issue #394). Sparse,
+    /// not per-tick, because DBSCAN is O(n²) and clustering every tick of every
+    /// seed is disproportionate for one noisy 0.2-weight term.
+    pub cluster_snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)>,
+}
+
 pub fn evaluate_from_log(
     world: &explorers_sim::World,
-    free_energy_per_tick: &[f32],
-    carcass_fraction_per_tick: &[f32],
-    producer_share_per_tick: &[f32],
-    cluster_snapshots: &[(u64, Vec<explorers_sim::TraitVector>)],
+    observations: &RolloutObservations,
     config: &EvalConfig,
     max_ticks: u64,
 ) -> FitnessBreakdown {
+    let RolloutObservations {
+        free_energy: free_energy_per_tick,
+        carcass_fraction: carcass_fraction_per_tick,
+        producer_share: producer_share_per_tick,
+        cluster_snapshots,
+    } = observations;
     let agents = world.agents();
     let ticks_survived = world.tick();
 
@@ -826,6 +855,23 @@ mod tests {
 
     /// Step a world to `max_ticks` (terminating early on extinction), sampling
     /// the free-energy stock each tick exactly as the real callers do.
+    /// Build a `RolloutObservations` from the per-tick series a test wants to
+    /// exercise — a thin constructor so each test still reads as "this free-energy
+    /// trace, this carcass trace, …" while the evaluator takes the one bundle.
+    fn obs(
+        free_energy: &[f32],
+        carcass_fraction: &[f32],
+        producer_share: &[f32],
+        cluster_snapshots: &[(u64, Vec<explorers_sim::TraitVector>)],
+    ) -> RolloutObservations {
+        RolloutObservations {
+            free_energy: free_energy.to_vec(),
+            carcass_fraction: carcass_fraction.to_vec(),
+            producer_share: producer_share.to_vec(),
+            cluster_snapshots: cluster_snapshots.to_vec(),
+        }
+    }
+
     fn run_collecting_free_energy(world: &mut explorers_sim::World, max_ticks: u64) -> Vec<f32> {
         let mut free = Vec::with_capacity(max_ticks as usize);
         for _ in 0..max_ticks {
@@ -886,7 +932,7 @@ mod tests {
         let max_ticks = 50;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let free = run_collecting_free_energy(&mut world, max_ticks);
-        let result = evaluate_from_log(&world, &free, &[], &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &obs(&free, &[], &[], &[]), &config, max_ticks);
         let born_count = world
             .event_log()
             .by_kind(&explorers_sim::event::EventKind::Reproduced)
@@ -925,7 +971,7 @@ mod tests {
         let collapsing: Vec<f32> = (0..n)
             .map(|t| if t < n / 2 { 100.0 } else { 1.0 })
             .collect();
-        let dead = evaluate_from_log(&world, &collapsing, &[], &[], &[], &config, max_ticks);
+        let dead = evaluate_from_log(&world, &obs(&collapsing, &[], &[], &[]), &config, max_ticks);
         assert_eq!(
             dead.failure,
             Some(FailureMode::EnergyDeath),
@@ -933,7 +979,7 @@ mod tests {
         );
 
         let sustained: Vec<f32> = vec![100.0; n];
-        let alive = evaluate_from_log(&world, &sustained, &[], &[], &[], &config, max_ticks);
+        let alive = evaluate_from_log(&world, &obs(&sustained, &[], &[], &[]), &config, max_ticks);
         assert_ne!(
             alive.failure,
             Some(FailureMode::EnergyDeath),
@@ -969,7 +1015,12 @@ mod tests {
         // A flat low carcass series: the trailing-window mean is that level, and
         // it is not high enough (or non-receding) to gate as lockup.
         let low: Vec<f32> = vec![0.1; n];
-        let low_bd = evaluate_from_log(&world, &healthy_energy, &low, &[], &[], &config, max_ticks);
+        let low_bd = evaluate_from_log(
+            &world,
+            &obs(&healthy_energy, &low, &[], &[]),
+            &config,
+            max_ticks,
+        );
         assert_ne!(low_bd.failure, Some(FailureMode::NutrientLockup));
         assert!(
             (low_bd.carcass_locked_fraction - 0.1).abs() < 1e-5,
@@ -987,8 +1038,12 @@ mod tests {
 
         // A flat higher carcass series reports a higher fraction (monotone read).
         let high: Vec<f32> = vec![0.3; n];
-        let high_bd =
-            evaluate_from_log(&world, &healthy_energy, &high, &[], &[], &config, max_ticks);
+        let high_bd = evaluate_from_log(
+            &world,
+            &obs(&healthy_energy, &high, &[], &[]),
+            &config,
+            max_ticks,
+        );
         assert!(
             high_bd.carcass_locked_fraction > low_bd.carcass_locked_fraction,
             "a higher dead-pool share should report a higher carcass fraction"
@@ -1022,10 +1077,7 @@ mod tests {
         let locked: Vec<f32> = (0..n).map(|t| if t < n / 2 { 0.05 } else { 0.6 }).collect();
         let dead = evaluate_from_log(
             &world,
-            &healthy_energy,
-            &locked,
-            &[],
-            &[],
+            &obs(&healthy_energy, &locked, &[], &[]),
             &config,
             max_ticks,
         );
@@ -1038,10 +1090,7 @@ mod tests {
         let turned_over: Vec<f32> = vec![0.05; n];
         let alive = evaluate_from_log(
             &world,
-            &healthy_energy,
-            &turned_over,
-            &[],
-            &[],
+            &obs(&healthy_energy, &turned_over, &[], &[]),
             &config,
             max_ticks,
         );
@@ -1150,7 +1199,7 @@ mod tests {
         if world.agents().len() < 20 {
             return; // can't test monoculture with too few agents
         }
-        let result = evaluate_from_log(&world, &free, &[], &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &obs(&free, &[], &[], &[]), &config, max_ticks);
         assert_eq!(
             result.failure,
             Some(FailureMode::Monoculture),
@@ -1171,7 +1220,7 @@ mod tests {
         let config = EvalConfig::default();
         let max_ticks: u64 = 1;
         let world = explorers_sim::World::new(params, dist, 42);
-        let result = evaluate_from_log(&world, &[], &[], &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &obs(&[], &[], &[], &[]), &config, max_ticks);
         assert_eq!(result.failure, Some(FailureMode::PopulationExplosion));
         assert_eq!(result.fitness, 0.0);
     }
@@ -1222,7 +1271,12 @@ mod tests {
             (4, snapshot_with_clusters(1)),
             (5, snapshot_with_clusters(2)),
         ];
-        let result = evaluate_from_log(&world, &free, &[], &[], &snapshots, &config, max_ticks);
+        let result = evaluate_from_log(
+            &world,
+            &obs(&free, &[], &[], &snapshots),
+            &config,
+            max_ticks,
+        );
         assert!(
             (result.coexistence_duration - 3.0 / 5.0).abs() < 1e-5,
             "coexistence should be K/N = 3/5, got {}",
@@ -1274,8 +1328,18 @@ mod tests {
         if world_a.agents().is_empty() || world_b.agents().is_empty() {
             return;
         }
-        let a = evaluate_from_log(&world_a, &free_a, &[], &[], &snapshots, &config, max_ticks);
-        let b = evaluate_from_log(&world_b, &free_b, &[], &[], &snapshots, &config, max_ticks);
+        let a = evaluate_from_log(
+            &world_a,
+            &obs(&free_a, &[], &[], &snapshots),
+            &config,
+            max_ticks,
+        );
+        let b = evaluate_from_log(
+            &world_b,
+            &obs(&free_b, &[], &[], &snapshots),
+            &config,
+            max_ticks,
+        );
         assert_eq!(
             a.coexistence_duration, b.coexistence_duration,
             "coexistence must not depend on initial_population_size"
@@ -1308,7 +1372,12 @@ mod tests {
             (15, snapshot_with_clusters(2)),
             (20, snapshot_with_clusters(1)),
         ];
-        let result = evaluate_from_log(&world, &free, &[], &[], &snapshots, &config, max_ticks);
+        let result = evaluate_from_log(
+            &world,
+            &obs(&free, &[], &[], &snapshots),
+            &config,
+            max_ticks,
+        );
         assert!(
             (result.coexistence_duration - 0.5).abs() < 1e-5,
             "only post-grace snapshots count: expected 1/2, got {}",
@@ -1338,7 +1407,12 @@ mod tests {
             (5, snapshot_with_clusters(2)),
             (40, snapshot_with_clusters(3)),
         ];
-        let result = evaluate_from_log(&world, &free, &[], &[], &snapshots, &config, max_ticks);
+        let result = evaluate_from_log(
+            &world,
+            &obs(&free, &[], &[], &snapshots),
+            &config,
+            max_ticks,
+        );
         assert_eq!(
             result.coexistence_duration, 0.0,
             "survival within grace → coexistence 0.0"
@@ -1361,7 +1435,7 @@ mod tests {
         if world.agents().is_empty() {
             return;
         }
-        let result = evaluate_from_log(&world, &free, &[], &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &obs(&free, &[], &[], &[]), &config, max_ticks);
         assert_eq!(result.coexistence_duration, 0.0);
     }
 
@@ -1397,7 +1471,12 @@ mod tests {
         let oscillating: Vec<f32> = (0..n)
             .map(|i| 0.5 + 0.3 * (2.0 * std::f32::consts::PI * i as f32 / period).sin())
             .collect();
-        let bd = evaluate_from_log(&world, &free, &[], &oscillating, &[], &config, max_ticks);
+        let bd = evaluate_from_log(
+            &world,
+            &obs(&free, &[], &oscillating, &[]),
+            &config,
+            max_ticks,
+        );
         let post_grace: Vec<f32> = oscillating
             .iter()
             .copied()
@@ -1416,7 +1495,7 @@ mod tests {
 
         // A flat producer-share series is a frozen fixed point → ~0 oscillation.
         let flat: Vec<f32> = vec![0.5; n];
-        let bd_flat = evaluate_from_log(&world, &free, &[], &flat, &[], &config, max_ticks);
+        let bd_flat = evaluate_from_log(&world, &obs(&free, &[], &flat, &[]), &config, max_ticks);
         assert_eq!(
             bd_flat.oscillation_strength, 0.0,
             "a flat producer-share series should read 0 oscillation"
@@ -1437,7 +1516,7 @@ mod tests {
         if world.agents().is_empty() {
             return; // can't test final-state metrics on extinct world
         }
-        let result = evaluate_from_log(&world, &free, &[], &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &obs(&free, &[], &[], &[]), &config, max_ticks);
 
         let trait_vectors: Vec<_> = world.agents().iter().map(|a| a.traits).collect();
         let energies: Vec<_> = world.agents().iter().map(|a| a.energy()).collect();
@@ -1514,7 +1593,7 @@ mod tests {
         let max_ticks = 100;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let free = run_collecting_free_energy(&mut world, 10);
-        let result = evaluate_from_log(&world, &free, &[], &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &obs(&free, &[], &[], &[]), &config, max_ticks);
         assert_eq!(result.fitness, 0.0);
         assert_eq!(result.failure, Some(FailureMode::Extinction));
     }

@@ -28,7 +28,7 @@
 //! shows up as a diff.
 
 use explorers_genesis_eval::ensemble::{ScenarioAggregate, SeedObservation, SeedScores, aggregate};
-use explorers_genesis_eval::{EvalConfig, FailureMode, evaluate_from_log};
+use explorers_genesis_eval::{EvalConfig, FailureMode, RolloutObservations, evaluate_from_log};
 use explorers_sim::{World, WorldRecipe};
 
 /// Name the failure mode for the JSON output. `None` is "none" — the run did not
@@ -111,33 +111,32 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
     // per-offspring events), so it is not a usable birth count on its own.
     let mut total_births = 0usize;
     let mut total_deaths = 0usize;
-    // Sample the free (non-carcass-locked) energy stock each tick so the
-    // evaluator can read its trend — energy death is this stock collapsing into
-    // carcasses (issue #302). The world stays history-free; the series lives here.
-    let mut free_energy_per_tick: Vec<f32> = Vec::with_capacity(recipe.max_ticks as usize);
-    // Sample the dead pool's share of system nutrient each tick so the evaluator
-    // can read its trend — nutrient lockup is this fraction sequestering high and
-    // staying there as carcasses out-accumulate the decomposers (issue #342).
-    let mut carcass_fraction_per_tick: Vec<f32> = Vec::with_capacity(recipe.max_ticks as usize);
-    // Sample the producer (autotroph) share of living energy each tick so the
-    // evaluator can read the producer↔consumer rhythm — the oscillation descriptor
-    // is the anti-correlation depth of this detrended series (issue #392).
-    let mut producer_share_per_tick: Vec<f32> = Vec::with_capacity(recipe.max_ticks as usize);
-    // Snapshot living-population trait vectors at the coarse coexistence interval
-    // so the evaluator can run DBSCAN on each snapshot for the coexistence
-    // descriptor (issue #394). This binary observes the same rollout the search
-    // does, so it samples the same way.
+    // Per-tick series the rollout observes so the evaluator can read each trend:
+    // free energy (issue #302), carcass fraction (#342) and producer share (#392)
+    // every tick, plus a coarse-interval trait-vector snapshot for coexistence
+    // (#394). This binary observes the same rollout the search does, so it samples
+    // the same way and bundles the series into the same `RolloutObservations`.
+    let cap = recipe.max_ticks as usize;
+    let mut observations = RolloutObservations {
+        free_energy: Vec::with_capacity(cap),
+        carcass_fraction: Vec::with_capacity(cap),
+        producer_share: Vec::with_capacity(cap),
+        cluster_snapshots: Vec::new(),
+    };
     let interval = config.coexistence_sample_interval.max(1);
-    let mut cluster_snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = Vec::new();
     for _ in 0..recipe.max_ticks {
         world.step();
         total_births += world.last_tick_births();
         total_deaths += world.last_tick_deaths();
-        free_energy_per_tick.push(world.free_energy());
-        carcass_fraction_per_tick.push(world.carcass_locked_nutrient_fraction());
-        producer_share_per_tick.push(world.producer_energy_share());
+        observations.free_energy.push(world.free_energy());
+        observations
+            .carcass_fraction
+            .push(world.carcass_locked_nutrient_fraction());
+        observations
+            .producer_share
+            .push(world.producer_energy_share());
         if world.tick() % interval as u64 == 0 {
-            cluster_snapshots.push((
+            observations.cluster_snapshots.push((
                 world.tick(),
                 world.agents().iter().map(|a| a.traits).collect(),
             ));
@@ -147,15 +146,7 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
         }
     }
 
-    let breakdown = evaluate_from_log(
-        &world,
-        &free_energy_per_tick,
-        &carcass_fraction_per_tick,
-        &producer_share_per_tick,
-        &cluster_snapshots,
-        config,
-        recipe.max_ticks,
-    );
+    let breakdown = evaluate_from_log(&world, &observations, config, recipe.max_ticks);
 
     SeedObservation {
         seed,
