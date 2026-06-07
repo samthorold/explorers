@@ -257,7 +257,7 @@ A statistical test for multimodality in a distribution (Hartigan & Hartigan 1985
 _Avoid_: cluster count (the question during genesis is whether clustering exists, not how many)
 
 **Cluster labelling**:
-Identifying and tracking specific clusters in trait space over time. Performed via DBSCAN (density-based, no preset cluster count; Ester et al. 1996) once the dip test confirms clustering exists. Required for all downstream measurements: oscillation detection per cluster, coexistence duration between clusters, trophic pyramid by cluster energy. Variance-ratio / gap statistic (scalar measure of clustering strength vs. uniform expectation) is an alternative approach.
+Assigning each agent to a density-based trait-space cluster, or to none, via DBSCAN (no preset cluster count; Ester et al. 1996). Where the dip test asks only *whether* clustering exists, labelling identifies *which* agents form *which* cluster in a given population. Variance-ratio / gap statistic (scalar measure of clustering strength vs. uniform expectation) is an alternative approach.
 
 ### Simulation
 
