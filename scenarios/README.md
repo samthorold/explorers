@@ -120,7 +120,20 @@ issue, surfaced by the example lens).
 > worlds produced decomposers), not by a hand-built scenario; `example6_decomposer_viability.json`
 > was retired in #328 because it demonstrated neither the viability nor the sustained carcass supply
 > it claimed (its producers mass-died in a single tick and its decomposer never established a
-> lineage). Per-scenario verdicts in [`verdicts.md`](verdicts.md); raw numbers in
+> lineage).
+> `example13_closed_web.json` (#136) is the **complement to example9**: where example9 holds its
+> decomposer *out of reach* to force a pure-detrital diet (and the field locks up), example13 seeds a
+> lean *facultative* decomposer guild **inside** example12's live differentiated web, on the producer
+> ring within reach of the carcass rain. There the brown loop carries flux: the guild persists as a
+> reproducing lineage (8/8 seeds, fitness 0.565, `trophic_balance_score` 1.0 — a producer-led pyramid;
+> the figure is below the 0.686 reported pre-#394, which counted lineage clades as coexistence —
+> example13's trait-cluster `coexistence_duration` is 0, as it is across the suite)
+> and cuts carcass-locked nutrient ~40% vs the no-decomposer example12 baseline. It is the suite's
+> first decomposer-in-a-live-web — but closure is **partial** (the dead pool is reduced, not
+> eliminated): 8 sessile decomposers can't reach the whole ring's carcass-fall with
+> `body_reach_coefficient=0`, so full field-scale closure is reach-limited, a *design* knob (see
+> [`viability.md`](../docs/system-design/viability.md)), not a scenario tweak.
+> Per-scenario verdicts in [`verdicts.md`](verdicts.md); raw numbers in
 > [`observed.json`](observed.json). Two root causes shaped the legacy set:
 
 ### Root cause 1 — partial recipes drift under code defaults
