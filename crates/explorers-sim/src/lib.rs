@@ -1453,6 +1453,32 @@ impl World {
         self.agents.iter().map(|a| a.energy()).sum()
     }
 
+    /// Producer (autotroph) share of the living energy: the energy-weighted mean
+    /// of each agent's autotrophy fraction `a = photo / (photo + hetero)`, where
+    /// `photo = photosynthetic_absorption` and `hetero = heterotrophy`. An agent
+    /// with `photo + hetero == 0` contributes `a = 0`. Zero when there are no
+    /// agents or total energy is zero.
+    ///
+    /// Being a ratio it is scale-invariant — independent of population size or
+    /// absolute energy. Sampled once per tick by callers, its detrended series
+    /// carries the producer↔consumer rhythm the genesis oscillation descriptor
+    /// reads (issue #392). Instantaneous read of public state; the world stays
+    /// history-free, mirroring `free_energy`.
+    pub fn producer_energy_share(&self) -> f32 {
+        let mut weighted = 0.0_f32;
+        let mut total = 0.0_f32;
+        for agent in &self.agents {
+            let e = agent.energy();
+            let photo = agent.traits.photosynthetic_absorption;
+            let hetero = agent.traits.heterotrophy;
+            let denom = photo + hetero;
+            let autotrophy = if denom > 0.0 { photo / denom } else { 0.0 };
+            weighted += e * autotrophy;
+            total += e;
+        }
+        if total > 0.0 { weighted / total } else { 0.0 }
+    }
+
     /// The dead pool's share of the conserved system nutrient: carcass-locked
     /// nutrient over the total across grid, living agents, and carcasses. Zero
     /// when no nutrient is present anywhere. Total nutrient is conserved, so the
@@ -1728,6 +1754,79 @@ mod tests {
             "fraction = carcass nutrient / total system nutrient, got {}",
             world.carcass_locked_nutrient_fraction()
         );
+    }
+
+    #[test]
+    fn producer_energy_share_is_energy_weighted_autotrophy_fraction() {
+        // Mirror of free_energy on the trophic-rhythm side (issue #392): an
+        // instantaneous, scale-invariant read of how much of the living energy
+        // sits in autotrophs. Per agent the autotrophy fraction is
+        // photo / (photo + hetero); the world weights it by the agent's energy.
+        let params = WorldParameters {
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let mut world = World::new(params, test_distribution(), 42);
+
+        // No agents → no living energy → share is 0.
+        assert_eq!(world.producer_energy_share(), 0.0);
+
+        // A pure producer (hetero = 0) and a pure consumer (photo = 0), equal
+        // energy: the energy-weighted mean autotrophy fraction is 0.5.
+        let producer_traits = TraitVector {
+            photosynthetic_absorption: 0.8,
+            heterotrophy: 0.0,
+            ..zero_traits()
+        };
+        let consumer_traits = TraitVector {
+            photosynthetic_absorption: 0.0,
+            heterotrophy: 0.6,
+            ..zero_traits()
+        };
+        world.add_agent(Agent::new(0, (0.0, 0.0), 10.0, 0.0, 0.0, producer_traits));
+        world.add_agent(Agent::new(0, (0.0, 0.0), 10.0, 0.0, 0.0, consumer_traits));
+        assert!(
+            (world.producer_energy_share() - 0.5).abs() < 1e-6,
+            "equal-energy producer+consumer → 0.5, got {}",
+            world.producer_energy_share()
+        );
+    }
+
+    #[test]
+    fn producer_energy_share_all_producer_and_all_consumer_and_zero_energy() {
+        let params = WorldParameters {
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let producer = TraitVector {
+            photosynthetic_absorption: 0.9,
+            heterotrophy: 0.1,
+            ..zero_traits()
+        };
+        let consumer = TraitVector {
+            photosynthetic_absorption: 0.1,
+            heterotrophy: 0.9,
+            ..zero_traits()
+        };
+
+        // All-producer (the autotrophy fraction is 0.9 each) → 0.9.
+        let mut all_prod = World::new(params.clone(), test_distribution(), 42);
+        all_prod.add_agent(Agent::new(0, (0.0, 0.0), 5.0, 0.0, 0.0, producer));
+        all_prod.add_agent(Agent::new(0, (0.0, 0.0), 20.0, 0.0, 0.0, producer));
+        assert!((all_prod.producer_energy_share() - 0.9).abs() < 1e-6);
+
+        // All-consumer → 0.1.
+        let mut all_cons = World::new(params.clone(), test_distribution(), 42);
+        all_cons.add_agent(Agent::new(0, (0.0, 0.0), 5.0, 0.0, 0.0, consumer));
+        all_cons.add_agent(Agent::new(0, (0.0, 0.0), 20.0, 0.0, 0.0, consumer));
+        assert!((all_cons.producer_energy_share() - 0.1).abs() < 1e-6);
+
+        // An agent with photo + hetero == 0 contributes autotrophy fraction 0;
+        // an agent with zero energy contributes nothing. A single zero-energy
+        // agent → total energy 0 → share 0.
+        let mut zero_energy = World::new(params, test_distribution(), 42);
+        zero_energy.add_agent(Agent::new(0, (0.0, 0.0), 0.0, 0.0, 0.0, producer));
+        assert_eq!(zero_energy.producer_energy_share(), 0.0);
     }
 
     #[test]

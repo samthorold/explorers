@@ -39,10 +39,15 @@ pub fn run_single(
     // nutrient-lockup detector's stock-trend signal (issue #342); the world
     // stays history-free, mirroring the free-energy sampling above.
     let mut carcass_fraction_per_tick: Vec<f32> = Vec::with_capacity(run_config.max_ticks as usize);
+    // Sample the producer (autotroph) share of living energy each tick for the
+    // oscillation descriptor's producer↔consumer rhythm signal (issue #392); a
+    // scale-invariant ratio, so it stays history-free and seed-invariant.
+    let mut producer_share_per_tick: Vec<f32> = Vec::with_capacity(run_config.max_ticks as usize);
     for _ in 0..run_config.max_ticks {
         world.step();
         free_energy_per_tick.push(world.free_energy());
         carcass_fraction_per_tick.push(world.carcass_locked_nutrient_fraction());
+        producer_share_per_tick.push(world.producer_energy_share());
         if world.agents().is_empty() {
             break;
         }
@@ -55,6 +60,7 @@ pub fn run_single(
         &world,
         &free_energy_per_tick,
         &carcass_fraction_per_tick,
+        &producer_share_per_tick,
         &run_config.eval_config,
         run_config.max_ticks,
     );

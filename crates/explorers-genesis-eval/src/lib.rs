@@ -73,6 +73,7 @@ pub fn evaluate_from_log(
     world: &explorers_sim::World,
     free_energy_per_tick: &[f32],
     carcass_fraction_per_tick: &[f32],
+    producer_share_per_tick: &[f32],
     config: &EvalConfig,
     max_ticks: u64,
 ) -> FitnessBreakdown {
@@ -184,8 +185,6 @@ pub fn evaluate_from_log(
     let mut active: std::collections::HashSet<u64> = (0..initial_pop).collect();
 
     let mut cluster_counts_per_tick: Vec<usize> = Vec::new();
-    let mut cluster_pop_series: std::collections::HashMap<usize, Vec<usize>> =
-        std::collections::HashMap::new();
 
     for tick in 0..ticks_survived {
         for event in log.by_tick_range(tick, tick + 1) {
@@ -209,14 +208,23 @@ pub fn evaluate_from_log(
         }
 
         cluster_counts_per_tick.push(pop_this_tick.len());
-
-        for (&cluster, &count) in &pop_this_tick {
-            cluster_pop_series.entry(cluster).or_default().push(count);
-        }
     }
 
-    let pop_vecs: Vec<Vec<usize>> = cluster_pop_series.into_values().collect();
-    let os = oscillation_strength(&pop_vecs);
+    // Oscillation: the producer↔consumer rhythm read off the per-tick producer-
+    // energy-share series the caller sampled (issue #392). Drop the grace prefix
+    // (same skip the energy/nutrient gates and clustering use) so the early
+    // colonization transient doesn't count, then measure over the full post-grace
+    // window — a slow ecological cycle needs several periods, not a trailing tail.
+    let post_grace_share: Vec<f32> = producer_share_per_tick
+        .iter()
+        .copied()
+        .skip(grace_ticks as usize)
+        .collect();
+    let os = if ticks_survived > grace_ticks {
+        oscillation_strength(&post_grace_share)
+    } else {
+        0.0
+    };
     let cd = coexistence_duration(&cluster_counts_per_tick);
 
     let fitness = 0.2 * os + 0.2 * cs + 0.2 * cd + 0.2 * ts + 0.2 * tb;
@@ -419,30 +427,87 @@ pub fn autocorrelation(series: &[f32], lag: usize) -> f32 {
     covariance / variance
 }
 
-pub fn oscillation_strength(cluster_populations: &[Vec<usize>]) -> f32 {
-    if cluster_populations.is_empty() {
+/// Anti-correlation depth of the linearly-detrended producer-energy-share series
+/// — the seed-invariant, search-smooth readout of the producer↔consumer rhythm
+/// (the Hopf bifurcation's frozen-fixed-point ↔ limit-cycle axis, issue #392).
+///
+/// The signal is `World::producer_energy_share` sampled per tick: a scale-
+/// invariant ratio, so a searched `initial_population_size` cannot leak in. We
+/// linearly detrend (least-squares residual against tick index) to kill the
+/// monotonic colonization transient, then report the deepest anti-correlation
+/// over lags `[LAG_MIN, n/2]` as `clamp(-min_ac, 0, 1)`.
+///
+/// This is continuous everywhere it matters — the output is the *value* of a min
+/// over continuous autocorrelations, never the *lag* — so it gives CMA-MAE a
+/// gradient through the Hopf onset: a sustained cycle reads high, damped ringing
+/// on the stable side reads small-but-positive, and a frozen fixed point, a
+/// monotonic ramp (detrended away) or white noise (uncorrelated, not anti-)
+/// all read ~0.
+pub fn oscillation_strength(producer_share: &[f32]) -> f32 {
+    const LAG_MIN: usize = 2;
+    const MIN_LEN: usize = 8;
+
+    let n = producer_share.len();
+    if n < MIN_LEN {
         return 0.0;
     }
-    let mut total = 0.0_f32;
-    let mut count = 0;
-    for pop in cluster_populations {
-        if pop.len() < 4 {
-            continue;
-        }
-        let series: Vec<f32> = pop.iter().map(|&x| x as f32).collect();
-        let max_lag = pop.len() / 2;
-        let mut max_ac = 0.0_f32;
-        for lag in 1..=max_lag {
-            let ac = autocorrelation(&series, lag);
-            max_ac = max_ac.max(ac);
-        }
-        total += max_ac;
-        count += 1;
-    }
-    if count == 0 {
+    let residual = linear_detrend(producer_share);
+    let max_lag = n / 2;
+    if max_lag < LAG_MIN {
         return 0.0;
     }
-    (total / count as f32).clamp(0.0, 1.0)
+    // Flat-after-detrend guard: a pure constant or pure linear ramp detrends to a
+    // residual that is float-rounding noise, not signal. Autocorrelating that
+    // noise yields a meaningless deep "anti-correlation". A monotonic colonization
+    // curve must read ~0 (the whole point of detrending), so if the residual
+    // carries negligible energy relative to the raw series we report 0 directly.
+    let nf = n as f32;
+    let raw_mean = producer_share.iter().sum::<f32>() / nf;
+    let raw_var = producer_share
+        .iter()
+        .map(|&x| (x - raw_mean) * (x - raw_mean))
+        .sum::<f32>();
+    let residual_var = residual.iter().map(|&x| x * x).sum::<f32>();
+    // residual is mean-zero by construction, so its sum-of-squares is its variance.
+    if raw_var <= 0.0 || residual_var <= 1e-6 * raw_var {
+        return 0.0;
+    }
+    let mut min_ac = f32::INFINITY;
+    for lag in LAG_MIN..=max_lag {
+        let ac = autocorrelation(&residual, lag);
+        if ac < min_ac {
+            min_ac = ac;
+        }
+    }
+    (-min_ac).clamp(0.0, 1.0)
+}
+
+/// Least-squares linear detrend: the residual of `series` against `x = 0..n`,
+/// i.e. with its best-fit straight line subtracted. A monotonic ramp's residual
+/// is ~0, so the oscillation descriptor rejects steady growth; a cycle's residual
+/// keeps its oscillation.
+fn linear_detrend(series: &[f32]) -> Vec<f32> {
+    let n = series.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let nf = n as f32;
+    let mean_x = (n - 1) as f32 / 2.0;
+    let mean_y = series.iter().sum::<f32>() / nf;
+    let mut sxx = 0.0_f32;
+    let mut sxy = 0.0_f32;
+    for (i, &y) in series.iter().enumerate() {
+        let dx = i as f32 - mean_x;
+        sxx += dx * dx;
+        sxy += dx * (y - mean_y);
+    }
+    let slope = if sxx > 0.0 { sxy / sxx } else { 0.0 };
+    let intercept = mean_y - slope * mean_x;
+    series
+        .iter()
+        .enumerate()
+        .map(|(i, &y)| y - (slope * i as f32 + intercept))
+        .collect()
 }
 
 pub fn has_demographic_turnover(total_births: usize, total_deaths: usize) -> bool {
@@ -762,6 +827,26 @@ mod tests {
         free
     }
 
+    /// Step a world to `max_ticks`, sampling both the free-energy stock and the
+    /// producer-energy share each tick, exactly as the real callers do. Returns
+    /// `(free_energy_per_tick, producer_share_per_tick)`.
+    fn run_collecting_free_energy_and_share(
+        world: &mut explorers_sim::World,
+        max_ticks: u64,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let mut free = Vec::with_capacity(max_ticks as usize);
+        let mut share = Vec::with_capacity(max_ticks as usize);
+        for _ in 0..max_ticks {
+            world.step();
+            free.push(world.free_energy());
+            share.push(world.producer_energy_share());
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+        (free, share)
+    }
+
     fn test_distribution() -> explorers_sim::InitialDistribution {
         explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
@@ -790,7 +875,7 @@ mod tests {
         let max_ticks = 50;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let free = run_collecting_free_energy(&mut world, max_ticks);
-        let result = evaluate_from_log(&world, &free, &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &[], &config, max_ticks);
         let born_count = world
             .event_log()
             .by_kind(&explorers_sim::event::EventKind::Reproduced)
@@ -829,7 +914,7 @@ mod tests {
         let collapsing: Vec<f32> = (0..n)
             .map(|t| if t < n / 2 { 100.0 } else { 1.0 })
             .collect();
-        let dead = evaluate_from_log(&world, &collapsing, &[], &config, max_ticks);
+        let dead = evaluate_from_log(&world, &collapsing, &[], &[], &config, max_ticks);
         assert_eq!(
             dead.failure,
             Some(FailureMode::EnergyDeath),
@@ -837,7 +922,7 @@ mod tests {
         );
 
         let sustained: Vec<f32> = vec![100.0; n];
-        let alive = evaluate_from_log(&world, &sustained, &[], &config, max_ticks);
+        let alive = evaluate_from_log(&world, &sustained, &[], &[], &config, max_ticks);
         assert_ne!(
             alive.failure,
             Some(FailureMode::EnergyDeath),
@@ -873,7 +958,7 @@ mod tests {
         // A flat low carcass series: the trailing-window mean is that level, and
         // it is not high enough (or non-receding) to gate as lockup.
         let low: Vec<f32> = vec![0.1; n];
-        let low_bd = evaluate_from_log(&world, &healthy_energy, &low, &config, max_ticks);
+        let low_bd = evaluate_from_log(&world, &healthy_energy, &low, &[], &config, max_ticks);
         assert_ne!(low_bd.failure, Some(FailureMode::NutrientLockup));
         assert!(
             (low_bd.carcass_locked_fraction - 0.1).abs() < 1e-5,
@@ -891,7 +976,7 @@ mod tests {
 
         // A flat higher carcass series reports a higher fraction (monotone read).
         let high: Vec<f32> = vec![0.3; n];
-        let high_bd = evaluate_from_log(&world, &healthy_energy, &high, &config, max_ticks);
+        let high_bd = evaluate_from_log(&world, &healthy_energy, &high, &[], &config, max_ticks);
         assert!(
             high_bd.carcass_locked_fraction > low_bd.carcass_locked_fraction,
             "a higher dead-pool share should report a higher carcass fraction"
@@ -923,7 +1008,7 @@ mod tests {
         let healthy_energy: Vec<f32> = vec![100.0; n];
 
         let locked: Vec<f32> = (0..n).map(|t| if t < n / 2 { 0.05 } else { 0.6 }).collect();
-        let dead = evaluate_from_log(&world, &healthy_energy, &locked, &config, max_ticks);
+        let dead = evaluate_from_log(&world, &healthy_energy, &locked, &[], &config, max_ticks);
         assert_eq!(
             dead.failure,
             Some(FailureMode::NutrientLockup),
@@ -931,7 +1016,14 @@ mod tests {
         );
 
         let turned_over: Vec<f32> = vec![0.05; n];
-        let alive = evaluate_from_log(&world, &healthy_energy, &turned_over, &config, max_ticks);
+        let alive = evaluate_from_log(
+            &world,
+            &healthy_energy,
+            &turned_over,
+            &[],
+            &config,
+            max_ticks,
+        );
         assert_ne!(
             alive.failure,
             Some(FailureMode::NutrientLockup),
@@ -1037,7 +1129,7 @@ mod tests {
         if world.agents().len() < 20 {
             return; // can't test monoculture with too few agents
         }
-        let result = evaluate_from_log(&world, &free, &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &[], &config, max_ticks);
         assert_eq!(
             result.failure,
             Some(FailureMode::Monoculture),
@@ -1058,13 +1150,16 @@ mod tests {
         let config = EvalConfig::default();
         let max_ticks: u64 = 1;
         let world = explorers_sim::World::new(params, dist, 42);
-        let result = evaluate_from_log(&world, &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &[], &[], &[], &config, max_ticks);
         assert_eq!(result.failure, Some(FailureMode::PopulationExplosion));
         assert_eq!(result.fitness, 0.0);
     }
 
     #[test]
-    fn evaluate_from_log_coexistence_and_oscillation_from_lineage_clusters() {
+    fn evaluate_from_log_coexistence_from_lineage_clusters() {
+        // Coexistence is still read off the lineage active-set machinery; the
+        // fitness is the weighted sum of the five components, and a non-degenerate
+        // run scores positive. (Oscillation's own path is exercised separately.)
         let params = test_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
@@ -1077,9 +1172,7 @@ mod tests {
         if world.agents().is_empty() {
             return;
         }
-        let result = evaluate_from_log(&world, &free, &[], &config, max_ticks);
-        // With 30 initial agents from 2 clusters, there should be some coexistence
-        // and the values should be computed (not left at 0.0 stub)
+        let result = evaluate_from_log(&world, &free, &[], &[], &config, max_ticks);
         let fitness = 0.2 * result.oscillation_strength
             + 0.2 * result.clustering_strength
             + 0.2 * result.coexistence_duration
@@ -1092,6 +1185,64 @@ mod tests {
         assert!(
             result.fitness > 0.0,
             "non-degenerate run should have positive fitness"
+        );
+    }
+
+    #[test]
+    fn evaluate_from_log_oscillation_from_producer_share_series() {
+        // Oscillation now reads the per-tick producer-energy-share series the
+        // caller samples (issue #392), over the post-grace window. A surviving
+        // world fed an oscillating share series surfaces a positive oscillation
+        // strength that matches the standalone descriptor on the post-grace slice;
+        // a flat series surfaces ~0. Seed-invariant by construction — no lineage
+        // clusters, no initial_population_size.
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 0.2,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 64;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let (free, _share) = run_collecting_free_energy_and_share(&mut world, max_ticks);
+        if world.agents().is_empty() {
+            return;
+        }
+        let n = world.tick() as usize;
+        let grace_ticks = (max_ticks as f32 * config.grace_period_fraction) as u64;
+        if (n as u64) <= grace_ticks {
+            return;
+        }
+
+        // A synthetic oscillating producer-share series: a clean producer↔consumer
+        // rhythm the evaluator should pick up over the post-grace window.
+        let period = 8.0;
+        let oscillating: Vec<f32> = (0..n)
+            .map(|i| 0.5 + 0.3 * (2.0 * std::f32::consts::PI * i as f32 / period).sin())
+            .collect();
+        let bd = evaluate_from_log(&world, &free, &[], &oscillating, &config, max_ticks);
+        let post_grace: Vec<f32> = oscillating
+            .iter()
+            .copied()
+            .skip(grace_ticks as usize)
+            .collect();
+        assert_eq!(
+            bd.oscillation_strength,
+            oscillation_strength(&post_grace),
+            "breakdown oscillation must be the descriptor over the post-grace slice"
+        );
+        assert!(
+            bd.oscillation_strength > 0.6,
+            "an oscillating producer-share series should read high: {}",
+            bd.oscillation_strength
+        );
+
+        // A flat producer-share series is a frozen fixed point → ~0 oscillation.
+        let flat: Vec<f32> = vec![0.5; n];
+        let bd_flat = evaluate_from_log(&world, &free, &[], &flat, &config, max_ticks);
+        assert_eq!(
+            bd_flat.oscillation_strength, 0.0,
+            "a flat producer-share series should read 0 oscillation"
         );
     }
 
@@ -1109,7 +1260,7 @@ mod tests {
         if world.agents().is_empty() {
             return; // can't test final-state metrics on extinct world
         }
-        let result = evaluate_from_log(&world, &free, &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &[], &config, max_ticks);
 
         let trait_vectors: Vec<_> = world.agents().iter().map(|a| a.traits).collect();
         let energies: Vec<_> = world.agents().iter().map(|a| a.energy()).collect();
@@ -1186,7 +1337,7 @@ mod tests {
         let max_ticks = 100;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let free = run_collecting_free_energy(&mut world, 10);
-        let result = evaluate_from_log(&world, &free, &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &[], &config, max_ticks);
         assert_eq!(result.fitness, 0.0);
         assert_eq!(result.failure, Some(FailureMode::Extinction));
     }
@@ -1407,41 +1558,82 @@ mod tests {
     }
 
     #[test]
-    fn oscillation_strength_high_for_oscillating_populations() {
-        let period = 20;
-        let n = 200;
-        // Two clusters oscillating out of phase
-        let cluster_0: Vec<usize> = (0..n)
-            .map(|i| {
-                (50.0 + 30.0 * (2.0 * std::f32::consts::PI * i as f32 / period as f32).sin())
-                    as usize
-            })
+    fn oscillation_strength_high_for_sustained_sine() {
+        // A sustained producer↔consumer rhythm (limit cycle): the detrended
+        // share series has a deep anti-correlation at half its period, so the
+        // descriptor reads high (issue #392).
+        let n = 64;
+        let period = 8.0;
+        let series: Vec<f32> = (0..n)
+            .map(|i| 0.5 + 0.3 * (2.0 * std::f32::consts::PI * i as f32 / period).sin())
             .collect();
-        let cluster_1: Vec<usize> = (0..n)
-            .map(|i| {
-                (50.0
-                    + 30.0
-                        * (2.0 * std::f32::consts::PI * i as f32 / period as f32
-                            + std::f32::consts::PI)
-                            .sin()) as usize
-            })
-            .collect();
-        let strength = oscillation_strength(&[cluster_0, cluster_1]);
+        let strength = oscillation_strength(&series);
         assert!(
-            strength > 0.5,
-            "oscillating populations should have high oscillation strength: {strength}"
+            strength > 0.6,
+            "a sustained sine should read high: {strength}"
         );
     }
 
     #[test]
-    fn oscillation_strength_low_for_flat_populations() {
-        let cluster_0 = vec![50; 100];
-        let cluster_1 = vec![30; 100];
-        let strength = oscillation_strength(&[cluster_0, cluster_1]);
+    fn oscillation_strength_zero_for_flat_constant() {
+        // A frozen fixed point: a flat residual has no anti-correlation → 0.
+        let series = vec![0.5_f32; 64];
+        assert_eq!(oscillation_strength(&series), 0.0);
+    }
+
+    #[test]
+    fn oscillation_strength_near_zero_for_linear_ramp() {
+        // Steady colonization growth, not a cycle: the linear detrend removes the
+        // ramp, leaving a ~0 residual → ~0. (The old metric scored this maximal.)
+        let series: Vec<f32> = (0..64).map(|i| 0.1 + 0.005 * i as f32).collect();
+        let strength = oscillation_strength(&series);
+        assert!(strength < 0.05, "a linear ramp should read ~0: {strength}");
+    }
+
+    #[test]
+    fn oscillation_strength_below_threshold_for_white_noise() {
+        // Uncorrelated noise is not anti-correlated: min autocorrelation hovers
+        // near 0, so the descriptor stays small. A deterministic pseudo-noise
+        // series keeps the test reproducible.
+        let mut state: u32 = 0x1234_5678;
+        let series: Vec<f32> = (0..256)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 8) as f32 / (1u32 << 24) as f32
+            })
+            .collect();
+        let strength = oscillation_strength(&series);
+        assert!(strength < 0.2, "white noise should read low: {strength}");
+    }
+
+    #[test]
+    fn oscillation_strength_small_positive_for_damped_sine() {
+        // Damped ringing on the stable side of the Hopf bifurcation: the
+        // anti-correlation is present but shallow, giving a small positive read —
+        // a pre-onset gradient pointing toward the bifurcation, well below a
+        // sustained cycle.
+        let n = 64;
+        let period = 8.0;
+        let series: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32;
+                let envelope = (-t / 3.0).exp();
+                0.5 + 0.3 * envelope * (2.0 * std::f32::consts::PI * t / period).sin()
+            })
+            .collect();
+        let strength = oscillation_strength(&series);
+        // Positive (the ringing leaves an anti-correlation footprint) but well
+        // below a sustained cycle (> 0.6) — the pre-onset gradient.
         assert!(
-            strength < 0.1,
-            "flat populations should have low oscillation strength: {strength}"
+            strength > 0.0 && strength < 0.4,
+            "damped sine should be small-but-positive: {strength}"
         );
+    }
+
+    #[test]
+    fn oscillation_strength_zero_for_series_shorter_than_min_len() {
+        let series = vec![0.1, 0.9, 0.1, 0.9, 0.1, 0.9, 0.1];
+        assert_eq!(oscillation_strength(&series), 0.0);
     }
 
     #[test]
