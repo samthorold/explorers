@@ -119,12 +119,17 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
     // can read its trend — nutrient lockup is this fraction sequestering high and
     // staying there as carcasses out-accumulate the decomposers (issue #342).
     let mut carcass_fraction_per_tick: Vec<f32> = Vec::with_capacity(recipe.max_ticks as usize);
+    // Sample the producer (autotroph) share of living energy each tick so the
+    // evaluator can read the producer↔consumer rhythm — the oscillation descriptor
+    // is the anti-correlation depth of this detrended series (issue #392).
+    let mut producer_share_per_tick: Vec<f32> = Vec::with_capacity(recipe.max_ticks as usize);
     for _ in 0..recipe.max_ticks {
         world.step();
         total_births += world.last_tick_births();
         total_deaths += world.last_tick_deaths();
         free_energy_per_tick.push(world.free_energy());
         carcass_fraction_per_tick.push(world.carcass_locked_nutrient_fraction());
+        producer_share_per_tick.push(world.producer_energy_share());
         if world.agents().is_empty() || world.agents().len() > config.max_population {
             break;
         }
@@ -134,6 +139,7 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
         &world,
         &free_energy_per_tick,
         &carcass_fraction_per_tick,
+        &producer_share_per_tick,
         config,
         recipe.max_ticks,
     );
