@@ -123,6 +123,12 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
     // evaluator can read the producer↔consumer rhythm — the oscillation descriptor
     // is the anti-correlation depth of this detrended series (issue #392).
     let mut producer_share_per_tick: Vec<f32> = Vec::with_capacity(recipe.max_ticks as usize);
+    // Snapshot living-population trait vectors at the coarse coexistence interval
+    // so the evaluator can run DBSCAN on each snapshot for the coexistence
+    // descriptor (issue #394). This binary observes the same rollout the search
+    // does, so it samples the same way.
+    let interval = config.coexistence_sample_interval.max(1);
+    let mut cluster_snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = Vec::new();
     for _ in 0..recipe.max_ticks {
         world.step();
         total_births += world.last_tick_births();
@@ -130,6 +136,12 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
         free_energy_per_tick.push(world.free_energy());
         carcass_fraction_per_tick.push(world.carcass_locked_nutrient_fraction());
         producer_share_per_tick.push(world.producer_energy_share());
+        if world.tick() % interval as u64 == 0 {
+            cluster_snapshots.push((
+                world.tick(),
+                world.agents().iter().map(|a| a.traits).collect(),
+            ));
+        }
         if world.agents().is_empty() || world.agents().len() > config.max_population {
             break;
         }
@@ -140,6 +152,7 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
         &free_energy_per_tick,
         &carcass_fraction_per_tick,
         &producer_share_per_tick,
+        &cluster_snapshots,
         config,
         recipe.max_ticks,
     );

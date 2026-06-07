@@ -45,6 +45,12 @@ pub struct EvalConfig {
     pub max_population: usize,
     pub energy_death_window: usize,
     pub nutrient_lock_window: usize,
+    /// Tick interval at which the rollout snapshots living-population trait vectors
+    /// for the coexistence descriptor (issue #394). Coarse, not per-tick: DBSCAN is
+    /// O(n²) and `max_population` is large, so clustering every tick of every seed
+    /// is disproportionate for one noisy 0.2-weight term. A co-presence *fraction*
+    /// needs only a representative sample of the post-grace window.
+    pub coexistence_sample_interval: usize,
     pub clustering_threshold: f32,
     pub dbscan_eps: f32,
     pub dbscan_min_points: usize,
@@ -59,6 +65,7 @@ impl Default for EvalConfig {
             max_population: 10_000,
             energy_death_window: 50,
             nutrient_lock_window: 50,
+            coexistence_sample_interval: 10,
             clustering_threshold: 0.5,
             dbscan_eps: 1.0,
             dbscan_min_points: 5,
@@ -74,6 +81,7 @@ pub fn evaluate_from_log(
     free_energy_per_tick: &[f32],
     carcass_fraction_per_tick: &[f32],
     producer_share_per_tick: &[f32],
+    cluster_snapshots: &[(u64, Vec<explorers_sim::TraitVector>)],
     config: &EvalConfig,
     max_ticks: u64,
 ) -> FitnessBreakdown {
@@ -169,46 +177,26 @@ pub fn evaluate_from_log(
         }
     }
 
+    // The full-log topology projection is still required for the decomposer-guild
+    // signal below; the lineage-clustering machinery that once fed coexistence is
+    // gone (issue #394) — coexistence now reads trait-space clusters, not clades.
     let mut topo = explorers_sim::topology::TopologyProjection::new();
     topo.update(log);
-    let mut lineage_map = topo.lineage_clusters();
 
-    let initial_pop = world.params().initial_population_size as u64;
-    let next_cluster = lineage_map.values().max().map_or(0, |&m| m + 1);
-    for id in 0..initial_pop {
-        lineage_map.entry(id).or_insert_with(|| {
-            let c = next_cluster + id as usize;
-            c
-        });
-    }
-
-    let mut active: std::collections::HashSet<u64> = (0..initial_pop).collect();
-
-    let mut cluster_counts_per_tick: Vec<usize> = Vec::new();
-
-    for tick in 0..ticks_survived {
-        for event in log.by_tick_range(tick, tick + 1) {
-            match event.kind {
-                explorers_sim::event::EventKind::Reproduced => {
-                    active.insert(event.source);
-                }
-                explorers_sim::event::EventKind::Died => {
-                    active.remove(&event.source);
-                }
-                _ => {}
-            }
-        }
-
-        let mut pop_this_tick: std::collections::HashMap<usize, usize> =
-            std::collections::HashMap::new();
-        for &agent_id in &active {
-            if let Some(&cluster) = lineage_map.get(&agent_id) {
-                *pop_this_tick.entry(cluster).or_default() += 1;
-            }
-        }
-
-        cluster_counts_per_tick.push(pop_this_tick.len());
-    }
+    // Coexistence (issue #394): the fraction of post-grace sampled ticks whose
+    // living population carries >=2 trait-space DBSCAN clusters. Genesis snapshots
+    // raw trait vectors at a coarse interval through the rollout (pure observation,
+    // no clustering); the evaluator owns all clustering, running DBSCAN on each
+    // post-grace snapshot here. Each snapshot's tick is stored so the grace cutoff
+    // stays index/interval-free. Seed-invariant by construction: a pure function of
+    // the snapshots and the DBSCAN config, with no `initial_population_size` leak.
+    let cluster_counts_per_snapshot: Vec<usize> = cluster_snapshots
+        .iter()
+        .filter(|(tick, _)| *tick > grace_ticks)
+        .map(|(_, traits)| {
+            distinct_cluster_count(traits, config.dbscan_eps, config.dbscan_min_points)
+        })
+        .collect();
 
     // Oscillation: the producer↔consumer rhythm read off the per-tick producer-
     // energy-share series the caller sampled (issue #392). Drop the grace prefix
@@ -225,7 +213,11 @@ pub fn evaluate_from_log(
     } else {
         0.0
     };
-    let cd = coexistence_duration(&cluster_counts_per_tick);
+    let cd = if ticks_survived > grace_ticks {
+        coexistence_duration(&cluster_counts_per_snapshot)
+    } else {
+        0.0
+    };
 
     let fitness = 0.2 * os + 0.2 * cs + 0.2 * cd + 0.2 * ts + 0.2 * tb;
 
@@ -639,6 +631,25 @@ pub fn coexistence_duration(cluster_counts_per_tick: &[usize]) -> f32 {
     coexisting as f32 / cluster_counts_per_tick.len() as f32
 }
 
+/// Number of distinct non-noise DBSCAN clusters in a trait-space snapshot — the
+/// living population's co-present niche count (CONTEXT.md *Cluster labelling*).
+/// Reuses the evaluator's existing `dbscan`; counts distinct `Some(_)` labels and
+/// ignores noise (`None`). This is `coexistence_duration`'s per-snapshot input
+/// (issue #394): the community-level "how many niches are occupied right now",
+/// not the dip/valley-depth existence statistic that is `clustering_strength`.
+pub fn distinct_cluster_count(
+    trait_vectors: &[explorers_sim::TraitVector],
+    eps: f32,
+    min_points: usize,
+) -> usize {
+    let labels = dbscan(trait_vectors, eps, min_points);
+    labels
+        .iter()
+        .filter_map(|l| *l)
+        .collect::<std::collections::HashSet<_>>()
+        .len()
+}
+
 pub fn dbscan(
     trait_vectors: &[explorers_sim::TraitVector],
     eps: f32,
@@ -875,7 +886,7 @@ mod tests {
         let max_ticks = 50;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let free = run_collecting_free_energy(&mut world, max_ticks);
-        let result = evaluate_from_log(&world, &free, &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &[], &[], &config, max_ticks);
         let born_count = world
             .event_log()
             .by_kind(&explorers_sim::event::EventKind::Reproduced)
@@ -914,7 +925,7 @@ mod tests {
         let collapsing: Vec<f32> = (0..n)
             .map(|t| if t < n / 2 { 100.0 } else { 1.0 })
             .collect();
-        let dead = evaluate_from_log(&world, &collapsing, &[], &[], &config, max_ticks);
+        let dead = evaluate_from_log(&world, &collapsing, &[], &[], &[], &config, max_ticks);
         assert_eq!(
             dead.failure,
             Some(FailureMode::EnergyDeath),
@@ -922,7 +933,7 @@ mod tests {
         );
 
         let sustained: Vec<f32> = vec![100.0; n];
-        let alive = evaluate_from_log(&world, &sustained, &[], &[], &config, max_ticks);
+        let alive = evaluate_from_log(&world, &sustained, &[], &[], &[], &config, max_ticks);
         assert_ne!(
             alive.failure,
             Some(FailureMode::EnergyDeath),
@@ -958,7 +969,7 @@ mod tests {
         // A flat low carcass series: the trailing-window mean is that level, and
         // it is not high enough (or non-receding) to gate as lockup.
         let low: Vec<f32> = vec![0.1; n];
-        let low_bd = evaluate_from_log(&world, &healthy_energy, &low, &[], &config, max_ticks);
+        let low_bd = evaluate_from_log(&world, &healthy_energy, &low, &[], &[], &config, max_ticks);
         assert_ne!(low_bd.failure, Some(FailureMode::NutrientLockup));
         assert!(
             (low_bd.carcass_locked_fraction - 0.1).abs() < 1e-5,
@@ -976,7 +987,8 @@ mod tests {
 
         // A flat higher carcass series reports a higher fraction (monotone read).
         let high: Vec<f32> = vec![0.3; n];
-        let high_bd = evaluate_from_log(&world, &healthy_energy, &high, &[], &config, max_ticks);
+        let high_bd =
+            evaluate_from_log(&world, &healthy_energy, &high, &[], &[], &config, max_ticks);
         assert!(
             high_bd.carcass_locked_fraction > low_bd.carcass_locked_fraction,
             "a higher dead-pool share should report a higher carcass fraction"
@@ -1008,7 +1020,15 @@ mod tests {
         let healthy_energy: Vec<f32> = vec![100.0; n];
 
         let locked: Vec<f32> = (0..n).map(|t| if t < n / 2 { 0.05 } else { 0.6 }).collect();
-        let dead = evaluate_from_log(&world, &healthy_energy, &locked, &[], &config, max_ticks);
+        let dead = evaluate_from_log(
+            &world,
+            &healthy_energy,
+            &locked,
+            &[],
+            &[],
+            &config,
+            max_ticks,
+        );
         assert_eq!(
             dead.failure,
             Some(FailureMode::NutrientLockup),
@@ -1020,6 +1040,7 @@ mod tests {
             &world,
             &healthy_energy,
             &turned_over,
+            &[],
             &[],
             &config,
             max_ticks,
@@ -1129,7 +1150,7 @@ mod tests {
         if world.agents().len() < 20 {
             return; // can't test monoculture with too few agents
         }
-        let result = evaluate_from_log(&world, &free, &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &[], &[], &config, max_ticks);
         assert_eq!(
             result.failure,
             Some(FailureMode::Monoculture),
@@ -1150,18 +1171,159 @@ mod tests {
         let config = EvalConfig::default();
         let max_ticks: u64 = 1;
         let world = explorers_sim::World::new(params, dist, 42);
-        let result = evaluate_from_log(&world, &[], &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &[], &[], &[], &[], &config, max_ticks);
         assert_eq!(result.failure, Some(FailureMode::PopulationExplosion));
         assert_eq!(result.fitness, 0.0);
     }
 
+    /// A snapshot of `count` tight, well-separated trait blobs (each dense enough
+    /// to form a DBSCAN cluster under the default config), so
+    /// `distinct_cluster_count` reads exactly `count`.
+    fn snapshot_with_clusters(count: usize) -> Vec<explorers_sim::TraitVector> {
+        let mut traits = Vec::new();
+        for c in 0..count {
+            for i in 0..10 {
+                traits.push(make_trait_vector([
+                    c as f32 * 5.0 + i as f32 * 0.01,
+                    0.0,
+                    0.0,
+                    0.0,
+                ]));
+            }
+        }
+        traits
+    }
+
     #[test]
-    fn evaluate_from_log_coexistence_from_lineage_clusters() {
-        // Coexistence is still read off the lineage active-set machinery; the
-        // fitness is the weighted sum of the five components, and a non-degenerate
-        // run scores positive. (Oscillation's own path is exercised separately.)
+    fn evaluate_from_log_coexistence_fraction_from_cluster_snapshots() {
+        // Coexistence is the fraction of post-grace sampled ticks whose living
+        // population carries >=2 trait-space clusters (issue #394). Feed a known
+        // K of N post-grace snapshots that carry >=2 clusters and assert the
+        // breakdown's coexistence_duration is exactly K/N. The fitness is the
+        // weighted sum of the five components.
         let params = test_world_params();
         let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 0.0,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 50;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let free = run_collecting_free_energy(&mut world, max_ticks);
+        if world.agents().is_empty() {
+            return;
+        }
+        // 5 snapshots (all post-grace because grace_period_fraction = 0): 3 with
+        // >=2 clusters, 2 with a single cluster → K/N = 3/5.
+        let snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = vec![
+            (1, snapshot_with_clusters(2)),
+            (2, snapshot_with_clusters(1)),
+            (3, snapshot_with_clusters(3)),
+            (4, snapshot_with_clusters(1)),
+            (5, snapshot_with_clusters(2)),
+        ];
+        let result = evaluate_from_log(&world, &free, &[], &[], &snapshots, &config, max_ticks);
+        assert!(
+            (result.coexistence_duration - 3.0 / 5.0).abs() < 1e-5,
+            "coexistence should be K/N = 3/5, got {}",
+            result.coexistence_duration
+        );
+        let fitness = 0.2 * result.oscillation_strength
+            + 0.2 * result.clustering_strength
+            + 0.2 * result.coexistence_duration
+            + 0.2 * result.turnover_score
+            + 0.2 * result.trophic_balance_score;
+        assert_eq!(
+            result.fitness, fitness,
+            "fitness should be weighted sum of components"
+        );
+    }
+
+    #[test]
+    fn coexistence_is_invariant_to_initial_population_size() {
+        // Coexistence is now a pure function of the snapshots and DBSCAN config —
+        // the searched seed parameter `initial_population_size` must NOT leak in
+        // (issue #394, the leak #390/#392 removed from oscillation). Two worlds
+        // built with different initial_population_size, fed identical snapshots,
+        // must report identical coexistence_duration.
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 0.0,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 50;
+
+        let snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = vec![
+            (1, snapshot_with_clusters(2)),
+            (2, snapshot_with_clusters(1)),
+            (3, snapshot_with_clusters(2)),
+        ];
+
+        let build = |pop: u32| {
+            let params = explorers_sim::WorldParameters {
+                initial_population_size: pop,
+                ..test_world_params()
+            };
+            let mut world = explorers_sim::World::new(params, dist.clone(), 42);
+            let free = run_collecting_free_energy(&mut world, max_ticks);
+            (world, free)
+        };
+
+        let (world_a, free_a) = build(10);
+        let (world_b, free_b) = build(80);
+        if world_a.agents().is_empty() || world_b.agents().is_empty() {
+            return;
+        }
+        let a = evaluate_from_log(&world_a, &free_a, &[], &[], &snapshots, &config, max_ticks);
+        let b = evaluate_from_log(&world_b, &free_b, &[], &[], &snapshots, &config, max_ticks);
+        assert_eq!(
+            a.coexistence_duration, b.coexistence_duration,
+            "coexistence must not depend on initial_population_size"
+        );
+    }
+
+    #[test]
+    fn coexistence_excludes_snapshots_at_or_before_grace() {
+        // Only snapshots with tick > grace_ticks count. With grace_ticks = 10
+        // (max_ticks=50, grace_fraction=0.2), the two pre-grace 2-cluster
+        // snapshots are excluded; only the post-grace snapshots set the fraction.
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 0.2,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 50;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let free = run_collecting_free_energy(&mut world, max_ticks);
+        if world.agents().is_empty() || world.tick() <= 10 {
+            return;
+        }
+        // grace_ticks = 10. Pre-grace snapshots (excluded) all carry 2 clusters;
+        // post-grace snapshots are 1 of 2 with >=2 clusters → fraction = 1/2, not
+        // dragged up by the excluded pre-grace ones.
+        let snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = vec![
+            (5, snapshot_with_clusters(2)),
+            (10, snapshot_with_clusters(2)),
+            (15, snapshot_with_clusters(2)),
+            (20, snapshot_with_clusters(1)),
+        ];
+        let result = evaluate_from_log(&world, &free, &[], &[], &snapshots, &config, max_ticks);
+        assert!(
+            (result.coexistence_duration - 0.5).abs() < 1e-5,
+            "only post-grace snapshots count: expected 1/2, got {}",
+            result.coexistence_duration
+        );
+    }
+
+    #[test]
+    fn coexistence_zero_when_survival_within_grace() {
+        // Guard mirroring the oscillation guard (#392): if ticks_survived <=
+        // grace_ticks, coexistence_duration is 0.0 regardless of snapshots.
+        let params = test_world_params();
+        let dist = test_distribution();
+        // grace_period_fraction = 1.0 → grace_ticks = max_ticks, so a surviving
+        // world never exceeds grace.
         let config = EvalConfig {
             grace_period_fraction: 1.0,
             ..EvalConfig::default()
@@ -1172,20 +1334,35 @@ mod tests {
         if world.agents().is_empty() {
             return;
         }
-        let result = evaluate_from_log(&world, &free, &[], &[], &config, max_ticks);
-        let fitness = 0.2 * result.oscillation_strength
-            + 0.2 * result.clustering_strength
-            + 0.2 * result.coexistence_duration
-            + 0.2 * result.turnover_score
-            + 0.2 * result.trophic_balance_score;
+        let snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = vec![
+            (5, snapshot_with_clusters(2)),
+            (40, snapshot_with_clusters(3)),
+        ];
+        let result = evaluate_from_log(&world, &free, &[], &[], &snapshots, &config, max_ticks);
         assert_eq!(
-            result.fitness, fitness,
-            "fitness should be weighted sum of components"
+            result.coexistence_duration, 0.0,
+            "survival within grace → coexistence 0.0"
         );
-        assert!(
-            result.fitness > 0.0,
-            "non-degenerate run should have positive fitness"
-        );
+    }
+
+    #[test]
+    fn coexistence_zero_when_no_snapshots() {
+        // Empty cluster_snapshots → coexistence 0.0 (a fixed-state caller with no
+        // rollout to sample passes an empty slice).
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 0.0,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 50;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let free = run_collecting_free_energy(&mut world, max_ticks);
+        if world.agents().is_empty() {
+            return;
+        }
+        let result = evaluate_from_log(&world, &free, &[], &[], &[], &config, max_ticks);
+        assert_eq!(result.coexistence_duration, 0.0);
     }
 
     #[test]
@@ -1220,7 +1397,7 @@ mod tests {
         let oscillating: Vec<f32> = (0..n)
             .map(|i| 0.5 + 0.3 * (2.0 * std::f32::consts::PI * i as f32 / period).sin())
             .collect();
-        let bd = evaluate_from_log(&world, &free, &[], &oscillating, &config, max_ticks);
+        let bd = evaluate_from_log(&world, &free, &[], &oscillating, &[], &config, max_ticks);
         let post_grace: Vec<f32> = oscillating
             .iter()
             .copied()
@@ -1239,7 +1416,7 @@ mod tests {
 
         // A flat producer-share series is a frozen fixed point → ~0 oscillation.
         let flat: Vec<f32> = vec![0.5; n];
-        let bd_flat = evaluate_from_log(&world, &free, &[], &flat, &config, max_ticks);
+        let bd_flat = evaluate_from_log(&world, &free, &[], &flat, &[], &config, max_ticks);
         assert_eq!(
             bd_flat.oscillation_strength, 0.0,
             "a flat producer-share series should read 0 oscillation"
@@ -1260,7 +1437,7 @@ mod tests {
         if world.agents().is_empty() {
             return; // can't test final-state metrics on extinct world
         }
-        let result = evaluate_from_log(&world, &free, &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &[], &[], &config, max_ticks);
 
         let trait_vectors: Vec<_> = world.agents().iter().map(|a| a.traits).collect();
         let energies: Vec<_> = world.agents().iter().map(|a| a.energy()).collect();
@@ -1337,7 +1514,7 @@ mod tests {
         let max_ticks = 100;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let free = run_collecting_free_energy(&mut world, 10);
-        let result = evaluate_from_log(&world, &free, &[], &[], &config, max_ticks);
+        let result = evaluate_from_log(&world, &free, &[], &[], &[], &config, max_ticks);
         assert_eq!(result.fitness, 0.0);
         assert_eq!(result.failure, Some(FailureMode::Extinction));
     }
@@ -1452,6 +1629,37 @@ mod tests {
             cluster_count <= 1,
             "widely scattered points should have 0-1 clusters, got {cluster_count}"
         );
+    }
+
+    #[test]
+    fn distinct_cluster_count_two_blobs() {
+        // Two well-separated trait blobs → two distinct DBSCAN clusters.
+        let mut traits = Vec::new();
+        for i in 0..10 {
+            traits.push(make_trait_vector([i as f32 * 0.01, 0.0, 0.0, 0.0]));
+        }
+        for i in 0..10 {
+            traits.push(make_trait_vector([5.0 + i as f32 * 0.01, 0.0, 0.0, 0.0]));
+        }
+        assert_eq!(distinct_cluster_count(&traits, 0.5, 3), 2);
+    }
+
+    #[test]
+    fn distinct_cluster_count_one_blob() {
+        // One tight blob → a single cluster.
+        let traits: Vec<_> = (0..10)
+            .map(|i| make_trait_vector([i as f32 * 0.01, 0.0, 0.0, 0.0]))
+            .collect();
+        assert_eq!(distinct_cluster_count(&traits, 0.5, 3), 1);
+    }
+
+    #[test]
+    fn distinct_cluster_count_sparse_scatter_is_zero() {
+        // Points too sparse to meet min_points density → all noise → zero clusters.
+        let traits: Vec<_> = (0..10)
+            .map(|i| make_trait_vector([i as f32 * 10.0, 0.0, 0.0, 0.0]))
+            .collect();
+        assert_eq!(distinct_cluster_count(&traits, 0.5, 3), 0);
     }
 
     #[test]
