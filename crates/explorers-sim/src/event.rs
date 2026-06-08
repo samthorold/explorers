@@ -9,6 +9,11 @@ pub enum EventKind {
     Wore,
     Died,
     Moved,
+    /// Network redistribution (flow 5): cooperative transfer of energy or
+    /// nutrient from `source` (the donor) to `target` (the recipient) along a
+    /// network connection. `energy_delta` is the net amount received by the
+    /// recipient. Emitted only when the network is enabled; inert by default.
+    Redistributed,
 }
 
 #[derive(Clone, Debug, PartialEq)]

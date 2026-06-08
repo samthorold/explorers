@@ -276,6 +276,11 @@ fn viable_baseline() -> WorldParameters {
         dispersal_propagule_cost_exponent: 2.0,
         dispersal_reach_coefficient: 10.0,
         body_reach_coefficient: 0.0,
+        network_connection_cap: 0,
+        network_creation_cost: 0.0,
+        network_maintenance_cost: 0.0,
+        network_redistribution_rate: 0.0,
+        network_transfer_efficiency: 0.0,
     }
 }
 
@@ -577,6 +582,22 @@ mod tests {
             .unwrap();
         assert!((tc.min - 0.1).abs() < 1e-10);
         assert!((tc.max - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn network_parameters_are_not_searched() {
+        // Flow 5 slice 1 (#409): the network mechanism is default-disabled and has
+        // no genesis criterion this epic, so its parameters must NOT be in the
+        // search ranges — genesis never explores them, keeping the atlas and
+        // existing recipes bit-unchanged.
+        let ranges = default_ranges();
+        for r in &ranges {
+            assert!(
+                !r.name.starts_with("network_"),
+                "network parameter {} must not be searched by genesis",
+                r.name
+            );
+        }
     }
 
     #[test]

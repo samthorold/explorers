@@ -463,6 +463,34 @@ pub struct WorldParameters {
     /// (backward-compatible: existing recipes keep the pure contact-range reach).
     #[serde(default)]
     pub body_reach_coefficient: f32,
+    /// Maximum network connections a single agent may build (flow 5). The master
+    /// switch for the whole network mechanism: **0 disables it** — no connection
+    /// ever forms, so redistribution is inert and every pre-network recipe, the
+    /// atlas, and genesis search are bit-unchanged. Default 0.
+    #[serde(default)]
+    pub network_connection_cap: u32,
+    /// Energy a builder pays from reserve surplus to create a network connection
+    /// (flow 5). Default 0.0 (network off).
+    #[serde(default)]
+    pub network_creation_cost: f32,
+    /// Per-tick energy a builder pays from reserve to maintain each of its network
+    /// connections (flow 5). The lever selection acts on — an agent that cannot
+    /// fund maintenance sheds connections. Default 0.0 (network off).
+    #[serde(default)]
+    pub network_maintenance_cost: f32,
+    /// Fraction of each per-currency gradient moved along a connection per tick
+    /// (flow 5): `flow = rate * (donor_level - recipient_level)`, bounded so a
+    /// transfer never overshoots the gradient in one step. Default 0.0 (network
+    /// off — no resources move).
+    #[serde(default)]
+    pub network_redistribution_rate: f32,
+    /// Flat cooperative transfer efficiency for network *energy* redistribution
+    /// (flow 5): the received fraction of energy sent, distance-independent
+    /// (unlike consumption's trait-distance efficiency — redistribution moves
+    /// reserve, not structure). Nutrient transfers are conserved regardless.
+    /// Default 0.0 (network off).
+    #[serde(default)]
+    pub network_transfer_efficiency: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -778,11 +806,49 @@ pub fn trophic_transfer_efficiency(
     params.base_trophic_efficiency * (-params.trophic_distance_decay * distance).exp()
 }
 
+/// A network connection (flow 5): a persistent link between two living agents,
+/// built and maintained by one of them (`builder`) to a `partner`. Created only
+/// while the two are within surface-contact reach, it then persists independent
+/// of surface distance. Resources flow along it in the redistribution pass. The
+/// network is a live transport structure on the `World` — distinct from the
+/// post-hoc food-web projection in `topology.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Connection {
+    /// The agent that built and maintains the connection (pays its costs).
+    pub builder: u64,
+    /// The other endpoint.
+    pub partner: u64,
+}
+
+/// Energy-ledger attribution for one `Redistributed` event (flow 5): the net
+/// amount the recipient received, recorded as a `donor -> recipient` flow. The
+/// donor's gross-minus-net transfer loss is *not* recorded here — it falls out
+/// as the donor's residual dissipation in the per-agent reconciliation, so this
+/// single record keeps the recipient's gain accounted and conservation intact.
+fn redistribution_flow(
+    ev: &event::Event,
+) -> (
+    energy_ledger::EnergyEndpoint,
+    energy_ledger::EnergyEndpoint,
+    f32,
+) {
+    use energy_ledger::EnergyEndpoint;
+    (
+        EnergyEndpoint::Agent(ev.source),
+        EnergyEndpoint::Agent(ev.target.expect("Redistributed event has a recipient")),
+        ev.energy_delta,
+    )
+}
+
 #[allow(dead_code)]
 pub struct World {
     params: WorldParameters,
     agents: Vec<Agent>,
     carcasses: Vec<Carcass>,
+    /// Live network connections (flow 5). Empty unless the network is enabled
+    /// and connections have formed. World-level, not on `Agent`, so the SoA
+    /// agent layout and its vectorised phases are untouched.
+    connections: Vec<Connection>,
     dissipated_energy: f32,
     total_solar_input: f32,
     nutrient_grid: spatial::NutrientGrid,
@@ -883,6 +949,7 @@ impl World {
             params,
             agents,
             carcasses: Vec::new(),
+            connections: Vec::new(),
             dissipated_energy: initial_dissipation,
             total_solar_input: 0.0,
             nutrient_grid,
@@ -954,6 +1021,7 @@ impl World {
                 params,
                 agents: sim_agents,
                 carcasses: seeded_carcasses,
+                connections: Vec::new(),
                 dissipated_energy: initial_dissipation,
                 total_solar_input: 0.0,
                 nutrient_grid,
@@ -1087,6 +1155,14 @@ impl World {
 
         // Remove drain-killed agents before further phases
         self.agents.retain(|a| !drain_dead_ids.contains(&a.id));
+
+        // 5b. Network redistribution (flow 5): cooperative transfer along live
+        // connections, between consumption and reproduction. Inert while the
+        // network is disabled (zero connection cap) — no connections, no events.
+        let (redistribute_events, redistribute_dissipated) =
+            phase::redistribute(&mut self.agents, &self.connections, &self.params);
+        self.dissipated_energy += redistribute_dissipated;
+        events.extend(redistribute_events);
 
         // 6. Resolve reproduction (coordinated pass 2)
         // Rebuild grid after removing dead agents (indices changed)
@@ -1298,6 +1374,19 @@ impl World {
             }
         }
 
+        // Record network-redistribution flows (flow 5): the net amount donor ->
+        // recipient. The donor's transfer loss is left to the residual-dissipation
+        // pass below. No-op while the network is disabled (no such events).
+        for ev in events
+            .iter()
+            .filter(|e| e.kind == event::EventKind::Redistributed)
+        {
+            let (src, dst, amount) = redistribution_flow(ev);
+            if amount > 0.0 {
+                self.ledger.record(src, dst, amount);
+            }
+        }
+
         // Record death transfers (agent -> carcass)
         for &id in &all_carcass_ids {
             if !pre_carcass_energy.contains_key(&id) && pre_agent_energy.contains_key(&id) {
@@ -1402,6 +1491,12 @@ impl World {
 
     pub fn agents(&self) -> &[Agent] {
         &self.agents
+    }
+
+    /// The live network connections (flow 5). Empty unless the network is enabled
+    /// and connections have formed.
+    pub fn connections(&self) -> &[Connection] {
+        &self.connections
     }
 
     /// Test support (#376): deliberately permute the in-memory order of the
@@ -1574,6 +1669,11 @@ mod tests {
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
             body_reach_coefficient: 0.0,
+            network_connection_cap: 0,
+            network_creation_cost: 0.0,
+            network_maintenance_cost: 0.0,
+            network_redistribution_rate: 0.0,
+            network_transfer_efficiency: 0.0,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -2112,6 +2212,100 @@ mod tests {
         world.step();
         world.step();
         assert!(world.tick() == 2);
+    }
+
+    #[test]
+    fn network_parameters_round_trip_and_default_off() {
+        // Flow 5 slice 1 (#409): the five network parameters serialize and
+        // deserialize round-trip, and a recipe that predates the network (JSON
+        // without the fields) deserializes with the network disabled.
+        let mut params = test_params();
+        params.network_connection_cap = 4;
+        params.network_creation_cost = 1.5;
+        params.network_maintenance_cost = 0.25;
+        params.network_redistribution_rate = 0.3;
+        params.network_transfer_efficiency = 0.8;
+        let json = serde_json::to_string(&params).unwrap();
+        let back: WorldParameters = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, params);
+
+        // Fields absent from the JSON ⇒ network disabled (off defaults).
+        let mut value = serde_json::to_value(test_params()).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        for k in [
+            "network_connection_cap",
+            "network_creation_cost",
+            "network_maintenance_cost",
+            "network_redistribution_rate",
+            "network_transfer_efficiency",
+        ] {
+            obj.remove(k);
+        }
+        let without: WorldParameters = serde_json::from_value(value).unwrap();
+        assert_eq!(without.network_connection_cap, 0);
+        assert_eq!(without.network_creation_cost, 0.0);
+        assert_eq!(without.network_maintenance_cost, 0.0);
+        assert_eq!(without.network_redistribution_rate, 0.0);
+        assert_eq!(without.network_transfer_efficiency, 0.0);
+    }
+
+    #[test]
+    fn network_is_inert_by_default() {
+        // Flow 5 slice 1 (#409): with default world parameters the network is
+        // disabled (zero connection cap), so stepping forms no connections, emits
+        // no Redistributed events, and the step's debug conservation asserts hold.
+        // Two identical runs stay bit-identical (determinism preserved).
+        let run = || {
+            let mut world = World::new(test_params(), test_distribution(), 42);
+            for _ in 0..20 {
+                world.step();
+            }
+            world
+        };
+        let world = run();
+        assert!(
+            world.connections().is_empty(),
+            "no connection forms while the network is disabled"
+        );
+        assert!(
+            world
+                .event_log()
+                .by_kind(&event::EventKind::Redistributed)
+                .is_empty(),
+            "no Redistributed events while the network is disabled"
+        );
+
+        let other = run();
+        assert_eq!(
+            world.event_log().len(),
+            other.event_log().len(),
+            "stepping is deterministic across runs"
+        );
+        assert_eq!(world.agents().len(), other.agents().len());
+    }
+
+    #[test]
+    fn redistribution_flow_attributes_net_transfer_donor_to_recipient() {
+        // Flow 5 (#409): a network-redistribution event moves energy from the
+        // donor to the recipient. The energy ledger attributes the net amount as
+        // a donor -> recipient flow; the donor's gross-minus-net loss is left to
+        // the residual-dissipation pass, so this single record keeps the
+        // recipient's gain accounted and conservation intact.
+        use energy_ledger::EnergyEndpoint;
+        let ev = event::Event {
+            tick: 3,
+            seq: 0,
+            kind: event::EventKind::Redistributed,
+            source: 7,
+            target: Some(9),
+            energy_delta: 4.0,
+            position: None,
+            target_was_carcass: false,
+        };
+        let (src, dst, amount) = redistribution_flow(&ev);
+        assert_eq!(src, EnergyEndpoint::Agent(7));
+        assert_eq!(dst, EnergyEndpoint::Agent(9));
+        assert_eq!(amount, 4.0);
     }
 
     #[test]
@@ -2915,6 +3109,11 @@ mod tests {
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
             body_reach_coefficient: 0.0,
+            network_connection_cap: 0,
+            network_creation_cost: 0.0,
+            network_maintenance_cost: 0.0,
+            network_redistribution_rate: 0.0,
+            network_transfer_efficiency: 0.0,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,
