@@ -467,16 +467,36 @@ pub fn autocorrelation(series: &[f32], lag: usize) -> f32 {
 pub fn oscillation_strength(producer_share: &[f32]) -> f32 {
     const LAG_MIN: usize = 2;
     const MIN_LEN: usize = 8;
+    // Absolute swing below which the series is not a regime signal: a producer
+    // share that moves less than 1% over the whole window is a frozen fixed point
+    // with noise, not an oscillation, no matter what structure that noise carries
+    // (issue #403). Sits at the top of the "<~0.5–1% is not a signal" band, with
+    // comfortable margin over the example10 seed-4 witness (~0.3% swing).
+    const MIN_SWING: f32 = 0.01;
 
     let n = producer_share.len();
     if n < MIN_LEN {
         return 0.0;
     }
-    let residual = linear_detrend(producer_share);
     let max_lag = n / 2;
     if max_lag < LAG_MIN {
         return 0.0;
     }
+    // Absolute near-flatness guard: the relative guard below keys on the
+    // residual-to-raw variance ratio, which a near-constant series with a tiny
+    // monotone creep slips past — the detrend removes the creep, leaving noise
+    // whose variance is not small *relative* to the (also tiny) raw variance, and
+    // its autocorrelation then reports a spurious deep anti-correlation (#403). A
+    // sub-MIN_SWING peak-to-peak is not a regime signal regardless of that ratio.
+    let (min_x, max_x) = producer_share
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &x| {
+            (lo.min(x), hi.max(x))
+        });
+    if max_x - min_x < MIN_SWING {
+        return 0.0;
+    }
+    let residual = linear_detrend(producer_share);
     // Flat-after-detrend guard: a pure constant or pure linear ramp detrends to a
     // residual that is float-rounding noise, not signal. Autocorrelating that
     // noise yields a meaningless deep "anti-correlation". A monotonic colonization
@@ -1921,6 +1941,35 @@ mod tests {
     fn oscillation_strength_zero_for_series_shorter_than_min_len() {
         let series = vec![0.1, 0.9, 0.1, 0.9, 0.1, 0.9, 0.1];
         assert_eq!(oscillation_strength(&series), 0.0);
+    }
+
+    #[test]
+    fn oscillation_strength_zero_for_near_flat_drift_with_noise() {
+        // Issue #403: a near-constant producer share with a microscopic monotone
+        // creep plus low-amplitude noise — the example10 seed-4 witness, which
+        // ranges only ~0.997–1.000 (peak-to-peak ~0.003). The linear detrend
+        // removes the drift, leaving noise whose variance is *not* small relative
+        // to the (also tiny) raw variance, so the relative guard does not trip;
+        // autocorrelating that noise finds a spurious deep anti-correlation at a
+        // long lag and reports a meaningless positive strength. A swing this far
+        // below the regime-signal floor must read 0 regardless of residual
+        // structure.
+        let mut state: u32 = 0x0bad_5eed;
+        let n = 512;
+        let series: Vec<f32> = (0..n)
+            .map(|i| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                // Drift 0.997 → 1.000 across the series, plus ±~0.0003 noise.
+                let drift = 0.997 + 0.003 * i as f32 / (n - 1) as f32;
+                let noise = ((state >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.0006;
+                drift + noise
+            })
+            .collect();
+        assert_eq!(
+            oscillation_strength(&series),
+            0.0,
+            "a ~0.003-swing near-flat series must read 0, not a spurious anti-correlation"
+        );
     }
 
     #[test]
