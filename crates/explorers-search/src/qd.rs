@@ -36,7 +36,7 @@
 use rand::Rng;
 
 use explorers_genesis::{
-    EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, RunConfig, run_ensemble,
+    EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, RunConfig, RunResult, run_ensemble,
 };
 use explorers_sim::WorldRecipe;
 
@@ -123,6 +123,12 @@ pub struct ConfigEval {
     /// Fraction of the ensemble that sprouted a persistent decomposer guild
     /// (reported distribution, never an axis or fitness term).
     pub decomposer_fraction: f32,
+    /// Fraction of the ensemble that lands in the coexisting regime — alive and
+    /// either clustering or coexisting (the #359 small-N disjunction). A reported
+    /// per-seed distribution under the *same* authority boundary as
+    /// `decomposer_fraction`: never an axis, never a fitness term. It feeds the
+    /// projection's robustness floor only (genesis-search.md).
+    pub coexistence_fraction: f32,
     /// The per-cell sample count (the seed-ensemble size).
     pub sample_count: u32,
     /// Observed coexistence duration of the median seed
@@ -142,6 +148,17 @@ pub struct ConfigEval {
     pub predicted_branching_distance: f32,
 }
 
+/// One seed lands in the coexisting regime when it is alive (no failure mode) and
+/// the clustering/coexistence observables read positive. The `||` is the #359
+/// small-N disjunction: below n≈4 the multi-peak `clustering_strength` silently
+/// zeroes even while coexistence genuinely persists, so a positive
+/// `coexistence_duration` still counts the seed as coexisting and the fraction
+/// does not under-count.
+fn is_coexisting(r: &RunResult) -> bool {
+    r.failure.is_none()
+        && (r.breakdown.clustering_strength > 0.0 || r.breakdown.coexistence_duration > 0.0)
+}
+
 /// Reduce a `run_ensemble` result to a [`ConfigEval`], reading the three axes and
 /// the decomposer signal off the per-seed [`FitnessBreakdown`] — no `run_single`
 /// mirror. The median-fitness seed (lower-middle for an even ensemble) is the
@@ -155,6 +172,19 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
             .run_results
             .iter()
             .filter(|r| r.breakdown.has_decomposer_guild)
+            .count() as f32
+            / sample_count as f32
+    };
+    // Reported per-seed distribution (never an axis, never fitness): the share of
+    // the ensemble that lands in the coexisting regime. The projection's
+    // robustness floor reads this; binning and fitness do not.
+    let coexistence_fraction = if sample_count == 0 {
+        0.0
+    } else {
+        result
+            .run_results
+            .iter()
+            .filter(|r| is_coexisting(r))
             .count() as f32
             / sample_count as f32
     };
@@ -179,6 +209,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
                 carcass: 0.0,
             },
             decomposer_fraction: 0.0,
+            coexistence_fraction: 0.0,
             sample_count: 0,
             coexistence_duration: 0.0,
             predicted_oscillation_distance: 0.0,
@@ -195,6 +226,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
             carcass: rep.breakdown.carcass_locked_fraction,
         },
         decomposer_fraction,
+        coexistence_fraction,
         sample_count,
         coexistence_duration: rep.breakdown.coexistence_duration,
         // Predicted bifurcation coordinates are filled by the caller, which holds
@@ -213,6 +245,10 @@ pub struct CellRecord {
     pub descriptors: Descriptors,
     pub unit: Vec<f64>,
     pub decomposer_fraction: f32,
+    /// Reported coexistence fraction of the cell's seed ensemble (see
+    /// [`ConfigEval::coexistence_fraction`]) — read by the projection's robustness
+    /// floor only, never binned on nor summed into fitness.
+    pub coexistence_fraction: f32,
     pub sample_count: u32,
     /// Predicted bifurcation descriptors of the elite (see [`ConfigEval`]) —
     /// reported on the cell, never binned on nor summed into fitness.
@@ -284,6 +320,7 @@ impl Archive {
                                 descriptors: eval.descriptors,
                                 unit: unit.to_vec(),
                                 decomposer_fraction: eval.decomposer_fraction,
+                                coexistence_fraction: eval.coexistence_fraction,
                                 sample_count: eval.sample_count,
                                 predicted_oscillation_distance: eval.predicted_oscillation_distance,
                                 predicted_branching_distance: eval.predicted_branching_distance,
@@ -306,6 +343,7 @@ impl Archive {
                                 rec.descriptors = eval.descriptors;
                                 rec.unit = unit.to_vec();
                                 rec.decomposer_fraction = eval.decomposer_fraction;
+                                rec.coexistence_fraction = eval.coexistence_fraction;
                                 rec.sample_count = eval.sample_count;
                                 rec.predicted_oscillation_distance =
                                     eval.predicted_oscillation_distance;
@@ -334,13 +372,6 @@ impl Archive {
 
     pub fn best_fitness(&self) -> f32 {
         self.cells.values().map(|c| c.fitness).fold(0.0, f32::max)
-    }
-
-    /// The elite of the argmax-fitness live cell — the recipe projection.
-    pub fn best_cell(&self) -> Option<&CellRecord> {
-        self.cells
-            .values()
-            .max_by(|a, b| a.fitness.partial_cmp(&b.fitness).unwrap())
     }
 
     /// Iterate the filled cells with their indices.
@@ -555,6 +586,11 @@ pub struct AtlasCell {
     /// Per-cell decomposer-guild distribution: the fraction of the cell's seed
     /// ensemble that sprouted a persistent guild (reported, never optimised).
     pub decomposer_fraction: f32,
+    /// Per-cell coexistence distribution: the fraction of the cell's seed ensemble
+    /// that lands in the coexisting regime. Reported like `decomposer_fraction`;
+    /// read only by the projection's robustness floor — never a binning axis nor a
+    /// fitness term (genesis-search.md, the authority boundary).
+    pub coexistence_fraction: f32,
     /// The seed-ensemble sample count behind that fraction.
     pub sample_count: u32,
     /// Predicted signed distance to the frozen↔oscillation (Hopf) boundary
@@ -742,6 +778,15 @@ pub struct Atlas {
 /// drift in the evaluator gate surfaces here as a failing test.
 pub const LOCK_FRACTION: f32 = 0.4;
 
+/// The minimum `coexistence_fraction` a cell must clear for the default projection
+/// to pick it (selection only — not a binning axis, not a fitness term). 0.5
+/// operationalizes CONTEXT.md:269's bar — *"a parameterisation is accepted only
+/// when most runs in the ensemble produce sensible worlds"* — at the projection
+/// step, so a monoculture↔coexistence bifurcation straddler that won a cell on a
+/// lucky seed draw is not certified as the playable recipe (#401). The straddler
+/// stays a recorded cell; only the recipe pick reads this floor.
+pub const COEXISTENCE_FLOOR: f32 = 0.5;
+
 /// The lockup boundary cross-check (genesis-search.md; the #363 spike's promoted
 /// check). Splits the atlas's live cells at the [`LOCK_FRACTION`] gate and reads
 /// the `NutrientLockup` dead-frontier tally, so the design's invariant can be
@@ -807,15 +852,25 @@ impl Atlas {
         }
     }
 
-    /// The world recipe drawn from the argmax-fitness live cell — the default
-    /// projection of the atlas (genesis-search.md, "the recipe is a projection").
-    /// `None` if no cell is live (every config died — the atlas is all frontier).
+    /// The world recipe drawn from the highest-fitness live cell that is *robustly
+    /// sensible* — its `coexistence_fraction` clears [`COEXISTENCE_FLOOR`] (most of
+    /// its seed ensemble coexists). Falls back to plain argmax-fitness when no live
+    /// cell clears the floor, so the projection stays total over live atlases (the
+    /// app always gets a world). Selection only: binning, fitness, and the straddler
+    /// cell itself are untouched (genesis-search.md, "the recipe is a projection";
+    /// #401). `None` if no cell is live (every config died — all frontier).
     pub fn best_recipe(&self, ranges: &[ParameterRange], max_ticks: u64) -> Option<WorldRecipe> {
-        let best = self
+        let pick = self
             .cells
             .iter()
-            .max_by(|a, b| a.fitness.partial_cmp(&b.fitness).unwrap())?;
-        Some(recipe_from_unit(&best.unit, ranges, max_ticks))
+            .filter(|c| c.coexistence_fraction >= COEXISTENCE_FLOOR)
+            .max_by(|a, b| a.fitness.partial_cmp(&b.fitness).unwrap())
+            .or_else(|| {
+                self.cells
+                    .iter()
+                    .max_by(|a, b| a.fitness.partial_cmp(&b.fitness).unwrap())
+            })?;
+        Some(recipe_from_unit(&pick.unit, ranges, max_ticks))
     }
 
     /// The world recipe for a specific live cell index, if that cell is filled —
@@ -1051,6 +1106,7 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
             clustering: rec.descriptors.clustering,
             carcass: rec.descriptors.carcass,
             decomposer_fraction: rec.decomposer_fraction,
+            coexistence_fraction: rec.coexistence_fraction,
             sample_count: rec.sample_count,
             predicted_oscillation_distance: rec.predicted_oscillation_distance,
             predicted_branching_distance: rec.predicted_branching_distance,
@@ -1090,6 +1146,7 @@ mod tests {
             cliff: None,
             descriptors: d,
             decomposer_fraction: 0.0,
+            coexistence_fraction: 1.0,
             sample_count: 5,
             coexistence_duration: 0.0,
             predicted_oscillation_distance: 0.0,
@@ -1136,6 +1193,7 @@ mod tests {
             clustering: 0.0,
             carcass,
             decomposer_fraction: 0.0,
+            coexistence_fraction: 1.0,
             sample_count: 5,
             predicted_oscillation_distance: 0.0,
             predicted_branching_distance: 0.0,
@@ -1717,14 +1775,23 @@ mod tests {
             let recovered: explorers_sim::WorldRecipe = serde_json::from_str(&json).unwrap();
             assert_eq!(recipe, recovered);
             assert!(recipe.parameters.initial_population_size > 0);
-            // The same elite is reachable as a cell-specific recipe.
-            let best = atlas
+            // The projected cell is reachable as a cell-specific recipe: the
+            // highest-fitness cell clearing the coexistence floor, argmax fallback
+            // when none clears (mirrors `best_recipe`'s floored pick, #401).
+            let pick = atlas
                 .cells
                 .iter()
+                .filter(|c| c.coexistence_fraction >= COEXISTENCE_FLOOR)
                 .max_by(|a, b| a.fitness.partial_cmp(&b.fitness).unwrap())
+                .or_else(|| {
+                    atlas
+                        .cells
+                        .iter()
+                        .max_by(|a, b| a.fitness.partial_cmp(&b.fitness).unwrap())
+                })
                 .unwrap();
             let cell_recipe = atlas
-                .recipe_for_cell(best.cell, &config.ranges, config.max_ticks)
+                .recipe_for_cell(pick.cell, &config.ranges, config.max_ticks)
                 .unwrap();
             assert_eq!(recipe, cell_recipe);
         }
@@ -1845,6 +1912,155 @@ mod tests {
         // Cross-check: identical disagreements regardless of decomposer fraction.
         let ds0 = bifurcation_crosscheck(&no_guild);
         let ds1 = bifurcation_crosscheck(&all_guild);
+        assert_eq!(ds0.len(), ds1.len());
+        for (x, y) in ds0.iter().zip(ds1.iter()) {
+            assert_eq!(x.axis, y.axis);
+            assert_eq!(x.regime, y.regime);
+            assert_eq!(x.predicted, y.predicted);
+            assert_eq!(x.observed, y.observed);
+        }
+    }
+
+    // --- Coexistence fraction + robustness-aware projection (#401) -----------
+
+    /// A zeroed [`FitnessBreakdown`] with the two coexistence observables set, for
+    /// synthetic per-seed results (no sim).
+    fn breakdown(
+        clustering: f32,
+        coexistence_duration: f32,
+    ) -> explorers_genesis::FitnessBreakdown {
+        explorers_genesis::FitnessBreakdown {
+            fitness: 0.0,
+            failure: None,
+            oscillation_strength: 0.0,
+            clustering_strength: clustering,
+            coexistence_duration,
+            turnover_score: 0.0,
+            trophic_balance_score: 0.0,
+            ticks_survived: 0,
+            carcass_locked_fraction: 0.0,
+            has_decomposer_guild: false,
+        }
+    }
+
+    fn run_result(
+        fitness: f32,
+        failure: Option<FailureMode>,
+        clustering: f32,
+        coexistence_duration: f32,
+    ) -> RunResult {
+        RunResult {
+            fitness,
+            failure,
+            termination_tick: 0,
+            breakdown: breakdown(clustering, coexistence_duration),
+        }
+    }
+
+    #[test]
+    fn config_eval_computes_coexistence_fraction() {
+        // The #401 straddler's independent 8-seed re-evaluation: 4 monoculture
+        // failures, 1 lockup failure, 3 alive-and-coexisting. Only the 3 live
+        // coexisting seeds count → 3/8. (The #359 small-N disjunction means a live
+        // seed coexisting only via coexistence_duration still counts.)
+        let run_results = vec![
+            run_result(0.0, Some(FailureMode::Monoculture), 0.0, 0.0),
+            run_result(0.0, Some(FailureMode::Monoculture), 0.0, 0.0),
+            run_result(0.0, Some(FailureMode::Monoculture), 0.0, 0.0),
+            run_result(0.0, Some(FailureMode::Monoculture), 0.0, 0.0),
+            run_result(0.0, Some(FailureMode::NutrientLockup), 0.0, 0.0),
+            run_result(0.6, None, 0.4, 8.0),
+            run_result(0.6, None, 0.0, 12.0), // coexists only via duration (small-N)
+            run_result(0.6, None, 0.3, 5.0),
+        ];
+        let result = EnsembleResult {
+            median_fitness: 0.0,
+            run_results,
+        };
+        let eval = config_eval_from_ensemble(&result);
+        assert_eq!(eval.coexistence_fraction, 3.0 / 8.0);
+    }
+
+    #[test]
+    fn best_recipe_prefers_the_robust_cell_over_a_higher_fitness_straddler() {
+        // The #401 fix: a higher-fitness cell that coexists on a minority of seeds
+        // (a bifurcation straddler) must NOT be projected over a lower-fitness cell
+        // that is robustly sensible (most of its ensemble coexists).
+        let ranges = default_ranges();
+        let mut straddler = atlas_cell(0.1);
+        straddler.cell = cell_of(&descr(0.1, 0.1, 0.1)).into();
+        straddler.fitness = 0.67;
+        straddler.coexistence_fraction = 0.375;
+        straddler.unit = vec![0.2; ranges.len()];
+        let mut robust = atlas_cell(0.1);
+        robust.cell = cell_of(&descr(0.2, 0.2, 0.1)).into();
+        robust.fitness = 0.40;
+        robust.coexistence_fraction = 1.0;
+        robust.unit = vec![0.8; ranges.len()];
+
+        let atlas = atlas_with(vec![straddler, robust.clone()], 0);
+        let recipe = atlas.best_recipe(&ranges, 100).unwrap();
+        let expected = recipe_from_unit(&robust.unit, &ranges, 100);
+        assert_eq!(recipe, expected);
+    }
+
+    #[test]
+    fn best_recipe_falls_back_to_argmax_when_no_cell_clears_the_floor() {
+        // Projection totality: if no live cell clears the floor the projection still
+        // yields a world (the highest-fitness straddler), so the app is never left
+        // without a recipe on a live atlas.
+        let ranges = default_ranges();
+        let mut a = atlas_cell(0.1);
+        a.cell = cell_of(&descr(0.1, 0.1, 0.1)).into();
+        a.fitness = 0.30;
+        a.coexistence_fraction = 0.2;
+        a.unit = vec![0.3; ranges.len()];
+        let mut b = atlas_cell(0.1);
+        b.cell = cell_of(&descr(0.2, 0.2, 0.1)).into();
+        b.fitness = 0.50;
+        b.coexistence_fraction = 0.4;
+        b.unit = vec![0.7; ranges.len()];
+
+        let atlas = atlas_with(vec![a, b.clone()], 0);
+        let recipe = atlas.best_recipe(&ranges, 100).unwrap();
+        // Fallback is plain argmax-fitness — the higher-fitness sub-floor cell.
+        let expected = recipe_from_unit(&b.unit, &ranges, 100);
+        assert_eq!(recipe, expected);
+    }
+
+    #[test]
+    fn coexistence_fraction_feeds_neither_binning_nor_fitness() {
+        // Authority boundary (mirrors the decomposer-fraction test): the coexistence
+        // fraction is a reported per-seed distribution, never a behaviour axis nor a
+        // fitness term. Two configs identical in every binning/fitness/descriptor
+        // field but with opposite coexistence fractions must bin to the same cell
+        // and yield identical archive fitness / qd-score / cross-check.
+        let d = descr(0.5, 0.6, 0.2);
+        let mut none = live(0.4, d);
+        let mut all = live(0.4, d);
+        none.coexistence_fraction = 0.0;
+        all.coexistence_fraction = 1.0;
+        for ev in [&mut none, &mut all] {
+            ev.predicted_branching_distance = 0.5;
+            ev.predicted_oscillation_distance = -0.2;
+            ev.coexistence_duration = 5.0;
+        }
+
+        // Binning: same cell.
+        assert_eq!(cell_of(&none.descriptors), cell_of(&all.descriptors));
+
+        // Fitness / archive improvement: identical regardless of coexistence fraction.
+        let mut a0 = Archive::new(0.0);
+        let mut a1 = Archive::new(0.0);
+        let imp0 = a0.insert(&vec![0.5; 3], &none);
+        let imp1 = a1.insert(&vec![0.5; 3], &all);
+        assert_eq!(imp0, imp1);
+        assert_eq!(a0.best_fitness(), a1.best_fitness());
+        assert_eq!(a0.qd_score(), a1.qd_score());
+
+        // Cross-check: identical disagreements regardless of coexistence fraction.
+        let ds0 = bifurcation_crosscheck(&none);
+        let ds1 = bifurcation_crosscheck(&all);
         assert_eq!(ds0.len(), ds1.len());
         for (x, y) in ds0.iter().zip(ds1.iter()) {
             assert_eq!(x.axis, y.axis);

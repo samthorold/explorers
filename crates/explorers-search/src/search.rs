@@ -493,15 +493,21 @@ mod tests {
         assert!(atlas.coverage + dead >= 1);
         // QD-score is the sum of elite fitnesses over filled cells.
         assert!(atlas.qd_score >= 0.0);
-        // Live cells carry the per-cell decomposer distribution and sample count.
+        // Live cells carry the per-cell decomposer + coexistence distributions and
+        // sample count.
         for cell in &atlas.cells {
             assert!(cell.decomposer_fraction >= 0.0 && cell.decomposer_fraction <= 1.0);
+            assert!(cell.coexistence_fraction >= 0.0 && cell.coexistence_fraction <= 1.0);
             assert_eq!(cell.sample_count, config.ensemble_size);
         }
     }
 
     #[test]
-    fn slow_atlas_best_recipe_is_the_argmax_cell_projection() {
+    fn slow_atlas_best_recipe_is_the_robust_cell_projection() {
+        // The default projection is the highest-fitness live cell that clears the
+        // coexistence floor (argmax fallback when none clears) — #401. Either way
+        // the recipe round-trips through serde and decodes to a non-degenerate
+        // world; that totality (a live atlas always yields a recipe) is the claim.
         use rand::SeedableRng;
         use rand_chacha::ChaCha8Rng;
 
