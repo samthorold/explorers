@@ -7,7 +7,8 @@
 use crate::event::{Event, EventKind};
 use crate::spatial::SpatialGrid;
 use crate::{
-    Agent, Carcass, FUNCTIONAL_TRAIT_COUNT, FUNCTIONAL_TRAIT_INDICES, TraitVector, WorldParameters,
+    Agent, Carcass, Connection, FUNCTIONAL_TRAIT_COUNT, FUNCTIONAL_TRAIT_INDICES, TraitVector,
+    WorldParameters,
 };
 use rand::Rng;
 use rand_distr::{Distribution, Normal, Poisson};
@@ -180,6 +181,27 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
         });
     }
     (events, total_dissipated)
+}
+
+/// Network redistribution (flow 5) — the coordinated pass that moves energy and
+/// nutrient along live [`Connection`]s from surplus to deficit, between
+/// consumption and reproduction in the tick. It is **inert** while the network is
+/// disabled (`network_connection_cap == 0`) or no connection exists, returning no
+/// events and no dissipation, so default worlds are bit-unchanged. The
+/// per-currency gradient flow, transfer loss, and connection lifecycle are
+/// introduced by later slices (#410 energy, #411 nutrient, #412–#413 formation
+/// and persistence); this is the skeleton that threads the pass into the loop.
+pub fn redistribute(
+    agents: &mut [Agent],
+    connections: &[Connection],
+    params: &WorldParameters,
+) -> (Vec<Event>, f32) {
+    if params.network_connection_cap == 0 || connections.is_empty() {
+        return (Vec::new(), 0.0);
+    }
+    // Connection flow is filled in by #410 (energy) and #411 (nutrient).
+    let _ = &mut *agents;
+    (Vec::new(), 0.0)
 }
 
 /// Grow: surplus energy (reserve above metabolic retention) is split by kappa.
@@ -1582,6 +1604,11 @@ mod tests {
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
             body_reach_coefficient: 0.0,
+            network_connection_cap: 0,
+            network_creation_cost: 0.0,
+            network_maintenance_cost: 0.0,
+            network_redistribution_rate: 0.0,
+            network_transfer_efficiency: 0.0,
         }
     }
 

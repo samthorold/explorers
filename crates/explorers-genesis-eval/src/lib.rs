@@ -870,6 +870,11 @@ mod tests {
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
             body_reach_coefficient: 0.0,
+            network_connection_cap: 0,
+            network_creation_cost: 0.0,
+            network_maintenance_cost: 0.0,
+            network_redistribution_rate: 0.0,
+            network_transfer_efficiency: 0.0,
         }
     }
 
@@ -1594,6 +1599,11 @@ mod tests {
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
             body_reach_coefficient: 0.0,
+            network_connection_cap: 0,
+            network_creation_cost: 0.0,
+            network_maintenance_cost: 0.0,
+            network_redistribution_rate: 0.0,
+            network_transfer_efficiency: 0.0,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {

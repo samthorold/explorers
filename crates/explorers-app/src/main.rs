@@ -484,6 +484,11 @@ fn default_recipe() -> WorldRecipe {
             dispersal_propagule_cost_exponent: 2.0,
             dispersal_reach_coefficient: 0.0,
             body_reach_coefficient: 0.0,
+            network_connection_cap: 0,
+            network_creation_cost: 0.0,
+            network_maintenance_cost: 0.0,
+            network_redistribution_rate: 0.0,
+            network_transfer_efficiency: 0.0,
         },
         initial_distribution: Some(InitialDistribution {
             mean_traits: TraitVector {
