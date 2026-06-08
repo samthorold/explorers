@@ -899,6 +899,214 @@ fn recipe_from_unit(unit: &[f64], ranges: &[ParameterRange], max_ticks: u64) -> 
 }
 
 // ---------------------------------------------------------------------------
+// Gated elite refinement of the projection (#404)
+// ---------------------------------------------------------------------------
+
+/// Default number of top-fitness live cells to re-evaluate before projecting.
+/// Small by design — refinement is the projection's last gate, not a second
+/// search — so its cost stays bounded (genesis-search.md, "the recipe is a
+/// projection").
+pub const REFINE_TOP_K: usize = 10;
+
+/// Default refinement ensemble size: the larger, independent draw that hardens the
+/// high-variance in-run n=5 estimate the floor reads (#404). 32 ≫ the 5-seed search
+/// ensemble, so the refined `coexistence_fraction` is a tight estimate near the
+/// monoculture↔coexistence bifurcation.
+pub const REFINE_ENSEMBLE_SIZE: u32 = 32;
+
+/// Seed offset that puts every refinement ensemble far above any seed the search
+/// itself drew, so the re-evaluation is an **independent** draw rather than a
+/// re-read of the in-run seeds (#404). The search assigns config base seeds as
+/// `base_seed + config_index*1000` (`run_qd`), bounded well under `2^40` for any
+/// real budget (`batch*(generations+1)` configs ≪ `2^40 / 1000`); a refinement
+/// block at `base_seed + 2^40 + rank*n` therefore never collides with a search
+/// ensemble. Fixed, so a given `(atlas, base_seed)` refines bit-reproducibly.
+const REFINEMENT_SEED_OFFSET: u64 = 1 << 40;
+
+/// One top-K cell re-evaluated at the larger refinement ensemble — the recorded
+/// (in-run) estimate beside the refined one, reported so the projection's gate is
+/// auditable. Selection only: this never rewrites the cell's atlas record.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct RefinedCell {
+    /// The behaviour-axis cell index `(oscillation, clustering, carcass)`.
+    pub cell: [usize; 3],
+    /// The cell's recorded (atlas) elite fitness — the ranking authority, untouched
+    /// by refinement.
+    pub recorded_fitness: f32,
+    /// The in-run coexistence fraction (the high-variance n=5 estimate the floor
+    /// read before #404).
+    pub recorded_coexistence_fraction: f32,
+    /// The refined coexistence fraction over the larger independent ensemble — what
+    /// the floor now reads for the pick.
+    pub refined_coexistence_fraction: f32,
+    /// The refined median fitness over the larger ensemble (reported for audit;
+    /// never the ranking key — that stays the recorded fitness).
+    pub refined_median_fitness: f32,
+    /// The refinement ensemble size behind the refined fraction.
+    pub refined_sample_count: u32,
+    /// Whether the refined fraction clears [`COEXISTENCE_FLOOR`].
+    pub clears_floor: bool,
+}
+
+/// The refined projection: the picked recipe plus the audit trail (#404). The pick
+/// is the highest recorded-fitness top-K cell whose **refined** coexistence
+/// fraction clears [`COEXISTENCE_FLOOR`]; it falls back to plain argmax-fitness
+/// (with `cleared_floor = false`) when no refined cell clears, mirroring
+/// [`Atlas::best_recipe`] so a live atlas always yields a world.
+#[derive(Clone, Debug)]
+pub struct RefinedProjection {
+    /// The projected recipe (`None` only when the atlas has no live cell).
+    pub recipe: Option<WorldRecipe>,
+    /// `true` when the pick cleared the refined floor; `false` on the argmax
+    /// fallback (the warning path — no robustly-coexisting cell at this budget).
+    pub cleared_floor: bool,
+    /// The refined top-K, in recorded-fitness-descending (ranking) order.
+    pub refined: Vec<RefinedCell>,
+    /// Live cells beyond the top-K that were *not* refined — the bounded-cost
+    /// disclosure (a robust cell ranked below the cut is not reached).
+    pub unrefined_live_cells: usize,
+}
+
+/// Configuration for the gated elite refinement step (#404).
+#[derive(Clone, Debug)]
+pub struct RefinementConfig {
+    /// Top-fitness live cells to re-evaluate (the gate, not a search).
+    pub top_k: usize,
+    /// Refinement ensemble size (the larger independent draw).
+    pub ensemble_size: u32,
+    /// Rollout horizon, matching the search's `max_ticks`.
+    pub max_ticks: u64,
+}
+
+impl Default for RefinementConfig {
+    fn default() -> Self {
+        RefinementConfig {
+            top_k: REFINE_TOP_K,
+            ensemble_size: REFINE_ENSEMBLE_SIZE,
+            max_ticks: 500,
+        }
+    }
+}
+
+/// Project a recipe from the atlas after hardening the top-K cells' coexistence
+/// estimate against `evaluate` — the pure selection core (#404). `evaluate(rank,
+/// unit)` returns `(refined_coexistence_fraction, refined_median_fitness,
+/// refined_sample_count)` for the cell at ranking position `rank`; the sim-backed
+/// wrapper is [`refined_best_recipe`]. Selection only: `atlas` is read, never
+/// mutated, and the **recorded** fitness remains the ranking key.
+fn project_with_refinement(
+    atlas: &Atlas,
+    ranges: &[ParameterRange],
+    max_ticks: u64,
+    top_k: usize,
+    mut evaluate: impl FnMut(usize, &[f64]) -> (f32, f32, u32),
+) -> RefinedProjection {
+    // Rank live cells by recorded fitness (descending), with a deterministic
+    // tiebreak on the cell index so the ranking — and thus the per-rank refinement
+    // seeds — is independent of the archive's HashMap iteration order.
+    let mut ranked: Vec<&AtlasCell> = atlas.cells.iter().collect();
+    ranked.sort_by(|a, b| {
+        b.fitness
+            .partial_cmp(&a.fitness)
+            .unwrap()
+            .then_with(|| a.cell.cmp(&b.cell))
+    });
+
+    if ranked.is_empty() {
+        return RefinedProjection {
+            recipe: None,
+            cleared_floor: false,
+            refined: Vec::new(),
+            unrefined_live_cells: 0,
+        };
+    }
+
+    let k = top_k.min(ranked.len());
+    let unrefined_live_cells = ranked.len() - k;
+
+    // Re-evaluate the top-K at the larger ensemble. The list stays in
+    // recorded-fitness order, so the first floor-clearing entry is the
+    // highest-fitness robust cell.
+    let refined: Vec<RefinedCell> = ranked[..k]
+        .iter()
+        .enumerate()
+        .map(|(rank, c)| {
+            let (frac, median_fitness, sample_count) = evaluate(rank, &c.unit);
+            RefinedCell {
+                cell: c.cell,
+                recorded_fitness: c.fitness,
+                recorded_coexistence_fraction: c.coexistence_fraction,
+                refined_coexistence_fraction: frac,
+                refined_median_fitness: median_fitness,
+                refined_sample_count: sample_count,
+                clears_floor: frac >= COEXISTENCE_FLOOR,
+            }
+        })
+        .collect();
+
+    // Pick the highest recorded-fitness top-K cell whose refined fraction clears
+    // the floor; fall back to plain argmax-fitness (the warning path) when none
+    // does, so a live atlas always yields a world.
+    match refined.iter().position(|r| r.clears_floor) {
+        Some(pos) => RefinedProjection {
+            recipe: Some(recipe_from_unit(&ranked[pos].unit, ranges, max_ticks)),
+            cleared_floor: true,
+            refined,
+            unrefined_live_cells,
+        },
+        None => RefinedProjection {
+            recipe: Some(recipe_from_unit(&ranked[0].unit, ranges, max_ticks)),
+            cleared_floor: false,
+            refined,
+            unrefined_live_cells,
+        },
+    }
+}
+
+/// Re-evaluate the atlas's top-K live cells at the larger refinement ensemble and
+/// project the recipe from the highest-fitness cell that clears the refined
+/// coexistence floor (#404). Hardens the high-variance in-run n=5 estimate that
+/// both fitness and the floor depend on, using deterministic seeds disjoint from
+/// the search's (see [`REFINEMENT_SEED_OFFSET`]). Selection only — never rewrites
+/// the atlas map's binning or per-cell fitness (genesis-search.md, the authority
+/// boundary). Deterministic in `(atlas, config, base_seed)`.
+pub fn refined_best_recipe(
+    atlas: &Atlas,
+    ranges: &[ParameterRange],
+    config: &RefinementConfig,
+    base_seed: u64,
+) -> RefinedProjection {
+    let ensemble_config = EnsembleConfig {
+        ensemble_size: config.ensemble_size,
+        run_config: RunConfig {
+            max_ticks: config.max_ticks,
+            eval_config: EvalConfig::default(),
+        },
+    };
+    project_with_refinement(
+        atlas,
+        ranges,
+        config.max_ticks,
+        config.top_k,
+        |rank, unit| {
+            let (wp, dist) = decode(unit, ranges);
+            // Disjoint, deterministic refinement seeds: a block per rank, far above
+            // any search seed (independent draw, reproducible for a fixed seed).
+            let refine_seed = base_seed
+                .wrapping_add(REFINEMENT_SEED_OFFSET)
+                .wrapping_add(rank as u64 * config.ensemble_size as u64);
+            let result = run_ensemble(&wp, &dist, &ensemble_config, refine_seed);
+            let eval = config_eval_from_ensemble(&result);
+            (
+                eval.coexistence_fraction,
+                eval.median_fitness,
+                eval.sample_count,
+            )
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
 // QD driver
 // ---------------------------------------------------------------------------
 
@@ -2026,6 +2234,170 @@ mod tests {
         // Fallback is plain argmax-fitness — the higher-fitness sub-floor cell.
         let expected = recipe_from_unit(&b.unit, &ranges, 100);
         assert_eq!(recipe, expected);
+    }
+
+    #[test]
+    fn refinement_drops_a_straddler_that_passed_the_in_run_floor() {
+        // #404: a higher-fitness cell that clears the floor on its lucky in-run n=5
+        // draw (recorded 0.6) but coexists on a minority under the larger
+        // independent ensemble (refined 0.2) must be rejected, and the projection
+        // must fall to the robustly-coexisting lower-fitness cell (refined 0.9).
+        let ranges = default_ranges();
+        let mut straddler = atlas_cell(0.1);
+        straddler.cell = cell_of(&descr(0.1, 0.1, 0.1)).into();
+        straddler.fitness = 0.67;
+        straddler.coexistence_fraction = 0.6; // cleared the in-run floor
+        straddler.unit = vec![0.2; ranges.len()];
+        let mut robust = atlas_cell(0.1);
+        robust.cell = cell_of(&descr(0.2, 0.2, 0.1)).into();
+        robust.fitness = 0.40;
+        robust.coexistence_fraction = 1.0;
+        robust.unit = vec![0.8; ranges.len()];
+
+        let atlas = atlas_with(vec![straddler.clone(), robust.clone()], 0);
+        // Stub evaluator: rank 0 is the straddler (top fitness), rank 1 the robust
+        // cell. The larger ensemble exposes the straddler's true minority coexistence.
+        let projection = project_with_refinement(&atlas, &ranges, 100, REFINE_TOP_K, |rank, _| {
+            if rank == 0 {
+                (0.2, 0.0, 32)
+            } else {
+                (0.9, 0.40, 32)
+            }
+        });
+
+        assert!(
+            projection.cleared_floor,
+            "the robust cell clears the refined floor"
+        );
+        assert_eq!(
+            projection.recipe.unwrap(),
+            recipe_from_unit(&robust.unit, &ranges, 100),
+            "the robust cell is projected, not the refined-out straddler"
+        );
+        assert_eq!(projection.refined.len(), 2);
+        assert_eq!(projection.refined[0].cell, straddler.cell);
+        assert!(!projection.refined[0].clears_floor);
+        assert!(projection.refined[1].clears_floor);
+
+        // Authority boundary: refinement is selection only — the straddler stays a
+        // recorded cell with its real fitness and in-run fraction untouched.
+        let recorded = atlas
+            .cells
+            .iter()
+            .find(|c| c.cell == straddler.cell)
+            .unwrap();
+        assert_eq!(recorded.fitness, 0.67);
+        assert_eq!(recorded.coexistence_fraction, 0.6);
+    }
+
+    #[test]
+    fn refinement_falls_back_to_argmax_when_no_refined_cell_clears() {
+        // When the larger ensemble drops every top-K cell below the floor, the
+        // projection still yields a world (highest recorded fitness) but flags the
+        // fallback so the search can warn — mirrors best_recipe's totality.
+        let ranges = default_ranges();
+        let mut a = atlas_cell(0.1);
+        a.cell = cell_of(&descr(0.1, 0.1, 0.1)).into();
+        a.fitness = 0.30;
+        a.unit = vec![0.3; ranges.len()];
+        let mut b = atlas_cell(0.1);
+        b.cell = cell_of(&descr(0.2, 0.2, 0.1)).into();
+        b.fitness = 0.50;
+        b.unit = vec![0.7; ranges.len()];
+
+        let atlas = atlas_with(vec![a.clone(), b.clone()], 0);
+        let projection =
+            project_with_refinement(&atlas, &ranges, 100, REFINE_TOP_K, |_, _| (0.1, 0.0, 32));
+
+        assert!(!projection.cleared_floor);
+        assert_eq!(
+            projection.recipe.unwrap(),
+            recipe_from_unit(&b.unit, &ranges, 100),
+            "fallback is plain argmax-fitness"
+        );
+    }
+
+    #[test]
+    fn refinement_only_touches_the_top_k_and_discloses_the_rest() {
+        // Bounded cost: only the top-K live cells are refined; cells ranked below
+        // the cut are reported as unrefined, never silently dropped.
+        let ranges = default_ranges();
+        let cells: Vec<AtlasCell> = (0..5)
+            .map(|i| {
+                let mut c = atlas_cell(0.1);
+                c.cell = [i, 0, 0];
+                c.fitness = 0.9 - 0.1 * i as f32; // strictly descending, distinct
+                c.unit = vec![0.1 * (i + 1) as f64; ranges.len()];
+                c
+            })
+            .collect();
+        let atlas = atlas_with(cells, 0);
+
+        let mut refined_ranks = Vec::new();
+        let projection = project_with_refinement(&atlas, &ranges, 100, 2, |rank, _| {
+            refined_ranks.push(rank);
+            (0.9, 0.5, 32)
+        });
+
+        assert_eq!(projection.refined.len(), 2, "only top-2 refined");
+        assert_eq!(
+            refined_ranks,
+            vec![0, 1],
+            "evaluator called for the top-2 ranks only"
+        );
+        assert_eq!(
+            projection.unrefined_live_cells, 3,
+            "the other 3 live cells disclosed"
+        );
+    }
+
+    #[test]
+    fn refinement_on_empty_atlas_yields_no_recipe() {
+        let ranges = default_ranges();
+        let atlas = atlas_with(vec![], 0);
+        let projection =
+            project_with_refinement(&atlas, &ranges, 100, REFINE_TOP_K, |_, _| (1.0, 1.0, 32));
+        assert!(projection.recipe.is_none());
+        assert!(!projection.cleared_floor);
+        assert!(projection.refined.is_empty());
+    }
+
+    #[test]
+    fn slow_refined_best_recipe_is_deterministic_in_seed() {
+        // #404 determinism: a fixed (atlas, config, base_seed) yields a
+        // bit-reproducible refinement (same refined fractions) and projection.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = crate::search::SearchConfig {
+            ensemble_size: 2,
+            max_ticks: 15,
+            batch: 6,
+            generations: 1,
+            ..Default::default()
+        };
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        let atlas = crate::search::run_search(&config, 7, &mut rng);
+
+        let rconfig = RefinementConfig {
+            top_k: 4,
+            ensemble_size: 4,
+            max_ticks: config.max_ticks,
+        };
+        let p1 = refined_best_recipe(&atlas, &config.ranges, &rconfig, 7);
+        let p2 = refined_best_recipe(&atlas, &config.ranges, &rconfig, 7);
+
+        assert_eq!(p1.recipe, p2.recipe);
+        assert_eq!(p1.cleared_floor, p2.cleared_floor);
+        assert_eq!(p1.refined.len(), p2.refined.len());
+        for (a, b) in p1.refined.iter().zip(p2.refined.iter()) {
+            assert_eq!(a.cell, b.cell);
+            assert_eq!(
+                a.refined_coexistence_fraction,
+                b.refined_coexistence_fraction
+            );
+            assert_eq!(a.refined_median_fitness, b.refined_median_fitness);
+        }
     }
 
     #[test]
