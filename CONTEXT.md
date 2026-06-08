@@ -87,6 +87,14 @@ _Avoid_: feeding (feeding is consumption of other agents), mining (implies delib
 The difference between the nutrient ratio in an agent's food and the ratio the agent needs. When a consumer eats prey whose nutrient ratio doesn't match its demand, it retains only what it needs and excretes the excess nutrient immediately to the available pool. The limiting currency (energy or nutrient) constrains how much of the consumed material the consumer can actually use.
 _Avoid_: waste, inefficiency (mismatch is not inefficiency — it is a physical constraint)
 
+**Network connection**:
+An edge on the **emergent network** linking two living agents. A **physical channel** — it carries energy and nutrient (and network perception), not merely information — built between agents that were within surface-contact reach and persisting independent of surface distance thereafter, so two agents adjacent on the network may be far apart on the surface. One agent builds and maintains it; it dissolves when no longer maintained or when either endpoint dies.
+_Avoid_: link, edge (informal shorthand), bond
+
+**Network redistribution**:
+The cooperative, bidirectional movement of energy and nutrient between living agents along **network connections**, as opposed to the adversarial one-way drain of **consumption**. Each currency flows down its own gradient, surplus to deficit; the energy component is lossy, nutrient is conserved. The mechanism by which **mutualism** becomes possible — complementary partners (one energy-rich, one nutrient-rich) each receive the currency they lack.
+_Avoid_: sharing, trading (trading implies an explicit market/pricing — redistribution is gradient flow)
+
 **Gross primary production**:
 The total photosynthetic income across all producers per tick — the sum of all photosynthesis (flow 1) in the system. The raw energy tap before producers pay their own costs. Sets the ceiling on how much energy the rest of the ecosystem can access.
 _Avoid_: GPP (abbreviation obscures meaning in a glossary)
