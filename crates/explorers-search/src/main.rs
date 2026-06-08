@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use explorers_search::qd::COEXISTENCE_FLOOR;
+use explorers_search::qd::{
+    COEXISTENCE_FLOOR, REFINE_ENSEMBLE_SIZE, REFINE_TOP_K, RefinementConfig, refined_best_recipe,
+};
 use explorers_search::search::{SearchConfig, default_ranges, run_search};
 
 fn main() {
@@ -17,6 +19,8 @@ fn main() {
     let mut seed = 42u64;
     let mut output_path = PathBuf::from("atlas.json");
     let mut recipe_output_path = PathBuf::from("recipe.json");
+    let mut refine_top_k = REFINE_TOP_K;
+    let mut refine_ensemble = REFINE_ENSEMBLE_SIZE;
 
     let mut i = 1;
     while i < args.len() {
@@ -48,6 +52,14 @@ fn main() {
             "--recipe-output" => {
                 i += 1;
                 recipe_output_path = PathBuf::from(&args[i]);
+            }
+            "--refine-top-k" => {
+                i += 1;
+                refine_top_k = args[i].parse().unwrap();
+            }
+            "--refine-ensemble" => {
+                i += 1;
+                refine_ensemble = args[i].parse().unwrap();
             }
             "--help" | "-h" => {
                 print_usage();
@@ -84,27 +96,61 @@ fn main() {
     let json = serde_json::to_string_pretty(&atlas).unwrap();
     fs::write(&output_path, &json).unwrap();
 
-    match atlas.best_recipe(&default_ranges(), config.max_ticks) {
+    // Gated elite refinement (#404): re-evaluate the top-K live cells at a larger,
+    // independent-seeded ensemble before projecting, so the high-variance in-run n=5
+    // estimate that both fitness and the coexistence floor depend on is hardened.
+    // Selection only — the atlas map (binning, per-cell fitness) is untouched.
+    let refinement = RefinementConfig {
+        top_k: refine_top_k,
+        ensemble_size: refine_ensemble,
+        max_ticks: config.max_ticks,
+    };
+    eprintln!(
+        "\nRefining top-{} live cells at ensemble n={} (independent seeds)...",
+        refine_top_k, refine_ensemble
+    );
+    let projection = refined_best_recipe(&atlas, &default_ranges(), &refinement, seed);
+
+    if !projection.refined.is_empty() {
+        eprintln!("Refined cells (recorded → refined coexistence fraction):");
+        for r in &projection.refined {
+            eprintln!(
+                "  cell {:?}: fitness={:.4} coexist {:.2} → {:.2} (n={}) refined_fit={:.4}{}",
+                r.cell,
+                r.recorded_fitness,
+                r.recorded_coexistence_fraction,
+                r.refined_coexistence_fraction,
+                r.refined_sample_count,
+                r.refined_median_fitness,
+                if r.clears_floor { " ✓" } else { "" },
+            );
+        }
+        if projection.unrefined_live_cells > 0 {
+            eprintln!(
+                "  ({} lower-fitness live cell(s) below the top-{} cut were not refined)",
+                projection.unrefined_live_cells, refine_top_k
+            );
+        }
+    }
+
+    match projection.recipe {
         Some(recipe) => {
             let recipe_json = serde_json::to_string_pretty(&recipe).unwrap();
             fs::write(&recipe_output_path, &recipe_json).unwrap();
             eprintln!(
-                "Recipe (best robust live cell) written to {}",
+                "Recipe (best refined-robust live cell) written to {}",
                 recipe_output_path.display()
             );
-            // Warn when the projection had to fall back below the floor: the atlas
-            // has no robustly-sensible live cell at this budget, so the recipe is a
-            // bifurcation straddler — most of its ensemble does NOT coexist (#401).
-            if !atlas
-                .cells
-                .iter()
-                .any(|c| c.coexistence_fraction >= COEXISTENCE_FLOOR)
-            {
+            // Warn when the refinement had to fall back below the floor: no top-K
+            // cell stays robustly sensible under the larger ensemble, so the recipe
+            // is a bifurcation straddler — most of its ensemble does NOT coexist
+            // (#401, #404).
+            if !projection.cleared_floor {
                 eprintln!(
-                    "  WARNING: no live cell clears the coexistence floor ({:.2}); the recipe \
-                     is the argmax-fitness straddler (a lucky-draw world). Try a larger budget \
-                     or ensemble.",
-                    COEXISTENCE_FLOOR
+                    "  WARNING: no refined top-{} cell clears the coexistence floor ({:.2}); the \
+                     recipe is the argmax-fitness straddler (a lucky-draw world). Try a larger \
+                     budget, ensemble, or --refine-top-k.",
+                    refine_top_k, COEXISTENCE_FLOOR
                 );
             }
         }
@@ -216,5 +262,7 @@ fn print_usage() {
     eprintln!("  --seed N            Random seed (default: 42)");
     eprintln!("  --output PATH       Atlas JSON path (default: atlas.json)");
     eprintln!("  --recipe-output PATH  Recipe JSON path (default: recipe.json)");
+    eprintln!("  --refine-top-k N    Top live cells to refine before projecting (default: 10)");
+    eprintln!("  --refine-ensemble N Refinement ensemble size, independent seeds (default: 32)");
     eprintln!("  --help, -h          Show this help");
 }

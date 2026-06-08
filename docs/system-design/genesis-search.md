@@ -209,3 +209,18 @@ real fitness; only the *recipe pick* reads the floor, so the atlas map stays unt
 honest. The atlas's honest stance is that *many* worlds across the manifold are viable, so any cell's
 elite is reachable as a recipe, not only the projected one. "The best recipe" is one pick from a map, not
 the search's output.
+
+**Gated elite refinement hardens the pick (#404).** The floor above reads the *same* in-run 5-seed
+ensemble that ranks the cell, and that estimate is itself high-variance near the bifurcation — so a lucky
+5-seed draw can both top the leaderboard *and* clear the floor (the #401 leader read 0.60 = 3/5 in-run yet
+re-evaluated to ~3/8 over an independent draw). Before projecting, the search therefore **re-evaluates the
+top-K live cells** (K = `REFINE_TOP_K`, small) at a **larger, independent ensemble** (`REFINE_ENSEMBLE_SIZE`,
+≫ 5) and applies the floor to that **refined** fraction. The refinement seeds are deterministic but drawn
+far above any seed the search used (offset `2^40`), so the re-evaluation is an *independent* draw, not a
+re-read of the in-run seeds, and a fixed `(atlas, seed)` refines bit-reproducibly. The pick is the
+highest **recorded**-fitness top-K cell whose refined fraction clears the floor; it falls back to plain
+argmax-fitness (with a warning) when none does. This stays inside the authority boundary: refinement
+**never** rewrites the atlas map's binning or per-cell fitness — the recorded fitness remains the ranking
+key, the refined fraction feeds only the pick, and the straddler stays a recorded cell. Its cost is
+bounded (top-K only) and logged, including the lower-fitness live cells below the cut that were not
+refined.
