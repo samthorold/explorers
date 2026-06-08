@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
+use explorers_search::qd::COEXISTENCE_FLOOR;
 use explorers_search::search::{SearchConfig, default_ranges, run_search};
 
 fn main() {
@@ -88,9 +89,24 @@ fn main() {
             let recipe_json = serde_json::to_string_pretty(&recipe).unwrap();
             fs::write(&recipe_output_path, &recipe_json).unwrap();
             eprintln!(
-                "Recipe (best live cell) written to {}",
+                "Recipe (best robust live cell) written to {}",
                 recipe_output_path.display()
             );
+            // Warn when the projection had to fall back below the floor: the atlas
+            // has no robustly-sensible live cell at this budget, so the recipe is a
+            // bifurcation straddler — most of its ensemble does NOT coexist (#401).
+            if !atlas
+                .cells
+                .iter()
+                .any(|c| c.coexistence_fraction >= COEXISTENCE_FLOOR)
+            {
+                eprintln!(
+                    "  WARNING: no live cell clears the coexistence floor ({:.2}); the recipe \
+                     is the argmax-fitness straddler (a lucky-draw world). Try a larger budget \
+                     or ensemble.",
+                    COEXISTENCE_FLOOR
+                );
+            }
         }
         None => {
             eprintln!(
@@ -123,13 +139,14 @@ fn main() {
     for cell in top.iter().take(10) {
         eprintln!(
             "  cell {:?}: fitness={:.4} osc={:.3} clus={:.3} carcass={:.3} \
-             decomposer_frac={:.2} (n={})",
+             decomposer_frac={:.2} coexist_frac={:.2} (n={})",
             cell.cell,
             cell.fitness,
             cell.oscillation,
             cell.clustering,
             cell.carcass,
             cell.decomposer_fraction,
+            cell.coexistence_fraction,
             cell.sample_count,
         );
     }

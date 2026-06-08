@@ -103,9 +103,19 @@ guild's truth is a *fraction of seeds*. The boundary is enforced mechanically: t
 the evaluator's output as a reported observable, alongside the other non-fitness readings, and is never
 summed into fitness nor binned on.
 
+A **second** reported per-seed distribution rides under the *same* boundary: the **coexistence
+fraction** — the share of a cell's seed ensemble that lands in the coexisting regime (alive, and either
+clustering or coexisting; the `||` is the #359 small-N disjunction so clustering's silent zero below
+n≈4 does not under-count). Like the decomposer fraction it is recorded with the sample count and is
+**never** a behaviour axis nor a fitness term; the monoculture↔coexistence *axis* is still the median
+seed's `clustering_strength`. What the fraction adds is visibility into how a cell's ensemble splits
+across the regime — the raw material the projection reads (below).
+
 Because each cell's elite is selected on a noisy median-over-seeds, a lucky elite can misrepresent its
 cell. The archive tolerates this descriptor noise by design (a soft per-cell acceptance threshold rather
-than a single sticky occupant) rather than pretending each cell is a noise-free point.
+than a single sticky occupant) rather than pretending each cell is a noise-free point. The coexistence
+fraction makes that noise *visible*: a cell whose median seed coexists on a lucky 5-seed draw but whose
+ensemble mostly monocultures reads a low fraction, and the projection (below) now reads it.
 
 ## Predicted bifurcation coordinates and the cross-check
 
@@ -177,14 +187,25 @@ never swallowed — the validation-triad cross-check both spikes prize. Each dis
   hardened cycle-detector lands (a separate issue).
 
 **Authority boundary.** Like the three axes and `C*`, these readings arbitrate **existence/stability
-only**. They never read the decomposer guild or any per-seed distributional property, are never summed
-into fitness, and are never a binning axis — the same existence-vs-distributional boundary the rest of
-the atlas respects.
+only**. They never read the decomposer guild or any per-seed distributional property (the decomposer
+fraction, the coexistence fraction), are never summed into fitness, and are never a binning axis — the
+same existence-vs-distributional boundary the rest of the atlas respects.
 
 ## The recipe is a projection of the atlas
 
 A single playable [world recipe](../../CONTEXT.md) is still drawn from the search, because the app needs
-one world to drop the player into. It is the elite of the highest-fitness live cell — the argmax
-projection of the atlas. But the atlas's honest stance is that *many* worlds across the manifold are
-viable, so any cell's elite is reachable as a recipe, not only the single best. "The best recipe" is one
-pick from a map, not the search's output.
+one world to drop the player into. It is the elite of the highest-fitness live cell **that clears the
+coexistence-fraction floor** — most of its seed ensemble coexists (`COEXISTENCE_FLOOR = 0.5`,
+operationalizing CONTEXT.md's bar *"accepted only when most runs in the ensemble produce sensible
+worlds"*). When no live cell clears the floor the projection **falls back to plain argmax-fitness**, so a
+live atlas always yields a world; the search warns when it had to.
+
+The why is #401: the 5-seed median that ranks cells is high-variance near the monoculture↔coexistence
+bifurcation, so a **straddler** — a cell that coexists on only a minority of initial conditions — can win
+a lucky draw and top the leaderboard while its typical outcome is monoculture (the live #401 leader scored
+fitness 0.67 yet re-evaluated to median 0 over an independent 8-seed ensemble, coexisting on ~3/8 ICs).
+This is **selection only** — not binning, not fitness: the straddler is still a recorded cell with its
+real fitness; only the *recipe pick* reads the floor, so the atlas map stays untouched and now visibly
+honest. The atlas's honest stance is that *many* worlds across the manifold are viable, so any cell's
+elite is reachable as a recipe, not only the projected one. "The best recipe" is one pick from a map, not
+the search's output.
