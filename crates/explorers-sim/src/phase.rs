@@ -197,6 +197,42 @@ fn retention_buffer(agent: &Agent, params: &WorldParameters) -> f32 {
     metabolic_cost * params.growth_retention_multiplier
 }
 
+/// Maintain network connections (flow 5): each connection's builder pays the
+/// per-connection maintenance cost from reserve, and an agent that cannot fund a
+/// connection sheds it. This is where selection acts — connections that don't pay
+/// for themselves are dropped under reserve stress, so the surviving network is
+/// the one that earns its keep. Shedding is deliberately *blunt*: connections are
+/// processed in a stable order (by builder then partner id) and a builder simply
+/// stops funding once it can no longer afford the next, rather than ranking
+/// partners by yield (the Kiers refinement, deferred). Returns the maintenance
+/// dissipated to heat. Inert while the network is disabled or the cost is zero.
+pub fn maintain_connections(
+    agents: &mut [Agent],
+    connections: &mut Vec<Connection>,
+    params: &WorldParameters,
+) -> f32 {
+    let m = params.network_maintenance_cost;
+    if m <= 0.0 {
+        return 0.0;
+    }
+    connections.sort_by_key(|c| (c.builder, c.partner));
+    let mut dissipated = 0.0_f32;
+    let mut kept = Vec::with_capacity(connections.len());
+    for c in connections.drain(..) {
+        match agents.iter_mut().find(|a| a.id == c.builder) {
+            Some(builder) if builder.reserve >= m => {
+                builder.reserve -= m;
+                dissipated += m;
+                kept.push(c);
+            }
+            // Builder gone or too poor to fund the connection — shed it.
+            _ => {}
+        }
+    }
+    *connections = kept;
+    dissipated
+}
+
 /// Form network connections (flow 5): each surplus-carrying agent builds a
 /// connection to a contacted neighbour it is not already linked to, paying the
 /// creation cost from reserve, up to the per-agent connection cap. Inert while the
@@ -1779,6 +1815,66 @@ mod tests {
 
     fn make_agent(id: u64, position: (f32, f32), reserve: f32, traits: TraitVector) -> Agent {
         Agent::new(id, position, reserve, 0.0, 0.0, traits)
+    }
+
+    // --- Network maintenance & shedding (flow 5) ---
+
+    #[test]
+    fn maintain_connections_charges_the_builder_each_tick() {
+        // Flow 5 (#413): a connection's builder pays the per-connection maintenance
+        // cost from reserve each tick; the cost dissipates to heat and the
+        // connection is kept while the builder can afford it.
+        let mut params = test_params();
+        params.network_connection_cap = 2;
+        params.network_maintenance_cost = 0.5;
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, zero_traits()),
+            make_agent(2, (0.0, 0.0), 10.0, zero_traits()),
+        ];
+        let mut connections = vec![Connection {
+            builder: 1,
+            partner: 2,
+        }];
+
+        let dissipated = maintain_connections(&mut agents, &mut connections, &params);
+
+        assert_eq!(connections.len(), 1, "affordable connection is kept");
+        assert!(
+            (agents[0].reserve - 9.5).abs() < 1e-5,
+            "builder paid maintenance"
+        );
+        assert!(
+            (agents[1].reserve - 10.0).abs() < 1e-5,
+            "partner pays nothing"
+        );
+        assert!((dissipated - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn maintain_connections_sheds_when_the_builder_cannot_pay() {
+        // Flow 5 (#413): a builder too poor to fund a connection sheds it — no
+        // maintenance is charged for a shed connection. This is the selection that
+        // makes the network earn its keep.
+        let mut params = test_params();
+        params.network_connection_cap = 2;
+        params.network_maintenance_cost = 5.0;
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 3.0, zero_traits()), // reserve < maintenance
+            make_agent(2, (0.0, 0.0), 10.0, zero_traits()),
+        ];
+        let mut connections = vec![Connection {
+            builder: 1,
+            partner: 2,
+        }];
+
+        let dissipated = maintain_connections(&mut agents, &mut connections, &params);
+
+        assert!(connections.is_empty(), "unfundable connection is shed");
+        assert_eq!(
+            agents[0].reserve, 3.0,
+            "no maintenance charged on a shed link"
+        );
+        assert_eq!(dissipated, 0.0);
     }
 
     // --- Network formation (flow 5) ---
