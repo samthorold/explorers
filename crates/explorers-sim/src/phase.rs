@@ -183,6 +183,105 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
     (events, total_dissipated)
 }
 
+/// The reserve an agent holds back to cover near-future metabolism: its per-tick
+/// metabolic cost times `growth_retention_multiplier` (the same buffer the grow
+/// phase mobilises surplus above). Reserve above this is the agent's surplus.
+fn retention_buffer(agent: &Agent, params: &WorldParameters) -> f32 {
+    let exp = params.maintenance_cost_exponent;
+    let metabolic_cost = params.base_metabolic_rate
+        + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
+        + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
+        + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
+        + agent.traits.asexual_propensity.powf(exp) * params.asexual_propensity_maintenance_cost
+        + agent.structure * params.structure_maintenance_coefficient;
+    metabolic_cost * params.growth_retention_multiplier
+}
+
+/// Form network connections (flow 5): each surplus-carrying agent builds a
+/// connection to a contacted neighbour it is not already linked to, paying the
+/// creation cost from reserve, up to the per-agent connection cap. Inert while the
+/// network is disabled (zero cap), so genesis and existing recipes never run it.
+///
+/// - **Surplus-gated:** an agent builds only if it can pay the creation cost while
+///   staying above its retention buffer (`reserve ≥ buffer + creation_cost`) — so
+///   well-established agents become hubs and the cost never starves the builder.
+/// - **Surface-contact eligibility:** the two agents are within
+///   `contact_range_coefficient` on the surface (the trait-free base physical reach
+///   that feeding and mate reach build on). The link then persists independent of
+///   surface distance — it is never removed here, only added.
+/// - **Unilateral, de-duplicated:** the builder owns the link; at most one link
+///   exists between any pair (a builder skips a partner it is already linked to in
+///   either direction).
+/// - **Deterministic:** agents are processed in slice order; when more eligible
+///   partners exist than free cap slots, the lowest partner ids are taken first.
+///
+/// Returns the total creation cost dissipated to heat (energy conserved: the
+/// builder's reserve drop is matched by this dissipation).
+pub fn form_connections(
+    agents: &mut [Agent],
+    connections: &mut Vec<Connection>,
+    grid: &SpatialGrid,
+    params: &WorldParameters,
+) -> f32 {
+    if params.network_connection_cap == 0 {
+        return 0.0;
+    }
+    let cap = params.network_connection_cap as usize;
+    let contact = params.contact_range_coefficient;
+    let creation = params.network_creation_cost;
+    let mut dissipated = 0.0_f32;
+
+    for i in 0..agents.len() {
+        let builder_id = agents[i].id;
+        let mut built = connections
+            .iter()
+            .filter(|c| c.builder == builder_id)
+            .count();
+        if built >= cap {
+            continue;
+        }
+
+        // Eligible partners: contacted, not already linked (either direction),
+        // ordered by ascending id (the deterministic cap tie-break).
+        let mut candidates: Vec<(u64, usize)> = grid
+            .query_radius(agents[i].position, contact)
+            .into_iter()
+            .map(|idx| idx as usize)
+            .filter(|&j| j != i)
+            .map(|j| (agents[j].id, j))
+            .filter(|&(pid, _)| {
+                !connections.iter().any(|c| {
+                    (c.builder == builder_id && c.partner == pid)
+                        || (c.builder == pid && c.partner == builder_id)
+                })
+            })
+            .collect();
+        // Order by ascending partner id (the deterministic cap tie-break) and
+        // dedupe: query_radius can return an id more than once under toroidal cell
+        // wrapping, and a partner must be considered at most once per builder.
+        candidates.sort_by_key(|&(pid, _)| pid);
+        candidates.dedup_by_key(|&mut (pid, _)| pid);
+
+        for (partner_id, _) in candidates {
+            if built >= cap {
+                break;
+            }
+            // Surplus gate: pay creation without dipping below the retention buffer.
+            if agents[i].reserve < retention_buffer(&agents[i], params) + creation {
+                break;
+            }
+            agents[i].reserve -= creation;
+            dissipated += creation;
+            connections.push(Connection {
+                builder: builder_id,
+                partner: partner_id,
+            });
+            built += 1;
+        }
+    }
+    dissipated
+}
+
 /// Network redistribution (flow 5) — the coordinated pass that moves energy and
 /// nutrient along live [`Connection`]s from surplus to deficit, between
 /// consumption and reproduction in the tick. It is **inert** while the network is
@@ -1680,6 +1779,131 @@ mod tests {
 
     fn make_agent(id: u64, position: (f32, f32), reserve: f32, traits: TraitVector) -> Agent {
         Agent::new(id, position, reserve, 0.0, 0.0, traits)
+    }
+
+    // --- Network formation (flow 5) ---
+
+    #[test]
+    fn form_connections_links_a_surplus_agent_to_a_contacted_neighbour() {
+        // Flow 5 (#412): a surplus-carrying agent builds a connection to a
+        // contacted neighbour and pays the creation cost from reserve. Building is
+        // unilateral and de-duplicated — only one link forms between the pair.
+        let mut params = test_params();
+        params.network_connection_cap = 2;
+        params.network_creation_cost = 1.0;
+        params.contact_range_coefficient = 5.0;
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, zero_traits()),
+            make_agent(2, (1.0, 0.0), 100.0, zero_traits()),
+        ];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, agents[0].position);
+        grid.insert(1, agents[1].position);
+        let mut connections = Vec::new();
+
+        let dissipated = form_connections(&mut agents, &mut connections, &grid, &params);
+
+        assert_eq!(connections.len(), 1, "one link forms between the pair");
+        assert_eq!(
+            connections[0].builder, 1,
+            "first surplus agent is the builder"
+        );
+        assert_eq!(connections[0].partner, 2);
+        assert!(
+            (dissipated - 1.0).abs() < 1e-5,
+            "one creation cost dissipated"
+        );
+        assert!(
+            (agents[0].reserve - 99.0).abs() < 1e-5,
+            "builder paid the creation cost: {}",
+            agents[0].reserve
+        );
+    }
+
+    #[test]
+    fn form_connections_requires_surplus_and_contact() {
+        let mut params = test_params();
+        params.network_connection_cap = 2;
+        params.network_creation_cost = 1.0;
+        params.contact_range_coefficient = 5.0;
+
+        // Marginal agents (cannot pay creation above their retention buffer) → no link.
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 0.5, zero_traits()),
+            make_agent(2, (1.0, 0.0), 0.5, zero_traits()),
+        ];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, agents[0].position);
+        grid.insert(1, agents[1].position);
+        let mut conns = Vec::new();
+        form_connections(&mut agents, &mut conns, &grid, &params);
+        assert!(conns.is_empty(), "no surplus → no connection");
+
+        // Surplus agents out of contact → no link.
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, zero_traits()),
+            make_agent(2, (50.0, 0.0), 100.0, zero_traits()),
+        ];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, agents[0].position);
+        grid.insert(1, agents[1].position);
+        let mut conns = Vec::new();
+        form_connections(&mut agents, &mut conns, &grid, &params);
+        assert!(conns.is_empty(), "out of contact → no connection");
+    }
+
+    #[test]
+    fn form_connections_caps_and_breaks_ties_by_partner_id() {
+        // Flow 5 (#412): when more eligible partners exist than free cap slots, the
+        // lowest partner ids are taken first — a deterministic tie-break.
+        let mut params = test_params();
+        params.network_connection_cap = 1;
+        params.network_creation_cost = 1.0;
+        params.contact_range_coefficient = 5.0;
+        let mut agents = vec![
+            make_agent(5, (0.0, 0.0), 100.0, zero_traits()), // sole surplus builder
+            make_agent(3, (1.0, 0.0), 0.0, zero_traits()),
+            make_agent(2, (1.0, 1.0), 0.0, zero_traits()),
+        ];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        let mut conns = Vec::new();
+        form_connections(&mut agents, &mut conns, &grid, &params);
+
+        let from5: Vec<_> = conns.iter().filter(|c| c.builder == 5).collect();
+        assert_eq!(from5.len(), 1, "cap 1 respected");
+        assert_eq!(from5[0].partner, 2, "lowest partner id chosen");
+    }
+
+    #[test]
+    fn formed_connection_persists_when_agents_separate() {
+        // Flow 5 (#412): the wire outlasts the touch — once built, a connection
+        // survives the agents drifting out of contact, and is not rebuilt/duplicated.
+        let mut params = test_params();
+        params.network_connection_cap = 2;
+        params.network_creation_cost = 1.0;
+        params.contact_range_coefficient = 5.0;
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 100.0, zero_traits()),
+            make_agent(2, (1.0, 0.0), 100.0, zero_traits()),
+        ];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, agents[0].position);
+        grid.insert(1, agents[1].position);
+        let mut conns = Vec::new();
+        form_connections(&mut agents, &mut conns, &grid, &params);
+        assert_eq!(conns.len(), 1);
+
+        // The agents drift far apart; a second formation pass leaves the existing
+        // link intact and forms no duplicate.
+        agents[1].position = (90.0, 0.0);
+        let mut grid2 = SpatialGrid::new(100.0, 10.0);
+        grid2.insert(0, agents[0].position);
+        grid2.insert(1, agents[1].position);
+        form_connections(&mut agents, &mut conns, &grid2, &params);
+        assert_eq!(conns.len(), 1, "the link persists and is not duplicated");
     }
 
     // --- Network redistribution (flow 5) ---

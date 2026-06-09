@@ -1156,9 +1156,21 @@ impl World {
         // Remove drain-killed agents before further phases
         self.agents.retain(|a| !drain_dead_ids.contains(&a.id));
 
-        // 5b. Network redistribution (flow 5): cooperative transfer along live
-        // connections, between consumption and reproduction. Inert while the
-        // network is disabled (zero connection cap) — no connections, no events.
+        // 5b. Network (flow 5): form connections, then redistribute along them —
+        // between consumption and reproduction. Inert while the network is disabled
+        // (zero connection cap). Formation needs current positions, so build a fresh
+        // grid after the drain-death removal above.
+        let mut network_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
+        for (i, a) in self.agents.iter().enumerate() {
+            network_grid.insert(i as u64, a.position);
+        }
+        let form_dissipated = phase::form_connections(
+            &mut self.agents,
+            &mut self.connections,
+            &network_grid,
+            &self.params,
+        );
+        self.dissipated_energy += form_dissipated;
         let (redistribute_events, redistribute_dissipated) =
             phase::redistribute(&mut self.agents, &self.connections, &self.params);
         self.dissipated_energy += redistribute_dissipated;
@@ -3031,6 +3043,58 @@ mod tests {
         assert!(
             (post_nutrient - pre_nutrient).abs() < 1e-3,
             "nutrient conserved: {pre_nutrient} -> {post_nutrient}"
+        );
+    }
+
+    #[test]
+    fn enabled_network_forms_a_connection_during_a_step_and_conserves() {
+        // Flow 5 (#412): two surplus agents in surface contact form a network
+        // connection during a step (de-duplicated to one link), and energy stays
+        // conserved — the creation cost is dissipated, caught as residual.
+        let mut params = test_params();
+        params.network_connection_cap = 2;
+        params.network_creation_cost = 1.0;
+        params.network_redistribution_rate = 0.5;
+        params.network_transfer_efficiency = 0.8;
+        params.contact_range_coefficient = 5.0;
+        // The grow phase (phase 4) mobilises above-retention reserve before
+        // formation (5b); a mobilisation rate below 1 leaves the feast-famine
+        // cushion the network builds from. At rate 1.0 grow strips all surplus, so
+        // the network only forms in the buffering regime — coherent, not a bug.
+        params.reserve_mobilisation_rate = 0.5;
+        let recipe = WorldRecipe {
+            parameters: params,
+            initial_distribution: None,
+            agents: Some(vec![
+                AgentSpec {
+                    position: (0.0, 0.0),
+                    reserve: 100.0,
+                    traits: zero_traits(),
+                    nutrient: 0.0,
+                },
+                AgentSpec {
+                    position: (1.0, 0.0),
+                    reserve: 100.0,
+                    traits: zero_traits(),
+                    nutrient: 0.0,
+                },
+            ]),
+            carcasses: None,
+            max_ticks: 100,
+        };
+        let mut world = World::from_recipe(&recipe, 42);
+        assert!(
+            world.connections().is_empty(),
+            "no connection before stepping"
+        );
+
+        world.step();
+        world.energy_ledger().assert_balanced();
+
+        assert_eq!(
+            world.connections().len(),
+            1,
+            "one connection forms between the contacted surplus pair"
         );
     }
 
