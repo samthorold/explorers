@@ -1156,10 +1156,15 @@ impl World {
         // Remove drain-killed agents before further phases
         self.agents.retain(|a| !drain_dead_ids.contains(&a.id));
 
-        // 5b. Network (flow 5): form connections, then redistribute along them —
-        // between consumption and reproduction. Inert while the network is disabled
-        // (zero connection cap). Formation needs current positions, so build a fresh
-        // grid after the drain-death removal above.
+        // 5b. Network (flow 5): prune dead endpoints, maintain (shedding the
+        // connections their builders can no longer fund), form new connections,
+        // then redistribute along them — between consumption and reproduction.
+        // Inert while the network is disabled (zero connection cap). Formation needs
+        // current positions, so build a fresh grid after the drain-death removal.
+        self.prune_dead_connections();
+        let maintain_dissipated =
+            phase::maintain_connections(&mut self.agents, &mut self.connections, &self.params);
+        self.dissipated_energy += maintain_dissipated;
         let mut network_grid = crate::spatial::SpatialGrid::new(extent, cell_size);
         for (i, a) in self.agents.iter().enumerate() {
             network_grid.insert(i as u64, a.position);
@@ -1278,6 +1283,10 @@ impl World {
 
         // Remove dead agents (those with reserve <= 0 or structure below threshold)
         self.agents.retain(|a| a.reserve > 0.0);
+
+        // A connection dissolves when either endpoint dies (flow 5): drop any that
+        // now reference a removed agent, so the next tick never sees a dangling link.
+        self.prune_dead_connections();
 
         // --- Energy ledger: record all flows for conservation verification ---
         // Built from event data and state snapshots, after all phases complete.
@@ -1516,6 +1525,17 @@ impl World {
     /// this is how a scenario or test wires up a network to exercise flow 5.
     pub fn seed_connection(&mut self, builder: u64, partner: u64) {
         self.connections.push(Connection { builder, partner });
+    }
+
+    /// Drop every connection whose builder or partner is no longer a living agent
+    /// (flow 5 death cleanup) — a connection dissolves when either endpoint dies.
+    fn prune_dead_connections(&mut self) {
+        if self.connections.is_empty() {
+            return;
+        }
+        let live: std::collections::HashSet<u64> = self.agents.iter().map(|a| a.id).collect();
+        self.connections
+            .retain(|c| live.contains(&c.builder) && live.contains(&c.partner));
     }
 
     /// Test support (#376): deliberately permute the in-memory order of the
@@ -3096,6 +3116,91 @@ mod tests {
             1,
             "one connection forms between the contacted surplus pair"
         );
+    }
+
+    #[test]
+    fn connection_dissolves_when_an_endpoint_dies() {
+        // Flow 5 (#413): a connection dissolves the tick an endpoint dies. One
+        // agent starves this step; its seeded connection is gone afterward, with no
+        // dangling reference and conservation intact.
+        let mut params = test_params();
+        params.network_connection_cap = 2;
+        params.network_maintenance_cost = 0.0; // isolate death cleanup from shedding
+        params.network_redistribution_rate = 0.0; // and from redistribution
+        let recipe = WorldRecipe {
+            parameters: params,
+            initial_distribution: None,
+            agents: Some(vec![
+                AgentSpec {
+                    position: (0.0, 0.0),
+                    reserve: 100.0,
+                    traits: zero_traits(),
+                    nutrient: 0.0,
+                },
+                AgentSpec {
+                    position: (1.0, 0.0),
+                    reserve: 0.05, // below one tick's metabolism → starves this step
+                    traits: zero_traits(),
+                    nutrient: 0.0,
+                },
+            ]),
+            carcasses: None,
+            max_ticks: 100,
+        };
+        let mut world = World::from_recipe(&recipe, 42);
+        world.seed_connection(0, 1);
+
+        world.step();
+        world.energy_ledger().assert_balanced();
+
+        assert!(
+            world.agents().iter().all(|a| a.id != 1),
+            "the starving endpoint died"
+        );
+        assert!(
+            world.connections().is_empty(),
+            "the connection to the dead endpoint dissolved"
+        );
+    }
+
+    #[test]
+    fn network_run_leaves_no_dangling_connections_and_conserves() {
+        // Flow 5 (#413): over a multi-tick run with formation, maintenance,
+        // redistribution and deaths all active, every connection always references
+        // two living agents and energy stays conserved each tick.
+        let mut params = test_params();
+        params.network_connection_cap = 3;
+        params.network_creation_cost = 0.2;
+        params.network_maintenance_cost = 0.1;
+        params.network_redistribution_rate = 0.4;
+        params.network_transfer_efficiency = 0.8;
+        params.contact_range_coefficient = 10.0;
+        params.reserve_mobilisation_rate = 0.5; // leave a cushion for formation
+        let dist = InitialDistribution {
+            mean_traits: TraitVector {
+                photosynthetic_absorption: 0.4,
+                ..zero_traits()
+            },
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 40.0,
+        };
+        let mut world = World::new(params, dist, 7);
+
+        for _ in 0..40 {
+            world.step();
+            world.energy_ledger().assert_balanced();
+            let live: std::collections::HashSet<u64> =
+                world.agents().iter().map(|a| a.id).collect();
+            for c in world.connections() {
+                assert!(
+                    live.contains(&c.builder) && live.contains(&c.partner),
+                    "connection {:?}->{:?} references a dead agent",
+                    c.builder,
+                    c.partner
+                );
+            }
+        }
     }
 
     #[test]
