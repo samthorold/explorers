@@ -199,9 +199,56 @@ pub fn redistribute(
     if params.network_connection_cap == 0 || connections.is_empty() {
         return (Vec::new(), 0.0);
     }
-    // Connection flow is filled in by #410 (energy) and #411 (nutrient).
-    let _ = &mut *agents;
-    (Vec::new(), 0.0)
+    let mut events = Vec::new();
+    let mut dissipated = 0.0_f32;
+    let rate = params.network_redistribution_rate;
+    let efficiency = params.network_transfer_efficiency;
+
+    for conn in connections {
+        // Both endpoints must be present and live. Death cleanup (#413) removes
+        // stale connections; this guard keeps the pass robust regardless.
+        let (Some(a), Some(b)) = (
+            agents.iter().position(|x| x.id == conn.builder),
+            agents.iter().position(|x| x.id == conn.partner),
+        ) else {
+            continue;
+        };
+
+        // Energy flows down the reserve gradient: the richer endpoint is the
+        // donor. A fraction `rate` of the gradient moves, reduced by the flat
+        // cooperative efficiency on receipt; the loss dissipates to heat (flow 7).
+        // The transfer is capped at the *equalising* amount — the `sent` that
+        // lands donor and recipient level after the loss — so a single tick never
+        // overshoots (flips) the gradient, however large the rate. This is the
+        // damping the network exists to provide; an overshoot would instead make
+        // a connection oscillate. Nutrient redistribution lands in #411.
+        let gradient = (agents[a].reserve - agents[b].reserve).abs();
+        let (donor, recipient) = if agents[a].reserve >= agents[b].reserve {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        let equalising = gradient / (1.0 + efficiency);
+        let sent = (rate * gradient).min(equalising);
+        if sent <= 0.0 {
+            continue;
+        }
+        let received = sent * efficiency;
+        agents[donor].reserve -= sent;
+        agents[recipient].reserve += received;
+        dissipated += sent - received;
+        events.push(Event {
+            tick: 0,
+            seq: 0,
+            kind: EventKind::Redistributed,
+            source: agents[donor].id,
+            target: Some(agents[recipient].id),
+            energy_delta: received,
+            position: Some(agents[donor].position),
+            target_was_carcass: false,
+        });
+    }
+    (events, dissipated)
 }
 
 /// Grow: surplus energy (reserve above metabolic retention) is split by kappa.
@@ -1614,6 +1661,76 @@ mod tests {
 
     fn make_agent(id: u64, position: (f32, f32), reserve: f32, traits: TraitVector) -> Agent {
         Agent::new(id, position, reserve, 0.0, 0.0, traits)
+    }
+
+    // --- Network redistribution (flow 5) ---
+
+    #[test]
+    fn redistribute_moves_energy_down_the_gradient_lossily() {
+        // Flow 5 (#410): energy flows from the higher-reserve endpoint to the
+        // lower along a connection — a bounded fraction of the gradient, reduced
+        // by the flat transfer efficiency. The Redistributed event records the net
+        // (received) amount; the donor's transfer loss is returned as dissipation.
+        let mut params = test_params();
+        params.network_connection_cap = 1;
+        params.network_redistribution_rate = 0.5;
+        params.network_transfer_efficiency = 0.8;
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, zero_traits()),
+            make_agent(2, (0.0, 0.0), 2.0, zero_traits()),
+        ];
+        let connections = vec![Connection {
+            builder: 1,
+            partner: 2,
+        }];
+
+        let (events, dissipated) = redistribute(&mut agents, &connections, &params);
+
+        // gradient 8 → sent = 0.5·8 = 4, received = 4·0.8 = 3.2, loss = 0.8.
+        assert!(
+            (agents[0].reserve - 6.0).abs() < 1e-5,
+            "donor reserve {}",
+            agents[0].reserve
+        );
+        assert!(
+            (agents[1].reserve - 5.2).abs() < 1e-5,
+            "recipient reserve {}",
+            agents[1].reserve
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, EventKind::Redistributed);
+        assert_eq!(events[0].source, 1);
+        assert_eq!(events[0].target, Some(2));
+        assert!((events[0].energy_delta - 3.2).abs() < 1e-5);
+        assert!((dissipated - 0.8).abs() < 1e-5);
+    }
+
+    #[test]
+    fn redistribute_flows_toward_the_poorer_endpoint_regardless_of_builder() {
+        // Flow 5 (#410): the donor is the higher-reserve endpoint, not the
+        // builder — the flow follows the gradient. Here the builder is poorer, so
+        // energy flows partner → builder.
+        let mut params = test_params();
+        params.network_connection_cap = 1;
+        params.network_redistribution_rate = 1.0;
+        params.network_transfer_efficiency = 1.0;
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 1.0, zero_traits()), // builder, poorer
+            make_agent(2, (0.0, 0.0), 9.0, zero_traits()), // partner, richer
+        ];
+        let connections = vec![Connection {
+            builder: 1,
+            partner: 2,
+        }];
+
+        let (events, dissipated) = redistribute(&mut agents, &connections, &params);
+
+        // rate 1, efficiency 1 → fully equalise at the midpoint, lossless.
+        assert!((agents[0].reserve - 5.0).abs() < 1e-5);
+        assert!((agents[1].reserve - 5.0).abs() < 1e-5);
+        assert_eq!(events[0].source, 2, "richer partner is the donor");
+        assert_eq!(events[0].target, Some(1));
+        assert!(dissipated.abs() < 1e-5, "lossless at efficiency 1");
     }
 
     // --- Photosynthesise ---

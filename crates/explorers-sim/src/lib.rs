@@ -1499,6 +1499,13 @@ impl World {
         &self.connections
     }
 
+    /// Seed a network connection directly: a `builder` agent linked to a
+    /// `partner`. Connection *formation* during the tick lands in #412; until then
+    /// this is how a scenario or test wires up a network to exercise flow 5.
+    pub fn seed_connection(&mut self, builder: u64, partner: u64) {
+        self.connections.push(Connection { builder, partner });
+    }
+
     /// Test support (#376): deliberately permute the in-memory order of the
     /// `agents` slice without changing any agent's identity or state. The
     /// keyed-stateless RNG keys every stochastic outcome on stable agent id (and
@@ -2921,6 +2928,49 @@ mod tests {
         };
         let world = World::from_recipe(&recipe, 42);
         assert_eq!(world.agents().len(), 1);
+    }
+
+    #[test]
+    fn enabled_network_redistributes_energy_and_conserves_through_a_step() {
+        // Flow 5 (#410): with the network enabled and a seeded connection, a full
+        // step moves energy down the gradient and the energy ledger still balances
+        // — the donor's transfer loss is attributed as residual dissipation, the
+        // recipient's gain as the donor->recipient flow.
+        let mut params = test_params();
+        params.network_connection_cap = 4;
+        params.network_redistribution_rate = 0.5;
+        params.network_transfer_efficiency = 0.8;
+        let recipe = WorldRecipe {
+            parameters: params,
+            initial_distribution: None,
+            agents: Some(vec![
+                AgentSpec {
+                    position: (0.0, 0.0),
+                    reserve: 50.0,
+                    traits: zero_traits(),
+                    nutrient: 0.0,
+                },
+                AgentSpec {
+                    position: (1.0, 0.0),
+                    reserve: 10.0,
+                    traits: zero_traits(),
+                    nutrient: 0.0,
+                },
+            ]),
+            carcasses: None,
+            max_ticks: 100,
+        };
+        let mut world = World::from_recipe(&recipe, 42);
+        world.seed_connection(0, 1);
+
+        world.step();
+        world.energy_ledger().assert_balanced();
+
+        let redistributed = world.event_log().by_kind(&event::EventKind::Redistributed);
+        assert_eq!(redistributed.len(), 1, "one redistribution flow fired");
+        assert_eq!(redistributed[0].source, 0, "richer agent is the donor");
+        assert_eq!(redistributed[0].target, Some(1));
+        assert!(redistributed[0].energy_delta > 0.0);
     }
 
     #[test]
