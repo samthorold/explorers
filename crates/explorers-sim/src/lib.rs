@@ -3203,6 +3203,135 @@ mod tests {
         }
     }
 
+    // --- Flow 5 capstone (#414): emergent mutualism ---
+
+    /// Build the complementary-pair scenario: a producer-like agent (energy-rich,
+    /// nutrient-poor) beside a decomposer-like agent (energy-poor, nutrient-rich),
+    /// within surface contact. `cap` toggles the network on (>0) or off (0, the
+    /// disconnected control). Everything else is identical, so a difference between
+    /// the two runs is the network's doing.
+    fn complementary_pair_world(cap: u32) -> World {
+        let mut params = test_params();
+        params.network_connection_cap = cap;
+        params.network_creation_cost = 0.2;
+        params.network_maintenance_cost = 0.05;
+        params.network_redistribution_rate = 0.4;
+        params.network_transfer_efficiency = 0.9;
+        params.contact_range_coefficient = 5.0;
+        params.reserve_mobilisation_rate = 0.5; // leave a cushion to build/share from
+        let recipe = WorldRecipe {
+            parameters: params,
+            initial_distribution: None,
+            agents: Some(vec![
+                AgentSpec {
+                    position: (0.0, 0.0),
+                    reserve: 100.0, // producer: energy-rich
+                    traits: zero_traits(),
+                    nutrient: 0.0, // ...nutrient-poor
+                },
+                AgentSpec {
+                    position: (1.0, 0.0),
+                    reserve: 10.0, // decomposer: energy-poor
+                    traits: zero_traits(),
+                    nutrient: 100.0, // ...nutrient-rich
+                },
+            ]),
+            carcasses: None,
+            max_ticks: 100,
+        };
+        World::from_recipe(&recipe, 42)
+    }
+
+    #[test]
+    fn network_sustains_mutualism_each_partner_gains_its_scarce_currency() {
+        // Flow 5 (#414): the capstone. A complementary pair forms a connection and
+        // sustains a bidirectional exchange — the energy-poor decomposer ends with
+        // more reserve, and the nutrient-poor producer with more nutrient, than in
+        // an identical disconnected control. The carbon-for-nutrient mutualism,
+        // emergent from two gradient flows.
+        let mut net = complementary_pair_world(2);
+        let mut ctl = complementary_pair_world(0);
+        for _ in 0..8 {
+            net.step();
+            net.energy_ledger().assert_balanced();
+            ctl.step();
+        }
+
+        let decomposer = |w: &World| w.agents().iter().find(|a| a.id == 1).unwrap().reserve;
+        let producer_nutrient = |w: &World| {
+            w.agents()
+                .iter()
+                .find(|a| a.id == 0)
+                .unwrap()
+                .nutrient_total(w.params())
+        };
+
+        assert!(
+            !net.connections().is_empty(),
+            "the mutualistic connection persists"
+        );
+        assert!(
+            decomposer(&net) > decomposer(&ctl),
+            "decomposer gains reserve via the network: {} vs control {}",
+            decomposer(&net),
+            decomposer(&ctl)
+        );
+        assert!(
+            producer_nutrient(&net) > producer_nutrient(&ctl),
+            "producer gains nutrient via the network: {} vs control {}",
+            producer_nutrient(&net),
+            producer_nutrient(&ctl)
+        );
+    }
+
+    #[test]
+    fn network_sheds_a_free_rider_connection_under_stress() {
+        // Flow 5 (#414): a connection to a partner that gives nothing back drains
+        // the builder; once the builder is reserve-stressed it sheds the link (blunt
+        // persistence selection), so a free-rider connection is not sustained.
+        let mut params = test_params();
+        params.network_connection_cap = 1;
+        params.network_maintenance_cost = 2.0; // a real upkeep the builder must fund
+        params.network_redistribution_rate = 0.5;
+        params.network_transfer_efficiency = 0.9;
+        let recipe = WorldRecipe {
+            parameters: params,
+            initial_distribution: None,
+            agents: Some(vec![
+                AgentSpec {
+                    position: (0.0, 0.0),
+                    reserve: 12.0, // builder: modest reserve
+                    traits: zero_traits(),
+                    nutrient: 0.0,
+                },
+                AgentSpec {
+                    position: (1.0, 0.0),
+                    reserve: 0.0, // free-rider: poor in both, nothing to give back
+                    traits: zero_traits(),
+                    nutrient: 0.0,
+                },
+            ]),
+            carcasses: None,
+            max_ticks: 100,
+        };
+        let mut world = World::from_recipe(&recipe, 42);
+        world.seed_connection(0, 1);
+
+        let mut shed = false;
+        for _ in 0..10 {
+            world.step();
+            world.energy_ledger().assert_balanced();
+            if world.connections().is_empty() {
+                shed = true;
+                break;
+            }
+        }
+        assert!(
+            shed,
+            "the free-rider connection is shed under the builder's stress"
+        );
+    }
+
     #[test]
     fn world_from_recipe_seeds_carcasses() {
         // A WorldRecipe can seed standing carcasses directly (issue #311): the
