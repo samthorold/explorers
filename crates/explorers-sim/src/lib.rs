@@ -2974,6 +2974,67 @@ mod tests {
     }
 
     #[test]
+    fn enabled_network_redistributes_nutrient_and_conserves_through_a_step() {
+        // Flow 5 (#411): with the network enabled and a seeded connection, free
+        // nutrient flows down its gradient through a full step and the closed
+        // nutrient system stays conserved (the in-step nutrient ledger asserts
+        // balance in debug builds; energy stays balanced too).
+        let mut params = test_params();
+        params.network_connection_cap = 4;
+        params.network_redistribution_rate = 0.5;
+        params.network_transfer_efficiency = 0.8;
+        let recipe = WorldRecipe {
+            parameters: params,
+            initial_distribution: None,
+            agents: Some(vec![
+                AgentSpec {
+                    position: (0.0, 0.0),
+                    reserve: 30.0,
+                    traits: zero_traits(),
+                    nutrient: 0.0, // nutrient-poor
+                },
+                AgentSpec {
+                    position: (1.0, 0.0),
+                    reserve: 30.0,
+                    traits: zero_traits(),
+                    nutrient: 8.0, // nutrient-rich
+                },
+            ]),
+            carcasses: None,
+            max_ticks: 100,
+        };
+        let mut world = World::from_recipe(&recipe, 42);
+        let pre_nutrient = world.nutrient_pool()
+            + world
+                .agents()
+                .iter()
+                .map(|a| a.nutrient_total(world.params()))
+                .sum::<f32>();
+        world.seed_connection(0, 1);
+
+        world.step();
+        world.energy_ledger().assert_balanced();
+
+        // The poor agent gained free nutrient from the rich one...
+        assert!(
+            world.agents()[0].nutrient > 0.0,
+            "nutrient flowed to the poorer agent: {}",
+            world.agents()[0].nutrient
+        );
+        // ...and the closed nutrient system is conserved across the step.
+        let post_nutrient = world.nutrient_pool()
+            + world
+                .agents()
+                .iter()
+                .map(|a| a.nutrient_total(world.params()))
+                .sum::<f32>();
+        assert!(
+            (post_nutrient - pre_nutrient).abs() < 1e-3,
+            "nutrient conserved: {pre_nutrient} -> {post_nutrient}"
+        );
+    }
+
+    #[test]
     fn world_from_recipe_seeds_carcasses() {
         // A WorldRecipe can seed standing carcasses directly (issue #311): the
         // recipe carries a `carcasses` deposit and `from_recipe` materialises it
