@@ -221,7 +221,7 @@ pub fn redistribute(
         // lands donor and recipient level after the loss — so a single tick never
         // overshoots (flips) the gradient, however large the rate. This is the
         // damping the network exists to provide; an overshoot would instead make
-        // a connection oscillate. Nutrient redistribution lands in #411.
+        // a connection oscillate. The nutrient flow below is independent.
         let gradient = (agents[a].reserve - agents[b].reserve).abs();
         let (donor, recipient) = if agents[a].reserve >= agents[b].reserve {
             (a, b)
@@ -230,23 +230,42 @@ pub fn redistribute(
         };
         let equalising = gradient / (1.0 + efficiency);
         let sent = (rate * gradient).min(equalising);
-        if sent <= 0.0 {
-            continue;
+        if sent > 0.0 {
+            let received = sent * efficiency;
+            agents[donor].reserve -= sent;
+            agents[recipient].reserve += received;
+            dissipated += sent - received;
+            events.push(Event {
+                tick: 0,
+                seq: 0,
+                kind: EventKind::Redistributed,
+                source: agents[donor].id,
+                target: Some(agents[recipient].id),
+                energy_delta: received,
+                position: Some(agents[donor].position),
+                target_was_carcass: false,
+            });
         }
-        let received = sent * efficiency;
-        agents[donor].reserve -= sent;
-        agents[recipient].reserve += received;
-        dissipated += sent - received;
-        events.push(Event {
-            tick: 0,
-            seq: 0,
-            kind: EventKind::Redistributed,
-            source: agents[donor].id,
-            target: Some(agents[recipient].id),
-            energy_delta: received,
-            position: Some(agents[donor].position),
-            target_was_carcass: false,
-        });
+
+        // Nutrient redistribution (flow 5): the free store flows down its own
+        // gradient, independent of the energy flow (so a producer can send energy
+        // one way while receiving nutrient the other). Nutrient is matter — it is
+        // *conserved*, never reduced by the transfer efficiency — so the equalising
+        // cap is the lossless midpoint (gradient / 2). The reproductive-nutrient
+        // earmark and bound structure are untouched; only the free store moves, and
+        // it is not re-split by kappa (this is a transfer between free stores, not
+        // fresh acquisition).
+        let n_gradient = (agents[a].nutrient - agents[b].nutrient).abs();
+        let (n_donor, n_recipient) = if agents[a].nutrient >= agents[b].nutrient {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        let n_sent = (rate * n_gradient).min(n_gradient / 2.0);
+        if n_sent > 0.0 {
+            agents[n_donor].nutrient -= n_sent;
+            agents[n_recipient].nutrient += n_sent;
+        }
     }
     (events, dissipated)
 }
@@ -1731,6 +1750,84 @@ mod tests {
         assert_eq!(events[0].source, 2, "richer partner is the donor");
         assert_eq!(events[0].target, Some(1));
         assert!(dissipated.abs() < 1e-5, "lossless at efficiency 1");
+    }
+
+    #[test]
+    fn redistribute_moves_free_nutrient_down_the_gradient_conserved() {
+        // Flow 5 (#411): free-store nutrient flows down its own gradient, capped at
+        // equalisation, and is *conserved* — the energy transfer efficiency does
+        // NOT apply to nutrient (nutrient is matter, never lost to heat). With equal
+        // reserves no energy moves, isolating the nutrient flow.
+        let mut params = test_params();
+        params.network_connection_cap = 1;
+        params.network_redistribution_rate = 0.5;
+        params.network_transfer_efficiency = 0.8; // energy-only; must not touch nutrient
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 5.0, zero_traits()),
+            make_agent(2, (0.0, 0.0), 5.0, zero_traits()), // equal reserve → no energy flow
+        ];
+        agents[0].nutrient = 8.0;
+        agents[1].nutrient = 0.0;
+        let connections = vec![Connection {
+            builder: 1,
+            partner: 2,
+        }];
+
+        let (events, dissipated) = redistribute(&mut agents, &connections, &params);
+
+        // gradient 8, rate 0.5 → sent = min(4, 8/2) = 4, equalise at 4 each, lossless.
+        assert!(
+            (agents[0].nutrient - 4.0).abs() < 1e-5,
+            "{}",
+            agents[0].nutrient
+        );
+        assert!(
+            (agents[1].nutrient - 4.0).abs() < 1e-5,
+            "{}",
+            agents[1].nutrient
+        );
+        assert_eq!(agents[0].reserve, 5.0, "no energy moves at equal reserve");
+        assert!(
+            events.is_empty(),
+            "no energy event when only nutrient flows"
+        );
+        assert!(
+            dissipated.abs() < 1e-5,
+            "nutrient is conserved, no dissipation"
+        );
+    }
+
+    #[test]
+    fn redistribute_exchanges_energy_and_nutrient_in_opposite_directions() {
+        // Flow 5 (#411): the two currencies flow down their *own* gradients, so a
+        // complementary pair trades both at once — the producer↔decomposer
+        // carbon-for-nutrient exchange, emergent from two independent gradient
+        // flows in a single tick.
+        let mut params = test_params();
+        params.network_connection_cap = 1;
+        params.network_redistribution_rate = 0.5;
+        params.network_transfer_efficiency = 1.0; // lossless for clean numbers
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, zero_traits()), // energy-rich, nutrient-poor
+            make_agent(2, (0.0, 0.0), 0.0, zero_traits()),  // energy-poor, nutrient-rich
+        ];
+        agents[0].nutrient = 0.0;
+        agents[1].nutrient = 10.0;
+        let connections = vec![Connection {
+            builder: 1,
+            partner: 2,
+        }];
+
+        let (events, _) = redistribute(&mut agents, &connections, &params);
+
+        // Energy flows 1 → 2 (down the reserve gradient); nutrient flows 2 → 1
+        // (down the nutrient gradient). Each equalises at 5.
+        assert!((agents[0].reserve - 5.0).abs() < 1e-5);
+        assert!((agents[1].reserve - 5.0).abs() < 1e-5);
+        assert!((agents[0].nutrient - 5.0).abs() < 1e-5);
+        assert!((agents[1].nutrient - 5.0).abs() < 1e-5);
+        assert_eq!(events[0].source, 1, "energy donor is the energy-rich agent");
+        assert_eq!(events[0].target, Some(2));
     }
 
     // --- Photosynthesise ---
