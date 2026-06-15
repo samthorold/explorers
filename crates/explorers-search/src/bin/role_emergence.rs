@@ -136,7 +136,7 @@ const PERSISTENCE_FRACTION: f64 = 0.25;
 const CLASSIFY_INTERVAL: u64 = 10;
 
 /// Where the configs were drawn from — the atlas live cells vs the sampled cube.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 enum ConfigSource {
     Atlas,
@@ -153,6 +153,28 @@ struct RunRecord {
     seed: u64,
     /// Ticks actually run (== `EXTENDED_HORIZON` unless terminated early).
     ran_ticks: u64,
+    /// Wall-time of this run's step loop, in seconds (issue #423: per-run timing
+    /// turns the straggler tail into data — does cost track population or query
+    /// radius / small world?). Measured with `std::time::Instant` around the loop.
+    wall_time_s: f64,
+    /// Peak / final living-agent count over the run. The hot path
+    /// (`SpatialGrid::query_radius`) is issued once per agent per phase, so cost is
+    /// expected to scale with population — these columns let the doc test that.
+    peak_population: usize,
+    final_population: usize,
+    /// Decoded radius / extent params for this config (read off the decoded
+    /// `WorldParameters`). The competing cost hypothesis (#423 H1) is that a large
+    /// query radius against a small grid `cell_size` — and a small `world_extent`
+    /// that makes the toroidal scan wrap and revisit cells — dominates, not
+    /// population. `grid_cell_size` is the value `World::step` actually builds the
+    /// spatial grid with (`light_competition_radius.max(1.0)`), i.e. the denominator
+    /// of the `radius / cell_size` cell-scan term.
+    sensing_range_coefficient: f32,
+    light_competition_radius: f32,
+    contact_range_coefficient: f32,
+    world_extent: f32,
+    nutrient_grid_cell_size: f32,
+    grid_cell_size: f32,
     /// Survived to the horizon without extinction or population explosion.
     survived: bool,
     /// Minimal, documented terminal classification (NOT the full evaluator):
@@ -193,9 +215,22 @@ struct RunRecord {
 fn run(source: ConfigSource, config_index: usize, unit: &[f64], seed: u64) -> RunRecord {
     let ranges = default_ranges();
     let (params, dist) = decode(unit, &ranges);
+    // Capture the decoded radius / extent params before `params` is moved into the
+    // world — these are the #423 H1 columns (cost vs query radius / small world).
+    let sensing_range_coefficient = params.sensing_range_coefficient;
+    let light_competition_radius = params.light_competition_radius;
+    let contact_range_coefficient = params.contact_range_coefficient;
+    let world_extent = params.world_extent;
+    let nutrient_grid_cell_size = params.nutrient_grid_cell_size;
+    // The spatial grid `World::step` builds is sized by this (see `lib.rs:1090`):
+    // `cell_size = light_competition_radius.max(1.0)`. It is the denominator of the
+    // `(radius / cell_size)^2` cell-scan term, so the doc needs it alongside the radii.
+    let grid_cell_size = light_competition_radius.max(1.0);
     let max_pop = EvalConfig::default().max_population;
     let mut world = World::new(params, dist, seed);
     let mut topo = TopologyProjection::new();
+    let mut peak_population = 0usize;
+    let run_start = Instant::now();
 
     // Agents that have ever drained *living* biomass (a predation `Consumed` event,
     // `target_was_carcass == false`). Read incrementally from the event log; this
@@ -226,6 +261,7 @@ fn run(source: ConfigSource, config_index: usize, unit: &[f64], seed: u64) -> Ru
         world.step();
         ran_ticks += 1;
         let tick = ran_ticks;
+        peak_population = peak_population.max(world.agents().len());
         topo.update(world.event_log());
 
         // Absorb new predation facts from the log tail (cheap, per-tick).
@@ -310,11 +346,23 @@ fn run(source: ConfigSource, config_index: usize, unit: &[f64], seed: u64) -> Ru
     let t_persistent_guild =
         first_persistent_index(&decomposer_present, PERSISTENCE_FRACTION).map(|i| sample_ticks[i]);
 
+    let wall_time_s = run_start.elapsed().as_secs_f64();
+    let final_population = world.agents().len();
+
     RunRecord {
         source,
         config_index,
         seed,
         ran_ticks,
+        wall_time_s,
+        peak_population,
+        final_population,
+        sensing_range_coefficient,
+        light_competition_radius,
+        contact_range_coefficient,
+        world_extent,
+        nutrient_grid_cell_size,
+        grid_cell_size,
         survived,
         terminal_mode,
         peak_decomposers,
@@ -444,6 +492,30 @@ struct Artifact {
     runs: Vec<RunRecord>,
 }
 
+/// Parse the optional `ROLE_EMERGENCE_CONFIGS` subset selector into a set of
+/// `(source, index)` pairs. Format: comma-separated `source:index` tokens, e.g.
+/// `atlas:0,sample:12`. Returns `None` when the var is unset (the full run);
+/// unparseable tokens panic loudly rather than silently dropping a requested config.
+fn parse_config_filter() -> Option<HashSet<(ConfigSource, usize)>> {
+    let raw = std::env::var("ROLE_EMERGENCE_CONFIGS").ok()?;
+    let mut set = HashSet::new();
+    for tok in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        let (src, idx) = tok
+            .split_once(':')
+            .unwrap_or_else(|| panic!("ROLE_EMERGENCE_CONFIGS token {tok:?} is not source:index"));
+        let source = match src {
+            "atlas" => ConfigSource::Atlas,
+            "sample" => ConfigSource::Sample,
+            other => panic!("ROLE_EMERGENCE_CONFIGS source {other:?} must be atlas|sample"),
+        };
+        let index: usize = idx
+            .parse()
+            .unwrap_or_else(|_| panic!("ROLE_EMERGENCE_CONFIGS index {idx:?} is not a usize"));
+        set.insert((source, index));
+    }
+    Some(set)
+}
+
 fn main() {
     let atlas_path = std::env::args()
         .nth(1)
@@ -476,15 +548,45 @@ fn main() {
         EXTENDED_HORIZON
     );
 
+    // Optional subset selection (issue #423: cheap re-run of just the worst configs
+    // to collect the new wall-time / population columns without paying for all 2048
+    // runs). `ROLE_EMERGENCE_CONFIGS=atlas:0,sample:12` restricts to those configs;
+    // `ROLE_EMERGENCE_SEEDS=2` caps seeds per config. Both unset → the full run, so
+    // the headline summary is unchanged. The decode path, seed block, and ordering
+    // are untouched (#350 determinism), so a subset's records are bit-identical to
+    // the same rows of a full run — only the row *set* shrinks.
+    let config_filter = parse_config_filter();
+    let seeds = std::env::var("ROLE_EMERGENCE_SEEDS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map_or(N_SEEDS, |n| n.min(N_SEEDS));
+    if config_filter.is_some() || seeds != N_SEEDS {
+        eprintln!(
+            "role_emergence: SUBSET MODE — configs={:?}, seeds={seeds} (summary is partial)",
+            config_filter.as_ref().map(|f| f.len())
+        );
+    }
+    let selected = |source: ConfigSource, idx: usize| -> bool {
+        config_filter
+            .as_ref()
+            .is_none_or(|f| f.contains(&(source, idx)))
+    };
+
     // Build the flat task list: every (config, seed) is an independent run.
     let mut tasks: Vec<(ConfigSource, usize, Vec<f64>, u64)> = Vec::new();
     for (i, unit) in atlas_units.iter().enumerate() {
-        for s in 0..N_SEEDS {
+        if !selected(ConfigSource::Atlas, i) {
+            continue;
+        }
+        for s in 0..seeds {
             tasks.push((ConfigSource::Atlas, i, unit.clone(), SEED_BASE + s));
         }
     }
     for (i, unit) in sampled_units.iter().enumerate() {
-        for s in 0..N_SEEDS {
+        if !selected(ConfigSource::Sample, i) {
+            continue;
+        }
+        for s in 0..seeds {
             tasks.push((ConfigSource::Sample, i, unit.clone(), SEED_BASE + s));
         }
     }
@@ -674,7 +776,10 @@ fn write_artifacts(artifact: &Artifact) {
     let csv_path = "target/role-emergence.csv";
     let mut csv = String::new();
     csv.push_str(
-        "source,config_index,seed,ran_ticks,survived,terminal_mode,peak_decomposers,\
+        "source,config_index,seed,ran_ticks,wall_time_s,peak_population,final_population,\
+         sensing_range_coefficient,light_competition_radius,contact_range_coefficient,\
+         world_extent,nutrient_grid_cell_size,grid_cell_size,\
+         survived,terminal_mode,peak_decomposers,\
          final_producers,final_consumers,final_decomposers,\
          t_first_carcass,t_first_decomposer,t_first_consumer,t_first_consumer_realised,\
          t_first_all_three,t_persistent_guild\n",
@@ -686,11 +791,20 @@ fn write_artifacts(artifact: &Artifact) {
             ConfigSource::Sample => "sample",
         };
         csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             source,
             r.config_index,
             r.seed,
             r.ran_ticks,
+            r.wall_time_s,
+            r.peak_population,
+            r.final_population,
+            r.sensing_range_coefficient,
+            r.light_competition_radius,
+            r.contact_range_coefficient,
+            r.world_extent,
+            r.nutrient_grid_cell_size,
+            r.grid_cell_size,
             r.survived,
             r.terminal_mode,
             r.peak_decomposers,
@@ -756,6 +870,24 @@ mod tests {
         // A lone present sample at the very end trivially qualifies there (1/1 ≥ 0.25).
         let late = vec![false, false, false, false, true];
         assert_eq!(first_persistent_index(&late, 0.25), Some(4));
+    }
+
+    #[test]
+    fn config_filter_parses_source_index_pairs() {
+        // Note: `parse_config_filter` reads the env var; here we exercise the same
+        // token grammar it uses by reconstructing the set directly is not possible
+        // (it's env-driven), so this guards the round-trip via the env var.
+        // SAFETY: single-threaded test, restores nothing because other tests don't
+        // read this var.
+        unsafe { std::env::set_var("ROLE_EMERGENCE_CONFIGS", "atlas:0, sample:12 ,atlas:3") };
+        let f = parse_config_filter().expect("set var → Some");
+        assert!(f.contains(&(ConfigSource::Atlas, 0)));
+        assert!(f.contains(&(ConfigSource::Atlas, 3)));
+        assert!(f.contains(&(ConfigSource::Sample, 12)));
+        assert!(!f.contains(&(ConfigSource::Sample, 0)));
+        assert_eq!(f.len(), 3);
+        unsafe { std::env::remove_var("ROLE_EMERGENCE_CONFIGS") };
+        assert!(parse_config_filter().is_none(), "unset → None (full run)");
     }
 
     #[test]
