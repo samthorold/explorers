@@ -43,13 +43,32 @@ impl SpatialGrid {
 
     pub fn query_radius(&self, center: (f32, f32), radius: f32) -> Vec<u64> {
         let mut results = Vec::new();
+        let cols = self.cols as isize;
         let cells_to_check = (radius / self.cell_size).ceil() as isize + 1;
         let (center_col, center_row) = self.cell_coords(center);
 
+        // The neighbourhood window spans `2*cells_to_check + 1` cells per axis. When
+        // that meets or exceeds `cols`, the toroidal wrap would revisit cells (the
+        // double-return). Cap by scanning the whole grid exactly once instead. The
+        // returned neighbour *set* is unchanged — every candidate is still
+        // distance-filtered below — so this only removes the duplicate ids a
+        // revisited cell would have produced, and bounds the scan at `cols*cols`.
+        if 2 * cells_to_check + 1 >= cols {
+            for cell in &self.cells {
+                for &id in cell {
+                    let pos = self.positions[&id];
+                    if toroidal_distance(center, pos, self.world_extent) <= radius {
+                        results.push(id);
+                    }
+                }
+            }
+            return results;
+        }
+
         for dr in -cells_to_check..=cells_to_check {
             for dc in -cells_to_check..=cells_to_check {
-                let row = (center_row as isize + dr).rem_euclid(self.cols as isize) as usize;
-                let col = (center_col as isize + dc).rem_euclid(self.cols as isize) as usize;
+                let row = (center_row as isize + dr).rem_euclid(cols) as usize;
+                let col = (center_col as isize + dc).rem_euclid(cols) as usize;
                 let cell_idx = row * self.cols + col;
                 for &id in &self.cells[cell_idx] {
                     let pos = self.positions[&id];
@@ -278,6 +297,27 @@ mod tests {
         let results = grid.query_radius((-48.0, 0.0), 5.0);
         assert!(results.contains(&1));
         assert!(results.contains(&2));
+    }
+
+    #[test]
+    fn query_returns_no_duplicate_ids_under_toroidal_wrap() {
+        // Small world + radius spanning the whole world: the legacy scan visited
+        // each wrapped cell multiple times and double-returned ids. After the fix
+        // each cell is scanned once, so every returned id is unique.
+        let mut grid = SpatialGrid::new(20.0, 1.0);
+        for id in 0..30u64 {
+            let x = -10.0 + (id as f32) * 0.6;
+            grid.insert(id, (x, 0.0));
+        }
+        let results = grid.query_radius((0.0, 0.0), 30.0);
+        let mut sorted = results.clone();
+        sorted.sort_unstable();
+        let mut unique = sorted.clone();
+        unique.dedup();
+        assert_eq!(
+            sorted, unique,
+            "query_radius must not return duplicate ids under toroidal wrap, got {results:?}"
+        );
     }
 
     #[test]
