@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::toroidal_distance;
 
 #[derive(Clone)]
@@ -7,8 +5,11 @@ pub struct SpatialGrid {
     world_extent: f32,
     cell_size: f32,
     cols: usize,
-    cells: Vec<Vec<u64>>,
-    positions: HashMap<u64, (f32, f32)>,
+    /// Each cell bucket stores `(id, position)` inline. Holding the position next
+    /// to the id lets `query_radius` distance-filter every candidate without a
+    /// per-candidate side-table probe — the dominant cost in the step loop
+    /// (issue #426 / #423 H2).
+    cells: Vec<Vec<(u64, (f32, f32))>>,
 }
 
 impl SpatialGrid {
@@ -19,14 +20,12 @@ impl SpatialGrid {
             cell_size,
             cols,
             cells: vec![Vec::new(); cols * cols],
-            positions: HashMap::new(),
         }
     }
 
     pub fn insert(&mut self, id: u64, position: (f32, f32)) {
         let cell_idx = self.cell_index(position);
-        self.cells[cell_idx].push(id);
-        self.positions.insert(id, position);
+        self.cells[cell_idx].push((id, position));
     }
 
     pub fn update_position(&mut self, id: u64, new_position: (f32, f32)) {
@@ -35,9 +34,11 @@ impl SpatialGrid {
     }
 
     pub fn remove(&mut self, id: u64) {
-        if let Some(pos) = self.positions.remove(&id) {
-            let cell_idx = self.cell_index(pos);
-            self.cells[cell_idx].retain(|&stored| stored != id);
+        // Off the hot path (only `update_position` and tests call this). Without a
+        // side id→cell map we locate the id by scanning the buckets; the inline
+        // positions are what keep the *query* path probe-free, which is the point.
+        for cell in &mut self.cells {
+            cell.retain(|&(stored, _)| stored != id);
         }
     }
 
@@ -55,8 +56,7 @@ impl SpatialGrid {
         // revisited cell would have produced, and bounds the scan at `cols*cols`.
         if 2 * cells_to_check + 1 >= cols {
             for cell in &self.cells {
-                for &id in cell {
-                    let pos = self.positions[&id];
+                for &(id, pos) in cell {
                     if toroidal_distance(center, pos, self.world_extent) <= radius {
                         results.push(id);
                     }
@@ -70,8 +70,7 @@ impl SpatialGrid {
                 let row = (center_row as isize + dr).rem_euclid(cols) as usize;
                 let col = (center_col as isize + dc).rem_euclid(cols) as usize;
                 let cell_idx = row * self.cols + col;
-                for &id in &self.cells[cell_idx] {
-                    let pos = self.positions[&id];
+                for &(id, pos) in &self.cells[cell_idx] {
                     if toroidal_distance(center, pos, self.world_extent) <= radius {
                         results.push(id);
                     }
@@ -268,6 +267,19 @@ mod tests {
         let results = grid.query_radius((0.0, 0.0), 5.0);
         assert!(!results.contains(&1));
         assert!(results.contains(&2));
+    }
+
+    #[test]
+    fn removing_a_cell_mate_leaves_the_other_intact() {
+        // Two agents in the *same* cell: removal must locate the right cell
+        // (no side position map) and drop only the requested id, leaving its
+        // cell-mate queryable with its position intact.
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(1, (5.0, 5.0));
+        grid.insert(2, (5.5, 5.0)); // same cell as 1
+        grid.remove(1);
+        let results = grid.query_radius((5.5, 5.0), 0.0);
+        assert_eq!(results, vec![2]);
     }
 
     #[test]
