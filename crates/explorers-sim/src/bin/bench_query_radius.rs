@@ -12,12 +12,16 @@
 //! scaling curve can be read off directly, and it pins which term dominates by
 //! comparing three implementations on the *same* deterministic agent layout:
 //!
-//!   - `baseline`  — the real `explorers_sim::spatial::SpatialGrid::query_radius`
-//!                   (side `HashMap<id,pos>` probe per candidate + a fresh `Vec`
-//!                   allocation per call). This is exactly what the stepper runs.
-//!   - `inline`    — positions stored *inline* in the cell buckets
-//!                   (`Vec<(u64,(f32,f32))>`), no side `HashMap`. Isolates the
-//!                   per-candidate `HashMap` probe (issue #423 **H2**).
+//!   - `baseline`  — the real `explorers_sim::spatial::SpatialGrid::query_radius`.
+//!                   Since issue #426 landed, the real grid stores positions inline
+//!                   in the cell buckets (no side `HashMap`), so `base` now tracks
+//!                   the `inline` design directly — this column is the regression
+//!                   guard that the H2 win stays banked.
+//!   - `inline`    — a local replica with positions stored *inline* in the cell
+//!                   buckets (`Vec<(u64,(f32,f32))>`), no side `HashMap`. Pre-#426
+//!                   this isolated the per-candidate `HashMap` probe (issue #423
+//!                   **H2**) against the then-`HashMap`-backed baseline; post-#426 it
+//!                   should match `base` (both are inline), confirming the win is real.
 //!   - `inline+scratch` — inline positions *and* a reused scratch buffer instead of
 //!                   a fresh `Vec` per call. On top of `inline`, isolates the
 //!                   per-call allocation (issue #423 **H3**).
@@ -103,12 +107,29 @@ impl InlineGrid {
     /// Scratch-buffer variant (isolates H3 vs `query_radius`): caller owns `out`.
     fn query_into(&self, center: (f32, f32), radius: f32, out: &mut Vec<u64>) {
         out.clear();
+        let cols = self.cols as isize;
         let cells_to_check = (radius / self.cell_size).ceil() as isize + 1;
         let (center_col, center_row) = self.cell_coords(center);
+
+        // Mirror the real grid's whole-grid-scan cap (issue #425 H1): when the
+        // window would wrap and revisit cells, scan every cell exactly once.
+        // Keeping this in lock-step with `spatial.rs` is what makes the inline
+        // column a faithful apples-to-apples replica in the wrapping regime.
+        if 2 * cells_to_check + 1 >= cols {
+            for cell in &self.cells {
+                for &(id, pos) in cell {
+                    if toroidal_distance(center, pos, self.world_extent) <= radius {
+                        out.push(id);
+                    }
+                }
+            }
+            return;
+        }
+
         for dr in -cells_to_check..=cells_to_check {
             for dc in -cells_to_check..=cells_to_check {
-                let row = (center_row as isize + dr).rem_euclid(self.cols as isize) as usize;
-                let col = (center_col as isize + dc).rem_euclid(self.cols as isize) as usize;
+                let row = (center_row as isize + dr).rem_euclid(cols) as usize;
+                let col = (center_col as isize + dc).rem_euclid(cols) as usize;
                 for &(id, pos) in &self.cells[row * self.cols + col] {
                     if toroidal_distance(center, pos, self.world_extent) <= radius {
                         out.push(id);
@@ -221,8 +242,8 @@ fn main() {
     println!("WARNING: running in debug. Use `cargo run --release` for meaningful numbers.\n");
 
     println!("cell_size = 1.0 for every row, so radius == ratio. ns are per query call.");
-    println!("base = real SpatialGrid (HashMap probe + fresh Vec alloc)");
-    println!("inline = positions in cell buckets, fresh alloc (H2: no HashMap probe)");
+    println!("base = real SpatialGrid (inline positions since #426, fresh Vec alloc)");
+    println!("inline = local inline replica, fresh alloc (H2: matches base post-#426)");
     println!("scratch = inline + reused buffer (H3: no per-call alloc)\n");
 
     let populations = [64usize, 256, 1024, 4096];
