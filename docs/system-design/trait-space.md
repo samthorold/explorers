@@ -97,4 +97,5 @@ This document describes the trait dimensions and their ecological motivation. It
 
 - **Data structures or algorithms.** How traits are stored, how maintenance costs are computed, how mutations are applied — those are implementation concerns that live with the code.
 - **Parameter values.** The exponent of superlinear scaling, the Poisson mean for fecundity, the specific maintenance cost per trait unit — those are genesis search parameters.
+- **Units.** Traits are dimensionless numbers. Where the world rules read a trait *as* a distance, a kernel width, or a flow per tick, the conversion carries a named unit anchor (each `1` in today's units) — see [world-rules](world-rules.md), *Unit anchors*. Trait-space distance is computed on the raw vector and so mixes those anchors; that is a property of the rules, stated there, not of the trait dimensions themselves.
 - **Ecological principles.** The underlying biology that motivates these design choices is documented in [docs/ecology/](../ecology/). This document is our opinion about how to use that biology, not a restatement of it.

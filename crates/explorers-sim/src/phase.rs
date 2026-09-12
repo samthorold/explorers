@@ -99,7 +99,9 @@ pub fn absorb_nutrients(
         std::collections::HashMap::new();
 
     for (i, agent) in agents.iter().enumerate() {
-        let demand = agent.effective_trait_with_steepness(0, k);
+        // Uptake demand in nutrient per tick: the autotrophy anchor u_A (#459).
+        let demand = agent.effective_trait_with_steepness(0, k)
+            * crate::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK;
         if demand <= 0.0 {
             continue;
         }
@@ -453,7 +455,8 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
         let decay = params.repair_decay;
         let mut repair_energy_spent = 0.0_f32;
         if soma_fraction > 0.0 && decay > 0.0 {
-            let base_repair = kappa;
+            // Repair in energy per tick: the kappa anchor u_R (#459).
+            let base_repair = kappa * crate::units::KAPPA_REPAIR_PER_TICK;
             for ft in 0..crate::FUNCTIONAL_TRAIT_COUNT {
                 if agent.wear[ft] <= 0.0 {
                     continue;
@@ -713,7 +716,9 @@ pub fn resolve_drains(
                 // tick — no warm-up, no contact-duration ramp. Predation vs grazing
                 // emerges downstream from the size of this drain relative to the
                 // target's structural death threshold, not from contact duration.
-                let demand = eff_heterotrophy;
+                // Drain in structure (energy) per tick: the heterotrophy
+                // anchor u_H (#459).
+                let demand = eff_heterotrophy * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
                 let trophic_eff = crate::trophic_transfer_efficiency(
                     &agents[consumer_idx].traits,
                     &agents[target_idx].traits,
@@ -868,7 +873,9 @@ pub fn resolve_drains(
                 // Binary-reach drain (#380): a carcass within feeding reach is
                 // drained at the consumer's effective heterotrophy each tick — no
                 // contact-duration ramp.
-                let demand = eff_heterotrophy;
+                // Drain in structure (energy) per tick: the heterotrophy
+                // anchor u_H (#459).
+                let demand = eff_heterotrophy * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
                 let trophic_eff = crate::trophic_transfer_efficiency(
                     &agents[consumer_idx].traits,
                     &carcasses[carcass_idx].traits,
@@ -1152,7 +1159,8 @@ pub fn move_agents(
             continue;
         }
 
-        let distance = eff_mobility;
+        // Distance in length per tick: the mobility anchor u_M (#459).
+        let distance = eff_mobility * crate::units::MOBILITY_DISTANCE_PER_TICK;
         let move_x = (dir_x / dir_mag) * distance;
         let move_y = (dir_y / dir_mag) * distance;
 
@@ -1375,7 +1383,8 @@ pub fn resolve_reproduction(
         agents[i].repro_nutrient -= nutrient_donated;
 
         // Dispersal: sigma proportional to parent's dispersal trait
-        let dispersal_radius = parent_traits.dispersal;
+        // Kernel σ in length: the dispersal anchor u_D (#459).
+        let dispersal_radius = parent_traits.dispersal * crate::units::DISPERSAL_KERNEL_SIGMA;
 
         for birth_slot in 0..offspring_count {
             // Asexual offspring: parent traits + mutation only (no crossover)
@@ -1705,7 +1714,8 @@ pub fn resolve_reproduction(
 
         // Dispersal: sigma = the seed parent's own dispersal trait, independent
         // of the mate's dispersal and of the inter-parent distance.
-        let dispersal_radius = seed_dispersal;
+        // Kernel σ in length: the dispersal anchor u_D (#459).
+        let dispersal_radius = seed_dispersal * crate::units::DISPERSAL_KERNEL_SIGMA;
 
         // Crossover, like the seed coin, draws each allele from one of the two
         // parents on a pair-keyed coin. Bind the `true` branch to the low-id

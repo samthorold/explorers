@@ -6,6 +6,7 @@ pub mod phase;
 pub mod soa;
 pub mod spatial;
 pub mod topology;
+pub mod units;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;

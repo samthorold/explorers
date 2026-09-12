@@ -251,7 +251,8 @@ pub fn grow_soa(s: &mut AgentSoA, params: &WorldParameters) -> (Vec<Event>, f32)
         let decay = params.repair_decay;
         let mut repair_energy_spent = 0.0_f32;
         if soma_fraction > 0.0 && decay > 0.0 {
-            let base_repair = kappa;
+            // Repair in energy per tick: the kappa anchor u_R (#459).
+            let base_repair = kappa * crate::units::KAPPA_REPAIR_PER_TICK;
             for ft in 0..FUNCTIONAL_TRAIT_COUNT {
                 if s.wear[ft][i] <= 0.0 {
                     continue;
