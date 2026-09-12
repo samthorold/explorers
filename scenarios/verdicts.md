@@ -20,6 +20,16 @@ its spread. (Across the current suite all eight seeds agree on the modal failure
 every scenario — the ensemble *confirms* the single-seed reads were not lucky draws, which
 is itself evidence — but the demographic and score spreads are now visible.)
 
+**What `n = 8` actually bounds (#434,
+[`docs/research/434-ensemble-confidence.md`](../docs/research/434-ensemble-confidence.md)).** A
+unanimous `8/8` read is a 95 % Clopper–Pearson lower bound of **`p ≥ 0.63`** (two-sided; `≥ 0.69`
+one-sided) on the true per-seed rate of that mode — evidence of a *dominant* mode, not proof of a
+deterministic one. A non-unanimous mode at this `n` is weak evidence: the observed mode is wrong or
+tied 19 % of the time when the true split is 0.7/0.3 and 41 % at 0.6/0.4, and a mid-range fraction
+such as `4/8` carries the interval `[0.16, 0.84]`. So read every `n/8` column below as "≥ 0.63"
+when it says `8/8` and as *undecided* when it says `5/8` or `6/8`; the suite should move to
+`--seeds 32` (`32/32 ⇒ p ≥ 0.89`) at its next regeneration.
+
 Regenerate by re-running `eval_scenarios` and re-judging (a human or a
 fresh-perspective agent); the verdict below was re-judged by an agent on 2026-06-02, and
 again on 2026-06-02 after #328 **retired `example6_decomposer_viability`** (trace inspection

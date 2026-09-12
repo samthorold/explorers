@@ -223,4 +223,7 @@ argmax-fitness (with a warning) when none does. This stays inside the authority 
 **never** rewrites the atlas map's binning or per-cell fitness — the recorded fitness remains the ranking
 key, the refined fraction feeds only the pick, and the straddler stays a recorded cell. Its cost is
 bounded (top-K only) and logged, including the lower-fitness live cells below the cut that were not
-refined.
+refined. The refinement size is a *separator*, not an estimator: at n = 32 the floor rule tells a
+straddler at p ≈ 0.35 from a robust cell at p ≈ 0.65 with ≈ 5 % error either way, but its two-sided
+interval at 16/32 is still [0.32, 0.68], and a sequential (SPRT) alternative was evaluated and not
+adopted — the arithmetic is in [`docs/research/434-ensemble-confidence.md`](../research/434-ensemble-confidence.md).

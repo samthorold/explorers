@@ -99,7 +99,11 @@ issue, surfaced by the example lens).
 > the older files. Numbers below are ensemble medians; `observed.json` carries the full spread.
 > Across the current suite all eight seeds agree on the modal failure mode for every scenario, so
 > the ensemble *confirms* the earlier single-seed reads were not lucky draws — but the demographic
-> and score spreads (example4 final pop 6–11) are now legible.
+> and score spreads (example4 final pop 6–11) are now legible. A unanimous `8/8` is a 95 %
+> Clopper–Pearson lower bound of **`p ≥ 0.63`** on that mode's true per-seed rate — a dominant mode,
+> not a deterministic one — and a `4/8` would carry `[0.16, 0.84]`; see
+> [`docs/research/434-ensemble-confidence.md`](../docs/research/434-ensemble-confidence.md) for the
+> full table and the case for `--seeds 32` (`32/32 ⇒ p ≥ 0.89`) at the next regeneration.
 > `example4.json` reproduces (median 34 births); `example9_detrital_pathway.json` (#311) is a
 > **pathway wiring test**: a sessile, *obligate* decomposer (`photosynthetic_absorption = 0`) is
 > seeded on a standing carcass deposit (a `carcasses` recipe capability) with no living agent
