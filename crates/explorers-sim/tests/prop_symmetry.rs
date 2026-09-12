@@ -5,7 +5,10 @@
 
 mod support;
 
-use explorers_sim::{Agent, World};
+use explorers_sim::spatial::SpatialGrid;
+use explorers_sim::{
+    Agent, AgentSpec, World, WorldRecipe, phase, toroidal_distance, wrap_position,
+};
 use proptest::prelude::*;
 use support::{WorldCase, world_case_integer_exponent};
 
@@ -122,21 +125,30 @@ fn world_case_without_reproduction() -> impl Strategy<Value = WorldCase> {
     })
 }
 
-/// Reproduction enabled, with the dispersal trait bounded away from zero so
-/// offspring never land exactly on a parent: founders draw
-/// `max(0, mean + N(0, cov))` with `mean ≥ 1.5, cov ≤ 0.25` (a 6σ event to
-/// reach zero), and mutation adds `N(0, magnitude)` with `magnitude ≤ 0.2`
-/// (5σ to reach zero from 1.0). Narrower than the search ranges on those three
-/// dimensions only; every other dimension is the C1 domain.
-fn world_case_with_reproduction() -> impl Strategy<Value = WorldCase> {
-    (world_case_integer_exponent(), 1.5f32..=2.0, 0.1f32..=0.25, 0.01f32..=0.2).prop_map(
-        |(mut c, dispersal, cov, magnitude)| {
+/// The C1 domain with the dispersal trait bounded away from zero so offspring
+/// never land exactly on a parent: founders draw `max(0, mean + N(0, cov))`
+/// with `mean ≥ 1.5, cov ≤ 0.25` (a 6σ event to reach zero), and mutation
+/// adds `N(0, magnitude)` with `magnitude ≤ 0.2` (5σ to reach zero from 1.0).
+/// Narrower than the search ranges on those three dimensions only.
+fn world_case_bounded_dispersal() -> impl Strategy<Value = WorldCase> {
+    (
+        world_case_integer_exponent(),
+        1.5f32..=2.0,
+        0.1f32..=0.25,
+        0.01f32..=0.2,
+    )
+        .prop_map(|(mut c, dispersal, cov, magnitude)| {
             c.dist.mean_traits.dispersal = dispersal;
             c.dist.trait_covariance = cov;
             c.params.mutation_magnitude = magnitude;
-            without_chemotaxis_or_contact(c)
-        },
-    )
+            c
+        })
+}
+
+/// Reproduction enabled on the bounded-dispersal domain, so a zero-reach
+/// consumer never coincides with a target.
+fn world_case_with_reproduction() -> impl Strategy<Value = WorldCase> {
+    world_case_bounded_dispersal().prop_map(without_chemotaxis_or_contact)
 }
 
 proptest! {
@@ -226,6 +238,277 @@ fn check_order_permutation_invariance(case: &WorldCase) -> Result<(), TestCaseEr
         "nutrient_pool",
         baseline.nutrient_pool(),
         permuted.nutrient_pool(),
+        rel,
+    )?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Property 2: toroidal translation
+// ---------------------------------------------------------------------------
+
+/// Absolute tolerance for un-translated positions, in world units. With
+/// chemotaxis off (see `translation_case_from`) a position is only ever
+/// `wrap(pos + keyed_jitter)`, so the two worlds' coordinates differ by the
+/// rounding of one addition per tick: ≤ 1 ulp at magnitude ≤ 15 (~1e-6),
+/// accumulating linearly to ≤ 2e-5 over 20 ticks. 1e-4 is 5× headroom.
+const TRANSLATION_POS_TOLERANCE: f32 = 1e-4;
+/// Relative tolerance for stores and totals under a translation. Every
+/// distance-derived flow inherits the ~1e-6 position rounding; 1e-4 (the C1
+/// ledger bound) leaves two orders of magnitude of headroom.
+const TRANSLATION_REL_TOLERANCE: f32 = 1e-4;
+
+/// A translation case: a C1 case whose extent is an exact multiple of the
+/// nutrient cell size, plus a whole-cell translation vector (never zero).
+#[derive(Debug, Clone)]
+struct TranslationCase {
+    case: WorldCase,
+    shift: (f32, f32),
+}
+
+/// Extent is snapped to `cells × cell_size` so the nutrient grid tiles the
+/// torus exactly: with a partial last cell, translating by whole cells would
+/// move agents between cells of different area, which is not a symmetry.
+/// The spatial grid (light competition, contact, sensing) is distance-filtered
+/// and so already translation-symmetric regardless of alignment.
+///
+/// Chemotaxis is switched off (`sensing_range_coefficient = 0`) in every
+/// translation domain, permanently and by the nature of the check rather than
+/// as a bug workaround: it weights neighbours by `1/dist` and normalises the
+/// summed direction, so the 1-ulp position rounding a translation introduces
+/// is amplified by `1/|dir|` whenever the attraction and jitter terms nearly
+/// cancel — a heavy-tailed, unbounded amplification (measured gaps of 1e-4
+/// within 5 ticks and 2e-2 within 18 across a few thousand random cases).
+/// That is sensitive dependence, not an asymmetry, but it means the
+/// trajectory has no f32-tolerance-stable form with chemotaxis on. Its
+/// geometry is covered separately by `chemotaxis_neighbour_counts_are_
+/// invariant_under_toroidal_translation`, on an integer statistic.
+fn translation_case_from(
+    cases: impl Strategy<Value = WorldCase>,
+) -> impl Strategy<Value = TranslationCase> {
+    (cases, 2u32..=3, 0u32..=2, 0u32..=2)
+        .prop_filter("translation must be non-zero", |(_, _, i, j)| {
+            *i != 0 || *j != 0
+        })
+        .prop_map(|(mut case, cells, i, j)| {
+            let cell = case.params.nutrient_grid_cell_size;
+            case.params.world_extent = cells as f32 * cell;
+            case.params.sensing_range_coefficient = 0.0;
+            TranslationCase {
+                case,
+                shift: (i as f32 * cell, j as f32 * cell),
+            }
+        })
+}
+
+/// Full C1 domain (less chemotaxis, see above).
+fn translation_case() -> impl Strategy<Value = TranslationCase> {
+    translation_case_from(world_case_integer_exponent())
+}
+
+/// The #453 workaround domain: consumption unreachable, so no carcass is ever
+/// drained and the zero-energy nutrient discontinuity cannot fire; dispersal
+/// bounded away from zero so a zero-reach consumer never coincides with a
+/// target either.
+fn translation_case_without_consumption() -> impl Strategy<Value = TranslationCase> {
+    translation_case_from(world_case_bounded_dispersal().prop_map(|mut c| {
+        c.params.contact_range_coefficient = 0.0;
+        c
+    }))
+}
+
+/// Sample the founders `World::new` would place for this case, as a spec'd
+/// roster, so the same population can be re-founded at translated positions.
+fn founder_roster(case: &WorldCase) -> Vec<AgentSpec> {
+    World::new(case.params.clone(), case.dist.clone(), case.seed)
+        .agents()
+        .iter()
+        .map(|a| AgentSpec {
+            position: a.position,
+            reserve: case.dist.initial_energy_per_agent,
+            traits: a.traits,
+            nutrient: 0.0,
+        })
+        .collect()
+}
+
+fn run_roster(case: &WorldCase, roster: Vec<AgentSpec>) -> World {
+    let recipe = WorldRecipe {
+        parameters: case.params.clone(),
+        initial_distribution: None,
+        agents: Some(roster),
+        carcasses: None,
+        max_ticks: case.ticks as u64,
+    };
+    let mut world = World::from_recipe(&recipe, case.seed);
+    for _ in 0..case.ticks {
+        world.step();
+    }
+    world
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Toroidal translation: founding the same roster shifted by a constant
+    /// whole-cell vector yields the same trajectory shifted — identity, traits
+    /// and demographics exact, positions shifted to f32 tolerance, stores and
+    /// totals equal to rounding. Ignored until #453 (carcass nutrient release
+    /// is discontinuous at zero energy, so a 1-ulp difference in a drained
+    /// carcass's residue decides whether all or none of its nutrient
+    /// recycles) is fixed; `..._without_consumption` runs meanwhile.
+    #[test]
+    #[ignore = "see #453"]
+    fn trajectory_is_covariant_under_toroidal_translation(tc in translation_case()) {
+        check_translation_covariance(&tc)?;
+    }
+
+    /// As above with consumption unreachable (#453 workaround). Covers light
+    /// competition, nutrient uptake by cell, the random walk, mate search by
+    /// spatial reach, and brood placement.
+    #[test]
+    fn trajectory_is_covariant_under_toroidal_translation_without_consumption(
+        tc in translation_case_without_consumption()
+    ) {
+        check_translation_covariance(&tc)?;
+    }
+
+    /// Chemotaxis geometry: the number of neighbours each founder senses is an
+    /// integer function of relative toroidal geometry, so it is exactly
+    /// invariant under translation. This is the covariant statistic that
+    /// survives the `1/|dir|` amplification that keeps chemotaxis out of the
+    /// trajectory check (see `translation_case_from`). Run as a single
+    /// movement phase over the founding roster, with sensing on and drawn
+    /// from the full search range.
+    #[test]
+    fn chemotaxis_neighbour_counts_are_invariant_under_toroidal_translation(
+        tc in translation_case_from(world_case_integer_exponent()),
+        sensing in 1.0f32..=30.0,
+    ) {
+        let mut case = tc.case.clone();
+        case.params.sensing_range_coefficient = sensing;
+        let extent = case.params.world_extent;
+        let (sx, sy) = tc.shift;
+        let base = World::new(case.params.clone(), case.dist.clone(), case.seed);
+        let mut agents = base.agents().to_vec();
+        let mut shifted = agents.clone();
+        for a in &mut shifted {
+            a.position = wrap_position((a.position.0 + sx, a.position.1 + sy), extent);
+        }
+        let counts = sensed_neighbour_counts(&mut agents, &case.params, case.seed);
+        let shifted_counts = sensed_neighbour_counts(&mut shifted, &case.params, case.seed);
+        prop_assert_eq!(
+            counts,
+            shifted_counts,
+            "sensed neighbour counts differ under translation by {:?}",
+            tc.shift
+        );
+    }
+}
+
+/// One movement phase over `agents` exactly as `World::step` runs it (grid
+/// keyed by slice index, cell size from the light-competition radius),
+/// returning each agent's sensed neighbour count.
+fn sensed_neighbour_counts(
+    agents: &mut [Agent],
+    params: &explorers_sim::WorldParameters,
+    seed: u64,
+) -> Vec<u32> {
+    let mut grid = SpatialGrid::new(
+        params.world_extent,
+        params.light_competition_radius.max(1.0),
+    );
+    for (i, a) in agents.iter().enumerate() {
+        grid.insert(i as u64, a.position);
+    }
+    phase::move_agents(agents, &[], &grid, params, seed, 0)
+        .sensing_throughput
+        .iter()
+        .map(|c| *c as u32)
+        .collect()
+}
+
+fn check_translation_covariance(tc: &TranslationCase) -> Result<(), TestCaseError> {
+    let case = &tc.case;
+    let extent = case.params.world_extent;
+    let (sx, sy) = tc.shift;
+    let roster = founder_roster(case);
+    let shifted_roster: Vec<AgentSpec> = roster
+        .iter()
+        .map(|spec| AgentSpec {
+            position: wrap_position((spec.position.0 + sx, spec.position.1 + sy), extent),
+            ..spec.clone()
+        })
+        .collect();
+
+    let base = run_roster(case, roster);
+    let shifted = run_roster(case, shifted_roster);
+
+    let mut base_pop: Vec<&Agent> = base.agents().iter().collect();
+    let mut shifted_pop: Vec<&Agent> = shifted.agents().iter().collect();
+    base_pop.sort_by_key(|a| a.id);
+    shifted_pop.sort_by_key(|a| a.id);
+    prop_assert_eq!(
+        base_pop.iter().map(|a| a.id).collect::<Vec<_>>(),
+        shifted_pop.iter().map(|a| a.id).collect::<Vec<_>>(),
+        "population identity differs under translation after {} ticks",
+        case.ticks
+    );
+    prop_assert_eq!(base.carcasses().len(), shifted.carcasses().len());
+
+    let rel = TRANSLATION_REL_TOLERANCE;
+    for (b, s) in base_pop.iter().zip(&shifted_pop) {
+        let ctx = format!("agent {}", b.id);
+        // Traits: crossover and mutation are keyed on identity, so exact.
+        for d in 0..7 {
+            prop_assert_eq!(
+                b.traits.get(d).to_bits(),
+                s.traits.get(d).to_bits(),
+                "{} trait {} differs under translation",
+                &ctx,
+                d
+            );
+        }
+        let expected = wrap_position((b.position.0 + sx, b.position.1 + sy), extent);
+        let gap = toroidal_distance(expected, s.position, extent);
+        prop_assert!(
+            gap <= TRANSLATION_POS_TOLERANCE,
+            "{ctx} position {:?} is not the translate of {:?} (expected {:?}, gap {gap})",
+            s.position,
+            b.position,
+            expected
+        );
+        let stores = [
+            ("reserve", b.reserve, s.reserve),
+            ("structure", b.structure, s.structure),
+            ("peak_structure", b.peak_structure, s.peak_structure),
+            ("nutrient", b.nutrient, s.nutrient),
+            ("repro_reserve", b.repro_reserve, s.repro_reserve),
+            ("repro_nutrient", b.repro_nutrient, s.repro_nutrient),
+            ("wear[0]", b.wear[0], s.wear[0]),
+            ("wear[1]", b.wear[1], s.wear[1]),
+            ("wear[2]", b.wear[2], s.wear[2]),
+        ];
+        for (name, x, y) in stores {
+            assert_rel_close(&format!("{ctx} {name}"), x, y, rel)?;
+        }
+    }
+    assert_rel_close(
+        "dissipated_energy",
+        base.dissipated_energy(),
+        shifted.dissipated_energy(),
+        rel,
+    )?;
+    assert_rel_close(
+        "total_solar_input",
+        base.total_solar_input(),
+        shifted.total_solar_input(),
+        rel,
+    )?;
+    assert_rel_close(
+        "nutrient_pool",
+        base.nutrient_pool(),
+        shifted.nutrient_pool(),
         rel,
     )?;
     Ok(())
