@@ -14,7 +14,7 @@ use explorers_sim::spatial::SpatialGrid;
 use explorers_sim::{Agent, Carcass, World, WorldParameters, phase};
 use proptest::prelude::*;
 use std::collections::HashMap;
-use support::{WorldCase, world_case_integer_exponent};
+use support::{WorldCase, world_case};
 
 /// Multiplicative perturbation applied to the parameter under test. Bounded
 /// away from 1 so the comparison is never a no-op, and modest so a case stays
@@ -88,7 +88,7 @@ proptest! {
     /// producer's photosynthetic income that tick, all else equal.
     #[test]
     fn raising_solar_flux_never_lowers_photosynthetic_income(
-        case in world_case_integer_exponent(),
+        case in world_case(),
         factor in factor(),
     ) {
         let world = advanced_world(&case);
@@ -124,7 +124,7 @@ proptest! {
     /// agent's reserve after the metabolise phase, all else equal.
     #[test]
     fn raising_base_metabolic_rate_never_raises_reserve(
-        case in world_case_integer_exponent(),
+        case in world_case(),
         factor in factor(),
     ) {
         let world = advanced_world(&case);
@@ -186,7 +186,7 @@ proptest! {
     /// consumption that tick, all else equal.
     #[test]
     fn raising_trophic_distance_decay_never_raises_consumption_gain(
-        case in world_case_integer_exponent(),
+        case in world_case(),
         factor in factor(),
     ) {
         let world = advanced_world(&case);
@@ -221,21 +221,15 @@ proptest! {
     /// capability costs energy to maintain whether or not it is in use, as
     /// `coefficient · trait^exponent`, and the per-trait terms are independent
     /// and additive. Raising `photo_maintenance_cost` therefore never lowers
-    /// any agent's maintenance charge that tick, all else equal.
-    ///
-    /// The maintenance exponent is pinned even (2) because `World::new` can
-    /// seed a negative founder trait (#444), and under the odd exponent 3 that
-    /// trait's term is *negative* — a higher coefficient then pays the agent
-    /// more. The rule is stated for the committed non-negative trait domain,
-    /// which an even exponent restores (as `prop_energy_bound` does). Widen
-    /// back to `world_case_integer_exponent()` once #444 is fixed.
+    /// any agent's maintenance charge that tick, all else equal. Runs over the
+    /// full exponent range: founders are floored into the non-negative trait
+    /// domain (#444), so no per-trait term can be negative.
     #[test]
     fn raising_photo_maintenance_cost_never_lowers_maintenance_charge(
-        case in world_case_integer_exponent(),
+        case in world_case(),
         factor in factor(),
     ) {
-        let mut world = advanced_world(&case);
-        world.params_mut().maintenance_cost_exponent = 2.0;
+        let world = advanced_world(&case);
         let base = world.params().clone();
         let mut raised = base.clone();
         raised.photo_maintenance_cost *= factor;
@@ -279,7 +273,7 @@ proptest! {
     /// branch is exercised, not only the demand-met branch.
     #[test]
     fn reducing_available_pool_never_raises_uptake(
-        case in world_case_integer_exponent(),
+        case in world_case(),
         focus in 0.0f32..=1.0,
         pool in 0.0f32..=4.0,
         reduction in 0.0f32..=0.95,
@@ -313,20 +307,15 @@ proptest! {
     /// `metabolic_cost × growth_retention_multiplier` is mobilisable, and the
     /// kappa share of the mobilised flow funds repair then growth. A larger
     /// buffer mobilises less, so raising `growth_retention_multiplier` never
-    /// raises any agent's structure growth that tick, all else equal.
-    ///
-    /// The maintenance exponent is pinned even (2) for the same reason as the
-    /// maintenance-charge property: a negative founder trait (#444) under the
-    /// odd exponent 3 can make the whole metabolic cost negative, so a larger
-    /// multiplier *lowers* the buffer and mobilises more. Widen back to
-    /// `world_case_integer_exponent()` once #444 is fixed.
+    /// raises any agent's structure growth that tick, all else equal. Runs over
+    /// the full exponent range: founders are floored into the non-negative
+    /// trait domain (#444), so the metabolic cost is never negative.
     #[test]
     fn raising_retention_multiplier_never_raises_structure_growth(
-        case in world_case_integer_exponent(),
+        case in world_case(),
         factor in factor(),
     ) {
-        let mut world = advanced_world(&case);
-        world.params_mut().maintenance_cost_exponent = 2.0;
+        let world = advanced_world(&case);
         let base = world.params().clone();
         let mut raised = base.clone();
         raised.growth_retention_multiplier *= factor;

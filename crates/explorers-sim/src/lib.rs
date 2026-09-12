@@ -915,13 +915,20 @@ impl World {
                     // born above its own peak-relative death threshold (#312).
                     peak_structure: seed_structure,
                     nutrient: 0.0,
+                    // Founders live in the same non-negative trait domain as
+                    // offspring (#444): every dimension is floored at zero exactly
+                    // as mutation floors it in `phase::resolve_reproduction`, with
+                    // kappa and asexual_propensity further clamped to [0, 1]. The
+                    // floor is applied in place so RNG draw order is unchanged.
                     traits: TraitVector {
-                        photosynthetic_absorption: centroid.photosynthetic_absorption
-                            + trait_dist.sample(&mut rng),
-                        heterotrophy: centroid.heterotrophy + trait_dist.sample(&mut rng),
-                        mobility: centroid.mobility + trait_dist.sample(&mut rng),
+                        photosynthetic_absorption: (centroid.photosynthetic_absorption
+                            + trait_dist.sample(&mut rng))
+                        .max(0.0),
+                        heterotrophy: (centroid.heterotrophy + trait_dist.sample(&mut rng))
+                            .max(0.0),
+                        mobility: (centroid.mobility + trait_dist.sample(&mut rng)).max(0.0),
                         kappa: (centroid.kappa + trait_dist.sample(&mut rng)).clamp(0.0, 1.0),
-                        fecundity: centroid.fecundity + trait_dist.sample(&mut rng),
+                        fecundity: (centroid.fecundity + trait_dist.sample(&mut rng)).max(0.0),
                         asexual_propensity: (centroid.asexual_propensity
                             + trait_dist.sample(&mut rng))
                         .clamp(0.0, 1.0),
@@ -976,6 +983,16 @@ impl World {
                 .iter()
                 .enumerate()
                 .map(|(i, spec)| {
+                    // An explicit negative trait in a recipe is author error
+                    // (#444): trait space is non-negative, and a negative base
+                    // under a non-integer maintenance exponent is NaN.
+                    for dim in 0..TraitVector::NUM_DIMS {
+                        debug_assert!(
+                            spec.traits.get(dim) >= 0.0,
+                            "recipe agent {i} has negative trait dim {dim} = {}",
+                            spec.traits.get(dim)
+                        );
+                    }
                     let (reserve, structure, heat) =
                         provision_initial_reserve_structure(spec.reserve, &params);
                     initial_dissipation += heat;
@@ -2960,6 +2977,30 @@ mod tests {
         };
         let world = World::from_recipe(&recipe, 42);
         assert_eq!(world.agents().len(), 1);
+    }
+
+    /// A recipe agent with a negative trait is author error (#444): the trait
+    /// domain is non-negative, and a negative base under a non-integer
+    /// maintenance exponent is NaN. Rejected loudly rather than clamped.
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore = "debug_assert only")]
+    #[should_panic(expected = "negative trait")]
+    fn world_from_recipe_rejects_negative_trait() {
+        let mut traits = zero_traits();
+        traits.heterotrophy = -2.13;
+        let recipe = WorldRecipe {
+            parameters: test_params(),
+            initial_distribution: None,
+            agents: Some(vec![AgentSpec {
+                position: (0.0, 0.0),
+                reserve: 50.0,
+                traits,
+                nutrient: 0.0,
+            }]),
+            carcasses: None,
+            max_ticks: 100,
+        };
+        let _ = World::from_recipe(&recipe, 42);
     }
 
     #[test]

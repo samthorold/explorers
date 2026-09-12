@@ -4,9 +4,9 @@
 
 mod support;
 
-use explorers_sim::World;
+use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use proptest::prelude::*;
-use support::{WorldCase, world_case, world_case_integer_exponent};
+use support::{WorldCase, world_case};
 
 /// Relative f32 tolerance for the energy identity: f32 carries ~7 significant
 /// digits and a ≤ 40-agent, ≤ 20-tick world performs a few thousand flows, so
@@ -34,29 +34,20 @@ fn run(case: &WorldCase) -> World {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// Energy ledger identity over the full search domain. Ignored until #444
-    /// (negative founder trait × non-integer maintenance exponent → NaN) is
-    /// fixed; `energy_ledger_identity_holds` covers the finite domain meanwhile.
-    #[test]
-    #[ignore = "see #444"]
-    fn energy_ledger_identity_holds_over_full_search_domain(case in world_case()) {
-        check_energy_ledger_identity(&case)?;
-    }
-
-    /// Energy ledger identity: after `k` steps,
+    /// Energy ledger identity over the full search domain: after `k` steps,
     /// `endowment + solar input == dissipated + retained (agents + carcasses)`.
     /// Ignored until #445 (metabolic overdraft at starvation death over-counts
     /// `dissipated_energy`) is fixed.
     #[test]
     #[ignore = "see #445"]
-    fn energy_ledger_identity_holds(case in world_case_integer_exponent()) {
+    fn energy_ledger_identity_holds(case in world_case()) {
         check_energy_ledger_identity(&case)?;
     }
 
     /// Nutrient closure: after `k` steps,
     /// `available + living (free + earmark + structure-bound) + carcass-locked == N_total`.
     #[test]
-    fn nutrient_closure_holds(case in world_case_integer_exponent()) {
+    fn nutrient_closure_holds(case in world_case()) {
         check_nutrient_closure(&case)?;
     }
 
@@ -67,7 +58,7 @@ proptest! {
     /// `stores_never_go_negative_beyond_rounding` runs meanwhile.
     #[test]
     #[ignore = "see #446"]
-    fn stores_never_go_negative(case in world_case_integer_exponent()) {
+    fn stores_never_go_negative(case in world_case()) {
         check_stores_non_negative(&case, 0.0)?;
     }
 
@@ -76,7 +67,7 @@ proptest! {
     /// the magnitude of the `(n / ratio) * ratio` round trip that produces it.
     /// Reserve, structure, the earmark and the pool stay strictly non-negative.
     #[test]
-    fn stores_never_go_negative_beyond_rounding(case in world_case_integer_exponent()) {
+    fn stores_never_go_negative_beyond_rounding(case in world_case()) {
         check_stores_non_negative(&case, f32::EPSILON)?;
     }
 }
@@ -159,4 +150,94 @@ fn check_stores_non_negative(
         );
     }
     Ok(())
+}
+
+/// The proptest-shrunk minimal case from #444: every searched parameter at its
+/// range minimum (notably `maintenance_cost_exponent = 1.5`), founder means at
+/// zero with `trait_covariance = 0.1`, so `World::new` used to sample negative
+/// specification traits whose `powf(1.5)` maintenance term is NaN.
+fn issue_444_minimal_case() -> WorldCase {
+    let params = WorldParameters {
+        solar_flux_magnitude: 1.0,
+        base_trophic_efficiency: 0.1,
+        trophic_distance_decay: 0.1,
+        reproduction_efficiency: 0.1,
+        base_metabolic_rate: 0.01,
+        movement_cost_coefficient: 0.001,
+        sensing_range_coefficient: 1.0,
+        reproduction_energy_threshold: 5.0,
+        mutation_rate: 0.01,
+        mutation_magnitude: 0.01,
+        contact_range_coefficient: 0.5,
+        world_extent: 20.0,
+        initial_population_size: 5,
+        light_competition_radius: 1.0,
+        photo_maintenance_cost: 0.001,
+        heterotrophy_maintenance_cost: 0.001,
+        reproductive_compatibility_distance: 0.5,
+        base_nutrient_ratio: 0.01,
+        specification_nutrient_coefficient: 0.01,
+        maintenance_cost_exponent: 1.5,
+        growth_retention_multiplier: 1.0,
+        offspring_structure_fraction: 0.05,
+        reserve_mobilisation_rate: 0.05,
+        ..support::viable_baseline()
+    };
+    let dist = InitialDistribution {
+        mean_traits: TraitVector {
+            photosynthetic_absorption: 0.0,
+            heterotrophy: 0.0,
+            mobility: 0.0,
+            kappa: 0.0,
+            fecundity: 0.35,
+            asexual_propensity: 0.0,
+            dispersal: 0.0,
+        },
+        trait_covariance: 0.1,
+        initial_cluster_count: 1,
+        initial_energy_per_agent: 1.0,
+    };
+    WorldCase {
+        params,
+        dist,
+        seed: 0,
+        ticks: 1,
+    }
+}
+
+/// Founders live in the same non-negative trait domain as offspring (#444):
+/// `World::new` floors every sampled dimension at zero, as mutation does.
+#[test]
+fn founders_never_carry_a_negative_trait() {
+    let case = issue_444_minimal_case();
+    for seed in 0..64u64 {
+        let world = World::new(case.params.clone(), case.dist.clone(), seed);
+        for agent in world.agents() {
+            for dim in 0..TraitVector::NUM_DIMS {
+                let v = agent.traits.get(dim);
+                assert!(
+                    v >= 0.0,
+                    "seed {seed}: founder {} has negative trait dim {dim} = {v}",
+                    agent.id
+                );
+            }
+        }
+    }
+}
+
+/// The #444 minimal case stays finite and balanced after one tick: no NaN in
+/// dissipation or any reserve, and the energy identity holds.
+#[test]
+fn issue_444_minimal_case_is_finite_after_one_tick() {
+    let case = issue_444_minimal_case();
+    let world = run(&case);
+    assert!(
+        world.dissipated_energy().is_finite(),
+        "dissipated_energy = {}",
+        world.dissipated_energy()
+    );
+    for agent in world.agents() {
+        assert!(agent.reserve.is_finite(), "agent {} reserve NaN", agent.id);
+    }
+    check_energy_ledger_identity(&case).unwrap();
 }

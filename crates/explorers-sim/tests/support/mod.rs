@@ -88,21 +88,6 @@ pub fn viable_baseline() -> WorldParameters {
 /// Strategy over the searched `WorldParameters` dimensions (ranges copied from
 /// `explorers-search::default_ranges()`, indices 0..=16 and 24..=25, 28..=31).
 pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
-    world_parameters_with_exponent(1.5f32..=3.0)
-}
-
-/// `world_parameters()` with `maintenance_cost_exponent` restricted to the
-/// integers 2 and 3 (both inside the search range). Workaround for #444:
-/// `World::new` can seed a negative founder trait, and a negative base under a
-/// non-integer `powf` is NaN. Integer exponents keep every case finite so the
-/// conservation properties still run in CI; delete this once #444 is fixed.
-pub fn world_parameters_integer_exponent() -> impl Strategy<Value = WorldParameters> {
-    world_parameters_with_exponent(prop_oneof![Just(2.0f32), Just(3.0f32)])
-}
-
-fn world_parameters_with_exponent(
-    exponent: impl Strategy<Value = f32>,
-) -> impl Strategy<Value = WorldParameters> {
     let searched = (
         (
             1.0f32..=20.0,  // 0  solar_flux_magnitude
@@ -128,7 +113,7 @@ fn world_parameters_with_exponent(
             0.01f32..=0.5,              // 25 specification_nutrient_coefficient
         ),
         (
-            exponent,      // 28 maintenance_cost_exponent (1.5..=3.0 in search)
+            1.5f32..=3.0,  // 28 maintenance_cost_exponent
             1.0f32..=5.0,  // 29 growth_retention_multiplier
             0.05f32..=0.5, // 30 offspring_structure_fraction
             0.05f32..=1.0, // 31 reserve_mobilisation_rate
@@ -202,20 +187,8 @@ pub fn initial_distribution() -> impl Strategy<Value = InitialDistribution> {
 /// Seeds come from proptest's RNG so every case is reproducible from the
 /// persisted regression seed and shrinks like any other input.
 pub fn world_case() -> impl Strategy<Value = WorldCase> {
-    world_case_from(world_parameters())
-}
-
-/// `world_case()` over `world_parameters_integer_exponent()` — the #444
-/// workaround domain. Delete once #444 is fixed.
-pub fn world_case_integer_exponent() -> impl Strategy<Value = WorldCase> {
-    world_case_from(world_parameters_integer_exponent())
-}
-
-fn world_case_from(
-    params: impl Strategy<Value = WorldParameters>,
-) -> impl Strategy<Value = WorldCase> {
     (
-        params,
+        world_parameters(),
         initial_distribution(),
         any::<u64>(),
         1u32..=MAX_TICKS,
