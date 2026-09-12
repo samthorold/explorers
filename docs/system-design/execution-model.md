@@ -125,6 +125,10 @@ Resolve all interactions that drain a target. Living agents and carcasses are re
 4. Apply drains to target state.
 5. Targets whose structure drops below their complexity-dependent death threshold are marked dead. Carcasses created by deaths in this pass are not available for decomposition until the next tick — there is no re-entrant processing within a tick.
 
+Step 2 is evaluated against tick-start state for every consumer, including its own stoichiometric need: consumers graze each other, so a need read from a structure that step 4 has already decremented would depend on which of a mutual pair the loop visited first. Steps 3–4 run in stable identity order — consumers within a target by id, living targets by id, then carcasses by id — so the proportional split, and every sum it feeds (a target's decrement, a consumer's intake across several targets, a cell's excretion), rounds the same way under any permutation of the population. That rounding is load-bearing: it decides whether an exhausted target ends at exactly zero or at a stray ulp, a fork that would otherwise select between two macroscopically different futures.
+
+A carcass is a target while it holds *any* stock, energy or nutrient. The two are drained by the same bite but are not exhausted at the same instant, and a carcass gated on energy alone would strand its remaining nutrient for good the moment rounding took its energy to exactly zero. The spent carcass is instead the continuous limit of the rich one: a bite on it transfers no energy, so the consumer retains no nutrient and the remainder is excreted to the cell — the nutrient returns to the substrate rather than locking in a dead pool nothing can reach.
+
 #### Pass 2 — Investments
 
 Resolve all interactions where the source invests its own resources:
