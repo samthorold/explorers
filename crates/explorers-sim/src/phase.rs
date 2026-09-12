@@ -506,8 +506,17 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
             // peak high-water mark the death threshold is measured against.
             agent.record_peak_structure();
             agent.reserve += growth_budget - energy_spent;
-            // Bind the matched free nutrient into the new structure.
-            agent.nutrient -= to_structure * ratio;
+            // Bind the matched free nutrient into the new structure. When
+            // nutrient is the limiting factor, growth binds *all* of the free
+            // store (Liebig), so bind it exactly: `(n / ratio) * ratio` does not
+            // round-trip in f32 and would leave the store at +-1 ulp of zero
+            // (#446). Bound nutrient is derived from structure x demand, so the
+            // ledger sees the same `to_structure` either way.
+            agent.nutrient = if nutrient_limited <= energy_limited {
+                0.0
+            } else {
+                agent.nutrient - to_structure * ratio
+            };
             total_dissipated += dissipated;
 
             if to_structure > 0.0 {
