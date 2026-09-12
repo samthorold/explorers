@@ -365,9 +365,14 @@ impl Archive {
         self.cells.len()
     }
 
-    /// QD-score: the sum of elite fitnesses over filled cells.
+    /// QD-score: the sum of elite fitnesses over filled cells, accumulated in
+    /// cell-index order so the f32 rounding is reproducible across runs (a
+    /// `HashMap` iteration order is not stable, and a sum over it is not either).
     pub fn qd_score(&self) -> f32 {
-        self.cells.values().map(|c| c.fitness).sum()
+        let mut keyed: Vec<(&(usize, usize, usize), f32)> =
+            self.cells.iter().map(|(k, c)| (k, c.fitness)).collect();
+        keyed.sort_by_key(|(k, _)| **k);
+        keyed.into_iter().map(|(_, f)| f).sum()
     }
 
     pub fn best_fitness(&self) -> f32 {
@@ -1744,10 +1749,15 @@ mod tests {
             }
         }
 
+        // Founders start with up to 50 energy (`initial_energy_per_agent`'s
+        // range top) and lose at least `B ≥ 0.4` per tick under `F ≤ B`, so a
+        // rollout must run past 125 ticks to observe the guaranteed extinction;
+        // 40 ticks used to suffice only because most founders were dead on
+        // arrival with a NaN reserve (#444).
         let config = QdConfig {
             ranges,
             ensemble_size: 2,
-            max_ticks: 40,
+            max_ticks: 160,
             batch: 4,
             generations: 1,
             prefilter_crosscheck_fraction: 1.0,

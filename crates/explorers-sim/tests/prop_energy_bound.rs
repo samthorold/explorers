@@ -7,7 +7,7 @@ mod support;
 
 use explorers_sim::World;
 use proptest::prelude::*;
-use support::{WorldCase, world_case_integer_exponent};
+use support::{WorldCase, world_case};
 
 /// Relative slack for f32 summation of a few hundred per-tick flows.
 const REL_TOLERANCE: f32 = 1e-4;
@@ -29,7 +29,7 @@ proptest! {
 
     /// Per-tick total solar input never exceeds the config-only cap of Lemma 1.
     #[test]
-    fn per_tick_solar_input_never_exceeds_cell_cap(case in world_case_integer_exponent()) {
+    fn per_tick_solar_input_never_exceeds_cell_cap(case in world_case()) {
         let mut world = World::new(case.params.clone(), case.dist.clone(), case.seed);
         for tick in 0..case.ticks {
             let producers = world
@@ -71,17 +71,13 @@ proptest! {
     /// survivors. Deaths only move energy to carcasses or heat, so this is
     /// independent of the #445 starvation-overdraft accounting bug.
     ///
-    /// The maintenance exponent is pinned even (2) because `World::new` can seed
-    /// negative founder traits (#444), and a negative trait under an odd
-    /// exponent makes its maintenance term *negative* — metabolism then pays
-    /// the agent, a second energy tap outside the committed rules (recorded in
-    /// the note as obstruction O3). The lemma is stated for the committed
-    /// non-negative trait domain, which an even exponent restores.
+    /// Runs over the full search domain, including non-integer and odd
+    /// maintenance exponents: founders are floored into the committed
+    /// non-negative trait domain (#444), so no maintenance term can go NaN or
+    /// negative (obstruction O3 in the note is closed).
     #[test]
-    fn total_energy_drops_by_base_rate_per_survivor(case in world_case_integer_exponent()) {
-        let mut params = case.params.clone();
-        params.maintenance_cost_exponent = 2.0;
-        let mut world = World::new(params, case.dist.clone(), case.seed);
+    fn total_energy_drops_by_base_rate_per_survivor(case in world_case()) {
+        let mut world = World::new(case.params.clone(), case.dist.clone(), case.seed);
         let b = case.params.base_metabolic_rate;
         for tick in 0..case.ticks {
             let before_ids: std::collections::HashSet<u64> =

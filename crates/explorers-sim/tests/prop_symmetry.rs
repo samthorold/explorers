@@ -10,7 +10,7 @@ use explorers_sim::{
     Agent, AgentSpec, World, WorldRecipe, phase, toroidal_distance, wrap_position,
 };
 use proptest::prelude::*;
-use support::{WorldCase, world_case_integer_exponent};
+use support::{WorldCase, world_case};
 
 /// Relative tolerance for *summed* world totals under a permutation. The
 /// execution model commits every RNG-derived quantity and every agent's
@@ -142,7 +142,7 @@ fn without_chemotaxis_or_contact(mut case: WorldCase) -> WorldCase {
 /// to coincide with a parent. Covers acquisition, metabolism, growth, the
 /// random walk, wear and death over the full trait-covariance range.
 fn world_case_without_reproduction() -> impl Strategy<Value = WorldCase> {
-    world_case_integer_exponent().prop_map(|mut c| {
+    world_case().prop_map(|mut c| {
         c.params.reproduction_energy_threshold = f32::INFINITY;
         without_chemotaxis_or_contact(c)
     })
@@ -154,18 +154,14 @@ fn world_case_without_reproduction() -> impl Strategy<Value = WorldCase> {
 /// adds `N(0, magnitude)` with `magnitude ≤ 0.2` (5σ to reach zero from 1.0).
 /// Narrower than the search ranges on those three dimensions only.
 fn world_case_bounded_dispersal() -> impl Strategy<Value = WorldCase> {
-    (
-        world_case_integer_exponent(),
-        1.5f32..=2.0,
-        0.1f32..=0.25,
-        0.01f32..=0.2,
-    )
-        .prop_map(|(mut c, dispersal, cov, magnitude)| {
+    (world_case(), 1.5f32..=2.0, 0.1f32..=0.25, 0.01f32..=0.2).prop_map(
+        |(mut c, dispersal, cov, magnitude)| {
             c.dist.mean_traits.dispersal = dispersal;
             c.dist.trait_covariance = cov;
             c.params.mutation_magnitude = magnitude;
             c
-        })
+        },
+    )
 }
 
 /// Reproduction enabled on the bounded-dispersal domain, so a zero-reach
@@ -177,7 +173,7 @@ fn world_case_with_reproduction() -> impl Strategy<Value = WorldCase> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// Agent-order permutation over the full (finite, #444-scoped) domain:
+    /// Agent-order permutation over the full search domain:
     /// stepping a world with its agent slice permuted before every tick yields
     /// the same multiset of agent states, bit for bit, and the same ledger
     /// totals to rounding. Ignored until two sequential-update leaks are fixed:
@@ -188,7 +184,7 @@ proptest! {
     #[test]
     #[ignore = "see #451, #452"]
     fn trajectory_is_invariant_under_agent_order_permutation(
-        case in world_case_integer_exponent()
+        case in world_case()
     ) {
         check_order_permutation_invariance(&case)?;
     }
@@ -301,7 +297,7 @@ fn translation_case_from(
 
 /// Full C1 domain (less chemotaxis, see above).
 fn translation_case() -> impl Strategy<Value = TranslationCase> {
-    translation_case_from(world_case_integer_exponent())
+    translation_case_from(world_case())
 }
 
 /// The #453 workaround domain: consumption unreachable, so no carcass is ever
@@ -380,7 +376,7 @@ proptest! {
     /// from the full search range.
     #[test]
     fn chemotaxis_neighbour_counts_are_invariant_under_toroidal_translation(
-        tc in translation_case_from(world_case_integer_exponent()),
+        tc in translation_case_from(world_case()),
         sensing in 1.0f32..=30.0,
     ) {
         let mut case = tc.case.clone();
@@ -579,7 +575,7 @@ fn mean_and_se(xs: &[f32]) -> (f32, f32) {
 /// The scaling domain: the C1 domain at `SCALING_BASE_EXTENT` with every
 /// interaction radius capped at `SCALING_MAX_RADIUS` (see the module note).
 fn scaling_case() -> impl Strategy<Value = WorldCase> {
-    world_case_integer_exponent().prop_map(|mut c| {
+    world_case().prop_map(|mut c| {
         c.params.world_extent = SCALING_BASE_EXTENT;
         c.params.light_competition_radius =
             c.params.light_competition_radius.min(SCALING_MAX_RADIUS);
