@@ -90,6 +90,8 @@ The balance between wear accumulation and repair must produce three properties:
 - **Activity-dependent equilibrium.** Higher throughput (more photosynthesis, more consumption, more movement) increases the equilibrium wear level. Busier agents age faster, but stabilise at a lower level of function rather than spiralling to death.
 - **Trait-space-derived lifespan.** An agent's position on the survive-vs-reproduce axis determines its lifespan. High kappa produces long-lived agents with low equilibrium wear. Low kappa produces short-lived agents with high equilibrium wear. The lifespan gradient is continuous, not binary.
 
+**Use-dependent wear is one coefficient over three couplings.** The committed rule accrues per-tick use-dependent wear on each functional trait as `use_wear_rate × usage`, where usage is *energy captured* for autotrophy, *energy drained* for heterotrophy, and *distance moved* for mobility. Wear is an energy (repair is 1:1 with energy, flow 9), so the first two couplings are dimensionless (`E/E`) while the third is `E/L` — one coefficient cannot carry both. The rule therefore carries three implied unit constants, one per coupling, each `1.0` in today's units: `u_WA` (per energy captured), `u_WH` (per energy drained), `u_WM` (per distance moved) — named in code as `units::USE_WEAR_PER_ENERGY_CAPTURED`, `units::USE_WEAR_PER_ENERGY_DRAINED`, `units::USE_WEAR_PER_DISTANCE_MOVED` (see *Unit anchors* below). The inhomogeneity is latent in practice: `use_wear_rate` is `0` on the search baseline and on the recipes that exercise the current verdicts (example4, 9–13); the older recipes example1–3, 5, 7 and 8 set it to `0.01`. Whether to resolve it — by splitting the coefficient into a per-energy and a per-distance rate, or by converting distance moved to the energy it already costs (`distance × movement_cost_coefficient × structure`) before it enters wear — is a design decision to be taken with the designer, not one the committed rules make ([`440-dimensionless-groups.md`](../research/440-dimensionless-groups.md), smell S2).
+
 Behavioural traits — kappa, fecundity — do not wear. They are allocation parameters, not physical machinery. An old organism is less capable, not less decisive.
 
 Identity-determining thresholds use an agent's nominal (unworn) traits. An agent born mobile is ecologically mobile for its entire life, even as its effective mobility degrades with age. Wear degrades performance, not identity. An aging wolf does not become a plant.
@@ -238,6 +240,16 @@ Traits are dimensionless ([trait-space](trait-space.md)), but five committed for
 | nutrient uptake demand per tick `= u_A · effective autotrophy` | flow 2 | `u_A = 1` | `N/T` per trait unit | `units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK` |
 | structure drained per in-reach target per tick `= u_H · effective heterotrophy` | flow 3 | `u_H = 1` | `E/T` per trait unit | `units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK` |
 | base repair per functional trait per tick `= u_R · kappa`, attenuated by `exp(−repair_decay · wear)` | somatic wear, flow 9 | `u_R = 1` | `E/T` per unit kappa | `units::KAPPA_REPAIR_PER_TICK` |
+
+A second family of anchors sits inside use-dependent wear (*Somatic wear*, above). `use_wear_rate` is one coefficient applied to three usages of different dimension; the constant that makes each product homogeneous is likewise `1.0` today:
+
+| coupling | rule | anchor | units | code constant |
+|---|---|---|---|---|
+| autotrophy wear per tick `= use_wear_rate · u_WA · energy captured` | somatic wear | `u_WA = 1` | `E/E` (dimensionless) | `units::USE_WEAR_PER_ENERGY_CAPTURED` |
+| heterotrophy wear per tick `= use_wear_rate · u_WH · energy drained` | somatic wear | `u_WH = 1` | `E/E` (dimensionless) | `units::USE_WEAR_PER_ENERGY_DRAINED` |
+| mobility wear per tick `= use_wear_rate · u_WM · distance moved` | somatic wear | `u_WM = 1` | `E/L` | `units::USE_WEAR_PER_DISTANCE_MOVED` |
+
+With `u_WA` and `u_WH` dimensionless, `use_wear_rate` is itself a pure number for the two energy couplings, and `u_WM` alone carries the `E/L` that the mobility coupling needs. The use-wear branch is guarded bit-exactly on a configuration where all three couplings are live at once (`tests/trait_unit_anchors.rs`).
 
 Naming them changes no number and no trajectory (`crates/explorers-sim/src/units.rs`; guarded bit-exactly by `tests/trait_unit_anchors.rs`). What it changes is what the design claims: the trait unit is pinned simultaneously to `L/T`, `L`, `N/T` and `E/T`, so no rescaling of energy, length or nutrient is a symmetry of the map even when every explicit parameter scales along — three of the search box's 32 axes are physical only through these anchors (see [viability](viability.md), *Dimensionless groups*, and [`440-dimensionless-groups.md`](../research/440-dimensionless-groups.md), smell S1).
 

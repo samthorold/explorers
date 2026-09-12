@@ -108,7 +108,7 @@ dimensionless group the field contributes (defined in the next section).
 | 20 | `wear_rate` | `E/T` (per trait unit) | baseline wear `= wear_rate · nominal` per tick; wear is repaired 1:1 with energy (`grow`), so wear is `E` | `π_w = wear_rate/B` |
 | 21 | `wear_degradation_steepness` `k` | `1/E` | `effective = nominal · exp(−k · wear)` | `π_k = k·ε` |
 | 22 | `somatic_maintenance_cost_coefficient` | — | **dead**: legacy serde field, read by no phase | none |
-| 23 | `use_wear_rate` | **inhomogeneous** | multiplies energy captured (`ft 0`), energy drained (`ft 1`) *and* distance moved (`ft 2`) (`apply_wear`) | **smell S2** |
+| 23 | `use_wear_rate` | **inhomogeneous** | multiplies energy captured (`ft 0`), energy drained (`ft 1`) *and* distance moved (`ft 2`) (`apply_wear`); the three implied anchors `u_WA = u_WH = 1 E/E`, `u_WM = 1 E/L` are now named (`units.rs`) | **smell S2** |
 | 24 | `structure_maintenance_coefficient` `c_s` | `1/T` | `c_s · structure` per tick (flow 8): `E` per `E` per tick | `π_s = c_s·τ` |
 | 25 | `repair_decay` | `1/E` | `repair = kappa · exp(−decay · wear)` (`grow`) | `π_rd = repair_decay·ε` |
 | 26 | `base_nutrient_ratio` `ρ_b` | `N/E` | `demand = structure · (ρ_b + ρ_s · σ)` (`stoichiometric_demand`) | `π_ρ = ρ_b·ε/N_r` |
@@ -298,9 +298,19 @@ parameterise any anchor, and what `d` then means, remains a system-design decisi
 **S2 — `use_wear_rate` mixes energy and length.** `apply_wear` computes
 `use_rate · usage[ft]` with `usage = [energy captured, energy drained, distance moved]`.
 One coefficient is therefore `wear/E` for autotrophy and heterotrophy and `wear/L` for
-mobility; no single unit satisfies both. The field is `0` on every committed recipe and
-on the search baseline, so nothing runs on it today — it is a smell in the rule, not a
-live defect. Filed as #460 (`needs-triage`).
+mobility; no single unit satisfies both. The field is `0` on the search baseline and on
+the recipes behind the current verdicts (example4, 9–13); example1–3, 5, 7 and 8 set it
+to `0.01`, so the branch does run there, but nothing in the atlas or the gates depends on
+it — it is a smell in the rule, not a live defect. Filed as #460 — resolved by naming the
+three implied unit constants as explicit anchors (`crates/explorers-sim/src/units.rs`:
+`USE_WEAR_PER_ENERGY_CAPTURED` `u_WA = 1 E/E`, `USE_WEAR_PER_ENERGY_DRAINED` `u_WH = 1 E/E`,
+`USE_WEAR_PER_DISTANCE_MOVED` `u_WM = 1 E/L`), multiplied in at `apply_wear` and its SoA
+twin, and documenting them in `world-rules.md` (*Somatic wear*, *Unit anchors*) and
+`viability.md` (*Dimensionless groups*); no number changed, and the `use_wear_rate > 0`
+branch is pinned bit-exactly on a configuration where all three couplings are live. With
+the anchors named, `use_wear_rate` reads as a pure number for the two energy couplings and
+`u_WM` alone carries the `E/L`. Whether to split the coefficient or convert distance moved
+to its energy cost before it enters wear remains a system-design decision.
 
 **S3 — the energy-death prefilter's `STRUCTURE_MIN = 1.0` is an uncommitted energy
 constant.** `viability.md` writes the gate with a symbolic `structure_min`; B1 proves no

@@ -346,7 +346,11 @@ pub fn apply_wear_soa(
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
             let nominal = s.nominal_functional(ft, i);
             let baseline = baseline_rate * nominal.max(0.0);
-            let use_dependent = use_rate * agent_usage[ft].max(0.0);
+            // `use_wear_rate` is one coefficient over three usages of different
+            // dimension; the per-usage anchor (each 1.0) makes the product
+            // homogeneous (#460, `units.rs`).
+            let use_dependent =
+                use_rate * crate::units::USE_WEAR_ANCHORS[ft] * agent_usage[ft].max(0.0);
             let accumulation = baseline + use_dependent;
             s.wear[ft][i] += accumulation;
             total_wear_delta += accumulation;
