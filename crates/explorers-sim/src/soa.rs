@@ -200,7 +200,7 @@ pub fn metabolise_soa(s: &mut AgentSoA, params: &WorldParameters) -> (Vec<Event>
     let exp = params.maintenance_cost_exponent;
 
     for i in 0..s.len() {
-        let cost = maintenance_cost(s, i, params, exp);
+        let cost = maintenance_cost(s, i, params, exp).min(s.reserve[i].max(0.0));
         s.reserve[i] -= cost;
         total_dissipated += cost;
         events.push(Event {

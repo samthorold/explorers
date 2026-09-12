@@ -167,6 +167,12 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
                 * params.asexual_propensity_maintenance_cost
             + agent.structure * params.structure_maintenance_coefficient;
 
+        // Flow 8 / reserve depletion: an agent pays only what it holds. The
+        // charge is capped at the available reserve (as the move phase caps
+        // its cost), so a starving agent lands at exactly zero and only the
+        // energy it actually held is booked as dissipated — never the
+        // overdraft it could not fund.
+        let cost = cost.min(agent.reserve.max(0.0));
         agent.reserve -= cost;
         total_dissipated += cost;
         events.push(Event {
@@ -2535,6 +2541,27 @@ mod tests {
         assert!((events[0].energy_delta - 1.0).abs() < 1e-6);
         assert!((agents[0].reserve - 9.0).abs() < 1e-6);
         assert!((dissipated - 1.0).abs() < 1e-6);
+    }
+
+    /// Flow 8 with reserve depletion: an agent whose reserve cannot cover
+    /// its metabolic cost pays only what it holds — reserve lands at exactly
+    /// zero (starvation) and only the energy it actually held dissipates.
+    #[test]
+    fn metabolise_caps_charge_at_available_reserve() {
+        let params = WorldParameters {
+            base_metabolic_rate: 1.0,
+            ..test_params()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 0.25, zero_traits())];
+
+        let (events, dissipated) = metabolise(&mut agents, &params);
+
+        assert_eq!(agents[0].reserve, 0.0, "reserve is depleted, not overdrawn");
+        assert!(
+            (dissipated - 0.25).abs() < 1e-6,
+            "only held energy dissipates"
+        );
+        assert!((events[0].energy_delta - 0.25).abs() < 1e-6);
     }
 
     #[test]

@@ -36,10 +36,7 @@ proptest! {
 
     /// Energy ledger identity over the full search domain: after `k` steps,
     /// `endowment + solar input == dissipated + retained (agents + carcasses)`.
-    /// Ignored until #445 (metabolic overdraft at starvation death over-counts
-    /// `dissipated_energy`) is fixed.
     #[test]
-    #[ignore = "see #445"]
     fn energy_ledger_identity_holds(case in world_case()) {
         check_energy_ledger_identity(&case)?;
     }
