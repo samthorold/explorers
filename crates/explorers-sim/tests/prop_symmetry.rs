@@ -513,3 +513,152 @@ fn check_translation_covariance(tc: &TranslationCase) -> Result<(), TestCaseErro
     )?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Property 3: extensive scaling
+// ---------------------------------------------------------------------------
+//
+// Doubling the linear extent (4× area) together with the founding population
+// and the nutrient pool must leave per-area living energy and per-area
+// available nutrient unchanged in expectation. The scale factor is 2 in
+// extent rather than √2 so the nutrient grid (fixed 10-unit cells) tiles both
+// worlds exactly and per-cell density is unchanged.
+//
+// This is a statistical property, asserted on ensemble means over
+// `SCALING_SEEDS` seeds per size with a bound justified as follows.
+//
+// Domain. The property holds in the thermodynamic limit `r ≪ L` only: an
+// interaction disc that wraps onto itself on the torus changes the physics
+// with size. Diagnostics at L = 20 showed |z| up to 37 once the
+// light-competition radius exceeded L/2, and z ≈ 3–4 systematic residue for
+// radii in (L/4, L/2) where second-order (neighbour-of-neighbour, scale 2r)
+// structure still wraps. The base world is therefore L = 40 with every
+// interaction radius capped at L/4 = 10: light competition ≤ 10, sensing
+// coefficient ≤ 5 (radius ≲ 7.5 at mobility ≤ 1.5), contact ≤ 5 × 1.5,
+// and `dispersal_reach_coefficient = 1` so mating reach ≲ 10. Everything else
+// is the C1 domain.
+//
+// Bound. `|Δmean| ≤ 8·SE_diff + 5%·max(|mean|)`. The z-term absorbs seed
+// noise (16 seeds per size; |t| > 8 at ~30 df is a 1e-8 event). The relative
+// floor absorbs two things the z-term cannot: statistics that are nearly
+// constant across seeds (per-area available nutrient moves by ~1e-4 of
+// itself in 20 ticks, so SE ≈ 0 and any rounding gives a large z), and
+// genuine O(1/N) finite-size effects — founders are dealt to trait clusters
+// round-robin, so a population of 16 in 5 clusters is 25/19/19/19/19% but 64
+// is 20/20/20/20/20%, and that composition shift is systematic, not seed
+// noise. Measured null: over 1000 random cases the worst `|Δ| / bound` was
+// 0.46. Non-extensive physics (solar input, nutrient endowment or any flow
+// scaling with something other than area) shows up as an O(1) relative
+// difference with a small SE — a ratio in the tens (leaving the pool
+// unscaled gives |Δ| = 15 × bound) — so the bound loses no power against
+// the bugs it is for.
+//
+// Cost: 64 cases × 2 sizes × 16 seeds × ≤ 20 ticks ≈ 3 s.
+
+/// Seeds per size in the scaling ensemble.
+const SCALING_SEEDS: u64 = 16;
+/// Base linear extent; the scaled world is `2 ×` this.
+const SCALING_BASE_EXTENT: f32 = 40.0;
+/// Every interaction radius is capped at this (= L/4), see the module note.
+const SCALING_MAX_RADIUS: f32 = SCALING_BASE_EXTENT / 4.0;
+/// z-score term of the bound.
+const SCALING_Z: f32 = 8.0;
+/// Relative-floor term of the bound.
+const SCALING_REL_FLOOR: f32 = 0.05;
+
+/// Per-area statistics of one world after `ticks` steps.
+struct PerArea {
+    living_energy: f32,
+    available_nutrient: f32,
+}
+
+fn per_area_after(case: &WorldCase, seed: u64) -> PerArea {
+    let mut world = World::new(case.params.clone(), case.dist.clone(), seed);
+    for _ in 0..case.ticks {
+        world.step();
+    }
+    let area = case.params.world_extent * case.params.world_extent;
+    PerArea {
+        living_energy: world.free_energy() / area,
+        available_nutrient: world.nutrient_pool() / area,
+    }
+}
+
+/// The same parameterisation scaled by `k` in linear extent: area, founding
+/// population and nutrient pool all scale by `k²`, so every intensive
+/// (per-area) quantity is unchanged in expectation.
+fn scaled_by(case: &WorldCase, k: u32) -> WorldCase {
+    let mut scaled = case.clone();
+    scaled.params.world_extent *= k as f32;
+    scaled.params.initial_population_size *= k * k;
+    scaled.params.initial_nutrient_pool *= (k * k) as f32;
+    scaled
+}
+
+fn mean_and_se(xs: &[f32]) -> (f32, f32) {
+    let n = xs.len() as f32;
+    let mean = xs.iter().sum::<f32>() / n;
+    let var = xs.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / (n - 1.0);
+    (mean, (var / n).sqrt())
+}
+
+/// The scaling domain: the C1 domain at `SCALING_BASE_EXTENT` with every
+/// interaction radius capped at `SCALING_MAX_RADIUS` (see the module note).
+fn scaling_case() -> impl Strategy<Value = WorldCase> {
+    world_case_integer_exponent().prop_map(|mut c| {
+        c.params.world_extent = SCALING_BASE_EXTENT;
+        c.params.light_competition_radius =
+            c.params.light_competition_radius.min(SCALING_MAX_RADIUS);
+        c.params.sensing_range_coefficient = c
+            .params
+            .sensing_range_coefficient
+            .min(SCALING_MAX_RADIUS / 2.0);
+        c.params.dispersal_reach_coefficient = 1.0;
+        c
+    })
+}
+
+fn assert_ensemble_means_agree(
+    name: &str,
+    small: &[f32],
+    big: &[f32],
+) -> Result<(), TestCaseError> {
+    let (mean_small, se_small) = mean_and_se(small);
+    let (mean_big, se_big) = mean_and_se(big);
+    let se_diff = (se_small * se_small + se_big * se_big).sqrt();
+    let scale = mean_small.abs().max(mean_big.abs());
+    let bound = SCALING_Z * se_diff + SCALING_REL_FLOOR * scale;
+    let delta = (mean_small - mean_big).abs();
+    prop_assert!(
+        delta <= bound,
+        "per-area {name} is not extensive: {mean_small} (SE {se_small}) at L vs \
+         {mean_big} (SE {se_big}) at 2L; |Δ| = {delta} > bound {bound} \
+         ({SCALING_Z}·SE_diff + {SCALING_REL_FLOOR}·scale)"
+    );
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Extensive scaling: doubling the extent with 4× population and 4×
+    /// nutrient pool leaves per-area living energy and per-area available
+    /// nutrient unchanged, up to the finite-size bound above.
+    #[test]
+    fn per_area_statistics_are_invariant_under_extensive_scaling(case in scaling_case()) {
+        let big = scaled_by(&case, 2);
+        let mut energy = (Vec::new(), Vec::new());
+        let mut nutrient = (Vec::new(), Vec::new());
+        for s in 0..SCALING_SEEDS {
+            let seed = case.seed.wrapping_add(s);
+            let small = per_area_after(&case, seed);
+            let large = per_area_after(&big, seed);
+            energy.0.push(small.living_energy);
+            energy.1.push(large.living_energy);
+            nutrient.0.push(small.available_nutrient);
+            nutrient.1.push(large.available_nutrient);
+        }
+        assert_ensemble_means_agree("living energy", &energy.0, &energy.1)?;
+        assert_ensemble_means_agree("available nutrient", &nutrient.0, &nutrient.1)?;
+    }
+}
