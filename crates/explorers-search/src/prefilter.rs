@@ -16,6 +16,35 @@ use explorers_genesis::WorldParameters;
 
 use crate::qd::Cliff;
 
+/// `S_min`: the structure of "one minimal viable body" that the energy-death
+/// gate charges nutrient for. Units: energy `E` (structure is embodied energy).
+///
+/// This is an **uncommitted** energy anchor, not a committed rule. The gate in
+/// `viability.md` (*Gate — energy death*) is written with a symbolic
+/// `structure_min`, but the committed peak-relative death threshold
+/// (`fragility × peak_structure`, no absolute floor — `433-energy-bound.md`,
+/// B1) supplies no minimal viable body, so the only value the committed rules
+/// support is `S_min → 0`, at which the gate reduces to `N_total ≥ N_r`. The
+/// prefilter has always filled the symbol with one unit of energy; naming it
+/// here changes no verdict (`tests/prefilter_atlas.rs` pins every committed
+/// atlas live cell green) but makes the anchor visible and citable.
+///
+/// In dimensionless form the floor is its own group, `π_S = S_min / ε` with
+/// `ε = B·τ` one tick of base metabolism, so the implemented gate
+/// `π_N ≥ π_ρ · π_S · (1 + π_ρs · σ_min) + 1` moves with `base_metabolic_rate`
+/// for no physical reason — it is not scale-free. `viability.md` records this
+/// in the Open tier alongside the living-energy ceiling; the dimensional
+/// analysis is `docs/research/440-dimensionless-groups.md`, smell S3. Whether
+/// to drop the term or commit a floor in system design is a design decision
+/// to be taken with the designer, not one this constant makes.
+pub const STRUCTURE_MIN: f32 = 1.0;
+
+/// `σ_min`: the specification sum of a minimal viable body — zero, because the
+/// cheapest viable body invests nothing in autotrophy/heterotrophy/mobility.
+/// Dimensionless. A smaller minimum makes the floor smaller, so this is the
+/// weakest (most conservative) choice, as the gate requires.
+pub const SIGMA_MIN: f32 = 0.0;
+
 /// Extinction flux floor (`viability.md`, *Gate — extinction*).
 ///
 /// An isolated producer receives at most the full flux magnitude `F`; metabolism
@@ -47,15 +76,16 @@ pub fn fails_extinction_gate(params: &WorldParameters) -> bool {
 /// `initial_nutrient_pool` (the closed nutrient ledger — `crate::search::decode`
 /// puts every unit of nutrient in the pool). `N_repro_threshold` is
 /// `reproduction_nutrient_threshold`. The gate is deliberately the *weakest*
-/// floor: `structure_min` and `σ_min` take their minimal viable values — one
-/// unit of structure (an agent must be embodied, `structure > 0`) and zero
-/// specification (the cheapest viable body invests nothing in
-/// autotrophy/heterotrophy/mobility). Smaller minima make the floor smaller, so
-/// failing it is *sufficient* for deadness, exactly as the doc requires.
+/// floor: `structure_min` and `σ_min` take their minimal viable values —
+/// [`STRUCTURE_MIN`] (one unit of energy: an agent must be embodied,
+/// `structure > 0`; an uncommitted anchor, see its doc) and [`SIGMA_MIN`]
+/// (zero specification). Smaller minima make the floor smaller, so failing it
+/// is *sufficient* for deadness, exactly as the doc requires.
+///
+/// In the dimensionless groups of `viability.md` the gate reads
+/// `π_N ≥ π_ρ · π_S · (1 + π_ρs · σ_min) + 1` with `π_S = STRUCTURE_MIN / ε`;
+/// the raw form below is that inequality multiplied through by `N_r`.
 pub fn fails_energy_death_gate(params: &WorldParameters) -> bool {
-    const STRUCTURE_MIN: f32 = 1.0;
-    const SIGMA_MIN: f32 = 0.0;
-
     let body_demand = STRUCTURE_MIN
         * (params.base_nutrient_ratio + params.specification_nutrient_coefficient * SIGMA_MIN);
     let floor = body_demand + params.reproduction_nutrient_threshold;
@@ -114,9 +144,11 @@ mod tests {
     #[test]
     fn energy_death_gate_fires_when_pool_below_the_floor() {
         let mut p = baseline();
-        // Floor = 1.0·(base_nutrient_ratio + spec_coeff·0) + N_repro_threshold
-        //       = base_nutrient_ratio + reproduction_nutrient_threshold.
-        let floor = p.base_nutrient_ratio + p.reproduction_nutrient_threshold;
+        // Floor = STRUCTURE_MIN·(base_nutrient_ratio + spec_coeff·SIGMA_MIN)
+        //         + N_repro_threshold.
+        let floor = STRUCTURE_MIN
+            * (p.base_nutrient_ratio + p.specification_nutrient_coefficient * SIGMA_MIN)
+            + p.reproduction_nutrient_threshold;
         // A pool a hair below the floor cannot embody one agent AND clear the
         // reproduction earmark → guaranteed energy death.
         p.initial_nutrient_pool = floor - 0.01;
@@ -130,7 +162,9 @@ mod tests {
     #[test]
     fn energy_death_gate_clears_when_pool_meets_the_floor() {
         let mut p = baseline();
-        let floor = p.base_nutrient_ratio + p.reproduction_nutrient_threshold;
+        let floor = STRUCTURE_MIN
+            * (p.base_nutrient_ratio + p.specification_nutrient_coefficient * SIGMA_MIN)
+            + p.reproduction_nutrient_threshold;
         // Exactly at the floor clears (the condition is N_total ≥ floor).
         p.initial_nutrient_pool = floor;
         assert!(!fails_energy_death_gate(&p), "pool == floor must clear");

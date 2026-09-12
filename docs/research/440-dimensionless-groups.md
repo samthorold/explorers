@@ -317,8 +317,16 @@ constant.** `viability.md` writes the gate with a symbolic `structure_min`; B1 p
 minimal viable body exists under the peak-relative death threshold; the prefilter fills
 the symbol with `1.0` energy. The gate is therefore not scale-free (`ŝ_min = 1/ε`), and
 the only value the committed rules support is `S_min → 0`, i.e. `N_total ≥ N_r`. Filed
-as #461 (`needs-triage`); the fix is a decision about the gate (drop the term, or commit a
-floor), not a physics change.
+as #461 — resolved by naming the anchor as an explicit constant
+(`crates/explorers-search/src/prefilter.rs`: `STRUCTURE_MIN = 1 E`, with `SIGMA_MIN = 0`
+alongside it; a search-crate constant, not a stepper one, so it does not live in
+`units.rs`), expressing the gate in π-form with the floor as its own group
+`π_S = STRUCTURE_MIN/ε` (`π_N ≥ π_ρ·π_S·(1 + π_ρs·σ_min) + 1`), and documenting it in
+`viability.md` (Open tier, *Dimensionless groups*, *Gate — energy death*) and
+`world-rules.md` (*Unit anchors*); no number changed, and every committed atlas live cell
+is pinned green against the gate (`crates/explorers-search/tests/prefilter_atlas.rs`).
+The decision about the gate (drop the term, or commit a floor) remains a system-design
+decision, not a physics change.
 
 Two non-smells recorded for completeness: `somatic_maintenance_cost_coefficient` is dead
 (read by no phase; retained for serde compatibility), and `trait_covariance` is a
