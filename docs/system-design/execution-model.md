@@ -129,6 +129,8 @@ Step 2 is evaluated against tick-start state for every consumer, including its o
 
 A carcass is a target while it holds *any* stock, energy or nutrient. The two are drained by the same bite but are not exhausted at the same instant, and a carcass gated on energy alone would strand its remaining nutrient for good the moment rounding took its energy to exactly zero. The spent carcass is instead the continuous limit of the rich one: a bite on it transfers no energy, so the consumer retains no nutrient and the remainder is excreted to the cell — the nutrient returns to the substrate rather than locking in a dead pool nothing can reach.
 
+Nutrient leaves a carcass in the proportion of its energy removed that tick, partitioned among the consumers by their drains — each share taken against the carcass's *tick-start* nutrient, like demand against tick-start structure, never against the stock as the previous consumer left it. Two equal bites therefore take equal shares, and a carcass whose demand exhausts it releases all of its nutrient in the same tick (any rounding remainder mineralises to the cell), so it leaves the world on the same tick in every run rather than lingering on a residue.
+
 #### Pass 2 — Investments
 
 Resolve all interactions where the source invests its own resources:

@@ -268,15 +268,10 @@ fn translation_case() -> impl Strategy<Value = TranslationCase> {
     translation_case_from(world_case())
 }
 
-/// The #453 workaround domain: consumption unreachable, so no carcass is ever
-/// drained and the zero-energy nutrient discontinuity cannot fire; dispersal
-/// bounded away from zero so a zero-reach consumer never coincides with a
-/// target either.
-fn translation_case_without_consumption() -> impl Strategy<Value = TranslationCase> {
-    translation_case_from(world_case_bounded_dispersal().prop_map(|mut c| {
-        c.params.contact_range_coefficient = 0.0;
-        c
-    }))
+/// Dispersal bounded away from zero, so a zero-reach consumer never
+/// coincides with a target.
+fn translation_case_bounded_dispersal() -> impl Strategy<Value = TranslationCase> {
+    translation_case_from(world_case_bounded_dispersal())
 }
 
 /// Sample the founders `World::new` would place for this case, as a spec'd
@@ -294,7 +289,10 @@ fn founder_roster(case: &WorldCase) -> Vec<AgentSpec> {
         .collect()
 }
 
-fn run_roster(case: &WorldCase, roster: Vec<AgentSpec>) -> World {
+/// Run a roster for the case's ticks, rejecting the case if the trajectory
+/// ever brings a consumer's feeding reach within `TRANSLATION_POS_TOLERANCE`
+/// of a target (see `contact_on_reach_boundary`).
+fn run_roster(case: &WorldCase, roster: Vec<AgentSpec>) -> Result<World, TestCaseError> {
     let recipe = WorldRecipe {
         parameters: case.params.clone(),
         initial_distribution: None,
@@ -304,9 +302,57 @@ fn run_roster(case: &WorldCase, roster: Vec<AgentSpec>) -> World {
     };
     let mut world = World::from_recipe(&recipe, case.seed);
     for _ in 0..case.ticks {
+        if let Some((consumer, target)) = contact_on_reach_boundary(&world) {
+            return Err(TestCaseError::reject(format!(
+                "consumer {consumer} sits on its feeding-reach boundary to target {target} \
+                 at tick {}",
+                world.tick()
+            )));
+        }
         world.step();
     }
-    world
+    Ok(world)
+}
+
+/// Feeding reach is a step function of position (binary-reach drain, #380):
+/// a target is drained if it is within reach and untouched if it is an ulp
+/// beyond. A translation perturbs every distance by the position rounding,
+/// so a pair that happens to sit within that rounding of the boundary is
+/// drained in one world and not the other — a measure-zero event (≈ 1e-4 of
+/// cases at the C1 domain) that is sensitive dependence, not an asymmetry,
+/// and that no f32 tolerance can absorb. Such a trajectory is outside the
+/// property's domain and the case is rejected. Scanned between ticks: the
+/// drain phase runs before movement, on the previous tick's positions and
+/// wear, and `body_reach_coefficient = 0` in this domain, so this is exactly
+/// the reach the next drain will apply. Returns the first (consumer, target)
+/// pair on the boundary.
+fn contact_on_reach_boundary(world: &World) -> Option<(u64, u64)> {
+    let params = world.params();
+    let extent = params.world_extent;
+    let k = params.wear_degradation_steepness;
+    for consumer in world.agents() {
+        let eff_heterotrophy = consumer.effective_trait_with_steepness(1, k);
+        if eff_heterotrophy <= 0.0 {
+            continue;
+        }
+        let reach = phase::consumption_reach(eff_heterotrophy, consumer.structure, params);
+        let on_boundary = |target_pos: (f32, f32)| {
+            (toroidal_distance(consumer.position, target_pos, extent) - reach).abs()
+                <= TRANSLATION_POS_TOLERANCE
+        };
+        if let Some(target) = world
+            .agents()
+            .iter()
+            .filter(|t| t.id != consumer.id)
+            .find(|t| on_boundary(t.position))
+        {
+            return Some((consumer.id, target.id));
+        }
+        if let Some(carcass) = world.carcasses().iter().find(|c| on_boundary(c.position)) {
+            return Some((consumer.id, carcass.id));
+        }
+    }
+    None
 }
 
 proptest! {
@@ -315,22 +361,19 @@ proptest! {
     /// Toroidal translation: founding the same roster shifted by a constant
     /// whole-cell vector yields the same trajectory shifted — identity, traits
     /// and demographics exact, positions shifted to f32 tolerance, stores and
-    /// totals equal to rounding. Ignored until #453 (carcass nutrient release
-    /// is discontinuous at zero energy, so a 1-ulp difference in a drained
-    /// carcass's residue decides whether all or none of its nutrient
-    /// recycles) is fixed; `..._without_consumption` runs meanwhile.
+    /// totals equal to rounding.
     #[test]
-    #[ignore = "see #453"]
     fn trajectory_is_covariant_under_toroidal_translation(tc in translation_case()) {
         check_translation_covariance(&tc)?;
     }
 
-    /// As above with consumption unreachable (#453 workaround). Covers light
-    /// competition, nutrient uptake by cell, the random walk, mate search by
-    /// spatial reach, and brood placement.
+    /// As above with dispersal bounded away from zero, so a zero-reach
+    /// consumer never coincides with a target. Covers light competition,
+    /// nutrient uptake by cell, the random walk, mate search by spatial reach,
+    /// and brood placement.
     #[test]
-    fn trajectory_is_covariant_under_toroidal_translation_without_consumption(
-        tc in translation_case_without_consumption()
+    fn trajectory_is_covariant_under_toroidal_translation_with_bounded_dispersal(
+        tc in translation_case_bounded_dispersal()
     ) {
         check_translation_covariance(&tc)?;
     }
@@ -403,8 +446,8 @@ fn check_translation_covariance(tc: &TranslationCase) -> Result<(), TestCaseErro
         })
         .collect();
 
-    let base = run_roster(case, roster);
-    let shifted = run_roster(case, shifted_roster);
+    let base = run_roster(case, roster)?;
+    let shifted = run_roster(case, shifted_roster)?;
 
     let base_pop = population_by_id(&base);
     let shifted_pop = population_by_id(&shifted);

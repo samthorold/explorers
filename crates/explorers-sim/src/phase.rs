@@ -609,11 +609,7 @@ pub struct DrainResult {
 /// carcass reach from its bulk, while a growing heterotroph (a mycelium) does.
 /// Both the living-target and carcass passes call this so they cannot drift
 /// apart (they diverged before — the #303/#293 index/id drain bug).
-pub(crate) fn consumption_reach(
-    eff_heterotrophy: f32,
-    structure: f32,
-    params: &WorldParameters,
-) -> f32 {
+pub fn consumption_reach(eff_heterotrophy: f32, structure: f32, params: &WorldParameters) -> f32 {
     eff_heterotrophy
         * (params.contact_range_coefficient
             + params.body_reach_coefficient * structure.max(0.0).sqrt())
@@ -891,12 +887,20 @@ pub fn resolve_drains(
         // the split that emptied it; it has nothing left to give, not a debt.
         let available = carcasses[carcass_idx].energy.max(0.0);
         let total_demand: f32 = consumers.iter().map(|(_, d, _)| *d).sum();
+        let exhausted = total_demand >= available;
+        // Every consumer's nutrient share is taken against the carcass's
+        // tick-start nutrient (gather-pass state, like demand), never against
+        // the stock as the previous consumer left it: shares are then a
+        // partition of the nutrient drained this tick — two equal bites take
+        // equal shares — rather than a geometric series that strands a
+        // remainder on a carcass whose energy is already gone (#453).
+        let tick_start_nutrient = carcasses[carcass_idx].nutrient;
 
         for &(consumer_idx, demand, trophic_eff) in &consumers {
-            let actual_drain = if total_demand <= available {
-                demand
-            } else {
+            let actual_drain = if exhausted {
                 (demand / total_demand) * available
+            } else {
+                demand
             };
 
             let energy_gained = actual_drain * trophic_eff;
@@ -907,18 +911,18 @@ pub fn resolve_drains(
             dissipated += energy_lost;
 
             // Nutrient transfer from carcass: the share of the carcass's
-            // nutrient that travels with this bite. When demand exhausts the
-            // carcass (including one whose energy is already spent) each
-            // consumer's share is its share of demand, so the carcass empties
-            // regardless of how much energy it had left.
-            let carcass_nutrient = carcasses[carcass_idx].nutrient;
-            if carcass_nutrient > 0.0 {
-                let nutrient_fraction = if total_demand <= available {
-                    actual_drain / available
-                } else {
+            // nutrient that travels with this bite, proportional to the share
+            // of its energy the bite removes. When demand exhausts the carcass
+            // (including one whose energy is already spent) each consumer's
+            // share is its share of demand, so the carcass empties regardless
+            // of how much energy it had left.
+            if tick_start_nutrient > 0.0 {
+                let nutrient_fraction = if exhausted {
                     demand / total_demand
+                } else {
+                    actual_drain / available
                 };
-                let nutrient_transferred = carcass_nutrient * nutrient_fraction;
+                let nutrient_transferred = tick_start_nutrient * nutrient_fraction;
 
                 let consumer_nutrient_need =
                     consumer_stoichiometric_demand[consumer_idx] * energy_gained;
@@ -944,6 +948,16 @@ pub fn resolve_drains(
                 position: Some(carcass_pos),
                 target_was_carcass: true,
             });
+        }
+
+        // The shares of an exhausted carcass sum to its tick-start nutrient
+        // only to rounding. Whatever ulp that leaves is not a stock anything
+        // will come back for; it mineralises to the cell now, so the carcass
+        // is empty on both stocks and leaves the world on the same tick in
+        // every run.
+        if exhausted && carcasses[carcass_idx].nutrient != 0.0 {
+            *nutrient_grid.at_position(carcass_pos) += carcasses[carcass_idx].nutrient;
+            carcasses[carcass_idx].nutrient = 0.0;
         }
     }
 
@@ -4933,6 +4947,143 @@ mod tests {
         assert!(
             (carcass_cell - excreted_to_grid).abs() < 1e-6,
             "all excreted nutrient should be in the carcass's cell"
+        );
+    }
+
+    #[test]
+    fn drain_carcass_exhausted_by_two_consumers_releases_all_nutrient_in_equal_shares() {
+        // #453 (3): several consumers on one carcass in a tick. Each consumer's
+        // nutrient share is its share of the energy drained, against the
+        // carcass's *tick-start* nutrient — so two identical consumers that
+        // between them exhaust the carcass receive identical shares and the
+        // carcass ends with no nutrient residue. (Re-reading the carcass's
+        // nutrient after each decrement gave N/2 then N/4, stranding a quarter.)
+        let params = test_params();
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0, // demand 2.0 each; trophic_eff 0.5 -> gains 1.0 each
+            ..zero_traits()
+        };
+        // Reach = 2.0 * 5.0 = 10: each consumer reaches the carcass (9 away)
+        // but not the other consumer (18 away), so nothing else is grazed.
+        let carcass_pos = (40.0, 0.0);
+        let mut agents = vec![
+            make_agent(1, (49.0, 0.0), 10.0, consumer_traits),
+            make_agent(2, (31.0, 0.0), 10.0, consumer_traits),
+        ];
+        // Stoichiometric need = 5.0 * (0.1 + 0.2 * 2.0) * energy_gained(1.0) = 2.5
+        // each, so a 4.0 share is retained 2.5 / excreted 1.5.
+        agents[0].structure = 5.0;
+        agents[1].structure = 5.0;
+
+        let mut carcasses = vec![Carcass {
+            id: 99,
+            position: carcass_pos,
+            energy: 4.0, // == total demand: exhausted this tick
+            nutrient: 8.0,
+            traits: zero_traits(),
+        }];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (49.0, 0.0));
+        grid.insert(1, (31.0, 0.0));
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+
+        let _result = resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
+
+        assert!(
+            carcasses[0].energy.abs() < 1e-6,
+            "carcass energy exhausted, got {}",
+            carcasses[0].energy
+        );
+        assert!(
+            carcasses[0].nutrient.abs() < 1e-6,
+            "an exhausted carcass releases all its nutrient, got residue {}",
+            carcasses[0].nutrient
+        );
+        for a in &agents {
+            let retained = a.nutrient + a.repro_nutrient;
+            assert!(
+                (retained - 2.5).abs() < 1e-5,
+                "consumer {} should retain its full need 2.5 from a 4.0 share, got {retained}",
+                a.id
+            );
+        }
+        assert!(
+            (nutrient_grid.total() - 3.0).abs() < 1e-5,
+            "the two 1.5 excesses reach the carcass's cell, got {}",
+            nutrient_grid.total()
+        );
+    }
+
+    #[test]
+    fn drain_carcass_partially_drained_by_two_consumers_releases_nutrient_pro_rata() {
+        // #453 (3), non-exhausted branch: nutrient leaves a carcass in the
+        // proportion of its energy removed this tick, partitioned among the
+        // consumers by their drains against the tick-start nutrient. Two equal
+        // bites taking half the energy release half the nutrient, a quarter
+        // each — not N/4 then 3N/16.
+        let params = test_params();
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            ..zero_traits()
+        };
+        let carcass_pos = (40.0, 0.0);
+        let mut agents = vec![
+            make_agent(1, (49.0, 0.0), 10.0, consumer_traits),
+            make_agent(2, (31.0, 0.0), 10.0, consumer_traits),
+        ];
+        // Tiny structure: need = 0.1 * 0.5 * 1.0 = 0.05 each, so almost the
+        // whole 2.0 share is excreted to the cell.
+        agents[0].structure = 0.1;
+        agents[1].structure = 0.1;
+
+        let mut carcasses = vec![Carcass {
+            id: 99,
+            position: carcass_pos,
+            energy: 8.0, // demand 4.0 of 8.0: half drained
+            nutrient: 8.0,
+            traits: zero_traits(),
+        }];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (49.0, 0.0));
+        grid.insert(1, (31.0, 0.0));
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+
+        let _result = resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
+
+        assert!(
+            (carcasses[0].energy - 4.0).abs() < 1e-6,
+            "half the energy drained, got {}",
+            carcasses[0].energy
+        );
+        assert!(
+            (carcasses[0].nutrient - 4.0).abs() < 1e-5,
+            "half the energy drained releases half the nutrient, got {}",
+            carcasses[0].nutrient
+        );
+        for a in &agents {
+            let retained = a.nutrient + a.repro_nutrient;
+            assert!(
+                (retained - 0.05).abs() < 1e-5,
+                "consumer {} retains its need 0.05 from a 2.0 share, got {retained}",
+                a.id
+            );
+        }
+        assert!(
+            (nutrient_grid.total() - 3.9).abs() < 1e-5,
+            "the two 1.95 excesses reach the cell, got {}",
+            nutrient_grid.total()
         );
     }
 
