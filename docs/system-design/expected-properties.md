@@ -72,7 +72,12 @@ Nutrient sequesters irreversibly into the dead pool. The conserved system nutrie
 
 ### Population explosion
 
-Unbounded growth. No force limits the system. This occurs when the negative feedbacks (metabolic costs, trophic loss, competition for the energy source) are too weak relative to the energy input rate. Populations grow until the simulation runs out of resources.
+Unbounded growth. No force limits the system. This occurs when the negative feedbacks (metabolic costs, trophic loss, competition for the energy source) are too weak relative to the energy input rate. Under the committed rules the mode splits in two, and only one half is actually open:
+
+- **Explosion in count is energy-impossible on average.** Solar flux is the sole external source, and it is capped per tick at `F·m²` — one flux per light-competition cell, `m = ⌊√2/π_r⌋ + 1` — while every surviving agent pays at least `B` every tick. So the long-run mean population cannot exceed `N̄_max = π_F·m²` ([viability](viability.md#bound--sustained-population-solar-ceiling)). The instantaneous count can spike past it — a hoarded reproductive allocation discharged into a short-lived brood — but no population can be *sustained* above it, for any setting of the searched coefficients. Across 2048 genesis runs (atlas live cells plus a low-discrepancy sample of the search box) the observed mean population sits at a median 0.14 % and a maximum 7.9 % of the ceiling: real worlds are nowhere near it.
+- **Explosion in stored energy is not bounded.** The reproductive allocation is filled every tick, costs nothing to hold, has no cap, and is spent only by a reproductive event the rules never force; a lone reproductively-isolated agent accumulates it indefinitely, and in the median genesis run it holds a third of living energy at peak. No closed-form ceiling on living energy exists without a commitment the design holds in reserve ([viability](viability.md#open-finding--living-energy-has-no-ceiling-under-the-committed-rules)).
+
+**What the detector measures.** The evaluator classifies `population_explosion` when the agent count exceeds a fixed ceiling (`max_population`). That ceiling is a **runtime performance guard** — it bounds the cost of a rollout — not an ecological threshold: it has no theoretical status beyond the mean bound above, it can be crossed transiently by many small-bodied agents within `N̄_max` or by a brood spike above it, and the mean bound itself is far from being reached anywhere in the search box. The failure-mode name and the detector are unchanged, so atlas classifications stay comparable; the reading is that a `population_explosion` verdict marks a run too expensive to evaluate, not a world in which no force limits the system.
 
 ### Frozen dynamics
 
