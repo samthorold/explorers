@@ -15,12 +15,13 @@ use support::{WorldCase, world_case};
 /// Relative tolerance for *summed* world totals under a permutation. The
 /// execution model commits every RNG-derived quantity and every agent's
 /// identity as exactly order-invariant, but explicitly allows the coordinated
-/// non-RNG phases (light competition, drain proportional split, nutrient
-/// uptake) to accumulate their per-neighbour sums in slice order — so totals
-/// built from them may differ by rounding (execution-model.md, "Re-seeding is
-/// a one-time event"). 1e-5 is ~100 ulps: ample for ≤ 20 ticks of a ≤ 40-agent
-/// world, and far below any real order leak (see #451, which showed up as a
-/// position difference of ~1e-2 after one tick).
+/// non-RNG phases (light competition, nutrient uptake) to accumulate their
+/// per-neighbour sums in slice order — so totals built from them may differ
+/// by rounding (execution-model.md, "Re-seeding is a one-time event"). The
+/// drain pass is id-ordered (#452), since its rounding feeds a discontinuity.
+/// 1e-5 is ~100 ulps: ample for ≤ 20 ticks of a ≤ 40-agent world, and far
+/// below any real order leak (see #451, which showed up as a position
+/// difference of ~1e-2 after one tick).
 const SUMMED_TOTAL_REL_TOLERANCE: f32 = 1e-5;
 
 // ---------------------------------------------------------------------------
@@ -124,27 +125,14 @@ fn assert_rel_close(name: &str, a: f32, b: f32, rel: f32) -> Result<(), TestCase
     Ok(())
 }
 
-/// The #452 workaround domain. `contact_range_coefficient = 0` (with the
-/// baseline's `body_reach_coefficient = 0`) gives every consumer zero feeding
-/// reach, so `resolve_drains` fires only for *exactly* co-located pairs.
-/// Founders are placed at random f32 positions and never coincide; the one
-/// way a pair can coincide is a zero-dispersal offspring landing on its
-/// parent, which the two domains below rule out differently. Chemotaxis is
-/// live: `move_agents` senses neighbours at their tick-start positions, so
-/// the movement phase is order-free (#451). Delete once #452 is fixed.
-fn without_contact(mut case: WorldCase) -> WorldCase {
-    case.params.contact_range_coefficient = 0.0;
-    case
-}
-
-/// Reproduction disabled (unreachable energy threshold), so no offspring exist
-/// to coincide with a parent. Covers acquisition, metabolism, growth, the
-/// random walk with chemotaxis, wear and death over the full trait-covariance
-/// range.
+/// Reproduction disabled (unreachable energy threshold). Covers acquisition,
+/// consumption, metabolism, growth, the random walk with chemotaxis, wear and
+/// death over the full trait-covariance range, with the phase most sensitive
+/// to order (reproduction) held out so a failure localises elsewhere.
 fn world_case_without_reproduction() -> impl Strategy<Value = WorldCase> {
     world_case().prop_map(|mut c| {
         c.params.reproduction_energy_threshold = f32::INFINITY;
-        without_contact(c)
+        c
     })
 }
 
@@ -152,7 +140,8 @@ fn world_case_without_reproduction() -> impl Strategy<Value = WorldCase> {
 /// never land exactly on a parent: founders draw `max(0, mean + N(0, cov))`
 /// with `mean ≥ 1.5, cov ≤ 0.25` (a 6σ event to reach zero), and mutation
 /// adds `N(0, magnitude)` with `magnitude ≤ 0.2` (5σ to reach zero from 1.0).
-/// Narrower than the search ranges on those three dimensions only.
+/// Narrower than the search ranges on those three dimensions only. Used by
+/// the translation property (property 2) below.
 fn world_case_bounded_dispersal() -> impl Strategy<Value = WorldCase> {
     (world_case(), 1.5f32..=2.0, 0.1f32..=0.25, 0.01f32..=0.2).prop_map(
         |(mut c, dispersal, cov, magnitude)| {
@@ -164,50 +153,29 @@ fn world_case_bounded_dispersal() -> impl Strategy<Value = WorldCase> {
     )
 }
 
-/// Reproduction enabled on the bounded-dispersal domain, so a zero-reach
-/// consumer never coincides with a target.
-fn world_case_with_reproduction() -> impl Strategy<Value = WorldCase> {
-    world_case_bounded_dispersal().prop_map(without_contact)
-}
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     /// Agent-order permutation over the full search domain:
     /// stepping a world with its agent slice permuted before every tick yields
     /// the same multiset of agent states, bit for bit, and the same ledger
-    /// totals to rounding. Ignored until the remaining sequential-update leak
-    /// is fixed: #452 (`resolve_drains` stoichiometric need reads
-    /// already-drained structure, so the retained/excreted nutrient split is
-    /// order-dependent). The two running forms below cover everything else
-    /// meanwhile, chemotaxis included.
+    /// totals to rounding. Every phase — chemotaxis (#451), the drain
+    /// proportional split and its stoichiometric nutrient split (#452), and
+    /// reproduction (pair keying, canonical newborn ids, brood placement) —
+    /// is per-agent, keyed on stable identity, or evaluated against tick-start
+    /// state.
     #[test]
-    #[ignore = "see #452"]
     fn trajectory_is_invariant_under_agent_order_permutation(
         case in world_case()
     ) {
         check_order_permutation_invariance(&case)?;
     }
 
-    /// As above on the domain where the leaking phase is inert (consumption
-    /// unreachable for #452) and reproduction is off. Every remaining phase —
-    /// chemotaxis included — is per-agent or keyed on stable identity, so
-    /// identity, position, traits and wear are bit-identical and every summed
-    /// store and total is equal to rounding.
+    /// As above with reproduction off, so a failure localises to the
+    /// non-reproductive phases (consumption included).
     #[test]
     fn trajectory_is_invariant_under_agent_order_permutation_without_reproduction(
         case in world_case_without_reproduction()
-    ) {
-        check_order_permutation_invariance(&case)?;
-    }
-
-    /// As above with reproduction on — the phase most sensitive to order
-    /// (pair keying, canonical newborn ids, brood placement) — on the domain
-    /// where offspring cannot coincide with a parent. Non-vacuous: ~30% of
-    /// generated cases produce births within their tick budget.
-    #[test]
-    fn trajectory_is_invariant_under_agent_order_permutation_with_reproduction(
-        case in world_case_with_reproduction()
     ) {
         check_order_permutation_invariance(&case)?;
     }

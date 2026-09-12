@@ -619,6 +619,12 @@ pub(crate) fn consumption_reach(
             + params.body_reach_coefficient * structure.max(0.0).sqrt())
 }
 
+/// Order a target's gathered consumers by agent id, so the proportional
+/// split and every accumulation it feeds are independent of slice order.
+fn sort_consumers_by_id(consumers: &mut [(usize, f32, f32)], agents: &[Agent]) {
+    consumers.sort_by_key(|&(idx, _, _)| agents[idx].id);
+}
+
 /// Resolve drains: coordinated pass 1. For each potential target (living agent
 /// or carcass), gather consumers within contact range, compute demand, apply
 /// proportional split when demand exceeds supply, transfer energy with trophic
@@ -648,6 +654,17 @@ pub fn resolve_drains(
         .iter()
         .map(|a| consumption_reach(a.effective_trait_with_steepness(1, k), a.structure, params))
         .fold(0.0_f32, f32::max);
+
+    // Each consumer's stoichiometric demand, evaluated once at tick-start
+    // structure (execution-model.md, "Pass 1 — Drains", step 2: demand is
+    // computed before any drain is applied, step 4). Consumers graze each
+    // other, so reading `structure` live inside the apply loops would make a
+    // consumer's retained/excreted nutrient split depend on whether its own
+    // drain block had already run — i.e. on slice order (#452).
+    let consumer_stoichiometric_demand: Vec<f32> = agents
+        .iter()
+        .map(|a| crate::stoichiometric_demand(&a.traits, a.structure, params))
+        .collect();
 
     // --- Pass over living targets ---
     // For each agent that has structure, find consumers in range. The spatial
@@ -711,6 +728,7 @@ pub fn resolve_drains(
         }
 
         if !consumers.is_empty() {
+            sort_consumers_by_id(&mut consumers, agents);
             living_drains.push(TargetDrain {
                 target_idx,
                 consumers,
@@ -718,7 +736,18 @@ pub fn resolve_drains(
         }
     }
 
-    // Apply living target drains
+    // Apply living target drains in target-id order. Every accumulation in
+    // this function — a target's structure decrement, a consumer's reserve
+    // and nutrient credit across several targets, a grid cell's excretion —
+    // is a floating-point sum, and a sum in slice order is a sum whose
+    // rounding depends on slice order. Slice order is not part of the
+    // execution model (a permuted population must step identically), and
+    // the rounding is not harmless: it decides whether a fully consumed
+    // target ends at exactly zero or at a stray ulp, which is a macroscopic
+    // difference downstream (a carcass with a ulp of energy still hands
+    // over all of its nutrient; one at zero is never visited again). So
+    // everything here runs in stable id order, as `move_agents` does.
+    living_drains.sort_by_key(|d| agents[d.target_idx].id);
     for drain in &living_drains {
         let available = agents[drain.target_idx].structure;
         let total_demand: f32 = drain.consumers.iter().map(|(_, d, _)| *d).sum();
@@ -747,13 +776,9 @@ pub fn resolve_drains(
                 crate::stoichiometric_demand(&agents[drain.target_idx].traits, 1.0, params);
             let nutrient_released = actual_drain * target_ratio;
             if nutrient_released > 0.0 {
-                // Consumer retains up to stoichiometric demand
-                let consumer_demand = crate::stoichiometric_demand(
-                    &agents[consumer_idx].traits,
-                    agents[consumer_idx].structure,
-                    params,
-                );
-                let consumer_nutrient_need = consumer_demand * energy_gained;
+                // Consumer retains up to its tick-start stoichiometric demand
+                let consumer_nutrient_need =
+                    consumer_stoichiometric_demand[consumer_idx] * energy_gained;
                 let retained = nutrient_released.min(consumer_nutrient_need);
                 let excreted = nutrient_released - retained;
 
@@ -798,9 +823,20 @@ pub fn resolve_drains(
         }
     }
 
-    // --- Pass over carcass targets ---
-    for carcass_idx in 0..carcasses.len() {
-        if carcasses[carcass_idx].energy <= 0.0 {
+    // --- Pass over carcass targets, in carcass-id order (see above) ---
+    let mut carcass_order: Vec<usize> = (0..carcasses.len()).collect();
+    carcass_order.sort_by_key(|&i| carcasses[i].id);
+    for carcass_idx in carcass_order {
+        // A carcass is a target while it holds *anything*. Energy and nutrient
+        // are drained by the same bite but are not exhausted at the same
+        // instant: the proportional split leaves energy at zero or at a stray
+        // ulp depending on rounding, and a carcass gated on `energy > 0` alone
+        // would then either release all its remaining nutrient on the next bite
+        // or strand it forever — a macroscopic fork on a rounding difference.
+        // Gating on either stock makes the spent carcass the continuous limit
+        // of the rich one: the last bite transfers no energy, so the consumer
+        // retains no nutrient and the remainder is excreted to the cell.
+        if carcasses[carcass_idx].energy <= 0.0 && carcasses[carcass_idx].nutrient <= 0.0 {
             continue;
         }
         let carcass_pos = carcasses[carcass_idx].position;
@@ -849,8 +885,11 @@ pub fn resolve_drains(
         if consumers.is_empty() {
             continue;
         }
+        sort_consumers_by_id(&mut consumers, agents);
 
-        let available = carcasses[carcass_idx].energy;
+        // A spent carcass's energy can sit a rounding error below zero after
+        // the split that emptied it; it has nothing left to give, not a debt.
+        let available = carcasses[carcass_idx].energy.max(0.0);
         let total_demand: f32 = consumers.iter().map(|(_, d, _)| *d).sum();
 
         for &(consumer_idx, demand, trophic_eff) in &consumers {
@@ -867,18 +906,22 @@ pub fn resolve_drains(
             agents[consumer_idx].reserve += energy_gained;
             dissipated += energy_lost;
 
-            // Nutrient transfer from carcass
+            // Nutrient transfer from carcass: the share of the carcass's
+            // nutrient that travels with this bite. When demand exhausts the
+            // carcass (including one whose energy is already spent) each
+            // consumer's share is its share of demand, so the carcass empties
+            // regardless of how much energy it had left.
             let carcass_nutrient = carcasses[carcass_idx].nutrient;
-            if available > 0.0 {
-                let nutrient_fraction = actual_drain / available;
+            if carcass_nutrient > 0.0 {
+                let nutrient_fraction = if total_demand <= available {
+                    actual_drain / available
+                } else {
+                    demand / total_demand
+                };
                 let nutrient_transferred = carcass_nutrient * nutrient_fraction;
 
-                let consumer_demand = crate::stoichiometric_demand(
-                    &agents[consumer_idx].traits,
-                    agents[consumer_idx].structure,
-                    params,
-                );
-                let consumer_nutrient_need = consumer_demand * energy_gained;
+                let consumer_nutrient_need =
+                    consumer_stoichiometric_demand[consumer_idx] * energy_gained;
                 let retained = nutrient_transferred.min(consumer_nutrient_need);
                 let excreted = nutrient_transferred - retained;
 
