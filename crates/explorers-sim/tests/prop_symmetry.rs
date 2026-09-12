@@ -23,16 +23,13 @@ use support::{WorldCase, world_case_integer_exponent};
 /// position difference of ~1e-2 after one tick).
 const SUMMED_TOTAL_REL_TOLERANCE: f32 = 1e-5;
 
-/// One agent's state split by what the execution model commits under a
-/// permutation: `exact` (identity, RNG-derived placement, traits, wear) must be
-/// bit-identical; `summed` (the energy and nutrient stores accumulated in the
-/// coordinated non-RNG phases) may differ by rounding.
-#[derive(Debug, Clone, PartialEq)]
-struct AgentSnapshot {
-    exact: AgentExactBits,
-    summed: [f32; 6],
-}
+// ---------------------------------------------------------------------------
+// Property 1: agent-order permutation
+// ---------------------------------------------------------------------------
 
+/// The part of an agent's state the execution model commits as *exactly*
+/// order-invariant — identity, RNG-derived placement, traits, wear — as raw
+/// bits, so equality is bit-identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct AgentExactBits {
     id: u64,
@@ -41,41 +38,67 @@ struct AgentExactBits {
     wear: [u32; 3],
 }
 
-const SUMMED_FIELDS: [&str; 6] = [
-    "reserve",
-    "structure",
-    "peak_structure",
-    "nutrient",
-    "repro_reserve",
-    "repro_nutrient",
-];
-
-impl AgentSnapshot {
+impl AgentExactBits {
     fn of(a: &Agent) -> Self {
-        AgentSnapshot {
-            exact: AgentExactBits {
-                id: a.id,
-                position: (a.position.0.to_bits(), a.position.1.to_bits()),
-                traits: std::array::from_fn(|d| a.traits.get(d).to_bits()),
-                wear: std::array::from_fn(|f| a.wear[f].to_bits()),
-            },
-            summed: [
-                a.reserve,
-                a.structure,
-                a.peak_structure,
-                a.nutrient,
-                a.repro_reserve,
-                a.repro_nutrient,
-            ],
+        AgentExactBits {
+            id: a.id,
+            position: (a.position.0.to_bits(), a.position.1.to_bits()),
+            traits: std::array::from_fn(|d| a.traits.get(d).to_bits()),
+            wear: std::array::from_fn(|f| a.wear[f].to_bits()),
         }
     }
 }
 
-/// The living population's state as a multiset (sorted by id).
-fn population_multiset(world: &World) -> Vec<AgentSnapshot> {
-    let mut v: Vec<AgentSnapshot> = world.agents().iter().map(AgentSnapshot::of).collect();
-    v.sort_by(|a, b| a.exact.cmp(&b.exact));
+/// The living population sorted by id, so two worlds can be compared as
+/// multisets of agent state.
+fn population_by_id(world: &World) -> Vec<&Agent> {
+    let mut v: Vec<&Agent> = world.agents().iter().collect();
+    v.sort_by_key(|a| a.id);
     v
+}
+
+/// The six energy and nutrient stores accumulated in the coordinated non-RNG
+/// phases, which may legitimately differ by rounding between two runs.
+fn stores(a: &Agent) -> [(&'static str, f32); 6] {
+    [
+        ("reserve", a.reserve),
+        ("structure", a.structure),
+        ("peak_structure", a.peak_structure),
+        ("nutrient", a.nutrient),
+        ("repro_reserve", a.repro_reserve),
+        ("repro_nutrient", a.repro_nutrient),
+    ]
+}
+
+fn assert_stores_close(a: &Agent, b: &Agent, rel: f32) -> Result<(), TestCaseError> {
+    for ((name, x), (_, y)) in stores(a).into_iter().zip(stores(b)) {
+        assert_rel_close(&format!("agent {} {name}", a.id), x, y, rel)?;
+    }
+    Ok(())
+}
+
+/// The world-level totals: carcass count exact, summed energy and nutrient
+/// totals to `rel`.
+fn assert_world_totals_close(a: &World, b: &World, rel: f32) -> Result<(), TestCaseError> {
+    prop_assert_eq!(
+        a.carcasses().len(),
+        b.carcasses().len(),
+        "carcass count differs"
+    );
+    assert_rel_close(
+        "dissipated_energy",
+        a.dissipated_energy(),
+        b.dissipated_energy(),
+        rel,
+    )?;
+    assert_rel_close(
+        "total_solar_input",
+        a.total_solar_input(),
+        b.total_solar_input(),
+        rel,
+    )?;
+    assert_rel_close("nutrient_pool", a.nutrient_pool(), b.nutrient_pool(), rel)?;
+    Ok(())
 }
 
 /// Run a case, optionally permuting agent order before every step.
@@ -198,49 +221,24 @@ fn check_order_permutation_invariance(case: &WorldCase) -> Result<(), TestCaseEr
     let baseline = run(case, false);
     let permuted = run(case, true);
 
-    let base_pop = population_multiset(&baseline);
-    let perm_pop = population_multiset(&permuted);
+    let base_pop = population_by_id(&baseline);
+    let perm_pop = population_by_id(&permuted);
     prop_assert_eq!(
-        base_pop.iter().map(|a| a.exact.clone()).collect::<Vec<_>>(),
-        perm_pop.iter().map(|a| a.exact.clone()).collect::<Vec<_>>(),
+        base_pop
+            .iter()
+            .map(|a| AgentExactBits::of(a))
+            .collect::<Vec<_>>(),
+        perm_pop
+            .iter()
+            .map(|a| AgentExactBits::of(a))
+            .collect::<Vec<_>>(),
         "identity / position / trait / wear multiset differs under order permutation after {} ticks",
         case.ticks
     );
     for (b, p) in base_pop.iter().zip(&perm_pop) {
-        for (f, name) in SUMMED_FIELDS.iter().enumerate() {
-            assert_rel_close(
-                &format!("agent {} {name}", b.exact.id),
-                b.summed[f],
-                p.summed[f],
-                SUMMED_TOTAL_REL_TOLERANCE,
-            )?;
-        }
+        assert_stores_close(b, p, SUMMED_TOTAL_REL_TOLERANCE)?;
     }
-    prop_assert_eq!(
-        baseline.carcasses().len(),
-        permuted.carcasses().len(),
-        "carcass count differs under order permutation"
-    );
-    let rel = SUMMED_TOTAL_REL_TOLERANCE;
-    assert_rel_close(
-        "dissipated_energy",
-        baseline.dissipated_energy(),
-        permuted.dissipated_energy(),
-        rel,
-    )?;
-    assert_rel_close(
-        "total_solar_input",
-        baseline.total_solar_input(),
-        permuted.total_solar_input(),
-        rel,
-    )?;
-    assert_rel_close(
-        "nutrient_pool",
-        baseline.nutrient_pool(),
-        permuted.nutrient_pool(),
-        rel,
-    )?;
-    Ok(())
+    assert_world_totals_close(&baseline, &permuted, SUMMED_TOTAL_REL_TOLERANCE)
 }
 
 // ---------------------------------------------------------------------------
@@ -444,28 +442,24 @@ fn check_translation_covariance(tc: &TranslationCase) -> Result<(), TestCaseErro
     let base = run_roster(case, roster);
     let shifted = run_roster(case, shifted_roster);
 
-    let mut base_pop: Vec<&Agent> = base.agents().iter().collect();
-    let mut shifted_pop: Vec<&Agent> = shifted.agents().iter().collect();
-    base_pop.sort_by_key(|a| a.id);
-    shifted_pop.sort_by_key(|a| a.id);
+    let base_pop = population_by_id(&base);
+    let shifted_pop = population_by_id(&shifted);
     prop_assert_eq!(
         base_pop.iter().map(|a| a.id).collect::<Vec<_>>(),
         shifted_pop.iter().map(|a| a.id).collect::<Vec<_>>(),
         "population identity differs under translation after {} ticks",
         case.ticks
     );
-    prop_assert_eq!(base.carcasses().len(), shifted.carcasses().len());
 
     let rel = TRANSLATION_REL_TOLERANCE;
     for (b, s) in base_pop.iter().zip(&shifted_pop) {
-        let ctx = format!("agent {}", b.id);
         // Traits: crossover and mutation are keyed on identity, so exact.
         for d in 0..7 {
             prop_assert_eq!(
                 b.traits.get(d).to_bits(),
                 s.traits.get(d).to_bits(),
-                "{} trait {} differs under translation",
-                &ctx,
+                "agent {} trait {} differs under translation",
+                b.id,
                 d
             );
         }
@@ -473,45 +467,25 @@ fn check_translation_covariance(tc: &TranslationCase) -> Result<(), TestCaseErro
         let gap = toroidal_distance(expected, s.position, extent);
         prop_assert!(
             gap <= TRANSLATION_POS_TOLERANCE,
-            "{ctx} position {:?} is not the translate of {:?} (expected {:?}, gap {gap})",
+            "agent {} position {:?} is not the translate of {:?} (expected {:?}, gap {gap})",
+            b.id,
             s.position,
             b.position,
             expected
         );
-        let stores = [
-            ("reserve", b.reserve, s.reserve),
-            ("structure", b.structure, s.structure),
-            ("peak_structure", b.peak_structure, s.peak_structure),
-            ("nutrient", b.nutrient, s.nutrient),
-            ("repro_reserve", b.repro_reserve, s.repro_reserve),
-            ("repro_nutrient", b.repro_nutrient, s.repro_nutrient),
-            ("wear[0]", b.wear[0], s.wear[0]),
-            ("wear[1]", b.wear[1], s.wear[1]),
-            ("wear[2]", b.wear[2], s.wear[2]),
-        ];
-        for (name, x, y) in stores {
-            assert_rel_close(&format!("{ctx} {name}"), x, y, rel)?;
+        assert_stores_close(b, s, rel)?;
+        // Wear accumulates from usage (energy captured, distance moved), which
+        // inherits the position rounding — so to rounding, not exact.
+        for f in 0..3 {
+            assert_rel_close(
+                &format!("agent {} wear[{f}]", b.id),
+                b.wear[f],
+                s.wear[f],
+                rel,
+            )?;
         }
     }
-    assert_rel_close(
-        "dissipated_energy",
-        base.dissipated_energy(),
-        shifted.dissipated_energy(),
-        rel,
-    )?;
-    assert_rel_close(
-        "total_solar_input",
-        base.total_solar_input(),
-        shifted.total_solar_input(),
-        rel,
-    )?;
-    assert_rel_close(
-        "nutrient_pool",
-        base.nutrient_pool(),
-        shifted.nutrient_pool(),
-        rel,
-    )?;
-    Ok(())
+    assert_world_totals_close(&base, &shifted, rel)
 }
 
 // ---------------------------------------------------------------------------
