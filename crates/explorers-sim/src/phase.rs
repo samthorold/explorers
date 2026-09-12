@@ -995,6 +995,16 @@ pub fn move_agents(
     let k = params.wear_degradation_steepness;
     let extent = params.world_extent;
 
+    // Positions are stable within a tick: every agent senses its neighbours
+    // where they stood at tick start (the positions `grid` was built from),
+    // not where earlier-iterated agents have already moved to. Snapshot them
+    // so the chemotaxis term is independent of iteration order.
+    let start_positions: Vec<(f32, f32)> = agents.iter().map(|a| a.position).collect();
+    // Carcasses are appended in death (slice) order; visit them by stable id
+    // so their attraction terms sum in a canonical order too.
+    let mut carcasses_by_id: Vec<&Carcass> = carcasses.iter().collect();
+    carcasses_by_id.sort_unstable_by_key(|c| c.id);
+
     for i in 0..agents.len() {
         let eff_mobility = agents[i].effective_trait_with_steepness(2, k);
         // Sensing range derived from mobility: mobile agents perceive farther
@@ -1014,25 +1024,28 @@ pub fn move_agents(
         let mut detected_count = 0.0_f32;
 
         if eff_sensing > 0.0 {
-            // Detect nearby living agents
-            let nearby = grid.query_radius(agents[i].position, eff_sensing);
-            let mut seen = std::collections::HashSet::new();
-            seen.insert(i as u64);
-            for neighbor_id in nearby {
-                if !seen.insert(neighbor_id) {
-                    continue;
-                }
-                let j = neighbor_id as usize;
-                if j >= agents.len() {
-                    continue;
-                }
-                let dist = crate::toroidal_distance(agents[i].position, agents[j].position, extent);
+            // Detect nearby living agents. The grid yields neighbours in cell
+            // (i.e. slice-insertion) order; the attraction terms are summed in
+            // f32, so sum them in a canonical order — ascending stable id —
+            // to keep the result independent of iteration order.
+            let mut nearby: Vec<(u64, usize)> = grid
+                .query_radius(agents[i].position, eff_sensing)
+                .into_iter()
+                .map(|neighbor_id| neighbor_id as usize)
+                .filter(|&j| j != i && j < agents.len())
+                .map(|j| (agents[j].id, j))
+                .collect();
+            nearby.sort_unstable();
+            nearby.dedup();
+            for (_, j) in nearby {
+                let neighbour_pos = start_positions[j];
+                let dist = crate::toroidal_distance(agents[i].position, neighbour_pos, extent);
                 if dist < 1e-6 {
                     detected_count += 1.0;
                     continue;
                 }
                 let (dx, dy) =
-                    crate::toroidal_displacement(agents[i].position, agents[j].position, extent);
+                    crate::toroidal_displacement(agents[i].position, neighbour_pos, extent);
                 // Attraction weighted by chemotaxis * heterotrophy (toward living agents)
                 let weight = eff_chemotaxis * eff_heterotrophy / dist;
                 dir_x += dx * weight;
@@ -1041,7 +1054,7 @@ pub fn move_agents(
             }
 
             // Detect nearby carcasses
-            for carcass in carcasses.iter() {
+            for carcass in &carcasses_by_id {
                 let dist = crate::toroidal_distance(agents[i].position, carcass.position, extent);
                 if dist > eff_sensing {
                     continue;

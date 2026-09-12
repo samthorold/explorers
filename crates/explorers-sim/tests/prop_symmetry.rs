@@ -124,27 +124,27 @@ fn assert_rel_close(name: &str, a: f32, b: f32, rel: f32) -> Result<(), TestCase
     Ok(())
 }
 
-/// The #451 / #452 workaround domains. `sensing_range_coefficient = 0` makes
-/// the chemotaxis term of `move_agents` inert (#451), so movement is the keyed
-/// random walk alone. `contact_range_coefficient = 0` (with the baseline's
-/// `body_reach_coefficient = 0`) gives every consumer zero feeding reach, so
-/// `resolve_drains` fires only for *exactly* co-located pairs (#452). Founders
-/// are placed at random f32 positions and never coincide; the one way a pair
-/// can coincide is a zero-dispersal offspring landing on its parent, which the
-/// two domains below rule out differently. Delete once both bugs are fixed.
-fn without_chemotaxis_or_contact(mut case: WorldCase) -> WorldCase {
-    case.params.sensing_range_coefficient = 0.0;
+/// The #452 workaround domain. `contact_range_coefficient = 0` (with the
+/// baseline's `body_reach_coefficient = 0`) gives every consumer zero feeding
+/// reach, so `resolve_drains` fires only for *exactly* co-located pairs.
+/// Founders are placed at random f32 positions and never coincide; the one
+/// way a pair can coincide is a zero-dispersal offspring landing on its
+/// parent, which the two domains below rule out differently. Chemotaxis is
+/// live: `move_agents` senses neighbours at their tick-start positions, so
+/// the movement phase is order-free (#451). Delete once #452 is fixed.
+fn without_contact(mut case: WorldCase) -> WorldCase {
     case.params.contact_range_coefficient = 0.0;
     case
 }
 
 /// Reproduction disabled (unreachable energy threshold), so no offspring exist
 /// to coincide with a parent. Covers acquisition, metabolism, growth, the
-/// random walk, wear and death over the full trait-covariance range.
+/// random walk with chemotaxis, wear and death over the full trait-covariance
+/// range.
 fn world_case_without_reproduction() -> impl Strategy<Value = WorldCase> {
     world_case().prop_map(|mut c| {
         c.params.reproduction_energy_threshold = f32::INFINITY;
-        without_chemotaxis_or_contact(c)
+        without_contact(c)
     })
 }
 
@@ -167,7 +167,7 @@ fn world_case_bounded_dispersal() -> impl Strategy<Value = WorldCase> {
 /// Reproduction enabled on the bounded-dispersal domain, so a zero-reach
 /// consumer never coincides with a target.
 fn world_case_with_reproduction() -> impl Strategy<Value = WorldCase> {
-    world_case_bounded_dispersal().prop_map(without_chemotaxis_or_contact)
+    world_case_bounded_dispersal().prop_map(without_contact)
 }
 
 proptest! {
@@ -176,24 +176,24 @@ proptest! {
     /// Agent-order permutation over the full search domain:
     /// stepping a world with its agent slice permuted before every tick yields
     /// the same multiset of agent states, bit for bit, and the same ledger
-    /// totals to rounding. Ignored until two sequential-update leaks are fixed:
-    /// #451 (`move_agents` chemotaxis reads neighbours' already-moved positions)
-    /// and #452 (`resolve_drains` stoichiometric need reads already-drained
-    /// structure, so the retained/excreted nutrient split is order-dependent).
-    /// `..._without_chemotaxis` covers everything else meanwhile.
+    /// totals to rounding. Ignored until the remaining sequential-update leak
+    /// is fixed: #452 (`resolve_drains` stoichiometric need reads
+    /// already-drained structure, so the retained/excreted nutrient split is
+    /// order-dependent). The two running forms below cover everything else
+    /// meanwhile, chemotaxis included.
     #[test]
-    #[ignore = "see #451, #452"]
+    #[ignore = "see #452"]
     fn trajectory_is_invariant_under_agent_order_permutation(
         case in world_case()
     ) {
         check_order_permutation_invariance(&case)?;
     }
 
-    /// As above on the domain where the two leaking phases are inert
-    /// (chemotaxis off for #451, consumption unreachable for #452) and
-    /// reproduction is off. Every remaining phase is per-agent or keyed on
-    /// stable identity, so identity, position, traits and wear are
-    /// bit-identical and every summed store and total is equal to rounding.
+    /// As above on the domain where the leaking phase is inert (consumption
+    /// unreachable for #452) and reproduction is off. Every remaining phase —
+    /// chemotaxis included — is per-agent or keyed on stable identity, so
+    /// identity, position, traits and wear are bit-identical and every summed
+    /// store and total is equal to rounding.
     #[test]
     fn trajectory_is_invariant_under_agent_order_permutation_without_reproduction(
         case in world_case_without_reproduction()
