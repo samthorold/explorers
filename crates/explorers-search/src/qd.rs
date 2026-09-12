@@ -910,8 +910,13 @@ pub const REFINE_TOP_K: usize = 10;
 
 /// Default refinement ensemble size: the larger, independent draw that hardens the
 /// high-variance in-run n=5 estimate the floor reads (#404). 32 ≫ the 5-seed search
-/// ensemble, so the refined `coexistence_fraction` is a tight estimate near the
-/// monoculture↔coexistence bifurcation.
+/// ensemble. It is sized as a *separator*, not an estimator (#434,
+/// `docs/research/434-ensemble-confidence.md`): the fixed rule `k/n ≥ 0.5` at n=32
+/// tells a straddler at p=0.35 (the #401 leader re-read ~3/8) from a robust cell at
+/// p=0.65 with α = β ≈ 5 % (the fixed-n optimum for that separation is n=29). It does
+/// **not** tell 0.4 from 0.6 (n=67 needed), and the two-sided 95 % Clopper–Pearson
+/// interval at 16/32 is still [0.32, 0.68] — so the refined fraction is a gate input,
+/// never a tight point estimate near the monoculture↔coexistence bifurcation.
 pub const REFINE_ENSEMBLE_SIZE: u32 = 32;
 
 /// Seed offset that puts every refinement ensemble far above any seed the search
