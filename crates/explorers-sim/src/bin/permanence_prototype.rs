@@ -29,8 +29,11 @@
 //! compartments stay bounded away from zero. The Hopf line from #358 is drawn on
 //! the same sweep so the reader can see it sits inside the permanent region.
 //!
-//! One deviation from `hopf_prototype`, deliberate and documented in the doc:
-//! `r_P` is kept **signed** (`hopf_prototype` clamps it at 0 because it only
+//! Two deviations from `hopf_prototype`, deliberate and documented in the doc.
+//! `r_P = χ_P·γ·(F − B_P)` counts the producer's whole surplus as biomass —
+//! the `(1 − κ_P)` share becomes offspring through the committed reproductive
+//! branch, at its own efficiency `η_P` (#466; `hopf_prototype` lumps only the
+//! somatic `κ_P` share). And `r_P` is kept **signed** (`hopf_prototype` clamps it at 0 because it only
 //! needs the interior fixed point). The sign of `r_P` *is* the extinction gate,
 //! so the boundary analysis must see it. When `r_P ≤ 0` the producer face is
 //! read as density-independent decline `f = 1 + r_P` (shading can only lower
@@ -54,8 +57,63 @@ use explorers_sim::{TraitVector, WorldParameters, WorldRecipe};
 /// Reference body mass for the mean-field reduction (as in `hopf_prototype`).
 const REFERENCE_BODY_MASS: f32 = 1.0;
 
+/// The fecundity floor `resolve_reproduction` applies before the Poisson draw
+/// (`fecundity.max(0.1)` in `phase.rs`).
+const FECUNDITY_FLOOR: f64 = 0.1;
+
+/// How much of a producer's mobilised surplus ends up as **structure** — the
+/// biomass coordinate `P` carries — once both of `κ`'s branches are followed
+/// to the body they build (#466).
+#[derive(Debug, Clone, Copy)]
+pub struct BiomassConversion {
+    /// Somatic allocation `κ_P` (flow 9's split of the mobilised flow).
+    pub kappa: f64,
+    /// Reproductive-branch efficiency `η_P`: the fraction of energy routed to
+    /// the reproductive allocation that reaches an offspring's body —
+    /// `reproduction_efficiency` (flow 4 heat), times the dispersal propagule
+    /// share left over, times the probability the Poisson brood is non-empty
+    /// (a zero draw dissipates the whole investment).
+    pub eta: f64,
+    /// `offspring_structure_fraction` — the share of an offspring's energy
+    /// embodied at birth; the rest is reserve the offspring itself mobilises.
+    pub structure_fraction: f64,
+    /// The conversion `χ_P`: structure built (before `γ`) per unit surplus,
+    /// closing the loop in which an offspring's reserve is re-split by `κ_P`.
+    /// `χ_P = 1` when `κ_P = 1` or the reproductive branch is lossless.
+    pub chi: f64,
+}
+
+/// Derive the producer's biomass conversion from committed parameters and its
+/// trait vector (`kappa`, `dispersal`, `fecundity`).
+pub fn biomass_conversion(producer: &TraitVector, p: &WorldParameters) -> BiomassConversion {
+    let kappa = producer.kappa.clamp(0.0, 1.0) as f64;
+    let propagule = explorers_sim::dispersal_propagule_cost_fraction(producer.dispersal, p) as f64;
+    let fecundity = (producer.fecundity as f64).max(FECUNDITY_FLOOR);
+    let eta = (p.reproduction_efficiency as f64).clamp(0.0, 1.0)
+        * (1.0 - propagule)
+        * (1.0 - (-fecundity).exp());
+    let s = p.offspring_structure_fraction.clamp(0.0, 1.0) as f64;
+    // One unit of surplus: κ builds κ structure (× γ, applied by the caller);
+    // (1 − κ) reaches offspring at η, of which s is embodied at birth and
+    // (1 − s) is reserve the offspring re-splits the same way:
+    //   χ = κ + (1 − κ)·η·(s + (1 − s)·χ).
+    let feedback = (1.0 - kappa) * eta * (1.0 - s);
+    let chi = if feedback >= 1.0 {
+        1.0
+    } else {
+        (kappa + (1.0 - kappa) * eta * s) / (1.0 - feedback)
+    };
+    BiomassConversion {
+        kappa,
+        eta,
+        structure_fraction: s,
+        chi,
+    }
+}
+
 /// The lumped coefficients of the 2-compartment map. Same derivation as
-/// `hopf_prototype::Compartments` (citations there), except `r_p` is signed.
+/// `hopf_prototype::Compartments` (citations there), except `r_p` is signed
+/// and the producer's growth counts both of `κ_P`'s branches (#466).
 #[derive(Debug, Clone, Copy)]
 pub struct Map {
     /// Producer intrinsic per-tick rate κ_P·γ·(F − B_P). **Signed.**
@@ -177,17 +235,17 @@ impl Map {
     }
 
     /// Derive the map from committed parameters and the two cluster-mean trait
-    /// vectors — identical to `hopf_prototype::Compartments::derive` except that
-    /// `r_p` keeps its sign.
+    /// vectors — as `hopf_prototype::Compartments::derive` except that `r_p`
+    /// keeps its sign and counts both of `κ_P`'s branches (`χ_P`, #466).
     pub fn derive(producer: &TraitVector, consumer: &TraitVector, p: &WorldParameters) -> Self {
-        let kappa_p = producer.kappa.clamp(0.0, 1.0) as f64;
         let kappa_c = consumer.kappa.clamp(0.0, 1.0) as f64;
         let gamma = p.growth_efficiency as f64;
         let b_p = Self::maintenance(producer, p);
         let b_c = Self::maintenance(consumer, p);
         let flux = p.solar_flux_magnitude as f64;
 
-        let r_p = kappa_p * gamma * (flux - b_p) / REFERENCE_BODY_MASS as f64;
+        let chi_p = biomass_conversion(producer, p).chi;
+        let r_p = chi_p * gamma * (flux - b_p) / REFERENCE_BODY_MASS as f64;
         let k_p = if b_p > 0.0 { flux / b_p } else { f64::INFINITY };
         let a = consumer.heterotrophy.max(0.0) as f64 / REFERENCE_BODY_MASS as f64;
         let m = b_c / REFERENCE_BODY_MASS as f64;
@@ -706,7 +764,16 @@ fn main() {
     );
     println!("  B_P (producer maintenance)     = {:.4}", b_p);
     println!("  B_C = m (consumer maintenance) = {:.4}", map.m);
-    println!("  r_P = kappa_P*gamma*(F - B_P)  = {:.4}", map.r_p);
+    let conv = biomass_conversion(&producer, params);
+    println!(
+        "  eta_P (reproductive branch)    = {:.4}  (= repro_eff*(1 - propagule)*(1 - exp(-fecundity)))",
+        conv.eta
+    );
+    println!(
+        "  chi_P (biomass conversion)     = {:.4}  (kappa_P = {:.2}, s = {:.2})",
+        conv.chi, conv.kappa, conv.structure_fraction
+    );
+    println!("  r_P = chi_P*gamma*(F - B_P)    = {:.4}", map.r_p);
     println!("  K_P = F / B_P                  = {:.4}", map.k_p);
     println!("  a   (attack rate)              = {:.4}", map.a);
     println!("  beta = kappa_C*gamma*e*a       = {:.5}", map.beta);
@@ -1011,6 +1078,77 @@ mod tests {
             checked > 1000,
             "sweep should exercise most cells, got {checked}"
         );
+    }
+
+    /// `κ_P` splits the producer's surplus between growth and offspring; it
+    /// does not decide whether the surplus becomes biomass (#466). A producer
+    /// that routes everything to reproduction (`κ_P = 0`) with `ρ > 1` still
+    /// has a live face — offspring are biomass the map carries — and the map
+    /// is permanent when the consumer invades.
+    #[test]
+    fn kappa_zero_producer_with_rho_above_one_keeps_its_face_alive() {
+        let mut t = producer();
+        t.kappa = 0.0;
+        // A modest invasion ratio so the escape orbit stays in the unsaturated
+        // regime (H2) and the numerics can score it.
+        let mut p = params();
+        p.base_trophic_efficiency = 0.1;
+        let map = Map::derive(&t, &consumer(), &p);
+        assert!(map.k_p > 1.0, "rho must exceed 1 here");
+        assert!(
+            map.r_p > 0.0,
+            "r_P = {} should be positive at kappa_P = 0",
+            map.r_p
+        );
+        assert!(map.permanence().producer_face_alive);
+        assert!(map.permanence().permanent());
+        assert_eq!(map.classify_by_simulation(20_000), NumericClass::Permanent);
+    }
+
+    /// `r_P` is a `κ_P`-weighted mix of the two branches: the somatic limit
+    /// (`κ_P = 1`) is the old `γ·(F − B_P)`; the reproductive branch is
+    /// strictly less productive because of the committed heat on the way to
+    /// an offspring (`reproduction_efficiency`, propagule cost, the empty
+    /// Poisson brood); and when that branch is lossless `κ_P` drops out.
+    #[test]
+    fn r_p_mixes_the_somatic_and_reproductive_branches_by_kappa() {
+        let base = params();
+        let somatic = |kappa: f32, p: &WorldParameters| {
+            let mut t = producer();
+            t.kappa = kappa;
+            Map::derive(&t, &consumer(), p).r_p
+        };
+        let b_p = Map::maintenance(&producer(), &base);
+        let full = base.growth_efficiency as f64 * (base.solar_flux_magnitude as f64 - b_p);
+        assert!((somatic(1.0, &base) - full).abs() < 1e-12);
+        let repro_only = somatic(0.0, &base);
+        assert!(repro_only > 0.0 && repro_only < full);
+        assert!(somatic(0.5, &base) > repro_only && somatic(0.5, &base) < full);
+
+        // Lossless reproductive branch: no heat at the event, no propagules,
+        // every offspring embodied at birth, a brood that is never empty.
+        let mut lossless = base.clone();
+        lossless.reproduction_efficiency = 1.0;
+        lossless.dispersal_propagule_cost_coefficient = 0.0;
+        lossless.offspring_structure_fraction = 1.0;
+        let mut fecund = producer();
+        fecund.fecundity = 1e3;
+        fecund.kappa = 0.0;
+        let r_lossless = Map::derive(&fecund, &consumer(), &lossless).r_p;
+        assert!(
+            (r_lossless - full).abs() < 1e-9,
+            "kappa-free: {r_lossless} vs {full}"
+        );
+
+        // A propagule cost that eats the whole reproductive budget makes the
+        // kappa_P = 0 face genuinely dead: nothing becomes biomass.
+        let mut burnt = base.clone();
+        burnt.dispersal_propagule_cost_coefficient = 1.0;
+        burnt.dispersal_propagule_cost_exponent = 1.0;
+        let mut broadcaster = producer();
+        broadcaster.dispersal = 1.0;
+        broadcaster.kappa = 0.0;
+        assert_eq!(Map::derive(&broadcaster, &consumer(), &burnt).r_p, 0.0);
     }
 
     /// The extinction gate `F ≤ B` (viability.md) must fall out of the
