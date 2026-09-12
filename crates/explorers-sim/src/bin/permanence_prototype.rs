@@ -36,6 +36,16 @@
 //! read as density-independent decline `f = 1 + r_P` (shading can only lower
 //! income further, so this bounds the true face factor from above).
 //!
+//! **Issue #437 extension.** The second half of this bin couples the map above
+//! to the three-compartment nutrient cycle `A ⇌ L ⇌ C_N` (available, living,
+//! carcass-locked; conserved `N_total`) through the committed Liebig
+//! co-limitation and the binary-reach drain run over carcasses — the
+//! reduction of `docs/research/437-permanence-alc.md`. It carries the
+//! *endogenous* lumpings (carcass richness, nutrient per carcass, reach
+//! geometry, producer mortality) as explicit inputs so the doc can say which
+//! part of the lockup condition is a characterisation and which a gate. Same
+//! banner: NOT PART OF THE PRODUCTION STEPPER.
+//!
 //! Usage:
 //!   cargo run -p explorers-sim --bin permanence_prototype -- scenarios/example10_predator_prey_hopf.json
 
@@ -262,6 +272,342 @@ impl Map {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Coupled energy × nutrient reduction (issue #437): the A1 map above coupled to
+// the three-compartment nutrient cycle `A ⇌ L ⇌ C_N`. Five named state
+// variables — `P`, `C_E` (structure, reference bodies) and `A`, `L`, `C_N`
+// (nutrient) — of which four are independent because `A + L + C_N = N_total`.
+// Every flux is a mean-field reading of a committed phase (citations on the
+// fields); the lumped coefficients that are *endogenous* in the stepper
+// (carcass richness, nutrient per carcass, reach geometry, producer mortality)
+// are collected in `AlcLumping` so the doc can point at exactly which terms
+// keep the lockup condition a characterisation rather than a gate.
+// ---------------------------------------------------------------------------
+
+/// Lumped, endogenous coefficients of the coupled reduction. None is a world
+/// parameter; each is set by the realised economy of a run. They are inputs
+/// here so the map can be iterated — never bounds.
+#[derive(Debug, Clone, Copy)]
+pub struct AlcLumping {
+    /// Producer per-tick mortality (flow 6: wear-driven intrinsic death plus
+    /// the below-threshold residue of drain kills), netted out of A1's `r_P`.
+    pub mu_p: f64,
+    /// Carcass richness `q`: nutrient per unit carcass energy in the standing
+    /// dead pool (a carcass carries the dead agent's exact content).
+    pub q: f64,
+    /// Nutrient per carcass `ν` (= `q` × the dead body's structure): fixes the
+    /// carcass *count* `C_N / ν` that the binary-reach drain multiplies.
+    pub nu: f64,
+    /// In-reach geometry `ι ∈ [0, 1]`: the fraction of carcasses within a
+    /// consumer body's feeding reach (flow 3, `consumption_reach`). A1 sets
+    /// the living-prey indicator to 1; kept explicit here for the carcass term.
+    pub iota: f64,
+    /// Trophic kernel on the carcass pool `e_C`: `base · exp(−λ·d)` at the
+    /// consumer↔carcass trait distance. A producer carcass keeps the producer's
+    /// exact trait vector, so for a producer-dominated pile `e_C = e` (A1's).
+    /// `None` reads the pile as producer carcasses.
+    pub e_c: Option<f64>,
+}
+
+impl Default for AlcLumping {
+    fn default() -> Self {
+        AlcLumping {
+            mu_p: 0.02,
+            q: f64::NAN, // filled from θ_P by `derive` when NaN
+            nu: f64::NAN,
+            iota: 1.0,
+            e_c: None,
+        }
+    }
+}
+
+/// State of the coupled reduction: the five named stocks, all carried
+/// explicitly so that no compartment is a difference of two near-equal
+/// stocks (near the lockup corner `L = N_total − A − C_N` loses every digit).
+/// Conservation `A + L + C_N = N_total` is then a *check* on the map, not a
+/// definition — see the ledger test.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AlcState {
+    /// Producer structure (reference bodies).
+    pub p: f64,
+    /// Consumer structure (reference bodies).
+    pub c_e: f64,
+    /// Available pool.
+    pub a: f64,
+    /// Free (unbound) living nutrient — free store plus reproductive earmark,
+    /// pooled across the living. `L = θ_P·P + θ_C·C_E + Φ`.
+    pub phi: f64,
+    /// Carcass-locked nutrient.
+    pub c_n: f64,
+}
+
+/// The analytic persistence verdict of the coupled reduction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlcPersistence {
+    /// `min(r_P, α_P/θ_P) > μ_P`: the producer invades the virgin pool.
+    pub producer_invades_virgin: bool,
+    /// `Λ > 1`: the heterotroph invades the carcass pile (lockup repeller).
+    pub heterotroph_invades_lockup: bool,
+    /// `ln λ_P(virgin) · ln λ_C(lockup) > ln(1/(1−m)) · ln(1/(1−μ_P))`: the
+    /// dead-line heteroclinic cycle is repelling.
+    pub cycle_repels: bool,
+}
+
+impl AlcPersistence {
+    pub fn permanent(self) -> bool {
+        self.producer_invades_virgin && self.heterotroph_invades_lockup && self.cycle_repels
+    }
+}
+
+/// The coupled map. The energy side is the A1 `Map` verbatim; the nutrient
+/// side adds uptake, Liebig co-limitation, excretion, death and decomposition.
+#[derive(Debug, Clone, Copy)]
+pub struct AlcMap {
+    /// A1's producer↔consumer energy map (reused, not re-derived).
+    pub energy: Map,
+    /// Producer per-body pool uptake `α_P` per tick (absorb_nutrients: the
+    /// per-agent demand is the effective autotrophy trait, pool-capped).
+    pub alpha_p: f64,
+    /// Stoichiometric demand `θ_P`, `θ_C`: nutrient bound per unit structure
+    /// (`stoichiometric_demand` at unit structure).
+    pub theta_p: f64,
+    pub theta_c: f64,
+    /// Consumer somatic conversion `κ_C·γ` (grow phase), kept separate so
+    /// the carcass return can carry its own kernel `e_C`.
+    pub kappa_c_gamma: f64,
+    /// Conserved nutrient total (`initial_nutrient_pool`; the unavailable pool
+    /// is geological and constant, so it is left out of the ledger).
+    pub n_total: f64,
+    pub lump: AlcLumping,
+}
+
+impl AlcMap {
+    pub fn derive(
+        producer: &TraitVector,
+        consumer: &TraitVector,
+        p: &WorldParameters,
+        mut lump: AlcLumping,
+    ) -> Self {
+        let energy = Map::derive(producer, consumer, p);
+        let theta_p = explorers_sim::stoichiometric_demand(producer, 1.0, p) as f64;
+        let theta_c = explorers_sim::stoichiometric_demand(consumer, 1.0, p) as f64;
+        // A producer carcass with no free store: richness = θ_P per unit
+        // energy, and one reference body of structure per carcass.
+        if lump.q.is_nan() {
+            lump.q = theta_p;
+        }
+        if lump.nu.is_nan() {
+            lump.nu = lump.q * REFERENCE_BODY_MASS as f64;
+        }
+        AlcMap {
+            energy,
+            alpha_p: producer.photosynthetic_absorption.max(0.0) as f64,
+            theta_p,
+            theta_c,
+            kappa_c_gamma: consumer.kappa.clamp(0.0, 1.0) as f64 * p.growth_efficiency as f64,
+            n_total: p.initial_nutrient_pool as f64,
+            lump,
+        }
+    }
+
+    /// Living nutrient `L = θ_P·P + θ_C·C_E + Φ` (bound plus free).
+    pub fn living(&self, x: &AlcState) -> f64 {
+        self.bound(x) + x.phi
+    }
+
+    /// Nutrient bound in living structure, `θ_P·P + θ_C·C_E ≤ L` (embodiment).
+    /// Tracked directly, so it keeps its precision where `L` as a difference of
+    /// two near-equal stocks does not; permanence in `(P, C_E)` bounds it, and
+    /// therefore `L`, away from zero.
+    pub fn bound(&self, x: &AlcState) -> f64 {
+        self.theta_p * x.p + self.theta_c * x.c_e
+    }
+
+    /// Trophic kernel on the carcass pool `e_C`. A producer carcass carries the
+    /// producer's exact trait vector, so for a producer-dominated pile it is
+    /// A1's `e = β / (κ_C·γ·a)`.
+    pub fn e_c(&self) -> f64 {
+        self.lump
+            .e_c
+            .unwrap_or(self.energy.beta / (self.kappa_c_gamma * self.energy.a))
+    }
+
+    /// Per-consumer-body, per-unit-carcass-nutrient clearance rate
+    /// `σ = a·ι/ν` (binary-reach drain of every in-reach carcass at `a`).
+    pub fn sigma(&self) -> f64 {
+        self.energy.a * self.lump.iota / self.lump.nu
+    }
+
+    /// Per-consumer-body growth on the full carcass pile: the Liebig minimum
+    /// of the energy conversion `κ_C·γ·e_C` and the carcass richness over the
+    /// consumer's own demand `q/θ_C`, times the clearance `σ·N_total`.
+    fn pile_growth_per_body(&self) -> f64 {
+        let liebig = (self.kappa_c_gamma * self.e_c()).min(self.lump.q / self.theta_c);
+        self.sigma() * self.n_total * liebig
+    }
+
+    /// The lockup-escape ratio `Λ = σ·N_total·min(κ_C·γ·e_C, q/θ_C) / m`: the
+    /// heterotroph's per-tick conversion on the whole carcass pile over its
+    /// maintenance floor. `Λ > 1` is the lockup repeller condition — the
+    /// carcass-pile analogue of A1's invasion ratio `I = β·K_P/m`.
+    pub fn lockup_escape_ratio(&self) -> f64 {
+        self.pile_growth_per_body() / self.energy.m
+    }
+
+    /// Transverse eigenvalues `[λ_P, λ_C]` at the lockup corner
+    /// `(0, 0, 0, N_total)`: `1 − μ_P` (no pool, so Liebig stops producer
+    /// growth at zero whatever the flux) and `1 + σ·N_total·min(…) − m`.
+    pub fn lockup_eigenvalues(&self) -> [f64; 2] {
+        [
+            1.0 - self.lump.mu_p,
+            1.0 + self.pile_growth_per_body() - self.energy.m,
+        ]
+    }
+
+    /// Transverse eigenvalues `[λ_P, λ_C]` at the virgin end of the dead line,
+    /// `(0, 0, N_total, 0)`: the producer's Liebig-limited invasion
+    /// `1 + min(r_P, α_P/θ_P) − μ_P` and the starving consumer's `1 − m`.
+    pub fn virgin_eigenvalues(&self) -> [f64; 2] {
+        [
+            1.0 + self.energy.r_p.min(self.alpha_p / self.theta_p) - self.lump.mu_p,
+            1.0 - self.energy.m,
+        ]
+    }
+
+    /// The coupled persistence verdict.
+    pub fn persistence(&self) -> AlcPersistence {
+        let [lp_v, lc_v] = self.virgin_eigenvalues();
+        let [lp_l, lc_l] = self.lockup_eigenvalues();
+        let producer_invades_virgin = lp_v > 1.0;
+        let heterotroph_invades_lockup = lc_l > 1.0;
+        // A common average-Lyapunov weight (a₁, a₂) exists for both ends of the
+        // dead line iff the product of the two invasion log-rates exceeds the
+        // product of the two decay log-rates — the heteroclinic-cycle criterion.
+        let cycle_repels = producer_invades_virgin
+            && heterotroph_invades_lockup
+            && lp_v.ln() * lc_l.ln() > (-lc_v.ln()) * (-lp_l.ln());
+        AlcPersistence {
+            producer_invades_virgin,
+            heterotroph_invades_lockup,
+            cycle_repels,
+        }
+    }
+
+    /// Brute-force boundary escape from a point hugging the lockup corner.
+    /// `lim inf L > 0` reads as in the A1 classifier, on the bound nutrient
+    /// `θ_P·P + θ_C·C_E ≤ L`: its trough over
+    /// the last quarter of the horizon is within a factor 10 of its trough over
+    /// the third quarter and above an absolute floor. A tick on which a drain
+    /// hits its cap leaves the unsaturated regime and is reported as such.
+    pub fn classify_by_boundary_escape(&self, horizon: usize) -> NumericClass {
+        let body = self.theta_p.max(self.theta_c);
+        // The heterotroph inoculum must be small on the pile-cap scale
+        // `1/(σ·q)` (the consumer mass that would drain the whole pile in one
+        // tick) as well as on the nutrient scale, or the first tick leaves H2.
+        let cap_scale = if self.sigma() > 0.0 && self.lump.q > 0.0 {
+            1.0 / (self.sigma() * self.lump.q)
+        } else {
+            f64::INFINITY
+        };
+        let mut x = AlcState {
+            p: 1e-3 * self.n_total / body,
+            c_e: 1e-6 * (self.n_total / body).min(cap_scale),
+            a: 0.0,
+            phi: 0.0,
+            c_n: 0.0,
+        };
+        x.c_n = self.n_total - self.bound(&x);
+        let mut mins = [f64::INFINITY; 2];
+        for t in 0..horizon {
+            let (next, in_regime) = self.step_checked(&x);
+            if !in_regime {
+                return NumericClass::LeftRegime;
+            }
+            x = next;
+            if t >= horizon / 2 {
+                let w = if t < 3 * horizon / 4 { 0 } else { 1 };
+                mins[w] = mins[w].min(self.bound(&x));
+            }
+        }
+        if mins[1] > 1e-100 * self.n_total && mins[1] > 0.1 * mins[0] {
+            NumericClass::Permanent
+        } else {
+            NumericClass::NotPermanent
+        }
+    }
+
+    /// One tick of the coupled map.
+    pub fn step(&self, x: &AlcState) -> AlcState {
+        self.step_checked(x).0
+    }
+
+    /// One tick, plus whether the tick stayed in the unsaturated regime: the
+    /// living drain `a·P·C_E` below the standing crop and the carcass drain
+    /// `σ·C_E·C_N` below the pile (A1's H2 — a drain that hits its cap is the
+    /// stepper's one-shot annihilation, where the mass-action reading stops).
+    pub fn step_checked(&self, x: &AlcState) -> (AlcState, bool) {
+        let m = &self.energy;
+        let (p, c_e, a, phi, c_n) = (x.p, x.c_e, x.a, x.phi, x.c_n);
+        let q = self.lump.q;
+
+        // Flow 2: uptake, per-body demand α_P, capped by the pool.
+        let u = (self.alpha_p * p).min(a);
+        // Flows 1, 8, 9 + Liebig: energy-limited increment is A1's logistic
+        // growth branch; nutrient-limited increment is the bindable free store.
+        let logistic = if m.r_p > 0.0 {
+            m.r_p * p * (1.0 - p / m.k_p)
+        } else {
+            m.r_p * p
+        };
+        let g_e = logistic.max(0.0);
+        let shading = (-logistic).max(0.0);
+        let g = g_e.min((phi + u) / self.theta_p);
+        // Flow 3 on living prey (A1's bilinear term) and on carcasses (the same
+        // binary-reach drain over the carcass count C_N/ν, capped by the pile).
+        let d_l = (m.a * p * c_e).min(p);
+        let d_c = if q > 0.0 {
+            (self.sigma() * c_e * c_n).min(c_n / q)
+        } else {
+            0.0
+        };
+        let in_regime = (p == 0.0 || m.a * p * c_e < p)
+            && (c_n == 0.0 || q <= 0.0 || self.sigma() * c_e * c_n < c_n / q);
+        // Consumer growth: A1's β·P on prey plus the carcass return, Liebig-
+        // limited by the nutrient that arrives with the drained structure.
+        let energy_limited = m.beta * p * c_e + self.kappa_c_gamma * self.e_c() * d_c;
+        let nutrient_arriving = self.theta_p * d_l + q * d_c;
+        let dc = energy_limited.min(nutrient_arriving / self.theta_c);
+        // Stoichiometric mismatch: what the consumer does not bind is excreted
+        // to the available pool at the feeding site.
+        let excreted = nutrient_arriving - self.theta_c * dc;
+        // Flow 6: producer deaths (lumped μ_P plus shading) carry their bound
+        // nutrient and their share of the free store; consumer deaths (A1's
+        // removal `m`) carry θ_C per body.
+        let m_p = (self.lump.mu_p * p + shading).min(p - d_l);
+        let m_c = m.m * c_e;
+        // The free store after this tick's growth has bound its share; the
+        // dying fraction of bodies takes the same fraction of it to the carcass.
+        let phi_after_growth = phi + u - self.theta_p * g;
+        let free_dying = if p > 0.0 {
+            phi_after_growth * (m_p / p)
+        } else {
+            0.0
+        };
+        let death_nutrient = self.theta_p * m_p + free_dying + self.theta_c * m_c;
+
+        let p1 = p + g - d_l - m_p;
+        let c_e1 = c_e + dc - m_c;
+        let next = AlcState {
+            p: p1,
+            c_e: c_e1,
+            a: a - u + excreted,
+            phi: phi_after_growth - free_dying,
+            c_n: c_n - q * d_c + death_nutrient,
+        };
+        (next, in_regime)
+    }
+}
+
 /// Producer / consumer cluster means from a scenario roster (as in `hopf_prototype`).
 fn extract_clusters(agents: &[explorers_sim::AgentSpec]) -> Option<(TraitVector, TraitVector)> {
     let mut prod_sum = zero();
@@ -451,6 +797,131 @@ fn main() {
     println!(
         "  agree = {agree}, disagree = {disagree}, within 2% of a boundary (not scored) = {near}, left regime = {left}"
     );
+    println!();
+
+    // --- Coupled A ⇌ L ⇌ C reduction (issue #437) ---
+    let alc = AlcMap::derive(&producer, &consumer, params, AlcLumping::default());
+    println!("# Coupled energy x nutrient reduction (issue #437) — same banner applies");
+    println!("## Nutrient-side coefficients (committed) and lumpings (endogenous)");
+    println!("  N_total (initial_nutrient_pool)  = {:.4}", alc.n_total);
+    println!("  alpha_P (per-body uptake)        = {:.4}", alc.alpha_p);
+    println!(
+        "  theta_P, theta_C (demand/struct) = {:.4}, {:.4}",
+        alc.theta_p, alc.theta_c
+    );
+    println!(
+        "  kappa_C*gamma                    = {:.4}",
+        alc.kappa_c_gamma
+    );
+    println!(
+        "  e_C (kernel on the pile)         = {:.4}   [lumped: producer carcasses]",
+        alc.e_c()
+    );
+    println!(
+        "  mu_P (producer mortality)        = {:.4}   [lumped, endogenous]",
+        alc.lump.mu_p
+    );
+    println!(
+        "  q (carcass richness)             = {:.4}   [lumped, endogenous]",
+        alc.lump.q
+    );
+    println!(
+        "  nu (nutrient per carcass)        = {:.4}   [lumped, endogenous]",
+        alc.lump.nu
+    );
+    println!(
+        "  iota (reach geometry)            = {:.4}   [lumped, endogenous]",
+        alc.lump.iota
+    );
+    println!("  sigma = a*iota/nu                = {:.4}", alc.sigma());
+    println!();
+    let [vp, vc] = alc.virgin_eigenvalues();
+    let [lp, lc] = alc.lockup_eigenvalues();
+    println!("## Dead-line ends: transverse eigenvalues (lambda_P, lambda_C)");
+    println!("  virgin end (0,0,N_total,0)  : {:.4}  {:.4}", vp, vc);
+    println!("  lockup corner (0,0,0,N_total): {:.4}  {:.4}", lp, lc);
+    let cond = alc.persistence();
+    println!("## Coupled persistence condition");
+    println!(
+        "  producer invades virgin pool  min(r_P, alpha_P/theta_P) = {:.4} > mu_P   {}",
+        alc.energy.r_p.min(alc.alpha_p / alc.theta_p),
+        cond.producer_invades_virgin
+    );
+    println!(
+        "  Lambda = sigma*N_total*min(kappa_C*gamma*e_C, q/theta_C)/m = {:.4} > 1   {}",
+        alc.lockup_escape_ratio(),
+        cond.heterotroph_invades_lockup
+    );
+    println!(
+        "  cycle repels: ln(lambda_P^v)*ln(lambda_C^L) = {:.4} > ln(1/(1-m))*ln(1/(1-mu_P)) = {:.4}   {}",
+        vp.ln() * lc.ln(),
+        (-vc.ln()) * (-lp.ln()),
+        cond.cycle_repels
+    );
+    println!("  persistent (analytic) = {}", cond.permanent());
+    println!(
+        "  persistent (numerics) = {:?}",
+        alc.classify_by_boundary_escape(20_000)
+    );
+    println!();
+    println!(
+        "## Sweep: N_total (rows, log-spaced) x base_trophic_efficiency (cols), other lumpings default"
+    );
+    println!(
+        "   '#' persistent   '.' not persistent   'x' left the unsaturated regime   '!'/'?' disagreement"
+    );
+    let mut agree = 0usize;
+    let mut disagree = 0usize;
+    let mut left = 0usize;
+    let mut near = 0usize;
+    print!("  {:>10}  {:>9} ", "N_total", "Lam@eff=1");
+    for e in &effs {
+        print!(
+            "{}",
+            if (e * 100.0).round() as i32 % 20 == 0 {
+                '|'
+            } else {
+                ' '
+            }
+        );
+    }
+    println!();
+    for i in 0..25 {
+        let n_total = 0.1 * (1e4f64).powf(i as f64 / 24.0);
+        let mut line = String::new();
+        let mut lam_at_one = 0.0;
+        for e in &effs {
+            let mut p = params.clone();
+            p.initial_nutrient_pool = n_total as f32;
+            p.base_trophic_efficiency = *e;
+            let m = AlcMap::derive(&producer, &consumer, &p, AlcLumping::default());
+            let lam = m.lockup_escape_ratio();
+            lam_at_one = lam / *e as f64;
+            let analytic = m.persistence().permanent();
+            let numeric = m.classify_by_boundary_escape(20_000);
+            let g = match (analytic, numeric) {
+                (true, NumericClass::Permanent) => '#',
+                (false, NumericClass::NotPermanent) => '.',
+                (_, NumericClass::LeftRegime) => 'x',
+                (true, NumericClass::NotPermanent) => '!',
+                (false, NumericClass::Permanent) => '?',
+            };
+            line.push(g);
+            let on_boundary = (lam - 1.0).abs() <= 0.02;
+            match g {
+                'x' => left += 1,
+                _ if on_boundary => near += 1,
+                '!' | '?' => disagree += 1,
+                _ => agree += 1,
+            }
+        }
+        println!("  {:>10.3}  {:>9.3} {line}", n_total, lam_at_one);
+    }
+    println!("  cols: eff = 0.04 .. 1.00 in steps of 0.04; '|' marks 0.2, 0.4, 0.6, 0.8, 1.0");
+    println!("## Agreement (coupled reduction, 20k-tick horizon)");
+    println!(
+        "  agree = {agree}, disagree = {disagree}, within 2% of Lambda = 1 (not scored) = {near}, left regime = {left}"
+    );
 }
 
 #[cfg(test)]
@@ -628,6 +1099,240 @@ mod tests {
                     l1 * l2
                 );
             }
+        }
+    }
+
+    // ---- Coupled A ⇌ L ⇌ C reduction (issue #437) ----
+
+    fn alc() -> AlcMap {
+        AlcMap::derive(&producer(), &consumer(), &params(), AlcLumping::default())
+    }
+
+    /// The coupled map is a closed nutrient ledger: `A + L + C_N = N_total`
+    /// after every tick (world-rules conservation), and the lockup corner
+    /// `(P, C_E, A, C_N) = (0, 0, 0, N_total)` is a fixed point — no passive
+    /// decay, so a dead world stays exactly where it died.
+    #[test]
+    fn coupled_map_conserves_nutrient_and_lockup_corner_is_fixed() {
+        let map = alc();
+        let n_total = map.n_total;
+        let mut x = AlcState {
+            p: 2.0,
+            c_e: 0.5,
+            a: 0.4 * n_total,
+            phi: 0.0,
+            c_n: 0.1 * n_total,
+        };
+        x.phi = n_total - x.a - x.c_n - map.bound(&x);
+        assert!(x.phi > 0.0);
+        for _ in 0..500 {
+            x = map.step(&x);
+            let l = map.living(&x);
+            assert!(l >= -1e-9, "living nutrient went negative: {l}");
+            assert!(
+                (x.a + l + x.c_n - n_total).abs() < 1e-9 * n_total,
+                "ledger drift: A={} L={l} C_N={} N_total={n_total}",
+                x.a,
+                x.c_n
+            );
+        }
+        let corner = AlcState {
+            p: 0.0,
+            c_e: 0.0,
+            a: 0.0,
+            phi: 0.0,
+            c_n: n_total,
+        };
+        let next = map.step(&corner);
+        assert_eq!(next, corner, "lockup corner should be a fixed point");
+    }
+
+    /// With no heterotroph the nutrient cycle is one-way (`A → L → C_N`, no
+    /// passive decay): a viable producer takes the pool up, dies at `μ_P`, and
+    /// every death strands nutrient. The producer-only face therefore flows
+    /// into the lockup corner — `C_N → N_total`, `L → 0` — whatever the flux.
+    /// This is world-rules' "a world without decomposers accumulates resources
+    /// in the dead pool until the living system starves", as a limit.
+    #[test]
+    fn producer_only_face_silts_into_the_lockup_corner() {
+        for flux in [10.0f32, 100.0, 1000.0] {
+            let mut p = params();
+            p.solar_flux_magnitude = flux;
+            p.initial_nutrient_pool = 50.0;
+            let map = AlcMap::derive(&producer(), &consumer(), &p, AlcLumping::default());
+            assert!(map.energy.r_p > 0.0, "producer must be energy-viable here");
+            let mut x = AlcState {
+                p: 1.0,
+                c_e: 0.0,
+                a: map.n_total - map.theta_p,
+                phi: 0.0,
+                c_n: 0.0,
+            };
+            let mut c_n_prev = x.c_n;
+            for _ in 0..20_000 {
+                x = map.step(&x);
+                assert!(
+                    x.c_n >= c_n_prev - 1e-12,
+                    "carcass pool is monotone without decomposers"
+                );
+                c_n_prev = x.c_n;
+            }
+            assert_eq!(x.c_e, 0.0);
+            assert!(
+                x.p < 1e-6,
+                "flux {flux}: producers should die out, P = {}",
+                x.p
+            );
+            assert!(
+                map.living(&x) < 1e-6 * map.n_total,
+                "flux {flux}: living nutrient should vanish, L = {}",
+                map.living(&x)
+            );
+            assert!(
+                (x.c_n - map.n_total).abs() < 1e-6 * map.n_total,
+                "flux {flux}: all nutrient should be carcass-locked, C_N = {} of {}",
+                x.c_n,
+                map.n_total
+            );
+        }
+    }
+
+    /// The lockup repeller condition is a statement about the corner's
+    /// transverse spectrum: in `(P, C_E)` the Jacobian at
+    /// `(0, 0, 0, N_total)` is `diag(1 − μ_P, λ_C(𝓛))` with
+    /// `λ_C(𝓛) = 1 + σ·N_total·min(κ_C·γ·e_C, q/θ_C) − m`. A central-difference
+    /// Jacobian of `step` at the corner must reproduce both entries — the
+    /// producer cannot invade (no uptake from an empty pool), only the
+    /// heterotroph feeding on the pile can.
+    #[test]
+    fn lockup_corner_eigenvalues_match_finite_difference_jacobian() {
+        for (eff, n_total) in [(0.5f32, 5.0f32), (0.05, 5.0), (0.5, 0.5), (1.0, 50.0)] {
+            let mut p = params();
+            p.base_trophic_efficiency = eff;
+            p.initial_nutrient_pool = n_total;
+            let map = AlcMap::derive(&producer(), &consumer(), &p, AlcLumping::default());
+            let corner = AlcState {
+                p: 0.0,
+                c_e: 0.0,
+                a: 0.0,
+                phi: 0.0,
+                c_n: map.n_total,
+            };
+            let h = 1e-7;
+            let dp = map.step(&AlcState { p: h, ..corner });
+            let dc = map.step(&AlcState { c_e: h, ..corner });
+            let [lambda_p, lambda_c] = map.lockup_eigenvalues();
+            assert!(
+                (dp.p / h - lambda_p).abs() < 1e-6 && dp.c_e.abs() < 1e-12,
+                "eff {eff} N {n_total}: producer column {} vs {lambda_p}",
+                dp.p / h
+            );
+            assert!(
+                (dc.c_e / h - lambda_c).abs() < 1e-6 && dc.p.abs() < 1e-12,
+                "eff {eff} N {n_total}: consumer column {} vs {lambda_c}",
+                dc.c_e / h
+            );
+            assert!(lambda_p < 1.0, "producer never invades the lockup corner");
+            assert_eq!(map.lockup_escape_ratio() > 1.0, lambda_c > 1.0);
+        }
+    }
+
+    /// Persistence of `L`, checked by boundary escape from a point hugging the
+    /// lockup corner (tiny producer and heterotroph inocula, all nutrient in
+    /// the pile). Sweeping `Λ` through 1 via `base_trophic_efficiency` at
+    /// fixed `N_total`: below 1 the living nutrient decays to zero (the corner
+    /// attracts); above 1, with the virgin-end clause and the heteroclinic
+    /// cycle condition also holding, the trough of `L` stops shrinking.
+    #[test]
+    fn living_nutrient_persists_iff_the_coupled_condition_holds() {
+        let mut checked = 0usize;
+        for i in 0..40 {
+            let eff = 0.01 + 0.99 * i as f32 / 39.0;
+            let mut p = params();
+            p.base_trophic_efficiency = eff;
+            p.initial_nutrient_pool = 2.0;
+            let map = AlcMap::derive(&producer(), &consumer(), &p, AlcLumping::default());
+            let cond = map.persistence();
+            if (map.lockup_escape_ratio() - 1.0).abs() <= 0.02 {
+                continue;
+            }
+            match map.classify_by_boundary_escape(20_000) {
+                NumericClass::LeftRegime => continue,
+                NumericClass::Permanent => assert!(
+                    cond.permanent(),
+                    "eff {eff}: numerics persistent, analytic not: {cond:?}"
+                ),
+                NumericClass::NotPermanent => assert!(
+                    !cond.permanent(),
+                    "eff {eff}: analytic persistent, numerics not: {cond:?}"
+                ),
+            }
+            checked += 1;
+        }
+        assert!(
+            checked >= 20,
+            "sweep should score most cells, got {checked}"
+        );
+    }
+
+    /// The `C_N = 0, A → 0` limit of the reduction: all nutrient is living and
+    /// bound, none is available. Uptake is `min(α_P·P, A) = 0`, so the Liebig
+    /// minimum closes producer growth at zero *whatever the solar flux* — the
+    /// map's living state is frozen at the nutrient it holds, and the only
+    /// condition left is the static one on `L = N_total` (the energy-death
+    /// floor). Energy abundance cannot rescue a nutrient-starved world.
+    #[test]
+    fn nutrient_starved_face_freezes_growth_regardless_of_flux() {
+        for flux in [1.0f32, 10.0, 1000.0, 1e6] {
+            let mut p = params();
+            p.solar_flux_magnitude = flux;
+            let map = AlcMap::derive(&producer(), &consumer(), &p, AlcLumping::default());
+            let x = AlcState {
+                p: 3.0,
+                c_e: 0.0,
+                a: 0.0,
+                phi: 0.0,
+                c_n: 0.0,
+            };
+            let next = map.step(&x);
+            assert!(
+                next.p <= x.p * (1.0 - map.lump.mu_p) + 1e-12,
+                "flux {flux}: no growth without available nutrient, got P' = {}",
+                next.p
+            );
+            assert_eq!(next.a, 0.0);
+            assert!(next.phi.abs() < 1e-12);
+        }
+    }
+
+    /// The one pure-parameter kill: `base_trophic_efficiency = 0` zeroes the
+    /// kernel on the carcass pool, so `Λ = 0` for every value of the
+    /// endogenous terms (reach, richness, carcass count, cluster traits) and
+    /// every `N_total` — the lockup corner attracts. This is the degenerate
+    /// corner viability.md's decomposer-return finding already names.
+    #[test]
+    fn zero_trophic_efficiency_makes_lockup_certain_for_every_lumping() {
+        for (iota, q, nu, n_total) in [
+            (1.0, 0.22, 0.22, 5.0),
+            (1.0, 10.0, 0.01, 1e6),
+            (0.5, 0.05, 1.0, 100.0),
+        ] {
+            let mut p = params();
+            p.base_trophic_efficiency = 0.0;
+            p.initial_nutrient_pool = n_total;
+            let lump = AlcLumping {
+                iota,
+                q,
+                nu,
+                ..AlcLumping::default()
+            };
+            let map = AlcMap::derive(&producer(), &consumer(), &p, lump);
+            assert_eq!(map.lockup_escape_ratio(), 0.0);
+            assert!(!map.persistence().heterotroph_invades_lockup);
+            assert_eq!(
+                map.classify_by_boundary_escape(2_000),
+                NumericClass::NotPermanent
+            );
         }
     }
 
