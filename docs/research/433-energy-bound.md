@@ -17,7 +17,7 @@ Every lemma is checked against the real stepper by
 `crates/explorers-sim/tests/prop_energy_bound.rs` (256 proptest cases over the search
 domain per property, plus the deterministic witness), so the proof stays falsifiable.
 The [B2 section](#b2--empirical-check-issue-438) at the end checks the lemmas against
-2048 real genesis runs and measures the obstruction at population scale.
+2256 real genesis runs and measures the obstruction at population scale.
 
 ## TL;DR
 
@@ -310,7 +310,7 @@ can stand up at once.
 - No change to the stepper, evaluator, or any committed document; the only code is
   `crates/explorers-sim/tests/prop_energy_bound.rs` (three tests, ~0.2 s).
 
-## B2 — empirical check (issue #438)
+## B2 — empirical check (issue #438; re-run under #476)
 
 **Status: measurement. Commits nothing; changes nothing in the stepper, evaluator, or
 search.** `crates/explorers-search/src/bin/energy_bound_check.rs` runs the lemmas
@@ -318,15 +318,38 @@ above against real genesis worlds and measures the obstruction. It is a diagnost
 not a CI gate:
 
 ```
-cargo run --release -p explorers-search --bin energy_bound_check   # ~10 min, 2048 runs
+cargo run --release -p explorers-search --bin energy_bound_check   # ~20 min, 2256 runs
 ```
 
 Artifact: `target/energy-bound-check.json` (gitignored). Subset selectors for
 development: `ENERGY_BOUND_CONFIGS=atlas:0,sample:12`, `ENERGY_BOUND_SEEDS=2`.
 
+**Change from the previous run.** The numbers below were re-taken under #476 on the
+stepper after the six post-atlas fixes (#444–#453, the last of them at `5a7bede`) and on
+the atlas #474 regenerated on that stepper (82 live cells, was 56). The 200 `sample:i`
+configs are the same seed-421 draw as before, so those labels stay comparable; the
+`atlas:i` cells are new. Three things moved, and one explanation covers the direction of
+all three. (i) Extinctions fell from 249 of 2048 runs to 76 of 2256 — the founder floor
+(#444) means no founder is culled on tick 1 any more (0 of 66 800 founders carry a
+negative trait, where before 57 % did), so populations that used to lose most of their
+founders before their first real tick now live; #474 reads the same rotation off the
+atlas's dead frontier, and #485 records that the metabolic overdraft cap (#445) also
+moves trajectories, so the per-cell attribution is not sharper than "the fixed stepper".
+(ii) Lemma 1 is less often tight on the count branch (median ratio 1.000 → 0.933;
+1563/2048 → 1087/2256 runs at `≥ 0.999`): with the full founder roster alive, producers
+more often have a competitor within `r`, so the light share is split rather than taken
+whole. (iii) Every tightness ratio in Check 2 roughly doubled (realised Lemma 2 median
+0.057 → 0.119; asymptote median 0.0014 → 0.0041) and the obstruction grew (growth median
+3.8× → 7.6×; peak at the horizon 704/1799 → 899/2180 survivors) — larger, longer-lived
+populations pay more base metabolism against the same throughput and hoard more. No
+finding changed: zero violations before, zero now; the allocation is still where living
+energy goes; nothing NaN'd, now for the structural reason that the founder domain is
+non-negative rather than because the cull leaked in the safe direction. The #444
+"two findings" section of the previous version is gone with the artefact it described.
+
 ### Design
 
-- **Configs.** The 56 atlas live-cell `unit` vectors, decoded with `decode` over
+- **Configs.** The 82 atlas live-cell `unit` vectors, decoded with `decode` over
   `default_ranges` exactly as the search replays them, plus 200 low-discrepancy points
   of the unit cube — the same fixed-seed LHS draw `role_emergence.rs` uses (seed 421;
   the crate's `sobol.rs` is the Saltelli *indices* estimator, not a sequence generator),
@@ -353,63 +376,67 @@ development: `ENERGY_BOUND_CONFIGS=atlas:0,sample:12`, `ENERGY_BOUND_SEEDS=2`.
   3. The obstruction: `max_t E_living(t)` against the naive cumulative-solar envelope
      `E_tot(0) + t·P_max` at the peak tick, the allocation's share of that peak, and
      the peak over the endowment `E_tot(0)`.
-- **#444 handling.** Under the search box's non-integer `maintenance_cost_exponent`
-  (1.5–3.0) a negative founder trait makes `metabolise`'s `powf` return NaN. The
-  instrument records per run how many founders carry a negative metabolic trait and
-  stops a run's checks at the first NaN in `P`, `E_living` or `E_tot`, excluding it
-  from the distributions.
+- **NaN guard.** The instrument still counts founders with a negative metabolic trait
+  and stops a run's checks at the first NaN in `P`, `E_living` or `E_tot`. Since the
+  founder floor (#444) both counters read zero on every run; the guard stays as the
+  falsifier of that floor, not as a working exclusion.
 
-### Results (56 + 200 configs × 8 seeds = 2048 runs, horizon 500)
+### Results (82 + 200 configs × 8 seeds = 2256 runs, horizon 500)
 
-Terminal modes: 1799 survived, 249 extinct, 0 exploded. **No run produced a NaN**,
+Terminal modes: 2180 survived, 76 extinct, 0 exploded. **No run produced a NaN**,
 and **no run violated Lemma 1, the Theorem, or the summed Lemma 2.**
 
 | Check | observed / bound | n | min | q1 | median | q3 | max |
 |---|---|---|---|---|---|---|---|
-| 1 Lemma 1 | `max_t P(t) / (F·min(N_P, m²))` | 2048 | 0.128 | 1.000 | 1.000 | 1.000 | 1.0001 |
-| 2 Theorem | `max_T B·ΣN_s / (E_tot(0) + T·P_max)` | 2048 | 0.000 | 0.0007 | 0.0026 | 0.0074 | 0.056 |
-| 2 Lemma 2 summed | `max_T B·ΣN_s / (E_tot(0) − E_tot(T) + ΣP)` | 2048 | 0.000 | 0.029 | 0.057 | 0.104 | 0.630 |
-| 2 asymptote | `mean_t N_s / N̄_max` | 2048 | 0.000 | 0.0004 | 0.0014 | 0.0038 | 0.079 |
-| 3 envelope | `max_t E_living / (E_tot(0) + t·P_max)` | 2048 | 0.000 | 0.0036 | 0.0094 | 0.021 | 0.568 |
-| 3 envelope, survivors only | same | 1799 | 0.000 | 0.0037 | 0.0091 | 0.019 | 0.568 |
-| 3 allocation share at peak | `Σ repro_reserve / E_living` | 2048 | 0.000 | 0.066 | 0.330 | 0.724 | 0.9998 |
-| 3 allocation share, survivors | same | 1799 | 0.000 | 0.075 | 0.331 | 0.724 | 0.9998 |
-| 3 growth | `max_t E_living / E_tot(0)` | 2048 | 0.000 | 1.14 | 3.81 | 15.4 | 19 055 |
+| 1 Lemma 1 | `max_t P(t) / (F·min(N_P, m²))` | 2256 | 0.113 | 0.714 | 0.933 | 1.000 | 1.0001 |
+| 2 Theorem | `max_T B·ΣN_s / (E_tot(0) + T·P_max)` | 2256 | 0.000 | 0.0027 | 0.0066 | 0.0148 | 0.116 |
+| 2 Lemma 2 summed | `max_T B·ΣN_s / (E_tot(0) − E_tot(T) + ΣP)` | 2256 | 0.000 | 0.061 | 0.119 | 0.200 | 0.759 |
+| 2 asymptote | `mean_t N_s / N̄_max` | 2256 | 0.000 | 0.0016 | 0.0041 | 0.0082 | 0.067 |
+| 3 envelope | `max_t E_living / (E_tot(0) + t·P_max)` | 2256 | 0.000 | 0.0068 | 0.0126 | 0.024 | 0.946 |
+| 3 envelope, survivors only | same | 2180 | 0.000 | 0.0068 | 0.0123 | 0.024 | 0.946 |
+| 3 allocation share at peak | `Σ repro_reserve / E_living` | 2256 | 0.000 | 0.120 | 0.357 | 0.628 | 0.9997 |
+| 3 allocation share, survivors | same | 2180 | 0.000 | 0.122 | 0.363 | 0.633 | 0.9997 |
+| 3 growth | `max_t E_living / E_tot(0)` | 2256 | 0.000 | 2.38 | 7.62 | 27.1 | 40 932 |
 
-**Check 1 — Lemma 1 holds and is tight on the count branch.** The max ratio is 1.0001
-(f32 summation of per-agent shares); 1563 of 2048 runs reach `≥ 0.999`. That is the
-`N_P` branch of the `min`, not the `m²` branch: in 1637 runs the peak population never
-exceeds `m²`, so the cap is `F·N_P` and a ratio of 1 means every producer at that tick
-had no competitor within `r` and took the full flux. The `m²` geometric branch never
-binds in this domain — populations are far too sparse — so its non-tightness (noted
+**Check 1 — Lemma 1 holds and is tight on the count branch, less often than before.**
+The max ratio is 1.0001 (f32 summation of per-agent shares); 1087 of 2256 runs reach
+`≥ 0.999` and the median is 0.933. That is the `N_P` branch of the `min`, not the `m²`
+branch: in 1698 runs the peak population never exceeds `m²`, so the cap is `F·N_P` and
+a ratio of 1 means every producer at that tick had no competitor within `r` and took
+the full flux. The drop from a median of 1.000 is the founder floor's doing — the whole
+founder roster now lives past tick 1, so a producer more often shares its light — and
+the `m²` geometric branch still never binds in this domain, so its non-tightness (noted
 under Lemma 1) is invisible here.
 
 **Check 2 — the Theorem holds with two orders of magnitude to spare.** The config-only
 form is loose because `P_max = F·m²` assumes every one of `m²` light cells is occupied;
 the realised form (summed Lemma 2) is the honest tightness read and its median is
-0.057: survivors' base charge `B·N_s` is ~6 % of the energy that actually passed
-through the system, the rest going to trait/structure maintenance, movement, transfer
-loss and the stocks. The worst case (0.63, `sample:169` seed 1002) is a survivor that
+0.119: survivors' base charge `B·N_s` is ~12 % of the energy that actually passed
+through the system (was ~6 %), the rest going to trait/structure maintenance, movement,
+transfer loss and the stocks. The worst case (0.76, `sample:155` seed 1007, then
+`sample:192` seeds 1007 and 1006 at 0.76 and 0.75) is a survivor population that
 converts most of its net budget into `B`. The asymptotic `N̄_max = F·m²/B` is nowhere
-approached (max 0.079, `sample:70`, `N̄_max = 51`, peak population 24) — the necessary
-ceiling on sustained population is not the binding constraint anywhere in the search
-box, as the Authority boundary anticipated.
+approached (max 0.067, `sample:70` seed 1005, `N̄_max = 51`, peak population 24 — the
+same cell that topped the previous run at 0.079) — the necessary ceiling on sustained
+population is not the binding constraint anywhere in the search box, as the Authority
+boundary anticipated.
 
 **Check 3 — the obstruction is real and common, and the envelope says nothing.** The
 naive cumulative-solar envelope is enormous (`m²` cells × `F` × `t`), so `E_living`
-sits at ~1 % of it at the median; the maxima (~0.57) are all peaks at tick 1–2, where
-`E_living ≈ E_tot(0)` and the envelope is only one `P_max` wider. The informative
-numbers are the other two rows:
+sits at ~1 % of it at the median; the maxima (~0.95, `sample:29` and `sample:69`) are
+all peaks at tick 1, where `E_living ≈ E_tot(0)` and the envelope is only one `P_max`
+wider. The informative numbers are the other two rows:
 
 - **The reproductive allocation is where living energy goes.** At the peak, the median
-  run holds a third of `E_living` in `repro_reserve`; the upper quartile holds 72 %;
-  715 of 1799 surviving runs hold more than half; the maximum is 99.98 %. Atlas cells
-  (median 0.41) hoard more than the cube sample (0.31).
-- **The stock is still rising at the horizon.** 704 of 1799 surviving runs have their
+  run holds 36 % of `E_living` in `repro_reserve`; the upper quartile holds 63 %;
+  815 of 2180 surviving runs hold more than half; the maximum is 99.97 % (`sample:95`).
+  Atlas cells (survivor median 0.40) hoard more than the cube sample (0.34).
+- **The stock is still rising at the horizon.** 899 of 2180 surviving runs have their
   `E_living` peak at tick 500 itself — the search horizon truncates a growing stock, it
-  does not see a plateau. `sample:147` reaches 19 055× its endowment (443 062 energy
-  from 23.3, 83 % of it allocation, population 948 < `max_population`) with no bound in
-  sight.
+  does not see a plateau. `sample:131` reaches 40 932× its endowment (1 256 747 energy
+  from 30.7, 99 % of it allocation, population 3841 < `max_population`), and
+  `sample:147` — the previous run's extreme — 20 585× (478 621 from 23.3, 86 %
+  allocation, population 953), with no bound in sight.
 
 This is the population-scale version of the lone-producer witness of O1: not an odd
 corner but the median behaviour of the search box. Any viability argument that treats
@@ -417,31 +444,11 @@ corner but the median behaviour of the search box. Any viability argument that t
 exactly as the obstruction section says; and the search's fitness surface is being
 read off runs whose dominant energy stock is one the rules never discharge.
 
-### Two findings about #444, recorded there
-
-- **Exposure is near-total.** 2014 of 2048 runs seeded at least one founder with a
-  negative metabolic trait; 34 959 of 61 008 founders (57 %) did. `default_ranges`
-  puts every `mean_*` trait in `[0, 1]` with `trait_covariance ≥ 0.1`, so a negative
-  draw is the rule, not the exception.
-- **Why nothing NaN'd.** The NaN founder's reserve fails `World::step`'s final
-  `retain(|a| a.reserve > 0.0)` (`lib.rs` ~line 1285) on tick 1 — `NaN > 0` is false —
-  so it is dropped silently: no `Died` event, no carcass, its structure and reserve
-  simply leave `E_tot`. (`World::dissipated_energy` *is* NaN from tick 1, as #444
-  reports; this instrument reads the stocks and the solar counter, neither of which is
-  touched.) Every run therefore proceeds from tick 1 on the non-negative trait domain
-  the lemmas assume, with `E_tot(0)` over-stated by the culled founders' endowment. The
-  leak is in the safe direction for all three checks, so it cannot have masked a
-  violation — but it means the checks here say nothing about O3 (a finite negative
-  maintenance term needs an exactly-odd integer exponent, which the continuous range
-  hits with probability zero), and it means 57 % of the search's founders are dead on
-  arrival, shrinking every population the search evaluates before its first real tick.
-
 ### Deliverables against the acceptance criteria
 
 - Deterministic across two runs (identical SHA-1 of `target/energy-bound-check.json`);
   artifact path documented above; not committed.
-- Zero violations of any proven bound; nothing to file. The #444 observations are
-  recorded as a comment on that issue, not as new bugs.
+- Zero violations of any proven bound; nothing to file.
 - The three ratio distributions (median, quartiles, max) are the table above.
 - The instrument asserts nothing about emergent values; its unit tests cover only the
   pure parts (`bounds`, `check_run`, `distribution`) on synthetic series.

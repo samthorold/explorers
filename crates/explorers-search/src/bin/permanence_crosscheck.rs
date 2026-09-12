@@ -51,7 +51,10 @@
 //! configs `role_emergence.rs` uses, so `sample:i` coincides across instruments.
 //! Seeds are a fixed contiguous block per config. Each (config, seed) run is
 //! independent, so the rayon collect is order-stable and the artifact is
-//! byte-identical across runs.
+//! byte-identical across runs. `World::new` floors founder traits at zero
+//! (#444), so no run can lose a compartment to a negative-trait cull and the
+//! instrument carries no #444 tag; the tick-1 population it records is the
+//! peak-relative death threshold's doing, not a founder artefact.
 //!
 //! ## Output
 //!
@@ -225,11 +228,15 @@ struct A1Verdict {
     /// that only routes the surplus through offspring, it no longer zeroes
     /// `r_P`).
     kappa_p: f64,
+    /// Consumer somatic allocation `κ_C`. `β = κ_C·γ·e·a` still carries the
+    /// lumping #466 removed from `r_P` (#482): at `κ_C = 0` it zeroes `I`
+    /// and `Λ` although the reproductive branch becomes offspring biomass.
+    kappa_c: f64,
     #[serde(flatten)]
     map: A1Map,
 }
 
-fn a1_verdict(map: A1Map, producer: &TraitVector) -> A1Verdict {
+fn a1_verdict(map: A1Map, producer: &TraitVector, consumer: &TraitVector) -> A1Verdict {
     let producer_face_alive = map.r_p > 0.0;
     let consumer_invades = map.beta * map.k_p > map.m;
     let hypothesis_h1 = map.m > 0.0 && map.m < 1.0 && map.r_p <= 2.0;
@@ -248,6 +255,7 @@ fn a1_verdict(map: A1Map, producer: &TraitVector) -> A1Verdict {
         rho: map.k_p,
         invasion_ratio: map.invasion_ratio(),
         kappa_p: producer.kappa.clamp(0.0, 1.0) as f64,
+        kappa_c: consumer.kappa.clamp(0.0, 1.0) as f64,
         map,
     }
 }
@@ -395,8 +403,6 @@ struct SeedOutcome {
     collapsed: bool,
     termination_tick: u64,
     founders: usize,
-    /// Founders with a negative metabolic trait (#444): culled silently at tick 1.
-    negative_founders: usize,
     population_after_tick1: usize,
     producers_after_tick1: usize,
     consumers_after_tick1: usize,
@@ -410,11 +416,6 @@ struct SeedOutcome {
     /// First tick with no consumer alive while producers still stood, if any.
     first_tick_without_consumers: Option<u64>,
     first_tick_without_producers: Option<u64>,
-    /// A whole compartment the prediction was evaluated on had no founder
-    /// left after tick 1, and the tick-1 losses are no more than the
-    /// negative-trait founders — the #444 artefact signature. (A tick-1 loss
-    /// larger than that is a first-tick floor, not #444.)
-    compartment_doa: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
@@ -440,11 +441,6 @@ struct Aggregate {
     modal_mode: &'static str,
     modal_count: usize,
     observed: Observed,
-    /// Collapsing seeds on which a compartment was dead on arrival (#444).
-    collapse_seeds_with_compartment_doa: usize,
-    /// `#444`-tagged: a majority of the collapsing seeds lost a compartment at
-    /// tick 1, so the IBM never held the pair the mean field was evaluated on.
-    tagged_444: bool,
     /// Persisting seeds with at least one consumer alive at the horizon.
     persisting_seeds_with_consumers: usize,
     /// Persisting seeds on which the evaluator saw a decomposer guild.
@@ -487,11 +483,6 @@ fn aggregate(seeds: &[SeedOutcome]) -> Aggregate {
     } else {
         Observed::Mixed
     };
-    let collapse_seeds_with_compartment_doa = seeds
-        .iter()
-        .filter(|s| s.collapsed && s.compartment_doa)
-        .count();
-    let tagged_444 = collapsed > 0 && 2 * collapse_seeds_with_compartment_doa > collapsed;
     let persisting_seeds_with_consumers = seeds
         .iter()
         .filter(|s| !s.collapsed && s.terminal_consumers > 0)
@@ -523,8 +514,6 @@ fn aggregate(seeds: &[SeedOutcome]) -> Aggregate {
         modal_mode,
         modal_count,
         observed,
-        collapse_seeds_with_compartment_doa,
-        tagged_444,
         persisting_seeds_with_consumers,
         persisting_seeds_with_decomposer_guild,
         median_first_tick_without_consumers: median_u64(&mut no_consumers),
@@ -579,8 +568,7 @@ fn classify(prediction: Prediction, a1: &A1Verdict, agg: &Aggregate) -> Agreemen
 
 /// One-line fault hypothesis for a disagreeing cell, from A1's authority
 /// boundary (mean field / no space / no demographic noise / reduction regime
-/// exit) plus the #444 founder artefact. Rules apply in order; the first that
-/// matches names the hypothesis.
+/// exit). Rules apply in order; the first that matches names the hypothesis.
 fn fault_hypothesis(
     agreement: Agreement,
     a1: &A1Verdict,
@@ -589,40 +577,37 @@ fn fault_hypothesis(
 ) -> Option<String> {
     match agreement {
         Agreement::Agree | Agreement::ProducerOnly | Agreement::Undecided => None,
-        Agreement::FalsePositive | Agreement::FalsePositiveMixed => Some(if agg.tagged_444 {
-            format!(
-                "#444 artefact: a compartment had no non-negative founder after tick 1 on {}/{} collapsing seeds",
-                agg.collapse_seeds_with_compartment_doa, agg.collapsed
-            )
-        } else if agg.median_population_after_tick1_on_collapse == Some(0) {
-            "reduction: every founder dies on tick 1 whatever its trait sign - a first-tick per-body floor (the peak-relative death threshold, endowment, embodiment) the biomass map has no coordinate for".to_string()
-        } else if agg.modal_mode == "nutrient-lockup" {
-            "reduction: nutrient lockup is outside A1's coordinates (A2's iota/nu/q are endogenous)"
+        Agreement::FalsePositive | Agreement::FalsePositiveMixed => Some(
+            if agg.median_population_after_tick1_on_collapse == Some(0) {
+                "reduction: every founder dies on tick 1 whatever its trait sign - a first-tick per-body floor (the peak-relative death threshold, endowment, embodiment) the biomass map has no coordinate for".to_string()
+            } else if agg.modal_mode == "nutrient-lockup" {
+                "reduction: nutrient lockup is outside A1's coordinates (A2's iota/nu/q are endogenous)"
                 .to_string()
-        } else if agg.modal_mode == "energy-death" {
-            "reduction: energy-death stock trend with survivors is outside A1's coordinates"
-                .to_string()
-        } else if agg
-            .median_first_tick_without_consumers
-            .is_some_and(|t| t <= 25)
-        {
-            format!(
-                "spatial: consumers lost by tick {} while producers stood - reach never met the crop (example10 signature)",
-                agg.median_first_tick_without_consumers.unwrap_or(0)
-            )
-        } else if agreement == Agreement::FalsePositiveMixed {
-            format!(
-                "demographic-stochastic: {}/{} seeds collapse - a per-seed split the mean field does not resolve",
-                agg.collapsed, agg.n
-            )
-        } else if agg.median_peak_population <= 2 * agg.median_founders {
-            format!(
-                "finite-size: population never left the founder scale (median peak {} from {} founders)",
-                agg.median_peak_population, agg.median_founders
-            )
-        } else {
-            "reduction: mean-field regime exit (unclassified)".to_string()
-        }),
+            } else if agg.modal_mode == "energy-death" {
+                "reduction: energy-death stock trend with survivors is outside A1's coordinates"
+                    .to_string()
+            } else if agg
+                .median_first_tick_without_consumers
+                .is_some_and(|t| t <= 25)
+            {
+                format!(
+                    "spatial: consumers lost by tick {} while producers stood - reach never met the crop (example10 signature)",
+                    agg.median_first_tick_without_consumers.unwrap_or(0)
+                )
+            } else if agreement == Agreement::FalsePositiveMixed {
+                format!(
+                    "demographic-stochastic: {}/{} seeds collapse - a per-seed split the mean field does not resolve",
+                    agg.collapsed, agg.n
+                )
+            } else if agg.median_peak_population <= 2 * agg.median_founders {
+                format!(
+                    "finite-size: population never left the founder scale (median peak {} from {} founders)",
+                    agg.median_peak_population, agg.median_founders
+                )
+            } else {
+                "reduction: mean-field regime exit (unclassified)".to_string()
+            },
+        ),
         Agreement::FalseNegative | Agreement::FalseNegativeMixed => {
             Some(if !a1.producer_face_alive && a1.rho > 1.0 {
                 format!(
@@ -631,6 +616,13 @@ fn fault_hypothesis(
                 )
             } else if !a1.producer_face_alive {
                 "reduction: extinction gate fails at the centroid but founders persisted - realised maintenance below the centroid's (trait draw / evolution)".to_string()
+            } else if a1.kappa_c == 0.0 {
+                format!(
+                    "#482 (beta lumping): kappa_C = 0 zeroes beta = kappa_C*gamma*e*a, so I = Lambda = 0 although rho = {:.1} > 1 - the consumer twin of the r_P lumping #466 corrected; the reproductive branch still becomes offspring biomass; consumers persisted on {}/{} seeds",
+                    a1.rho,
+                    agg.persisting_seeds_with_consumers,
+                    agg.n - agg.collapsed
+                )
             } else if single_centroid {
                 format!(
                     "reduction: single mixotroph centroid - no consumer compartment to evaluate, I is read at the mean's own h; heterotroph-leaning agents present on {}/{} persisting seeds",
@@ -675,7 +667,9 @@ fn confusion(cells: &[(Prediction, Observed)]) -> [[usize; 3]; 3] {
 }
 
 /// False-positive rates: strict (every seed collapsed) and any-seed (at least
-/// one seed collapsed), raw and excluding the `#444`-tagged cells.
+/// one seed collapsed). There is no "excluding #444" denominator any more:
+/// `World::new` floors founder traits at zero, so no cell can owe its
+/// collapse to the tick-1 cull.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 struct FalsePositives {
     predicted_permanent: usize,
@@ -683,38 +677,21 @@ struct FalsePositives {
     any_seed: usize,
     strict_rate: f64,
     any_seed_rate: f64,
-    predicted_permanent_excl_444: usize,
-    strict_excl_444: usize,
-    any_seed_excl_444: usize,
-    strict_rate_excl_444: f64,
-    any_seed_rate_excl_444: f64,
 }
 
-fn false_positives(cells: &[(Prediction, Observed, bool)]) -> FalsePositives {
+fn false_positives(cells: &[(Prediction, Observed)]) -> FalsePositives {
     let rate = |k: usize, n: usize| if n == 0 { 0.0 } else { k as f64 / n as f64 };
-    let permanent: Vec<&(Prediction, Observed, bool)> = cells
+    let permanent: Vec<&(Prediction, Observed)> = cells
         .iter()
-        .filter(|(p, _, _)| *p == Prediction::Permanent)
+        .filter(|(p, _)| *p == Prediction::Permanent)
         .collect();
     let strict = permanent
         .iter()
-        .filter(|(_, o, _)| *o == Observed::Collapse)
+        .filter(|(_, o)| *o == Observed::Collapse)
         .count();
     let any_seed = permanent
         .iter()
-        .filter(|(_, o, _)| *o != Observed::Persist)
-        .count();
-    // A #444 tag only applies where seeds collapsed, so excluding tagged cells
-    // removes them from the numerator and the denominator alike.
-    let untagged: Vec<&&(Prediction, Observed, bool)> =
-        permanent.iter().filter(|(_, _, tagged)| !tagged).collect();
-    let strict_excl = untagged
-        .iter()
-        .filter(|(_, o, _)| *o == Observed::Collapse)
-        .count();
-    let any_excl = untagged
-        .iter()
-        .filter(|(_, o, _)| *o != Observed::Persist)
+        .filter(|(_, o)| *o != Observed::Persist)
         .count();
     FalsePositives {
         predicted_permanent: permanent.len(),
@@ -722,11 +699,6 @@ fn false_positives(cells: &[(Prediction, Observed, bool)]) -> FalsePositives {
         any_seed,
         strict_rate: rate(strict, permanent.len()),
         any_seed_rate: rate(any_seed, permanent.len()),
-        predicted_permanent_excl_444: untagged.len(),
-        strict_excl_444: strict_excl,
-        any_seed_excl_444: any_excl,
-        strict_rate_excl_444: rate(strict_excl, untagged.len()),
-        any_seed_rate_excl_444: rate(any_excl, untagged.len()),
     }
 }
 
@@ -764,38 +736,19 @@ fn compartments(world: &World) -> (usize, usize) {
     (producers, consumers)
 }
 
-/// Founders carrying a negative metabolic trait (#444; as `energy_bound_check`).
-fn negative_metabolic_founders(world: &World) -> usize {
-    world
-        .agents()
-        .iter()
-        .filter(|a| {
-            let t = &a.traits;
-            t.photosynthetic_absorption < 0.0
-                || t.heterotrophy < 0.0
-                || t.mobility < 0.0
-                || t.asexual_propensity < 0.0
-        })
-        .count()
-}
-
 /// Drive one (config, seed) through the genesis step loop exactly as
 /// `explorers_genesis::run_single` does (same observations, same early stops,
 /// same `evaluate_from_log`), while also reading the compartment facts the
-/// fault hypotheses need. `has_consumer_compartment` says whether the
-/// prediction was evaluated on a distinct consumer centroid; with a single
-/// mixotroph centroid there is no consumer compartment to lose.
+/// fault hypotheses need.
 fn run_seed(
     params: &WorldParameters,
     dist: &InitialDistribution,
     seed: u64,
     horizon: u64,
-    has_consumer_compartment: bool,
 ) -> SeedOutcome {
     let eval_config = EvalConfig::default();
     let mut world = World::new(params.clone(), dist.clone(), seed);
     let founders = world.agents().len();
-    let negative_founders = negative_metabolic_founders(&world);
     let cap = horizon as usize;
     let mut observations = RolloutObservations {
         free_energy: Vec::with_capacity(cap),
@@ -849,16 +802,12 @@ fn run_seed(
     let mode = mode_label(&breakdown.failure);
     let (terminal_producers, terminal_consumers) = compartments(&world);
     let decomposer_guild = breakdown.has_decomposer_guild;
-    let compartment_doa = negative_founders > 0
-        && (producers_after_tick1 == 0 || (has_consumer_compartment && consumers_after_tick1 == 0))
-        && founders - population_after_tick1 <= negative_founders;
     SeedOutcome {
         seed,
         mode,
         collapsed: is_collapse(mode),
         termination_tick: world.tick(),
         founders,
-        negative_founders,
         population_after_tick1,
         producers_after_tick1,
         consumers_after_tick1,
@@ -868,7 +817,6 @@ fn run_seed(
         peak_population,
         first_tick_without_consumers,
         first_tick_without_producers,
-        compartment_doa,
     }
 }
 
@@ -908,7 +856,7 @@ fn evaluate_config(
     let (producer, consumer) = representative_clusters(&dist);
     let has_consumer_compartment = producer != consumer;
     let map = A1Map::derive(&producer, &consumer, &params);
-    let a1 = a1_verdict(map, &producer);
+    let a1 = a1_verdict(map, &producer, &consumer);
     let a2 = a2_verdict(&map, &producer, &consumer, &params);
     let predicted_a1 = a1.prediction;
     let predicted_a2 = a2_prediction(&a1, &a2);
@@ -916,15 +864,7 @@ fn evaluate_config(
     // the record is bit-identical to the sequential map (the #350 contract).
     let outcomes: Vec<SeedOutcome> = (0..seeds)
         .into_par_iter()
-        .map(|s| {
-            run_seed(
-                &params,
-                &dist,
-                SEED_BASE + s,
-                horizon,
-                has_consumer_compartment,
-            )
-        })
+        .map(|s| run_seed(&params, &dist, SEED_BASE + s, horizon))
         .collect();
     let aggregate = aggregate(&outcomes);
     let agreement_a1 = classify(predicted_a1, &a1, &aggregate);
@@ -973,7 +913,6 @@ struct Disagreement {
     rho: f64,
     invasion_ratio: f64,
     lockup_escape_ratio: f64,
-    tagged_444: bool,
     fault_hypothesis: String,
 }
 
@@ -1007,9 +946,9 @@ fn column(records: &[ConfigRecord], a1_only: bool) -> Column {
             )
         }
     };
-    let cells: Vec<(Prediction, Observed, bool)> = records
+    let cells: Vec<(Prediction, Observed)> = records
         .iter()
-        .map(|r| (pick(r).0, r.aggregate.observed, r.aggregate.tagged_444))
+        .map(|r| (pick(r).0, r.aggregate.observed))
         .collect();
     let count = |a: Agreement| records.iter().filter(|r| pick(r).1 == a).count();
     let disagreements = records
@@ -1028,13 +967,12 @@ fn column(records: &[ConfigRecord], a1_only: bool) -> Column {
                 rho: r.a1.rho,
                 invasion_ratio: r.a1.invasion_ratio,
                 lockup_escape_ratio: r.a2.lockup_escape_ratio,
-                tagged_444: r.aggregate.tagged_444,
                 fault_hypothesis,
             })
         })
         .collect();
     Column {
-        confusion: confusion(&cells.iter().map(|(p, o, _)| (*p, *o)).collect::<Vec<_>>()),
+        confusion: confusion(&cells),
         false_positives: false_positives(&cells),
         agree: count(Agreement::Agree),
         producer_only: count(Agreement::ProducerOnly),
@@ -1054,9 +992,6 @@ struct Summary {
     configs_run: usize,
     total_runs: usize,
     runs_collapsed: usize,
-    runs_with_negative_founders: usize,
-    runs_with_compartment_doa: usize,
-    configs_tagged_444: usize,
     a1: Column,
     a2: Column,
 }
@@ -1183,17 +1118,6 @@ fn main() {
         configs_run: records.len(),
         total_runs: records.iter().map(|r| r.seeds.len()).sum(),
         runs_collapsed: records.iter().map(|r| r.aggregate.collapsed).sum(),
-        runs_with_negative_founders: records
-            .iter()
-            .flat_map(|r| &r.seeds)
-            .filter(|s| s.negative_founders > 0)
-            .count(),
-        runs_with_compartment_doa: records
-            .iter()
-            .flat_map(|r| &r.seeds)
-            .filter(|s| s.compartment_doa)
-            .count(),
-        configs_tagged_444: records.iter().filter(|r| r.aggregate.tagged_444).count(),
         a1: column(&records, true),
         a2: column(&records, false),
     };
@@ -1227,22 +1151,13 @@ fn print_column(name: &str, c: &Column) {
         fp.any_seed_rate
     );
     println!(
-        "  excluding #444-tagged cells:                              strict {}/{} = {:.3}, any-seed {}/{} = {:.3}",
-        fp.strict_excl_444,
-        fp.predicted_permanent_excl_444,
-        fp.strict_rate_excl_444,
-        fp.any_seed_excl_444,
-        fp.predicted_permanent_excl_444,
-        fp.any_seed_rate_excl_444
-    );
-    println!(
         "  agree {}, producer-only (clause 2 fails, no consumer at horizon) {}, false negative {} (+{} mixed), undecided {}",
         c.agree, c.producer_only, c.false_negative, c.false_negative_mixed, c.undecided
     );
     println!("  disagreements: {}", c.disagreements.len());
     for d in &c.disagreements {
         println!(
-            "    {:?}:{} {:?}→{:?} ({}/{} collapse, modal {}; rho {:.2}, I {:.2}, Lambda {:.3e}){} — {}",
+            "    {:?}:{} {:?}→{:?} ({}/{} collapse, modal {}; rho {:.2}, I {:.2}, Lambda {:.3e}) — {}",
             d.source,
             d.config_index,
             d.predicted,
@@ -1253,7 +1168,6 @@ fn print_column(name: &str, c: &Column) {
             d.rho,
             d.invasion_ratio,
             d.lockup_escape_ratio,
-            if d.tagged_444 { " [#444]" } else { "" },
             d.fault_hypothesis
         );
     }
@@ -1273,11 +1187,8 @@ fn print_summary(s: &Summary) {
         s.horizon
     );
     println!(
-        "# runs collapsed (extinction | energy-death | nutrient-lockup): {}; runs with a negative founder (#444): {}; runs with a compartment DOA at tick 1: {}; configs #444-tagged: {}\n",
-        s.runs_collapsed,
-        s.runs_with_negative_founders,
-        s.runs_with_compartment_doa,
-        s.configs_tagged_444
+        "# runs collapsed (extinction | energy-death | nutrient-lockup): {}\n",
+        s.runs_collapsed
     );
     print_column("A1 only (rho > 1 and I > 1 at the seeded centroids)", &s.a1);
     print_column(
@@ -1365,7 +1276,11 @@ mod tests {
         // Numbers quoted in 432-permanence-pc.md and printed by
         // permanence_prototype on the committed scenario.
         let (producer, consumer, params) = example10();
-        let v = a1_verdict(A1Map::derive(&producer, &consumer, &params), &producer);
+        let v = a1_verdict(
+            A1Map::derive(&producer, &consumer, &params),
+            &producer,
+            &consumer,
+        );
         assert!((v.rho - 71.111).abs() < 1e-2, "rho = {}", v.rho);
         assert!(
             (v.invasion_ratio - 23.135).abs() < 1e-2,
@@ -1386,7 +1301,11 @@ mod tests {
     fn a1_clause_one_holds_at_kappa_zero_when_rho_exceeds_one() {
         let (mut producer, consumer, params) = example10();
         producer.kappa = 0.0;
-        let v = a1_verdict(A1Map::derive(&producer, &consumer, &params), &producer);
+        let v = a1_verdict(
+            A1Map::derive(&producer, &consumer, &params),
+            &producer,
+            &consumer,
+        );
         assert!(v.rho > 1.0);
         assert!(v.map.r_p > 0.0, "r_P = {}", v.map.r_p);
         assert!(v.producer_face_alive);
@@ -1400,13 +1319,17 @@ mod tests {
         // Clause 1: flux at the producer's maintenance floor.
         let mut p = params.clone();
         p.solar_flux_magnitude = 0.1;
-        let v = a1_verdict(A1Map::derive(&producer, &consumer, &p), &producer);
+        let v = a1_verdict(
+            A1Map::derive(&producer, &consumer, &p),
+            &producer,
+            &consumer,
+        );
         assert!(!v.producer_face_alive);
         assert_eq!(v.prediction, Prediction::NotPermanent);
         // Clause 2: a consumer with no heterotrophy cannot invade.
         let mut c = consumer;
         c.heterotrophy = 0.0;
-        let v = a1_verdict(A1Map::derive(&producer, &c, &params), &producer);
+        let v = a1_verdict(A1Map::derive(&producer, &c, &params), &producer, &c);
         assert!(v.producer_face_alive && !v.consumer_invades);
         assert_eq!(v.prediction, Prediction::NotPermanent);
     }
@@ -1418,7 +1341,11 @@ mod tests {
         // but no longer sufficient.
         let mut p = params.clone();
         p.solar_flux_magnitude = 20.0;
-        let v = a1_verdict(A1Map::derive(&producer, &consumer, &p), &producer);
+        let v = a1_verdict(
+            A1Map::derive(&producer, &consumer, &p),
+            &producer,
+            &consumer,
+        );
         assert!(v.map.r_p > 2.0);
         assert!(v.producer_face_alive && v.consumer_invades);
         assert_eq!(v.prediction, Prediction::Undecided);
@@ -1437,7 +1364,7 @@ mod tests {
         );
         assert!(v.producer_invades_virgin && v.heterotroph_invades_lockup && v.cycle_repels);
         assert_eq!(
-            a2_prediction(&a1_verdict(map, &producer), &v),
+            a2_prediction(&a1_verdict(map, &producer, &consumer), &v),
             Prediction::Permanent
         );
     }
@@ -1450,7 +1377,7 @@ mod tests {
         let mut p = params.clone();
         p.initial_nutrient_pool = 1e-3;
         let map = A1Map::derive(&producer, &consumer, &p);
-        let a1 = a1_verdict(map, &producer);
+        let a1 = a1_verdict(map, &producer, &consumer);
         let a2 = a2_verdict(&map, &producer, &consumer, &p);
         assert_eq!(a1.prediction, Prediction::Permanent);
         assert!(!a2.heterotroph_invades_lockup && a2.lockup_escape_ratio > 0.0);
@@ -1459,7 +1386,7 @@ mod tests {
         let mut c = consumer;
         c.heterotrophy = 0.0;
         let map = A1Map::derive(&producer, &c, &params);
-        let a1 = a1_verdict(map, &producer);
+        let a1 = a1_verdict(map, &producer, &c);
         let a2 = a2_verdict(&map, &producer, &c, &params);
         assert_eq!(a2.lockup_escape_ratio, 0.0);
         assert_eq!(a2_prediction(&a1, &a2), Prediction::NotPermanent);
@@ -1467,7 +1394,7 @@ mod tests {
         let mut p = params.clone();
         p.solar_flux_magnitude = 0.1;
         let map = A1Map::derive(&producer, &consumer, &p);
-        let a1 = a1_verdict(map, &producer);
+        let a1 = a1_verdict(map, &producer, &consumer);
         let a2 = a2_verdict(&map, &producer, &consumer, &p);
         assert!(a2.virgin_invasion_rate <= 0.0);
         assert_eq!(a2_prediction(&a1, &a2), Prediction::NotPermanent);
@@ -1477,78 +1404,71 @@ mod tests {
         let mut p = params.clone();
         p.solar_flux_magnitude = 0.3;
         let map = A1Map::derive(&producer, &consumer, &p);
-        let a1 = a1_verdict(map, &producer);
+        let a1 = a1_verdict(map, &producer, &consumer);
         let a2 = a2_verdict(&map, &producer, &consumer, &p);
         assert_eq!(a1.prediction, Prediction::NotPermanent);
         assert!(a1.producer_face_alive && !a1.consumer_invades);
         assert_eq!(a2_prediction(&a1, &a2), Prediction::Permanent);
     }
 
-    fn outcome(seed: u64, mode: &'static str, doa: bool, consumers: usize) -> SeedOutcome {
+    fn outcome(seed: u64, mode: &'static str, consumers: usize) -> SeedOutcome {
         SeedOutcome {
             seed,
             mode,
             collapsed: is_collapse(mode),
             termination_tick: 500,
             founders: 10,
-            negative_founders: if doa { 5 } else { 0 },
             population_after_tick1: 5,
             producers_after_tick1: 5,
-            consumers_after_tick1: if doa { 0 } else { 5 },
+            consumers_after_tick1: 5,
             terminal_producers: 5,
             terminal_consumers: consumers,
             decomposer_guild: false,
             peak_population: 40,
             first_tick_without_consumers: None,
             first_tick_without_producers: None,
-            compartment_doa: doa,
         }
     }
 
     #[test]
-    fn aggregate_reads_unanimity_and_tags_444_on_a_majority_of_collapsing_seeds() {
+    fn aggregate_reads_unanimity_and_the_mixed_split() {
         let seeds = [
-            outcome(0, "extinction", true, 0),
-            outcome(1, "extinction", true, 0),
-            outcome(2, "energy-death", false, 0),
+            outcome(0, "extinction", 0),
+            outcome(1, "extinction", 0),
+            outcome(2, "energy-death", 0),
         ];
         let agg = aggregate(&seeds);
         assert_eq!(agg.observed, Observed::Collapse);
         assert_eq!((agg.modal_mode, agg.modal_count), ("extinction", 2));
         assert_eq!(agg.collapsed, 3);
-        assert!(agg.tagged_444);
 
         let seeds = [
-            outcome(0, "none", false, 3),
-            outcome(1, "extinction", true, 0),
-            outcome(2, "monoculture", false, 0),
+            outcome(0, "none", 3),
+            outcome(1, "extinction", 0),
+            outcome(2, "monoculture", 0),
         ];
         let agg = aggregate(&seeds);
         assert_eq!(agg.observed, Observed::Mixed);
         assert!((agg.collapse_fraction - 1.0 / 3.0).abs() < 1e-12);
         assert_eq!(agg.persisting_seeds_with_consumers, 1);
-        assert!(agg.tagged_444, "1/1 collapsing seed was DOA");
 
-        let seeds = [
-            outcome(0, "none", false, 0),
-            outcome(1, "explosion", false, 2),
-        ];
+        let seeds = [outcome(0, "none", 0), outcome(1, "explosion", 2)];
         let agg = aggregate(&seeds);
         assert_eq!(agg.observed, Observed::Persist);
-        assert!(!agg.tagged_444);
     }
 
     #[test]
     fn classification_separates_the_dangerous_direction_from_producer_only_persistence() {
         let (producer, consumer, params) = example10();
-        let permanent = a1_verdict(A1Map::derive(&producer, &consumer, &params), &producer);
-        let collapse = aggregate(&[outcome(0, "extinction", false, 0)]);
-        let mixed = aggregate(&[
-            outcome(0, "extinction", false, 0),
-            outcome(1, "none", false, 1),
-        ]);
-        let persist_no_consumers = aggregate(&[outcome(0, "monoculture", false, 0)]);
-        let persist_with_consumers = aggregate(&[outcome(0, "none", false, 2)]);
+        let permanent = a1_verdict(
+            A1Map::derive(&producer, &consumer, &params),
+            &producer,
+            &consumer,
+        );
+        let collapse = aggregate(&[outcome(0, "extinction", 0)]);
+        let mixed = aggregate(&[outcome(0, "extinction", 0), outcome(1, "none", 1)]);
+        let persist_no_consumers = aggregate(&[outcome(0, "monoculture", 0)]);
+        let persist_with_consumers = aggregate(&[outcome(0, "none", 2)]);
         assert_eq!(
             classify(Prediction::Permanent, &permanent, &collapse),
             Agreement::FalsePositive
@@ -1564,7 +1484,7 @@ mod tests {
         // Clause 2 fails only: a producer-only world is what A1 predicts.
         let mut c = consumer;
         c.heterotrophy = 0.0;
-        let no_invasion = a1_verdict(A1Map::derive(&producer, &c, &params), &producer);
+        let no_invasion = a1_verdict(A1Map::derive(&producer, &c, &params), &producer, &c);
         assert_eq!(
             classify(
                 Prediction::NotPermanent,
@@ -1592,16 +1512,38 @@ mod tests {
     }
 
     #[test]
-    fn fault_hypothesis_names_444_before_any_other_cause() {
+    fn fault_hypothesis_names_the_reduction_exit_and_is_silent_on_agreement() {
         let (producer, consumer, params) = example10();
-        let permanent = a1_verdict(A1Map::derive(&producer, &consumer, &params), &producer);
-        let doa = aggregate(&[outcome(0, "extinction", true, 0)]);
-        let h = fault_hypothesis(Agreement::FalsePositive, &permanent, &doa, false).unwrap();
-        assert!(h.starts_with("#444"), "{h}");
-        let lockup = aggregate(&[outcome(0, "nutrient-lockup", false, 0)]);
+        let permanent = a1_verdict(
+            A1Map::derive(&producer, &consumer, &params),
+            &producer,
+            &consumer,
+        );
+        let lockup = aggregate(&[outcome(0, "nutrient-lockup", 0)]);
         let h = fault_hypothesis(Agreement::FalsePositive, &permanent, &lockup, false).unwrap();
         assert!(h.contains("nutrient lockup"), "{h}");
         assert!(fault_hypothesis(Agreement::Agree, &permanent, &lockup, false).is_none());
+    }
+
+    /// The consumer conversion `β = κ_C·γ·e·a` carries the lumping #466
+    /// corrected for the producer: at `κ_C = 0` it reads the consumer's whole
+    /// surplus as loss, so `I = 0` and clause (2) fails for a reason that is
+    /// the coefficient's, not the theorem's (#482). A false negative on such a
+    /// cell is attributed to #482 before any other cause.
+    #[test]
+    fn fault_hypothesis_attributes_a_kappa_c_zero_false_negative_to_482() {
+        let (producer, mut consumer, params) = example10();
+        consumer.kappa = 0.0;
+        let v = a1_verdict(
+            A1Map::derive(&producer, &consumer, &params),
+            &producer,
+            &consumer,
+        );
+        assert_eq!(v.map.beta, 0.0);
+        assert!(v.producer_face_alive && !v.consumer_invades);
+        let persist = aggregate(&[outcome(0, "none", 2)]);
+        let h = fault_hypothesis(Agreement::FalseNegative, &v, &persist, false).unwrap();
+        assert!(h.starts_with("#482"), "{h}");
     }
 
     #[test]
@@ -1609,28 +1551,39 @@ mod tests {
         use Observed::*;
         use Prediction::*;
         let cells = [
-            (Permanent, Persist, false),
-            (Permanent, Collapse, true),
-            (Permanent, Collapse, false),
-            (Permanent, Mixed, false),
-            (NotPermanent, Collapse, false),
-            (Undecided, Persist, false),
+            (Permanent, Persist),
+            (Permanent, Collapse),
+            (Permanent, Collapse),
+            (Permanent, Mixed),
+            (NotPermanent, Collapse),
+            (Undecided, Persist),
         ];
-        let m = confusion(&cells.iter().map(|(p, o, _)| (*p, *o)).collect::<Vec<_>>());
+        let m = confusion(&cells);
         assert_eq!(m, [[2, 1, 1], [1, 0, 0], [0, 0, 1]]);
         let fp = false_positives(&cells);
         assert_eq!((fp.predicted_permanent, fp.strict, fp.any_seed), (4, 2, 3));
         assert!((fp.strict_rate - 0.5).abs() < 1e-12);
-        assert_eq!(
-            (
-                fp.predicted_permanent_excl_444,
-                fp.strict_excl_444,
-                fp.any_seed_excl_444
-            ),
-            (3, 1, 2)
-        );
-        assert!((fp.strict_rate_excl_444 - 1.0 / 3.0).abs() < 1e-12);
+        assert!((fp.any_seed_rate - 0.75).abs() < 1e-12);
     }
+    /// `World::new` floors every founder trait at zero (#444), so no founder
+    /// can be culled for a negative trait and the #444 tag has nothing to
+    /// tag: the report carries no #444 field at any level.
+    #[test]
+    fn report_carries_no_444_tagging_fields() {
+        let seeds = [outcome(0, "extinction", 0), outcome(1, "none", 2)];
+        let agg = aggregate(&seeds);
+        let fp = false_positives(&[(Prediction::Permanent, Observed::Collapse)]);
+        for json in [
+            serde_json::to_string(&seeds[0]).unwrap(),
+            serde_json::to_string(&agg).unwrap(),
+            serde_json::to_string(&fp).unwrap(),
+        ] {
+            for key in ["444", "doa", "negative_founders"] {
+                assert!(!json.contains(key), "{key} in {json}");
+            }
+        }
+    }
+
     #[test]
     fn evaluate_config_produces_a_record_per_seed_with_a_terminal_mode() {
         // Smoke check only: no assertion on the emergent outcome.
