@@ -50,22 +50,10 @@ proptest! {
 
     /// Non-negativity, strict: after every step, no living agent holds a
     /// negative reserve, structure, free nutrient or reproductive-nutrient
-    /// earmark, and the available pool is never negative. Ignored until #446
-    /// (nutrient-limited growth leaves free nutrient at -1 ulp) is fixed;
-    /// `stores_never_go_negative_beyond_rounding` runs meanwhile.
+    /// earmark, and the available pool is never negative.
     #[test]
-    #[ignore = "see #446"]
     fn stores_never_go_negative(case in world_case()) {
-        check_stores_non_negative(&case, 0.0)?;
-    }
-
-    /// Non-negativity beyond rounding: as above, but free nutrient may carry the
-    /// #446 residue — one ulp of the nutrient bound into structure, which is
-    /// the magnitude of the `(n / ratio) * ratio` round trip that produces it.
-    /// Reserve, structure, the earmark and the pool stay strictly non-negative.
-    #[test]
-    fn stores_never_go_negative_beyond_rounding(case in world_case()) {
-        check_stores_non_negative(&case, f32::EPSILON)?;
+        check_stores_non_negative(&case)?;
     }
 }
 
@@ -117,19 +105,15 @@ fn check_nutrient_closure(case: &WorldCase) -> Result<(), TestCaseError> {
 
 /// `free_nutrient_residue_ulps` scales the allowed negative free-nutrient
 /// residue: `residue = ulps × max(1, bound_nutrient)`. Zero is strict.
-fn check_stores_non_negative(
-    case: &WorldCase,
-    free_nutrient_residue_ulps: f32,
-) -> Result<(), TestCaseError> {
+fn check_stores_non_negative(case: &WorldCase) -> Result<(), TestCaseError> {
     let mut world = World::new(case.params.clone(), case.dist.clone(), case.seed);
     for tick in 0..case.ticks {
         world.step();
         for a in world.agents() {
-            let residue = free_nutrient_residue_ulps * a.bound_nutrient(world.params()).max(1.0);
             prop_assert!(
                 a.reserve >= 0.0
                     && a.structure >= 0.0
-                    && a.nutrient >= -residue
+                    && a.nutrient >= 0.0
                     && a.repro_nutrient >= 0.0,
                 "agent {} has a negative store after tick {tick}: reserve={}, \
                  structure={}, nutrient={}, repro_nutrient={}",

@@ -293,7 +293,12 @@ pub fn grow_soa(s: &mut AgentSoA, params: &WorldParameters) -> (Vec<Event>, f32)
                 s.peak_structure[i] = s.structure[i];
             }
             s.reserve[i] += growth_budget - energy_spent;
-            s.nutrient[i] -= to_structure * ratio;
+            // Exact bind when nutrient limits (see phase::grow, #446).
+            s.nutrient[i] = if nutrient_limited <= energy_limited {
+                0.0
+            } else {
+                s.nutrient[i] - to_structure * ratio
+            };
             total_dissipated += dissipated;
 
             if to_structure > 0.0 {
