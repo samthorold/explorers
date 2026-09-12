@@ -51,7 +51,7 @@ binary-reach drain run over carcasses:
    `ln λ_P(virgin) · ln λ_C(𝓛) > ln(1/(1−B_C)) · ln(1/(1−μ_P))`. (i) and (ii) are necessary;
    the product (iii) is what a common average-Lyapunov weight needs and is the classical
    heteroclinic-cycle criterion. Boundary-escape numerics agree with the analytic frontier
-   on 239/239 scored cells of a 25×25 sweep (0 disagreements), the frontier being the
+   on 238/238 scored cells of a 25×25 sweep (0 disagreements), the frontier being the
    hyperbola `Λ = 1` (`base_trophic_efficiency · N_total = const`).
 5. **Which part is a gate.** `Λ` contains `ι`, `ν`, `q`, `e_C`'s distance `d`, and the
    cluster's `h_C, κ_C, θ_C, B_C` — all endogenous or per-cluster. The only pure-parameter
@@ -132,8 +132,9 @@ Term by term:
   whole uptake enters `L` (the κ share as free store, the `1 − κ` share as reproductive
   earmark — both living nutrient).
 - **Producer growth `G` (Liebig).** The energy-limited increment is A1's logistic growth
-  branch `r_P·P·(1 − P/K_P)` (photosynthesise + metabolise + grow; `r_P = κ_P·γ·(F − B_P)`,
-  `K_P = F/B_P`). The nutrient-limited increment is what the *bindable* free store supports
+  branch `r_P·P·(1 − P/K_P)` (photosynthesise + metabolise + grow; `r_P = χ_P·γ·(F − B_P)`
+  with `χ_P` the biomass conversion over both of `κ_P`'s branches — A1's table, corrected
+  in #466 — and `K_P = F/B_P`). The nutrient-limited increment is what the *bindable* free store supports
   at demand `θ_P`: `(Φ + U)/θ_P`. The stepper's `grow` takes the smaller (`to_structure =
   energy_limited.min(nutrient_limited)`), and energy that cannot be matched stays in
   reserve rather than burning. Two lumpings, both stated: the free store is pooled across
@@ -455,7 +456,7 @@ free store so `q = ν = θ_P`):
        4.642      9.438 ..###xxxxxxxxxxxxxxxxxxxx
        6.813     13.853 .##xxxxxxxxxxxxxxxxxxxxxx
       10.000     20.333 .##xxxxxxxxxxxxxxxxxxxxxx
-      14.678     29.845 ###xxxxxxxxxxxxxxxxxxxxxx
+      14.678     29.845 ##xxxxxxxxxxxxxxxxxxxxxxx
       21.544     43.807 ##xxxxxxxxxxxxxxxxxxxxxxx
       31.623     64.300 ##xxxxxxxxxxxxxxxxxxxxxxx
       46.416     94.380 ##xxxxxxxxxxxxxxxxxxxxxxx
@@ -465,7 +466,7 @@ free store so `q = ν = θ_P`):
        ...            ...  (all x to N_total = 1000)
   cols: eff = 0.04 .. 1.00 in steps of 0.04; '|' marks 0.2, 0.4, 0.6, 0.8, 1.0
   '#' persistent   '.' not persistent   'x' left the unsaturated regime   '!'/'?' disagreement
-  agree = 239, disagree = 0, within 2% of Lambda = 1 (not scored) = 1, left regime = 385
+  agree = 238, disagree = 0, within 2% of Lambda = 1 (not scored) = 1, left regime = 386
 ```
 
 - The `.`/`#` frontier is the hyperbola `Λ = 1`, i.e. `base_trophic_efficiency · N_total =

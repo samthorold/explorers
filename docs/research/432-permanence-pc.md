@@ -27,7 +27,7 @@ C' = C · g(P,C),   g = 1 + β·P − m,             β = κ_C·γ·e·a,  e = b
 the extinction boundary `{P = 0} ∪ {C = 0}` is a repeller — the system is **permanent** —
 iff
 
-> **(1)** `r_P > 0`  ⟺  `F > B_P`  (the producer face has a positive equilibrium)
+> **(1)** `r_P > 0`  ⟺  `F > B_P`  (the producer face has a positive equilibrium; `r_P = χ_P·γ·(F − B_P)` with the biomass conversion `χ_P > 0` on every committed configuration short of a degenerate corner — see the coefficient table)
 > **(2)** `β·K_P > m`  ⟺  `κ_C · γ · base_trophic_efficiency · exp(−trophic_distance_decay·d) · h_C · F  >  B_P · B_C`  (the consumer invades it)
 
 in the committed parameters `F = solar_flux_magnitude`, `B_P`, `B_C` the producer's and
@@ -35,11 +35,16 @@ consumer's per-body maintenance (`base_metabolic_rate` plus the form-pinned trai
 structure maintenance), `γ = growth_efficiency`, `κ_C` the consumer's somatic allocation,
 `h_C` its effective heterotrophy, `d` the trait-space distance producer↔consumer. Clause
 (1) **is** the extinction gate `F ≤ B` of `viability.md`, sharpened by trait maintenance
-(shown explicitly below). The Hopf line of #358 (`β·K_P/m = (1+m)/m`) lies strictly inside
-the permanent region, so the condition admits the oscillating regime, as it must — permanence
-constrains the *boundary*, never the interior attractor. Brute-force boundary-escape numerics
-agree with the analytic boundary on 550/550 scored cells of a 25×25 sweep (tolerance stated
-below), with 0 disagreements.
+(shown explicitly below). `κ_P`, the producer's somatic allocation, does **not** appear in
+it: the map carries biomass, and the `(1 − κ_P)` share of the surplus becomes offspring
+biomass through the committed reproductive branch — an earlier version of this note
+lumped `r_P = κ_P·γ·(F − B_P)` and thereby acquired a spurious conjunct `κ_P > 0`, which
+[`439-permanence-crosscheck.md`](439-permanence-crosscheck.md) (A3) caught on ten atlas
+cells; the correction (#466) is the `χ_P` row of the table below. The Hopf line of #358
+(`β·K_P/m = (1+m)/m`) lies strictly inside the permanent region, so the condition admits
+the oscillating regime, as it must — permanence constrains the *boundary*, never the
+interior attractor. Brute-force boundary-escape numerics agree with the analytic boundary
+on 550/550 scored cells of a 25×25 sweep (tolerance stated below), with 0 disagreements.
 
 ## The map, and what is reused
 
@@ -52,7 +57,7 @@ there:
 
 | symbol | lumping | committed source |
 |---|---|---|
-| `r_P` | `κ_P · γ · (F − B_P)` | producer low-density net income → structure |
+| `r_P` | `χ_P · γ · (F − B_P)` | producer low-density net income → structure, by **both** of `κ_P`'s branches (below) |
 | `K_P` | `F / B_P` | biomass at which the density-dependent light share meets maintenance |
 | `a` | `h_C` (effective heterotrophy per reference body) | resolve_drains' per-consumer demand |
 | `m` | `B_C` | consumer maintenance floor (metabolise) |
@@ -63,6 +68,60 @@ with `B_X = base_metabolic_rate + c_photo·α_X^p + c_het·h_X^p + c_mob·μ_X^p
 `c_·` coefficients stay symbolic throughout). Reference body mass `M_ref = 1`, as in
 `hopf_prototype`.
 
+**The biomass conversion `χ_P` (the #466 correction).** The grow phase (flow 9) mobilises
+a body's surplus `F − B_P` and splits it by `κ_P`: the `κ_P` share is converted to
+structure at `γ` that tick, the `(1 − κ_P)` share is earmarked as reproductive allocation.
+The map's coordinate is biomass, so the earmark is not a loss: at the next reproductive
+event (flow 4, `phase::resolve_reproduction`) it becomes offspring, and the offspring's
+body is structure the map carries. What the reproductive branch *does* cost, read off the
+committed code, is:
+
+- `reproduction_efficiency` — the flat per-event heat on the invested allocation;
+- the dispersal propagule share `φ_P = clamp(c_disp · δ_P^{e_disp}, 0, 1)`
+  (`dispersal_propagule_cost_fraction` on the producer's dispersal trait `δ_P`;
+  `dispersal_propagule_cost_coefficient`, `_exponent`), spent before the budget is divided;
+- the **empty brood**: the offspring count is a Poisson draw at `max(fecundity, 0.1)`, and a
+  zero draw consumes the whole investment as heat, so a fraction `e^{−f_P}` of events
+  provisions nobody;
+- `offspring_structure_fraction = s` of each offspring's energy is embodied at birth
+  through the same lossy `γ` as in-life growth (`provision_offspring`); the remaining
+  `1 − s` is the offspring's reserve, which its own grow phase mobilises and splits by the
+  same `κ_P` — the loop closes on itself.
+
+Writing `η_P = reproduction_efficiency · (1 − φ_P) · (1 − e^{−f_P})` for the fraction of the
+earmark that reaches an offspring's body, the structure (before `γ`) that one unit of surplus
+eventually builds satisfies `χ_P = κ_P + (1 − κ_P)·η_P·(s + (1 − s)·χ_P)`, i.e.
+
+```
+χ_P = ( κ_P + (1 − κ_P)·η_P·s ) / ( 1 − (1 − κ_P)·η_P·(1 − s) ),      r_P = χ_P · γ · (F − B_P)
+```
+
+`γ` multiplies both branches exactly once (at growth, or at birth / the offspring's growth),
+so `r_P` is `γ·(F − B_P)` **up to the reproductive-branch heat**: `χ_P = 1` at `κ_P = 1` and
+whenever the reproductive branch is lossless (`η_P = 1`, whatever `s`); otherwise the
+reproductive share is strictly less productive than the somatic one and `r_P` is a
+`κ_P`-weighted mix, increasing in `κ_P`. At `κ_P = 0`, `χ_P = η_P·s / (1 − η_P·(1 − s)) > 0`
+as long as `η_P·s > 0`. Clause (1) is therefore `ρ > 1` together with `χ_P > 0`, and the
+second conjunct fails only on a degenerate corner no search box reaches —
+`reproduction_efficiency = 0`, or a propagule share of 1, or `offspring_structure_fraction
+= 0` with `κ_P = 0` (offspring born as pure reserve that is re-earmarked with loss every
+generation and never embodied). On example10 the producer's `fecundity = 0.1` makes the
+empty brood the dominant cost (`1 − e^{−0.1} = 0.095`, so `η_P = 0.067`), and with
+`κ_P = 0.55`, `s = 0.2`: `χ_P = 0.5697` — the somatic branch carries almost all of `r_P`.
+The reproduction *thresholds* still drop out (next-but-one paragraph): they set when the
+earmark is spent, not how much of it becomes body.
+
+**The same lumping sits in `β`, uncorrected here.** `β = κ_C·γ·e·a` reads the consumer's
+conversion as its somatic share only; by the argument above it should be `χ_C·γ·e·a` with
+`χ_C` the consumer's own conversion. It is left as is in this note because `κ_C` runs
+through the invasion ratio `I`, A2's `Λ`, the π-forms of
+[`440-dimensionless-groups.md`](440-dimensionless-groups.md), every per-cell `I` in A3, and
+`hopf_prototype`'s crossing — a separate correction. Its consequence is the symmetric
+spurious conjunct `κ_C > 0` on clause (2): the ten atlas cells A3 lists as clause-(1)
+failures have `mean_kappa = 0` on the *consumer* centroid too, so after this correction
+they clear clause (1) (`r_P` from 0.04 to 0.34) and fail clause (2) with `I = 0` — still
+predicted not-permanent, for the same reason in the other compartment.
+
 **One deliberate deviation.** `hopf_prototype` clamps `r_P` at 0 (it only needs the interior
 fixed point). The sign of `r_P` *is* the extinction gate, so the boundary analysis keeps it
 signed; for `r_P ≤ 0` the producer face is read as density-independent decline
@@ -70,10 +129,12 @@ signed; for `r_P ≤ 0` the producer face is read as density-independent decline
 from above — using it makes the non-permanence verdict conservative in the right direction).
 
 **Reproduction thresholds drop out.** The map carries *biomass*; whether structure sits in
-one body or two is invisible to it. `reproduction_energy_threshold` and the nutrient earmark
-enter only through the validity of the lumping — they set the granularity of the demographic
-noise the mean field erases (authority boundary, below) and the energy-death nutrient floor
-that gates the map's *existence* (that gate is independent of this one and is not restated).
+one body or two is invisible to it (which is exactly why `κ_P` cannot zero `r_P`: it moves
+structure between bodies, and `χ_P` accounts for the heat paid on the way).
+`reproduction_energy_threshold` and the nutrient earmark enter only through the validity
+of the lumping — they set the granularity of the demographic noise the mean field erases
+(authority boundary, below) and the energy-death nutrient floor that gates the map's
+*existence* (that gate is independent of this one and is not restated).
 
 ## Hypotheses
 
@@ -150,12 +211,12 @@ This is the acceptance criterion the note must show rather than assert. On the f
 `{C = 0}` the map is `P' = P · (1 + r_P·(1 − P/K_P))` with
 
 ```
-r_P = κ_P · γ · (F − B_P),      B_P = B + c_photo·α_P^p + c_struct·M_ref  ≥  B
+r_P = χ_P · γ · (F − B_P),      B_P = B + c_photo·α_P^p + c_struct·M_ref  ≥  B
 ```
 
-where `B = base_metabolic_rate` and every other term of `B_P` is non-negative (the
-form-pinned maintenance is a sum of non-negative powers times non-negative coefficients).
-Hence:
+where `B = base_metabolic_rate`, every other term of `B_P` is non-negative (the
+form-pinned maintenance is a sum of non-negative powers times non-negative coefficients),
+and `χ_P ≥ 0` (a ratio of non-negative terms with a positive denominator). Hence:
 
 ```
 F ≤ B   ⟹   F ≤ B_P   ⟹   r_P ≤ 0   ⟹   λ_P(0,0) = 1 + r_P ≤ 1
@@ -169,10 +230,15 @@ producer compartment goes extinct and, its food gone, so does the consumer. The 
 structure maintenance. Clause (1) is the same gate with the searched maintenance
 coefficients left symbolic: `F > B + c_photo·α_P^p + c_struct·M_ref`. Nothing about the
 consumer — no efficiency, no kernel, no attack rate — can rescue it, which is exactly the
-gate's "for every other parameter and every functional form" clause. The bin's unit test
-`condition_fails_on_the_c0_face_whenever_flux_is_at_or_below_base_metabolism` checks this
-at `F/B ∈ {0, ¼, ½, 1}` for three efficiencies, asserting `λ_P(0,0) ≤ 1`, both clauses'
-conjunction false, and numerical non-permanence.
+gate's "for every other parameter and every functional form" clause; and nothing about the
+producer's *allocation* can either — `χ_P` scales `r_P` but never flips its sign. The bin's
+unit test `condition_fails_on_the_c0_face_whenever_flux_is_at_or_below_base_metabolism`
+checks this at `F/B ∈ {0, ¼, ½, 1}` for three efficiencies, asserting `λ_P(0,0) ≤ 1`, both
+clauses' conjunction false, and numerical non-permanence; `kappa_zero_producer_with_rho_above_one_keeps_its_face_alive`
+and `r_p_mixes_the_somatic_and_reproductive_branches_by_kappa` check the other direction —
+that `ρ > 1` keeps the face alive at `κ_P = 0`, that the mix is monotone in `κ_P` between the
+reproductive-only and somatic-only limits, that it is `κ_P`-free when the reproductive
+branch is lossless, and that a propagule share of 1 genuinely kills the `κ_P = 0` face.
 
 ## Boundary equilibria and their eigenvalues
 
@@ -193,10 +259,15 @@ quoted in `F-hopf-validation.md`; `hopf_prototype` reports the same):
 
 ```
   point                               P          C   lambda_1   lambda_2
-  (0,0)      extinction          0.0000     0.0000     2.3014     0.8870
-  (K_P,0)    producer-only      71.1111     0.0000    -0.3014     3.5018
-  (P*,C*)    interior            3.0737     2.2640     1.0414     1.0414
+  (0,0)      extinction          0.0000     0.0000     2.3479     0.8870
+  (K_P,0)    producer-only      71.1111     0.0000    -0.3479     3.5018
+  (P*,C*)    interior            3.0737     2.3449     1.0428     1.0428
 ```
+
+(`r_P = 1.3479` with `χ_P = 0.5697`; the pre-#466 lumping gave `r_P = 1.3014` — the
+reproductive share adds 3.6 % on this low-fecundity producer, and moves nothing but the
+`r_P`-dependent entries: `λ_P` at the two boundary points, `C*`, and the interior modulus.
+`K_P`, `β`, `I`, the Hopf line, and the sweep below are unchanged.)
 
 `ρ = F/B_P = 71.1 > 1` and `I = β·K_P/m = 23.1 > 1`: the mean field says example10 is
 permanent, and (since `I > (1+m)/m = 9.85`) oscillating. See the authority boundary for
@@ -364,7 +435,8 @@ per-tick conversion, was the binding constraint on the one example examined.
 
 - Research doc with the standard header; nothing added to `docs/system-design/` — this file.
 - The condition reduces to `F ≤ B` on the `C = 0` face — shown in *Reduction to the
-  extinction gate*, and unit-tested.
+  extinction gate*, and unit-tested; the `r_P` row counts both of `κ_P`'s branches (#466),
+  so clause (1) carries no allocation conjunct.
 - Boundary-equilibrium table with eigenvalues — above, symbolic and on example10.
 - Numerics agree with the analytic boundary within a stated tolerance — 550/550 scored
   cells, 2 % boundary band, unit-tested on a 40×40 grid.

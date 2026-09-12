@@ -108,10 +108,39 @@ fn representative_clusters(dist: &InitialDistribution) -> (TraitVector, TraitVec
     (producer, consumer)
 }
 
+/// The fecundity floor `resolve_reproduction` applies before the Poisson draw
+/// (`fecundity.max(0.1)` in `phase.rs`).
+const FECUNDITY_FLOOR: f64 = 0.1;
+
+/// The producer's biomass conversion `χ_P` (copied from
+/// `permanence_prototype::biomass_conversion`, #466): the structure built,
+/// before `γ`, per unit of mobilised surplus once both of `κ_P`'s branches are
+/// followed to the body they build. The reproductive branch reaches an
+/// offspring at `η_P = reproduction_efficiency · (1 − propagule share) ·
+/// (1 − e^{−fecundity})`; `s = offspring_structure_fraction` of that is
+/// embodied at birth and the rest is reserve the offspring re-splits by `κ_P`,
+/// so `χ_P = κ_P + (1 − κ_P)·η_P·(s + (1 − s)·χ_P)`.
+fn biomass_conversion(producer: &TraitVector, p: &WorldParameters) -> f64 {
+    let kappa = producer.kappa.clamp(0.0, 1.0) as f64;
+    let propagule = explorers_sim::dispersal_propagule_cost_fraction(producer.dispersal, p) as f64;
+    let fecundity = (producer.fecundity as f64).max(FECUNDITY_FLOOR);
+    let eta = (p.reproduction_efficiency as f64).clamp(0.0, 1.0)
+        * (1.0 - propagule)
+        * (1.0 - (-fecundity).exp());
+    let s = p.offspring_structure_fraction.clamp(0.0, 1.0) as f64;
+    let feedback = (1.0 - kappa) * eta * (1.0 - s);
+    if feedback >= 1.0 {
+        1.0
+    } else {
+        (kappa + (1.0 - kappa) * eta * s) / (1.0 - feedback)
+    }
+}
+
 /// A1's lumped coefficients (copied from `permanence_prototype::Map`; `r_p` signed).
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 struct A1Map {
-    /// Producer intrinsic per-tick rate `κ_P·γ·(F − B_P)`, signed.
+    /// Producer intrinsic per-tick rate `χ_P·γ·(F − B_P)`, signed (#466: both
+    /// of `κ_P`'s branches become biomass; `χ_P` is the conversion).
     r_p: f64,
     /// Producer carrying capacity `F / B_P` (= `ρ`, the extinction ratio).
     k_p: f64,
@@ -139,13 +168,13 @@ fn maintenance(traits: &TraitVector, p: &WorldParameters) -> f64 {
 
 impl A1Map {
     fn derive(producer: &TraitVector, consumer: &TraitVector, p: &WorldParameters) -> Self {
-        let kappa_p = producer.kappa.clamp(0.0, 1.0) as f64;
         let kappa_c = consumer.kappa.clamp(0.0, 1.0) as f64;
         let gamma = p.growth_efficiency as f64;
         let b_p = maintenance(producer, p);
         let b_c = maintenance(consumer, p);
         let flux = p.solar_flux_magnitude as f64;
-        let r_p = kappa_p * gamma * (flux - b_p) / REFERENCE_BODY_MASS as f64;
+        let r_p =
+            biomass_conversion(producer, p) * gamma * (flux - b_p) / REFERENCE_BODY_MASS as f64;
         let k_p = if b_p > 0.0 { flux / b_p } else { f64::INFINITY };
         let a = consumer.heterotrophy.max(0.0) as f64 / REFERENCE_BODY_MASS as f64;
         let m = b_c / REFERENCE_BODY_MASS as f64;
@@ -192,8 +221,9 @@ struct A1Verdict {
     hypothesis_h1: bool,
     rho: f64,
     invasion_ratio: f64,
-    /// Producer somatic allocation `κ_P` (the search box allows 0, which
-    /// zeroes `r_P` whatever the flux).
+    /// Producer somatic allocation `κ_P` (the search box allows 0; since #466
+    /// that only routes the surplus through offspring, it no longer zeroes
+    /// `r_P`).
     kappa_p: f64,
     #[serde(flatten)]
     map: A1Map,
@@ -596,8 +626,8 @@ fn fault_hypothesis(
         Agreement::FalseNegative | Agreement::FalseNegativeMixed => {
             Some(if !a1.producer_face_alive && a1.rho > 1.0 {
                 format!(
-                    "reduction: kappa_P = {} zeroes r_P = kappa_P*gamma*(F - B_P) although rho = {:.1} > 1 - the reproductive share still becomes offspring biomass (the map's kappa lumping, not the extinction gate)",
-                    a1.kappa_p, a1.rho
+                    "reduction: rho = {:.1} > 1 but r_P <= 0 - the biomass conversion chi_P is zero (kappa_P = {} and the reproductive branch burns everything: propagule share 1 or reproduction_efficiency 0)",
+                    a1.rho, a1.kappa_p
                 )
             } else if !a1.producer_face_alive {
                 "reduction: extinction gate fails at the centroid but founders persisted - realised maintenance below the centroid's (trait draw / evolution)".to_string()
@@ -1342,11 +1372,26 @@ mod tests {
             "I = {}",
             v.invasion_ratio
         );
-        assert!((v.map.r_p - 1.3014).abs() < 1e-3);
+        assert!((v.map.r_p - 1.3479).abs() < 1e-3, "r_P = {}", v.map.r_p);
         assert!((v.map.m - 0.1130).abs() < 1e-3);
         assert!((v.map.beta - 0.03677).abs() < 1e-4);
         assert_eq!(v.prediction, Prediction::Permanent);
         assert!(v.hypothesis_h1);
+    }
+
+    /// `κ_P = 0` routes the whole surplus to offspring, which are biomass the
+    /// map carries: clause (1) is `ρ > 1`, not `ρ > 1 ∧ κ_P > 0` (#466). This
+    /// is the shape of the ten atlas cells A3 listed as clause-(1) failures.
+    #[test]
+    fn a1_clause_one_holds_at_kappa_zero_when_rho_exceeds_one() {
+        let (mut producer, consumer, params) = example10();
+        producer.kappa = 0.0;
+        let v = a1_verdict(A1Map::derive(&producer, &consumer, &params), &producer);
+        assert!(v.rho > 1.0);
+        assert!(v.map.r_p > 0.0, "r_P = {}", v.map.r_p);
+        assert!(v.producer_face_alive);
+        assert_eq!(v.prediction, Prediction::Permanent);
+        assert_eq!(v.kappa_p, 0.0);
     }
 
     #[test]
