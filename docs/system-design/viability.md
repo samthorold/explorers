@@ -22,6 +22,20 @@ The sharpness of a gate is bounded by how much of the map `T` is pinned. Three t
 
 A gate is cheap and decidable today exactly when it rests on the first two tiers.
 
+## Dimensionless groups
+
+The committed rules carry four base units — energy `E`, nutrient `N`, length `L`, and the tick `T` — and every gate is a statement about ratios, not magnitudes. Traits are dimensionless; counts are dimensionless. Of the world-parameter fields, `solar_flux_magnitude`, `base_metabolic_rate`, the four trait maintenance costs, `wear_rate`, and `network_maintenance_cost` are energy rates (`E/T`); `reproduction_energy_threshold`, `initial_energy_per_agent`, and `network_creation_cost` are energies; `reproduction_nutrient_threshold` and `initial_nutrient_pool` are nutrient; `base_nutrient_ratio` and `specification_nutrient_coefficient` are `N/E`; `world_extent`, `light_competition_radius`, `nutrient_grid_cell_size`, and the contact, sensing, and dispersal-reach coefficients are lengths (the last three per trait unit); `movement_cost_coefficient` is `1/L`, `body_reach_coefficient` is `L/E^½`; `structure_maintenance_coefficient`, `reserve_mobilisation_rate`, and `network_redistribution_rate` are per-tick rates, `growth_retention_multiplier` is a time; `wear_degradation_steepness` and `repair_decay` are `1/E`. Everything else — efficiencies, exponents, probabilities, trait-space distances, fractions, caps — is already a pure number.
+
+The tick fixes the time scale; `base_metabolic_rate` `B`, `world_extent` `L`, and `reproduction_nutrient_threshold` `N_r` fix the other three (`ε = B·τ` is one tick of base metabolism). The map depends on **49 independent dimensionless groups**: 23 fields that are pure numbers, and 26 ratios —
+
+- energy rates over `B`: `π_F = F/B`, `π_a`, `π_h`, `π_μ`, `π_x` (the four maintenance costs), `π_w` (wear), `π_nm` (network maintenance);
+- energy stocks over `ε`: `π_Er` (reproduction threshold), `π_E0` (founder endowment), `π_nc` (connection cost); inverse energies times `ε`: `π_k`, `π_rd`;
+- per-tick rates times `τ`: `π_s` (structure maintenance), `π_f` (mobilisation), `π_nr` (redistribution); `π_ret` (retention buffer, in ticks);
+- lengths over `L`: `π_r` (light radius), `π_c` (contact), `π_sn` (sensing), `π_dr` (dispersal reach), `π_cell` (nutrient cell); `π_mv = c_mv·L`; `π_body = body_reach·√ε/L`;
+- nutrient: `π_N = N_total/N_r`, `π_ρ = ρ_b·ε/N_r`, `π_ρs = ρ_s/ρ_b`.
+
+The genesis search box is 32-dimensional in raw parameters and spans 29 of these groups; its other three axes are the energy, length, and nutrient scales, which act only through ratios to un-searched constants. In the groups, the gates read: extinction `π_F ≤ 1`; energy death `π_N ≥ π_ρ·ŝ_min·(1 + π_ρs·σ_min) + 1` (with `ŝ_min = S_min/ε`, and `S_min → 0` under the peak-relative death threshold, so the committed floor is `π_N ≥ 1`); the producer-invasion ratio `ρ = π_F/b_P` and consumer-invasion number `I = κ_C·γ·e·ĥ_C·π_F/(b_P·b_C)` of the permanence reading; the lockup repeller `Λ = ĥ_C·ι·(π_N/ν̂)·min(κ_C·γ·e_C, q/θ_C)/b_C`; and the sustained-count ceiling `N̄_max = π_F·m²`, `m = ⌊√2/π_r⌋ + 1`, where `b_X = B_X/B` is a body's maintenance in base-metabolisms and `ĥ_C` the consumer's per-target drain in the same units. The full unit table, the derivation, and the three places the committed rules break dimensional homogeneity (the implicit unit constants in the trait-to-flow conversions, `use_wear_rate`, and the prefilter's `STRUCTURE_MIN`) are in [`440-dimensionless-groups.md`](../research/440-dimensionless-groups.md).
+
 ## Organising principle: the failure modes as gates
 
 The degenerate configurations in [expected properties](expected-properties.md) are the natural index. Each is a way the map `T` fails to hold a living fixed point, and they split by how amenable they are to a priori analysis:
