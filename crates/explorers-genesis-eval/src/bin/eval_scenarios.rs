@@ -23,9 +23,12 @@
 //!   cargo run -p explorers-genesis-eval --bin eval_scenarios -- [--seed N] [--seeds N] FILE...
 //!   cargo run -p explorers-genesis-eval --bin eval_scenarios -- scenarios/example*.json > scenarios/observed.json
 //!
-//! Deterministic: a fixed base seed (default 1) and size (default 8) yield the
+//! Deterministic: a fixed base seed (default 1) and size (default 32) yield the
 //! same evidence every run, so the committed snapshot is regenerable and drift
-//! shows up as a diff.
+//! shows up as a diff. The default ensemble is 32 because a unanimous `32/32`
+//! read is a 95 % Clopper–Pearson lower bound of `p ≥ 0.89` on the modal
+//! failure mode's true per-seed rate, where `8/8` bounded only `p ≥ 0.63`
+//! (#434, `docs/research/434-ensemble-confidence.md`).
 
 use explorers_genesis_eval::ensemble::{ScenarioAggregate, SeedObservation, SeedScores, aggregate};
 use explorers_genesis_eval::{EvalConfig, FailureMode, RolloutObservations, evaluate_from_log};
@@ -45,32 +48,54 @@ fn failure_name(failure: &Option<FailureMode>) -> &'static str {
     }
 }
 
-fn main() {
-    let mut base_seed = 1u64;
-    let mut seeds = 8u64;
-    let mut paths: Vec<String> = Vec::new();
-    let mut args = std::env::args().skip(1);
+/// The parsed command line: the deterministic seed block and the scenario files.
+struct Cli {
+    base_seed: u64,
+    seeds: u64,
+    paths: Vec<String>,
+}
+
+/// Parse `[--seed N] [--seeds N] FILE...`. Defaults: base seed 1, 32 seeds —
+/// the size #434 recommends for the suite (`32/32 ⇒ p ≥ 0.89`, versus
+/// `8/8 ⇒ p ≥ 0.63`). Returns a usage error rather than exiting so it is
+/// testable.
+fn parse_args(args: impl Iterator<Item = String>) -> Result<Cli, String> {
+    let mut cli = Cli {
+        base_seed: 1,
+        seeds: 32,
+        paths: Vec::new(),
+    };
+    let mut args = args;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--seed" => {
-                base_seed = args
+                cli.base_seed = args
                     .next()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or_else(|| die("--seed requires a number"));
+                    .ok_or("--seed requires a number")?;
             }
             "--seeds" => {
-                seeds = args
+                cli.seeds = args
                     .next()
                     .and_then(|s| s.parse().ok())
                     .filter(|&n| n > 0)
-                    .unwrap_or_else(|| die("--seeds requires a positive number"));
+                    .ok_or("--seeds requires a positive number")?;
             }
-            other => paths.push(other.to_string()),
+            other => cli.paths.push(other.to_string()),
         }
     }
-    if paths.is_empty() {
-        die::<()>("usage: eval_scenarios [--seed N] [--seeds N] FILE...");
+    if cli.paths.is_empty() {
+        return Err("usage: eval_scenarios [--seed N] [--seeds N] FILE...".to_string());
     }
+    Ok(cli)
+}
+
+fn main() {
+    let Cli {
+        base_seed,
+        seeds,
+        paths,
+    } = parse_args(std::env::args().skip(1)).unwrap_or_else(|e| die(&e));
 
     let config = EvalConfig::default();
     let mut out = Vec::with_capacity(paths.len());
@@ -169,4 +194,19 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
 fn die<T>(msg: &str) -> T {
     eprintln!("{msg}");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args;
+
+    #[test]
+    fn default_ensemble_is_32_seeds_from_base_seed_1() {
+        // #434: a unanimous 32/32 read bounds the modal rate at p >= 0.89 (95 %),
+        // versus p >= 0.63 at 8/8 — the suite's default is the recommended size.
+        let cli = parse_args(["scenarios/example4.json".to_string()].into_iter()).unwrap();
+        assert_eq!(cli.seeds, 32);
+        assert_eq!(cli.base_seed, 1);
+        assert_eq!(cli.paths, vec!["scenarios/example4.json".to_string()]);
+    }
 }

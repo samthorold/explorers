@@ -67,14 +67,17 @@ a run, and **located** by genesis. Three artifacts make that concrete:
    Produced by running every scenario through the **same evaluator genesis uses**
    (`evaluate_from_log`), so "sensible" means the same thing to the example lens and the
    search lens. It is an **ensemble distribution, not a single seed (#314)**: each scenario
-   is run over a deterministic seed set (`base_seed=1 .. base_seed+8`, mirroring genesis's
+   is run over a deterministic seed set (`base_seed=1 .. base_seed+32`, mirroring genesis's
    `run_ensemble`), so the evidence is robust to regime-sensitive scenarios that flip between
    regimes on a single draw. Regenerate (same args, same seed set):
    ```
    cargo run -p explorers-genesis-eval --bin eval_scenarios -- scenarios/example*.json > scenarios/observed.json
    ```
-   `--seed N` sets the base seed (default 1); `--seeds N` the ensemble size (default 8, the
-   same set the headless harness sweeps). Each scenario's entry carries a **failure-mode
+   `--seed N` sets the base seed (default 1); `--seeds N` the ensemble size (default **32**
+   since #475 — the size [#434](../docs/research/434-ensemble-confidence.md) recommends: a
+   unanimous `32/32` bounds the modal mode's true per-seed rate at `p ≥ 0.89` (95 %
+   Clopper–Pearson), where the earlier `8/8` bounded only `p ≥ 0.63`; the headless harness
+   still sweeps the first 8). Each scenario's entry carries a **failure-mode
    distribution** (count over the six + modal mode), the **median and min/max spread** of the
    five sensible-world scores + `fitness`, the same spread for `ticks_survived` / final
    population / true birth & death counts, the seed set used, and a `per_seed` array with each
@@ -93,18 +96,29 @@ already has: the verdict synthesis traces the suite's near-universal `energy_dea
 a detector that measures predation flow rather than free-energy throughput (a genesis-evaluator
 issue, surfaced by the example lens).
 
-## Current status (8-seed ensemble, base seed 1)
+## Current status (32-seed ensemble, base seed 1; post-fix stepper, #475)
 
-> **The legacy suite is stale and trophically incomplete** — `status: stale-params` on most of
-> the older files. Numbers below are ensemble medians; `observed.json` carries the full spread.
-> Across the current suite all eight seeds agree on the modal failure mode for every scenario, so
-> the ensemble *confirms* the earlier single-seed reads were not lucky draws — but the demographic
-> and score spreads (example4 final pop 6–11) are now legible. A unanimous `8/8` is a 95 %
-> Clopper–Pearson lower bound of **`p ≥ 0.63`** on that mode's true per-seed rate — a dominant mode,
-> not a deterministic one — and a `4/8` would carry `[0.16, 0.84]`; see
-> [`docs/research/434-ensemble-confidence.md`](../docs/research/434-ensemble-confidence.md) for the
-> full table and the case for `--seeds 32` (`32/32 ⇒ p ≥ 0.89`) at the next regeneration.
-> `example4.json` reproduces (median 34 births); `example9_detrital_pathway.json` (#311) is a
+> **The legacy suite is trophically incomplete** — the older files carry explicit-but-zeroed
+> parameters (`growth_efficiency = 0` in `example1/2/3`, frozen from the old default by the #304
+> migration) or rosters with no decomposer (`example5/7/8`). Numbers below are ensemble medians;
+> `observed.json` carries the full spread. Regenerated on 2026-09-12 at **`--seeds 32`** on the stepper
+> carrying the six fixes #444–#446 / #451–#453. Eleven of twelve scenarios are unanimous on their modal
+> failure mode — a unanimous `32/32` is a 95 % Clopper–Pearson lower bound of **`p ≥ 0.89`** on that
+> mode's true per-seed rate (the earlier `8/8` bounded only `p ≥ 0.63`; see
+> [`docs/research/434-ensemble-confidence.md`](../docs/research/434-ensemble-confidence.md)). The
+> legacy set and `example9` are byte-identical on their first 8 seeds — none of the fixes reaches a
+> fixed-roster scenario with no surviving heterotroph. **Two verdicts moved, both pinned by a fix-by-fix
+> bisect to #445** (the metabolic-overdraft cap, which lifted a same-tick starvation tax on heterotrophs
+> that run their reserve dry between meals): `example12` still confirms its generalist-confinement
+> prediction (broad generalists 0 % energy, 32/32) but its specialist mobile consumers now *persist*
+> and compatible mixotrophs reach a 53 % median share; `example13` moves from *sensible* to
+> **partially-sensible / split** — its decomposer guild persists on 32/32 and cuts carcass-locked
+> nutrient ~60 % vs the no-decomposer baseline (0/32 `nutrient_lockup`, the mode it probes), but the
+> guild has outgrown the producer level (an inverted pyramid, `trophic_balance_score` 0 on 32/32) and
+> its modal `generalist_dominance` (20/32) is an **evaluator artifact** — DBSCAN merges every archetype
+> into one cluster whose mean trophic coordinates read as a generalist, gated by the 20-agent population
+> floor — while `probe_generalist` reads broad-generalist energy at 0 %.
+> `example4.json` reproduces (median 43 births); `example9_detrital_pathway.json` (#311) is a
 > **pathway wiring test**: a sessile, *obligate* decomposer (`photosynthetic_absorption = 0`) is
 > seeded on a standing carcass deposit (a `carcasses` recipe capability) with no living agent
 > inside its consumption reach, so `detrital_share` stays majority-detrital (≈0.9–1.0) *by geometry* — it verifies the
@@ -114,12 +128,12 @@ issue, surfaced by the example lens).
 > births / ≈2100 deaths) supplies the living producer→carcass front of the pathway and the deaths
 > that exercise the post-reindex drain regression, but its carcasses fall near the ring, out of reach,
 > so they accumulate unconsumed rather than feeding the decomposer — the brown loop closes only
-> *locally*, at the deposit. (Earlier framing called this "a full living brown food web"; the telemetry
-> shows the field-wide rain is unconsumed, so the closed loop is the local deposit, not the field.)
-> That unconsumed rain now reads honestly: the field-level verdict is **`nutrient_lockup` (8/8)** since
-> the evaluator gained a carcass-locked-nutrient signal (#342) — locally healthy wiring, nutrient
-> lockup at the field scale. (example9's demographic medians are non-deterministic run-to-run, #343;
-> the `nutrient_lockup` verdict is stable.)
+> *locally*, at the deposit. That unconsumed rain reads honestly: the field-level verdict is
+> **`nutrient_lockup` (32/32)** since the evaluator gained a carcass-locked-nutrient signal (#342) —
+> locally healthy wiring, nutrient lockup at the field scale — and it is **unmoved by #452/#453**,
+> which mineralise a carcass only when a drain exhausts it: unreachable carcasses lock exactly as
+> before (≈46 % of system nutrient at tick 2000). (example9's demographic medians are
+> non-deterministic run-to-run, #343; the `nutrient_lockup` verdict is stable.)
 > Whether decomposers *emerge* is answered by the genesis search (71/120 viable random
 > worlds produced decomposers), not by a hand-built scenario; `example6_decomposer_viability.json`
 > was retired in #328 because it demonstrated neither the viability nor the sustained carcass supply
@@ -129,14 +143,14 @@ issue, surfaced by the example lens).
 > decomposer *out of reach* to force a pure-detrital diet (and the field locks up), example13 seeds a
 > lean *facultative* decomposer guild **inside** example12's live differentiated web, on the producer
 > ring within reach of the carcass rain. There the brown loop carries flux: the guild persists as a
-> reproducing lineage (8/8 seeds, fitness 0.565, `trophic_balance_score` 1.0 — a producer-led pyramid;
-> the figure is below the 0.686 reported pre-#394, which counted lineage clades as coexistence —
-> example13's trait-cluster `coexistence_duration` is 0, as it is across the suite)
-> and cuts carcass-locked nutrient ~40% vs the no-decomposer example12 baseline. It is the suite's
+> reproducing lineage (32/32 seeds, 9–10 alive at tick 2000 from 8 seeded) and cuts carcass-locked
+> nutrient ~60% vs the no-decomposer example12 baseline on the same physics. It is the suite's
 > first decomposer-in-a-live-web — but closure is **partial** (the dead pool is reduced, not
-> eliminated): 8 sessile decomposers can't reach the whole ring's carcass-fall with
+> eliminated): sessile decomposers can't reach the whole ring's carcass-fall with
 > `body_reach_coefficient=0`, so full field-scale closure is reach-limited, a *design* knob (see
-> [`viability.md`](../docs/system-design/viability.md)), not a scenario tweak.
+> [`viability.md`](../docs/system-design/viability.md)), not a scenario tweak — and on the fixed
+> stepper the guild's "narrow honest band" (see the file's `intent`) no longer holds a producer-led
+> pyramid; re-tuning it is a scenario edit deferred past #475.
 > Per-scenario verdicts in [`verdicts.md`](verdicts.md); raw numbers in
 > [`observed.json`](observed.json). Two root causes shaped the legacy set:
 
