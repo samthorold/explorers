@@ -227,6 +227,22 @@ Solar ──photosynthesis──▶ Reserve ──growth──▶ Structure ─�
                   Living agent (nutrient)
 ```
 
+### Unit anchors (trait-to-flow conversions)
+
+Traits are dimensionless ([trait-space](trait-space.md)), but five committed forms read a trait *as* a flow or a length. Each conversion carries a **unit anchor** — a constant that turns one trait unit into so much of a base unit per tick — which the rules previously left implicit. They are now named, with the tick's status as a committed unit choice, and each is `1.0` in today's units:
+
+| conversion | rule | anchor | units | code constant |
+|---|---|---|---|---|
+| distance moved per tick `= u_M · effective mobility` | movement (channels on the surface) | `u_M = 1` | `L/T` per trait unit | `units::MOBILITY_DISTANCE_PER_TICK` |
+| offspring placement kernel `Normal(0, σ)`, `σ = u_D · dispersal` of the seed parent | flow 4, both modes | `u_D = 1` | `L` per trait unit | `units::DISPERSAL_KERNEL_SIGMA` |
+| nutrient uptake demand per tick `= u_A · effective autotrophy` | flow 2 | `u_A = 1` | `N/T` per trait unit | `units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK` |
+| structure drained per in-reach target per tick `= u_H · effective heterotrophy` | flow 3 | `u_H = 1` | `E/T` per trait unit | `units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK` |
+| base repair per functional trait per tick `= u_R · kappa`, attenuated by `exp(−repair_decay · wear)` | somatic wear, flow 9 | `u_R = 1` | `E/T` per unit kappa | `units::KAPPA_REPAIR_PER_TICK` |
+
+Naming them changes no number and no trajectory (`crates/explorers-sim/src/units.rs`; guarded bit-exactly by `tests/trait_unit_anchors.rs`). What it changes is what the design claims: the trait unit is pinned simultaneously to `L/T`, `L`, `N/T` and `E/T`, so no rescaling of energy, length or nutrient is a symmetry of the map even when every explicit parameter scales along — three of the search box's 32 axes are physical only through these anchors (see [viability](viability.md), *Dimensionless groups*, and [`440-dimensionless-groups.md`](../research/440-dimensionless-groups.md), smell S1).
+
+**Trait-space distance mixes these anchors.** The Euclidean distance `d` that drives trophic transfer efficiency (flow 7), mate compatibility (flow 4) and the branching descriptor is computed on the *raw* trait vector. It therefore adds a length-like coordinate (mobility, dispersal) to an energy-rate-like one (heterotrophy), a nutrient-rate-like one (autotrophy) and pure fractions (kappa, asexual propensity, fecundity) as if they shared a unit — which they do only because every anchor is `1`. This is stated, not fixed: whether the anchors should become world parameters (and, if so, what `d` then means) is a design decision to be taken with the designer, not a change any of the committed rules make.
+
 ## Viability constraints
 
 The flows above describe what can happen. Viability constraints describe what the flows must be capable of producing for the ecology to function. These are not parameter values — they are design requirements on the physics. If any constraint cannot be satisfied by some agent configuration under the maintenance cost landscape, that trophic role is structurally impossible and the ecology is broken.

@@ -290,9 +290,10 @@ branching descriptor) adds a length-like coordinate (`mobility`, `dispersal`) to
 energy-rate-like ones (`heterotrophy`) and pure fractions (`kappa`, `asexual_propensity`);
 and no rescaling of `E`, `L` or `N` is a symmetry of the map even where every explicit
 parameter scales along. `world-rules.md` does not state these constants; `trait-space.md`
-calls traits dimensionless. Filed as #459 (`needs-triage`) — the fix, if any, is a
-system-design decision (surface the constants as committed unit choices, or declare the
-affected traits dimensional), not something this note commits.
+calls traits dimensionless. Filed as #459 — resolved by naming the five anchors as explicit constants
+(`crates/explorers-sim/src/units.rs`, each `1.0`) and documenting them in `world-rules.md`
+(*Unit anchors*) and `viability.md` (*Dimensionless groups*); no number changed. Whether to
+parameterise any anchor, and what `d` then means, remains a system-design decision.
 
 **S2 — `use_wear_rate` mixes energy and length.** `apply_wear` computes
 `use_rate · usage[ft]` with `usage = [energy captured, energy drained, distance moved]`.
