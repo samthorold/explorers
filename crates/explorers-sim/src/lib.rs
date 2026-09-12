@@ -1161,6 +1161,7 @@ impl World {
                     energy_delta: 0.0,
                     position: Some(agent.position),
                     target_was_carcass: false,
+                    second_parent: None,
                 });
                 agent.reserve = 0.0; // mark for removal
                 agent.repro_reserve = 0.0;
@@ -1216,10 +1217,24 @@ impl World {
         self.dissipated_energy += repro_result.dissipated;
         self.last_tick_births = repro_result.offspring.len();
         events.extend(repro_result.events);
-        // Add offspring to world with unique IDs
-        for mut child in repro_result.offspring {
+        // Add offspring to world with unique IDs, logging each birth as a
+        // `Born` event under its final id (#443 lineage observability).
+        for (mut child, (parent, second_parent)) in
+            repro_result.offspring.into_iter().zip(repro_result.parents)
+        {
             child.id = self.next_agent_id;
             self.next_agent_id += 1;
+            events.push(event::Event {
+                tick: 0,
+                seq: 0,
+                kind: event::EventKind::Born,
+                source: child.id,
+                target: Some(parent),
+                energy_delta: 0.0,
+                position: Some(child.position),
+                target_was_carcass: false,
+                second_parent,
+            });
             self.agents.push(child);
         }
 
@@ -1699,6 +1714,7 @@ impl World {
             energy_delta,
             position,
             target_was_carcass: false,
+            second_parent: None,
         });
     }
 }
@@ -2358,6 +2374,7 @@ mod tests {
             energy_delta: 4.0,
             position: None,
             target_was_carcass: false,
+            second_parent: None,
         };
         let (src, dst, amount) = redistribution_flow(&ev);
         assert_eq!(src, EnergyEndpoint::Agent(7));
@@ -4017,6 +4034,124 @@ mod tests {
             "reproduction should produce births this tick"
         );
         world.nutrient_ledger().assert_balanced();
+    }
+
+    /// Lineage observability (#443): every birth is a `Born` event whose
+    /// `source` is the offspring's *final* world id and whose `target` is the
+    /// parent (the seed parent of a pair, with the mate in `second_parent`).
+    /// Read together with `Died`, the log carries descent — an invader's
+    /// lineage can be followed without any state on `Agent`.
+    #[test]
+    fn every_birth_is_logged_as_a_born_event_naming_the_offspring_and_its_parent() {
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            reproduction_energy_threshold: 5.0,
+            reproduction_nutrient_threshold: 1.0,
+            ..conservation_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        world.add_agent(Agent {
+            id: 0,
+            position: (0.0, 0.0),
+            reserve: 60.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: 20.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.3,
+                kappa: 0.7,
+                fecundity: 5.0,
+                asexual_propensity: 1.0,
+                ..zero_traits()
+            },
+            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+            repro_reserve: 350.0,
+            repro_nutrient: 10.0,
+        });
+        let parent_id = world.agents()[0].id;
+
+        world.step();
+
+        let births = world.last_tick_births();
+        assert!(births > 0, "reproduction should produce births this tick");
+        let born: Vec<&event::Event> = world.event_log().by_kind(&event::EventKind::Born);
+        assert_eq!(born.len(), births, "one Born event per offspring");
+        let alive: std::collections::HashSet<u64> = world.agents().iter().map(|a| a.id).collect();
+        for ev in &born {
+            assert!(
+                alive.contains(&ev.source),
+                "Born.source {} must be a live offspring id",
+                ev.source
+            );
+            assert_ne!(ev.source, parent_id);
+            assert_eq!(ev.target, Some(parent_id), "Born.target is the parent");
+            assert_eq!(ev.second_parent, None, "asexual birth has no mate");
+            assert_eq!(ev.tick, 0);
+        }
+        let offspring: std::collections::HashSet<u64> = born.iter().map(|e| e.source).collect();
+        assert_eq!(offspring.len(), births, "offspring ids are distinct");
+    }
+
+    /// A sexual birth names both parents: `target` is the seed parent and
+    /// `second_parent` the mate, so descent through either parent is readable.
+    #[test]
+    fn a_sexual_birth_is_logged_with_both_parents() {
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            reproduction_energy_threshold: 5.0,
+            reproduction_nutrient_threshold: 1.0,
+            reproductive_compatibility_distance: 10.0,
+            ..conservation_params()
+        };
+        let dist = InitialDistribution {
+            mean_traits: zero_traits(),
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            initial_energy_per_agent: 50.0,
+        };
+        let mut world = World::new(params, dist, 42);
+        for x in [0.0, 1.0] {
+            world.add_agent(Agent {
+                id: 0,
+                position: (x, 0.0),
+                reserve: 60.0,
+                structure: 5.0,
+                peak_structure: 5.0,
+                nutrient: 20.0,
+                traits: TraitVector {
+                    photosynthetic_absorption: 0.3,
+                    // Mobility gives the pair mate-finding reach.
+                    mobility: 1.0,
+                    kappa: 0.7,
+                    fecundity: 5.0,
+                    asexual_propensity: 0.0,
+                    ..zero_traits()
+                },
+                wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
+                repro_reserve: 350.0,
+                repro_nutrient: 10.0,
+            });
+        }
+        let parents: std::collections::HashSet<u64> = world.agents().iter().map(|a| a.id).collect();
+
+        world.step();
+
+        let born: Vec<&event::Event> = world.event_log().by_kind(&event::EventKind::Born);
+        assert!(!born.is_empty(), "the pair should have reproduced sexually");
+        assert_eq!(born.len(), world.last_tick_births());
+        for ev in &born {
+            let a = ev.target.expect("seed parent");
+            let b = ev.second_parent.expect("sexual birth names its mate");
+            assert_ne!(a, b);
+            assert!(parents.contains(&a) && parents.contains(&b));
+            assert!(!parents.contains(&ev.source));
+        }
     }
 
     #[test]
