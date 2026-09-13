@@ -48,7 +48,20 @@ impl TopologyProjection {
     }
 
     pub fn update(&mut self, log: &EventLog) {
+        self.update_before(log, u64::MAX);
+    }
+
+    /// Absorb the log tail up to (excluding) events stamped `tick`, leaving the
+    /// cursor there so a later call continues from the next event. Events are
+    /// stamped with the world tick they happened *in* and the world's tick
+    /// counter advances after the step, so the projection as of a roster read
+    /// at `World::tick() == t` is `update_before(log, t)`. Lets an observer walk
+    /// a finished log sample by sample without re-projecting from the start.
+    pub fn update_before(&mut self, log: &EventLog, tick: u64) {
         for event in log.since(self.cursor) {
+            if event.tick >= tick {
+                break;
+            }
             match event.kind {
                 EventKind::Reproduced => {
                     if let Some(target) = event.target {
@@ -121,15 +134,25 @@ impl TopologyProjection {
     /// [`DETRITAL_RELIANCE_THRESHOLD`] of its consumed energy, else a **Consumer**;
     /// a non-eater defaults to Consumer.
     pub fn trophic_roles(&self, agents: &[crate::Agent]) -> HashMap<u64, TrophicRole> {
+        self.trophic_roles_of(agents.iter().map(|a| (a.id, &a.traits)))
+    }
+
+    /// [`Self::trophic_roles`] over a roster given as `(id, traits)` pairs — the
+    /// same classification for a caller holding a recorded roster snapshot
+    /// rather than live `Agent`s.
+    pub fn trophic_roles_of<'a>(
+        &self,
+        roster: impl IntoIterator<Item = (u64, &'a crate::TraitVector)>,
+    ) -> HashMap<u64, TrophicRole> {
         let mut roles = HashMap::new();
-        for a in agents {
-            if a.traits.photosynthetic_absorption >= a.traits.heterotrophy {
-                roles.insert(a.id, TrophicRole::Producer);
+        for (id, traits) in roster {
+            if traits.photosynthetic_absorption >= traits.heterotrophy {
+                roles.insert(id, TrophicRole::Producer);
                 continue;
             }
 
-            let predation = self.outgoing_energy(a.id, EdgeKind::Consumed);
-            let decomposition = self.outgoing_energy(a.id, EdgeKind::Decomposed);
+            let predation = self.outgoing_energy(id, EdgeKind::Consumed);
+            let decomposition = self.outgoing_energy(id, EdgeKind::Decomposed);
             let consumed = predation + decomposition;
 
             let role = if consumed > 0.0 && decomposition / consumed >= DETRITAL_RELIANCE_THRESHOLD
@@ -138,7 +161,7 @@ impl TopologyProjection {
             } else {
                 TrophicRole::Consumer
             };
-            roles.insert(a.id, role);
+            roles.insert(id, role);
         }
         roles
     }

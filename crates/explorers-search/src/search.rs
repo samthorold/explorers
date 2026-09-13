@@ -498,10 +498,11 @@ mod tests {
         assert!(atlas.coverage + dead >= 1);
         // QD-score is the sum of elite fitnesses over filled cells.
         assert!(atlas.qd_score >= 0.0);
-        // Live cells carry the per-cell decomposer + coexistence distributions and
-        // sample count.
+        // Live cells carry the per-cell decomposer, consumer + coexistence
+        // distributions and sample count.
         for cell in &atlas.cells {
             assert!(cell.decomposer_fraction >= 0.0 && cell.decomposer_fraction <= 1.0);
+            assert!(cell.consumer_fraction >= 0.0 && cell.consumer_fraction <= 1.0);
             assert!(cell.coexistence_fraction >= 0.0 && cell.coexistence_fraction <= 1.0);
             assert_eq!(cell.sample_count, config.ensemble_size);
         }

@@ -413,8 +413,8 @@ struct SeedOutcome {
     terminal_producers: usize,
     terminal_consumers: usize,
     /// The evaluator's decomposer-guild observable (`has_decomposer_guild`):
-    /// a persistent guild draining carcasses — A2's pile route, read off the
-    /// same log the failure mode is.
+    /// a sustained, recruiting population draining carcasses (#490) — A2's
+    /// pile route, read off the same log the failure mode is.
     decomposer_guild: bool,
     peak_population: usize,
     /// First tick with no consumer alive while producers still stood, if any.
@@ -754,14 +754,7 @@ fn run_seed(
     let eval_config = EvalConfig::default();
     let mut world = World::new(params.clone(), dist.clone(), seed);
     let founders = world.agents().len();
-    let cap = horizon as usize;
-    let mut observations = RolloutObservations {
-        free_energy: Vec::with_capacity(cap),
-        carcass_fraction: Vec::with_capacity(cap),
-        producer_share: Vec::with_capacity(cap),
-        cluster_snapshots: Vec::new(),
-    };
-    let interval = eval_config.coexistence_sample_interval.max(1);
+    let mut observations = RolloutObservations::with_capacity(horizon as usize);
     let mut peak_population = founders;
     let mut population_after_tick1 = 0;
     let mut producers_after_tick1 = 0;
@@ -770,19 +763,7 @@ fn run_seed(
     let mut first_tick_without_producers = None;
     for _ in 0..horizon {
         world.step();
-        observations.free_energy.push(world.free_energy());
-        observations
-            .carcass_fraction
-            .push(world.carcass_locked_nutrient_fraction());
-        observations
-            .producer_share
-            .push(world.producer_energy_share());
-        if world.tick().is_multiple_of(interval as u64) {
-            observations.cluster_snapshots.push((
-                world.tick(),
-                world.agents().iter().map(|a| a.traits).collect(),
-            ));
-        }
+        observations.observe(&world, eval_config.coexistence_sample_interval);
         let (producers, consumers) = compartments(&world);
         if world.tick() == 1 {
             population_after_tick1 = world.agents().len();

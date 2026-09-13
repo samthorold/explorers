@@ -35,33 +35,17 @@ pub fn run_single(
     // Per-tick series the rollout observes for the descriptors that need a
     // temporal trace: free energy (issue #302), carcass fraction (#342) and
     // producer share (#392) sampled every tick, plus a coarse-interval trait-
-    // vector snapshot for coexistence (#394). The world stays history-free — the
+    // vector snapshot for coexistence (#394) and a roster snapshot for the
+    // heterotroph guild read (#490). The world stays history-free — the
     // series live here, bundled as `RolloutObservations` for the evaluator. The
     // snapshots are pure observation; genesis does NOT cluster, the evaluator runs
     // DBSCAN on each.
-    let cap = run_config.max_ticks as usize;
-    let mut observations = explorers_genesis_eval::RolloutObservations {
-        free_energy: Vec::with_capacity(cap),
-        carcass_fraction: Vec::with_capacity(cap),
-        producer_share: Vec::with_capacity(cap),
-        cluster_snapshots: Vec::new(),
-    };
-    let interval = run_config.eval_config.coexistence_sample_interval.max(1);
+    let mut observations =
+        explorers_genesis_eval::RolloutObservations::with_capacity(run_config.max_ticks as usize);
+    let interval = run_config.eval_config.coexistence_sample_interval;
     for _ in 0..run_config.max_ticks {
         world.step();
-        observations.free_energy.push(world.free_energy());
-        observations
-            .carcass_fraction
-            .push(world.carcass_locked_nutrient_fraction());
-        observations
-            .producer_share
-            .push(world.producer_energy_share());
-        if world.tick() % interval as u64 == 0 {
-            observations.cluster_snapshots.push((
-                world.tick(),
-                world.agents().iter().map(|a| a.traits).collect(),
-            ));
-        }
+        observations.observe(&world, interval);
         if world.agents().is_empty() {
             break;
         }
