@@ -23,7 +23,42 @@ pub struct HeterotrophGuilds {
     pub decomposer: bool,
 }
 
-/// Read the two heterotroph guilds off a finished run. Membership is the
+/// The guild read for every trophic role. The evaluator reports only the two
+/// heterotroph guilds ([`heterotroph_guilds`]); the producer read exists for
+/// instruments that ask "is there a *population* of this role" of all three
+/// roles by one rule (the invasion-growth presence gate, #493).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct RoleGuilds {
+    pub producer: bool,
+    pub consumer: bool,
+    pub decomposer: bool,
+}
+
+impl RoleGuilds {
+    pub fn get(self, role: TrophicRole) -> bool {
+        match role {
+            TrophicRole::Producer => self.producer,
+            TrophicRole::Consumer => self.consumer,
+            TrophicRole::Decomposer => self.decomposer,
+        }
+    }
+}
+
+/// Read the two heterotroph guilds off a finished run: [`role_guilds`]
+/// restricted to consumer and decomposer.
+pub fn heterotroph_guilds(
+    log: &EventLog,
+    roster_snapshots: &[RosterSnapshot],
+    max_ticks: u64,
+) -> HeterotrophGuilds {
+    let g = role_guilds(log, roster_snapshots, max_ticks);
+    HeterotrophGuilds {
+        consumer: g.consumer,
+        decomposer: g.decomposer,
+    }
+}
+
+/// Read every role's guild off a finished run. Membership is the
 /// `trophic_roles` read (heterotroph by trait, consumer/decomposer by realised
 /// diet) on each roster snapshot whose tick falls in the second half of the
 /// run (`tick > max_ticks / 2`); the projection is walked incrementally to each
@@ -33,17 +68,19 @@ pub struct HeterotrophGuilds {
 /// long-lived sterile founder cohort sitting at exactly the floor. "Member"
 /// is the union of the role over the window's samples, so a parent that bred
 /// between two samples still counts as long as it was read in the role at one.
-pub fn heterotroph_guilds(
+pub fn role_guilds(
     log: &EventLog,
     roster_snapshots: &[RosterSnapshot],
     max_ticks: u64,
-) -> HeterotrophGuilds {
+) -> RoleGuilds {
+    const ROLES: [TrophicRole; 3] = [
+        TrophicRole::Producer,
+        TrophicRole::Consumer,
+        TrophicRole::Decomposer,
+    ];
     let window_start = max_ticks / 2 + 1;
     let mut topo = TopologyProjection::new();
-    let mut sustained = HashMap::from([
-        (TrophicRole::Consumer, true),
-        (TrophicRole::Decomposer, true),
-    ]);
+    let mut sustained: HashMap<TrophicRole, bool> = ROLES.iter().map(|r| (*r, true)).collect();
     let mut members: HashMap<TrophicRole, HashSet<u64>> = HashMap::new();
     let mut sampled = false;
     for (tick, roster) in roster_snapshots.iter().filter(|(t, _)| *t >= window_start) {
@@ -74,7 +111,8 @@ pub fn heterotroph_guilds(
         })
     };
     let guild = |role: TrophicRole| sampled && sustained[&role] && recruited(role);
-    HeterotrophGuilds {
+    RoleGuilds {
+        producer: guild(TrophicRole::Producer),
         consumer: guild(TrophicRole::Consumer),
         decomposer: guild(TrophicRole::Decomposer),
     }
@@ -268,6 +306,27 @@ mod tests {
             !too_small.consumer,
             "four consumers are below GUILD_MIN_SIZE"
         );
+    }
+
+    #[test]
+    fn producer_guild_reads_by_the_same_rule_through_role_guilds() {
+        // Five producers on every sample; a birth in the window names one.
+        let roster: Vec<(u64, TraitVector)> = (1..=5).map(|id| (id, producer())).collect();
+        let mut recruiting = EventLog::new();
+        recruiting
+            .append(event(60, 0, EventKind::Born, 99, Some(1)))
+            .unwrap();
+        let guilds = role_guilds(&recruiting, &constant_roster(&roster), MAX_TICKS);
+        assert!(guilds.producer);
+        assert!(!guilds.consumer);
+        assert!(!guilds.decomposer);
+        assert_eq!(guilds.get(TrophicRole::Producer), true);
+        // The heterotroph view of the same log ignores the producers.
+        let h = heterotroph_guilds(&recruiting, &constant_roster(&roster), MAX_TICKS);
+        assert_eq!(h, HeterotrophGuilds::default());
+        // Sterile producers are not a guild.
+        let sterile = EventLog::new();
+        assert!(!role_guilds(&sterile, &constant_roster(&roster), MAX_TICKS).producer);
     }
 
     #[test]
