@@ -82,12 +82,10 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
-use explorers_search::lhs;
+use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{decode, default_ranges};
 use explorers_sim::World;
 use explorers_sim::event::EventKind;
@@ -110,14 +108,6 @@ const SEARCH_HORIZON: u64 = 500;
 const N_SEEDS: u64 = 8;
 const SEED_BASE: u64 = 1000;
 
-/// Number of low-discrepancy unit-cube configs sampled in addition to the atlas
-/// live cells. These span the never-branching (monoculture / extinction) regimes
-/// the atlas's count-only dead frontier cannot replay.
-const SAMPLE_CONFIGS: usize = 200;
-
-/// Fixed seed for the deterministic LHS draw of the sampled configs.
-const SAMPLE_SEED: u64 = 421;
-
 /// A decomposer guild is "persistent" from a tick when ≥1 decomposer is present for
 /// at least this fraction of the *remaining* run. Reuses the 0.25 convention from
 /// `decomposer_emergence.rs` (the empty gap between the transient and sustained
@@ -134,14 +124,6 @@ const PERSISTENCE_FRACTION: f64 = 0.25;
 /// `t_*` role milestone is resolved to the nearest sampled tick (±`CLASSIFY_INTERVAL`),
 /// and `t_persistent_guild`'s presence fraction is computed over the sampled series.
 const CLASSIFY_INTERVAL: u64 = 10;
-
-/// Where the configs were drawn from — the atlas live cells vs the sampled cube.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-enum ConfigSource {
-    Atlas,
-    Sample,
-}
 
 /// One (config × seed) run's milestone record. Every `t_*` is the tick of first
 /// occurrence, or `null` if it never happened within the horizon.
@@ -492,28 +474,11 @@ struct Artifact {
     runs: Vec<RunRecord>,
 }
 
-/// Parse the optional `ROLE_EMERGENCE_CONFIGS` subset selector into a set of
-/// `(source, index)` pairs. Format: comma-separated `source:index` tokens, e.g.
-/// `atlas:0,sample:12`. Returns `None` when the var is unset (the full run);
-/// unparseable tokens panic loudly rather than silently dropping a requested config.
+/// Parse `ROLE_EMERGENCE_CONFIGS` (`atlas:0,sample:12`); `None` when unset (the full run).
 fn parse_config_filter() -> Option<HashSet<(ConfigSource, usize)>> {
-    let raw = std::env::var("ROLE_EMERGENCE_CONFIGS").ok()?;
-    let mut set = HashSet::new();
-    for tok in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
-        let (src, idx) = tok
-            .split_once(':')
-            .unwrap_or_else(|| panic!("ROLE_EMERGENCE_CONFIGS token {tok:?} is not source:index"));
-        let source = match src {
-            "atlas" => ConfigSource::Atlas,
-            "sample" => ConfigSource::Sample,
-            other => panic!("ROLE_EMERGENCE_CONFIGS source {other:?} must be atlas|sample"),
-        };
-        let index: usize = idx
-            .parse()
-            .unwrap_or_else(|_| panic!("ROLE_EMERGENCE_CONFIGS index {idx:?} is not a usize"));
-        set.insert((source, index));
-    }
-    Some(set)
+    std::env::var("ROLE_EMERGENCE_CONFIGS")
+        .ok()
+        .map(|raw| parse_selector(&raw, "ROLE_EMERGENCE_CONFIGS", None))
 }
 
 fn main() {
@@ -535,10 +500,7 @@ fn main() {
     // Source 2: a deterministic low-discrepancy (LHS) sample of the unit cube,
     // decoded via the same `decode` over `default_ranges`. Naturally includes
     // monoculture / extinction regimes the atlas dead frontier cannot replay.
-    let sampled_units: Vec<Vec<f64>> = {
-        let mut rng = ChaCha8Rng::seed_from_u64(SAMPLE_SEED);
-        lhs::sample(dims, SAMPLE_CONFIGS, &mut rng)
-    };
+    let sampled_units = sampled_units(dims);
 
     eprintln!(
         "role_emergence: {} atlas + {} sampled configs × {} seeds, horizon {} ticks",
