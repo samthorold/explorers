@@ -53,8 +53,10 @@ fresh-perspective agent).
   atlas cells is the **post-fix atlas regenerated in #474 (PR #483)** — 82 live cells, recipe cell
   `[5, 19, 7]`, refined `coexistence_fraction` 0.91 at `n = 32`
   ([`474-atlas-regen-post-fix.md`](../docs/research/474-atlas-regen-post-fix.md)); that note's
-  §4 attribution claim that #445 "changes the ledger, not the state" is **contradicted by this
-  suite's bisect** (see `example12` / `example13`) and should be revisited.
+  §4 attribution originally claimed #445 "changes the ledger, not the state"; this suite's bisect
+  contradicted that (see `example12` / `example13`) and §4 was rewritten under #485 to match — it
+  now names #445 as trajectory-changing for heterotrophs and flags the #444 / #445 split of the
+  atlas's extinction → monoculture rotation as argued, not measured.
 - 2026-06-02 — re-judged three times: after #328 **retired `example6_decomposer_viability`**
   (trace inspection showed its producers mass-died in a single tick and its decomposer never
   established a lineage — pinned at count 1 for all 2000 ticks — so it demonstrated neither the
@@ -216,7 +218,8 @@ fresh-perspective agent).
     starvation tax on exactly the feast-famine heterotroph — a mobile consumer between prey — and
     lifting it is why the consumer level survives here. (This contradicts
     [`474-atlas-regen-post-fix.md`](../docs/research/474-atlas-regen-post-fix.md) §4, which reasons that
-    #445 "changes the ledger, not the state"; the scenario lens shows it changes who lives.)
+    #445 "changes the ledger, not the state" in its original form; the scenario lens shows it changes
+    who lives, and §4 was rewritten under #485 to say so.)
   - Specialist producers hold 11–13 of the survivors; final population is 15–19 (median 17.5, up from
     12.5), turnover 0.26–0.33 (median 0.29, up from 0.21) as the persisting consumer level keeps the
     ring cycling.
@@ -423,6 +426,6 @@ detritivore) — exactly the under-committed knob
    scenario registers is a reach pathology, which is what it was built to show.
 
 Where verdicts compare to the search lens they cite the post-fix atlas from #474 (PR #483): 82 live
-cells, recipe cell `[5, 19, 7]`, refined `coexistence_fraction` 0.91 at `n = 32`. Its §4 attributes no
-state change to #445 by construction; this suite's bisect says otherwise, and the two readings should
-be reconciled in a follow-up rather than left to disagree silently.
+cells, recipe cell `[5, 19, 7]`, refined `coexistence_fraction` 0.91 at `n = 32`. Its §4 originally
+attributed no state change to #445 by construction; this suite's bisect said otherwise, and #485
+reconciled the two — §4 now carries the same mechanism and bisect result as this file.

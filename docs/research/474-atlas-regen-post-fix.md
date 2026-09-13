@@ -29,8 +29,11 @@ re-run under #476, not here, and `439-`/`433-` are left as written.
    19 → 10, monoculture 15 → 29, nutrient lockup 12 → 11, generalist dominance 2 → 1. The
    direction is exactly what #444 predicts — founders that used to be culled on tick 1
    (NaN maintenance from a negative trait) now live, and a population that lives but does
-   not diversify is a monoculture, not an extinction — and it is the only shift with a
-   named cause; see §4.
+   not diversify is a monoculture, not an extinction — and it is the only shift whose
+   direction a fix's mechanism signs. #445 (metabolic overdraft cap) also moves
+   heterotroph survival and so reaches both cliffs, but without a signed direction
+   between them; the #444 / #445 split is argued, not measured (no per-commit atlas
+   run exists); see §4.
 4. **Coexistence is more robust.** `coexistence_fraction ≥ 0.8` on 32 / 56 (57 %) → 58 / 82
    (71 %) live cells; mean 0.72 → 0.77; `== 1.0` on 25 → 36. Cells at `0.0` went 1 → 4.
 5. **The recipe moved and is now a refined pick.** Old: cell [9, 13, 4], fitness 0.674,
@@ -220,12 +223,15 @@ against a single seed-42 run on the old, and the outer search is itself a trajec
 last-ulp one — re-routes which configs get evaluated after generation 1. A cell-by-cell
 diff therefore cannot be read as "this fix caused this cell"; only aggregate shifts with
 a mechanism that predicts their direction are attributable. What the six fixes do to a
-trajectory, from their PR descriptions:
+trajectory, from their PR descriptions and — for #445, whose PR description undersold
+it — from the stepper's phase order and the #475 scenario bisect (PR #484). No
+per-commit atlas run was made for this note; the attribution below is by argument
+throughout, and it says so where the argument cannot separate two fixes:
 
 | fix | what changed in the stepper | expected effect on a trajectory |
 |---|---|---|
 | #444 founder trait floor (`fc52e74`) | founder traits sampled as centroid + Normal are floored at 0; previously 57 % of search-box founders carried a negative trait → NaN maintenance under a non-integer exponent (agent silently dropped on tick 1) or a negative charge under an odd one | **large, systematic**: founders that died on tick 1 now live; seeds with no negative draws are byte-identical |
-| #445 metabolic overdraft (`be21bf0`) | charge capped at available reserve; death path previously floored the negative reserve to 0 | **none on the trajectory** — the agent dies at the same tick with the same state; only the dissipation ledger entry changes |
+| #445 metabolic overdraft (`be21bf0`) | `metabolise` charges `cost.min(reserve)` instead of the full cost, so a starving agent lands at exactly 0 rather than negative; the death path previously floored the negative reserve to 0 for the ledger | **trajectory-changing for heterotrophs, in a signed direction**: the tick runs `metabolise` (3) → `resolve_drains` (5) → `check_death_thresholds` (9), which kills on `reserve <= 0`; an agent that ran dry used to need same-tick drain income *exceeding the overdraft* to clear the check and now needs any positive income. Photosynthesis lands *before* the charge, so producers are untouched; the fix lifts a starvation tax on consumers between meals. Confirmed by the #475 scenario bisect (`example12`, `example13` flip at `be21bf0`) |
 | #446 nutrient bind (`e08c2cc`) | nutrient-limited growth binds the store to exactly 0 instead of −1 ulp | ulp-level; measure-zero unless a downstream comparison sits on the sign |
 | #451 chemotaxis order (`2301455`) | neighbours sensed at tick-start positions, attraction summed in stable-id order | trajectory-changing for every config with mobile sensing agents; no systematic direction |
 | #452 drain stoichiometry order (`15b193b`) | stoichiometric need at tick-start structure; drains in stable-id order; spent carcasses stay targets while they hold stock | trajectory-changing wherever consumption occurs; spent carcasses now mineralise instead of stranding nutrient → *less* stranded nutrient, if anything |
@@ -233,32 +239,55 @@ trajectory, from their PR descriptions:
 
 What the numbers support:
 
-- **Extinction 19 → 10 and monoculture 15 → 29 are attributable to #444.** Under the old
-  physics a config whose founders drew negative traits lost a large fraction of them on
-  tick 1 — with founding populations of tens of agents and 57 % of founders affected, that
-  was routinely enough to push a marginal config to extinction within 500 ticks. Under
-  the new physics those founders live; a founding population that lives but whose trait
-  clusters merge (or whose consumer compartment never gets going) ends as a monoculture,
-  which the evaluator scores as a cliff, not as extinction. The total dead count barely
-  moved (48 → 51), consistent with the same *configs* being marginal and the cliff they
-  fall off being relabelled. This is the direction #444's PR predicted ("the
-  full-crosscheck test runs 160 ticks so it can observe the guaranteed extinction now
-  that founders survive their first tick") and no other fix has a mechanism that moves
-  configs *between* those two cliffs.
+- **Extinction 19 → 10 and monoculture 15 → 29: the direction is #444's, but the split
+  between #444 and #445 is not measured.** Under the old physics a config whose founders
+  drew negative traits lost a large fraction of them on tick 1 — with founding
+  populations of tens of agents and 57 % of founders affected, that was routinely enough
+  to push a marginal config to extinction within 500 ticks. Under the new physics those
+  founders live; a founding population that lives but whose trait clusters merge (or
+  whose consumer compartment never gets going) ends as a monoculture, which the
+  evaluator scores as a cliff, not as extinction. The total dead count barely moved
+  (48 → 51), consistent with the same *configs* being marginal and the cliff they fall
+  off being relabelled. This is the direction #444's PR predicted ("the full-crosscheck
+  test runs 160 ticks so it can observe the guaranteed extinction now that founders
+  survive their first tick"). #445 also reaches both cliffs — it keeps a heterotroph that
+  ran dry alive on any same-tick income — but its mechanism does not *sign* the move
+  between them: a rescued consumer level can turn an extinction into a live cell or a
+  monoculture into a live cell, and it can equally overgraze a thin producer level into
+  extinction (the `example13` inverted pyramid in `verdicts.md` is the scenario-scale
+  version). So the *net* rotation toward monoculture is the #444 signature, while #445
+  is an unsigned contributor to both counts of unknown size. Separating them needs the
+  per-commit atlas (below); this note was written from the six PRs' descriptions and a
+  single before/after run, not from per-commit search runs, and the earlier version of
+  this bullet was wrong to hand the whole shift to #444.
 - **Nutrient lockup 12 → 11 is not evidence for or against #452/#453.** Those fixes
   release stranded carcass nutrient, which would predict *fewer* lockups; a change of one
   on a base of twelve is within the outer search's re-routing noise.
-- **The +26 live cells, +0.125 best fitness and the carcass-axis spread (6 → 8 occupied
-  bins, 12 → 33 cells in bins ≥ 2) are consistent with #444 but not attributable by
-  measurement here.** Founders that live are more biomass, more carcass and more
-  trait variance from tick 1 — every direction the fitness objective and the carcass
-  descriptor reward — but the same outcome is reachable by the outer search simply
-  finding a better basin on a re-routed trajectory. Separating those would need the
-  #444-only stepper (the six fixes are sequential commits, so it is a one-line checkout
-  and a 20-minute run); it is not done here because item 4 says not to tune, and a
-  finer attribution changes no decision.
-- **#445 contributes nothing to any of these numbers**, by construction (it changes the
-  ledger, not the state). Any doc that attributes an atlas shift to #445 is wrong.
+- **The +26 live cells, +0.125 best fitness, the coexistence lift (mean 0.72 → 0.77,
+  TL;DR 4) and the carcass-axis spread (6 → 8 occupied bins, 12 → 33 cells in bins ≥ 2)
+  are consistent with #444 and #445 but not attributable by measurement here.**
+  Founders that live (#444) are more biomass, more carcass and more trait variance from
+  tick 1; a consumer level that no longer starves between meals (#445) is exactly what
+  `coexistence_fraction` and the trophic-balance term count — every direction the
+  fitness objective and the carcass descriptor reward. But the same outcome is reachable
+  by the outer search simply finding a better basin on a re-routed trajectory.
+  Separating these needs per-commit atlas runs — the six fixes are sequential commits,
+  so a `fc52e74` (#444-only) and a `be21bf0` (#444 + #445) checkout are one line each
+  and ≈ 20 minutes per run — and no such run exists in this note or elsewhere; it is not
+  done here because item 4 says not to tune, and a finer attribution changes no
+  decision. If one is ever wanted, it is a separate follow-up, not an amendment to this
+  note.
+- **#445 was previously claimed here to contribute nothing, "by construction".** That
+  was wrong. The claim confused the *ledger* fix (which is what #445's title describes)
+  with its *state* effect: capping the charge changes where a starving agent's reserve
+  sits when drain income arrives two phases later, which is a survival difference, not
+  a bookkeeping one. The #475 scenario bisect (PR #484, `verdicts.md`) is the
+  measurement: at 8 seeds per commit `example12`'s final population steps 12.5 → 17.0
+  and births 384 → 544 at `be21bf0` (the later fixes add ≤ 0.5 to either) — its
+  specialist mobile consumers, 0 / 8 survivors pre-fix, persist at 3–6 on every probed
+  seed at `n = 32` — and `example13`'s facultative guild outgrows its producers at the
+  same commit, with #451 a secondary contributor. Anything in `docs/` that repeats
+  the "ledger, not state" reading should be corrected to this.
 - **The clustering-19 concentration** (§2, TL;DR 6) is intensified, not created: the old
   atlas already had 7 / 10 of its top-10 and 43 % of its live cells there. Not
   attributed.
