@@ -362,6 +362,33 @@ resident population so the reader can condition on the ratio.
 an instrument reading, and it currently says the atlas's "coexistence" descriptor and
 mutual invasibility measure different things.
 
+## 5. Do the flat cohorts eat? (2026-09-13, #491)
+
+**Status: addendum. Subset run only — `atlas:0,atlas:1` × seeds 1000–1001 × both arms
+on the #491 protocol (absent roles `not_testable`, no canonical-vertex injection;
+`lineage_consumed_events` added to every injection). Every realised-centroid
+`growth_rate` / `lineage_series` is byte-identical to the pre-#491 run of the same subset,
+so the numbers below are §4's cohorts, now with their diet.** §4.2 read the flat,
+zero-birth heterotroph cohorts as sessile mixotrophs that never eat; the artifact could
+not confirm it. The flat consumer cohort on `atlas:0` seed 1000 (centroid `α 0.13`,
+`h 1.34`, `mobility 0.34`, `kappa 1.0`; `lineage_series` `[8, 6, 6, …, 6]`, zero births,
+identical on both arms) logs **33 `Consumed` events over the 500-tick window — 21 on
+living targets, 12 on carcasses** — about five bites per surviving agent in 500 ticks,
+against 756 / 797 for the same seed's producer cohort of 8–14. So the letter of §4.2 is
+wrong (they do eat) and its substance stands: at ~0.01 events per agent-tick consumption
+is not what keeps six agents alive for 475 ticks, and at `kappa = 1` the cohort is sterile
+by construction — a flat cohort is a founder cohort that neither breeds nor feeds to any
+purpose. Whether photosynthesis at `α = 0.13` is the balance of the budget is still not
+in the record (it carries counts, not `energy_delta`), so that half of §4.2 remains a
+reading. The other flat shape is different in kind: the decomposer cohorts flat at
+**one** agent (`atlas:0` seed 1001 `removed`, `atlas:1` seed 1001 `removed`; `kappa` 0.0
+/ 0.72, 16 / 15 births early, then a lone survivor) log 318 and 368 events — a single
+agent eating continuously, not a sterile cohort. "Flat" in §4.3 conflates the two, and
+the `lineage_consumed_events` field is what separates them on the next full run. As a
+selector check only (one seed, `intact` arm), `sample:55` — §4.6's positive control — ran
+with all three roles present at `t_inj` (P 1441 / C 4 / D 6) and its consumer cohort went
+8 → 62 with 12 617 living / 17 077 carcass events; a single seed, not a verdict.
+
 ## Deliverables against the acceptance criteria
 
 - **Deterministic across two runs; covers every atlas live cell × 3 roles × ≥ 8 seeds** —

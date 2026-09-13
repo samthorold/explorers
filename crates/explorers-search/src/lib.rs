@@ -1,5 +1,6 @@
 pub mod bayesopt;
 pub mod bifurcation;
+pub mod config_source;
 pub mod gp;
 pub mod lhs;
 pub mod prefilter;

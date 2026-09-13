@@ -73,13 +73,11 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 
 use explorers_genesis::{EvalConfig, FailureMode};
 use explorers_genesis_eval::{RolloutObservations, evaluate_from_log};
-use explorers_search::lhs;
+use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{SearchConfig, decode, default_ranges};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 
@@ -714,18 +712,6 @@ fn false_positives(cells: &[(Prediction, Observed)]) -> FalsePositives {
 /// Fixed contiguous seed block per config (the `role_emergence` convention).
 const N_SEEDS: u64 = 8;
 const SEED_BASE: u64 = 1000;
-/// Low-discrepancy configs drawn in addition to the atlas cells — same count
-/// and seed as `role_emergence.rs` / `energy_bound_check.rs`.
-const SAMPLE_CONFIGS: usize = 200;
-const SAMPLE_SEED: u64 = 421;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-enum ConfigSource {
-    Atlas,
-    Sample,
-}
-
 /// Producer / consumer split of a living roster, by the prototype's rule
 /// (`photosynthetic_absorption ≥ heterotrophy` is a producer).
 fn compartments(world: &World) -> (usize, usize) {
@@ -998,25 +984,11 @@ struct AtlasCellUnit {
     unit: Vec<f64>,
 }
 
-/// Parse `PERMANENCE_CROSSCHECK_CONFIGS` (`atlas:0,sample:12`); `None` when unset.
+/// Parse `PERMANENCE_CROSSCHECK_CONFIGS` (`atlas:0,sample:12`); `None` when unset (the full run).
 fn parse_config_filter() -> Option<HashSet<(ConfigSource, usize)>> {
-    let raw = std::env::var("PERMANENCE_CROSSCHECK_CONFIGS").ok()?;
-    let mut set = HashSet::new();
-    for tok in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
-        let (src, idx) = tok.split_once(':').unwrap_or_else(|| {
-            panic!("PERMANENCE_CROSSCHECK_CONFIGS token {tok:?} is not source:index")
-        });
-        let source = match src {
-            "atlas" => ConfigSource::Atlas,
-            "sample" => ConfigSource::Sample,
-            other => panic!("PERMANENCE_CROSSCHECK_CONFIGS source {other:?} must be atlas|sample"),
-        };
-        let index: usize = idx.parse().unwrap_or_else(|_| {
-            panic!("PERMANENCE_CROSSCHECK_CONFIGS index {idx:?} is not a usize")
-        });
-        set.insert((source, index));
-    }
-    Some(set)
+    std::env::var("PERMANENCE_CROSSCHECK_CONFIGS")
+        .ok()
+        .map(|raw| parse_selector(&raw, "PERMANENCE_CROSSCHECK_CONFIGS", None))
 }
 
 fn main() {
@@ -1033,10 +1005,7 @@ fn main() {
             serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {atlas_path}: {e}"));
         atlas.cells.into_iter().map(|c| c.unit).collect()
     };
-    let sampled_units: Vec<Vec<f64>> = {
-        let mut rng = ChaCha8Rng::seed_from_u64(SAMPLE_SEED);
-        lhs::sample(ranges.len(), SAMPLE_CONFIGS, &mut rng)
-    };
+    let sampled_units = sampled_units(ranges.len());
 
     let config_filter = parse_config_filter();
     let seeds = std::env::var("PERMANENCE_CROSSCHECK_SEEDS")

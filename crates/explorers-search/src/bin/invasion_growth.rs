@@ -15,11 +15,14 @@
 //! config, stepped to `t_inj` (the 500-tick search horizon). At `t_inj` the
 //! roles are classified and each role's **realised centroid** (mean trait
 //! vector of the agents in that role) is read; a role absent from the
-//! resident gets the config's **canonical pure vertex** (the `World::new`
-//! cluster seed for that compartment) and the record says so. The resident
-//! is then forked (`World: Clone`) into one control and, per role × arm, one
-//! injection: a cohort of `INVADER_COHORT` agents at the centroid, spread
-//! uniformly over the world and provisioned exactly as founders are. Two
+//! resident is **not testable** (`not_testable`, reason `role_absent`) and
+//! gets no injection — Chesson's question is whether the role can re-invade
+//! *this* web, and a phenotype the web never produced does not ask it
+//! (#491; the canonical-vertex injections it replaces starved at a median
+//! tick of 13). The resident is then forked (`World: Clone`) into one
+//! control and, per present role × arm, one injection: a cohort of
+//! `INVADER_COHORT` agents at the centroid, spread uniformly over the world
+//! and provisioned exactly as founders are. Two
 //! arms: `intact` injects into the resident as it stands (the issue's literal
 //! protocol; the injected role's own residents stay) and `removed` first
 //! removes the injected role's residents (Chesson's "community without the
@@ -34,7 +37,10 @@
 //! joins the lineage when either parent is a member, membership is permanent,
 //! and the live lineage is the members on the roster. Sexual crosses with a
 //! resident mate are members too (the either-parent rule) and are counted
-//! separately (`cross_births`) so the reader can judge the rule.
+//! separately (`cross_births`) so the reader can judge the rule. The
+//! lineage's diet is read off `Consumed` events the same way
+//! (`lineage_consumed_events`, living / carcass), so a flat cohort can be
+//! told from a starving one.
 //!
 //! The rate is `r = ln(max(N_end, ½) / N_0) / ticks` over the 500-tick window
 //! (an extinct lineage reads at half an agent so its rate is a finite
@@ -69,13 +75,16 @@
 //!
 //! ## Determinism, sourcing, output
 //!
-//! Atlas live cells decoded via `decode` over `default_ranges`; seeds a fixed
-//! contiguous block; cohort positions from a stream keyed on (seed, role);
-//! one rayon task per cell with an order-stable per-seed collect, so the
-//! artifact is byte-identical across runs. `target/invasion-growth.json`
-//! (gitignored) plus a stdout summary. Subset selectors:
-//! `INVASION_GROWTH_CELLS=0,5`, `INVASION_GROWTH_SEEDS=2`,
-//! `INVASION_GROWTH_ARMS=intact|removed|both`.
+//! Atlas live cells decoded via `decode` over `default_ranges`, plus on
+//! request the seed-421 LHS draw `role_emergence` / `energy_bound_check` /
+//! `permanence_crosscheck` share (`config_source`), so `sample:i` names the
+//! same config everywhere; seeds a fixed contiguous block; cohort positions
+//! from a stream keyed on (seed, role); one rayon task per cell with an
+//! order-stable per-seed collect, so the artifact is byte-identical across
+//! runs. `target/invasion-growth.json` (gitignored) plus a stdout summary.
+//! Subset selectors: `INVASION_GROWTH_CELLS=atlas:3,sample:55` (a bare
+//! integer is an atlas index; the unfiltered run is the atlas only),
+//! `INVASION_GROWTH_SEEDS=2`, `INVASION_GROWTH_ARMS=intact|removed|both`.
 //!
 //! Run with:
 //!   cargo run --release -p explorers-search --bin invasion_growth
@@ -93,11 +102,12 @@ use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
+use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::qd::COEXISTENCE_FLOOR;
 use explorers_search::search::{SearchConfig, decode, default_ranges};
 use explorers_sim::event::{Event, EventKind};
 use explorers_sim::topology::{TopologyProjection, TrophicRole};
-use explorers_sim::{Agent, InitialDistribution, TraitVector, World};
+use explorers_sim::{Agent, TraitVector, World};
 
 /// Fixed contiguous seed block per cell (the `permanence_crosscheck` convention).
 const N_SEEDS: u64 = 8;
@@ -218,28 +228,6 @@ fn role_centroid(agents: &[Agent], roles: &HashMap<u64, Role>, role: Role) -> Op
     Some(mean)
 }
 
-/// The canonical pure vertex for a role absent from the resident web: the
-/// cluster centroid `World::new` seeds for that trophic compartment (pure
-/// producer `(α+h, 0, …)` / pure heterotroph `(0, α+h, …)`, every other
-/// dimension the config mean's). A decomposer is a heterotroph by trait —
-/// the role is realised by diet — so it shares the consumer's vertex.
-fn canonical_vertex(dist: &InitialDistribution, role: Role) -> TraitVector {
-    let mean = dist.mean_traits;
-    let trophic_total = mean.photosynthetic_absorption + mean.heterotrophy;
-    match role {
-        Role::Producer => TraitVector {
-            photosynthetic_absorption: trophic_total,
-            heterotrophy: 0.0,
-            ..mean
-        },
-        Role::Consumer | Role::Decomposer => TraitVector {
-            photosynthetic_absorption: 0.0,
-            heterotrophy: trophic_total,
-            ..mean
-        },
-    }
-}
-
 /// Inject a cohort of `n` agents with the given traits, spread uniformly over
 /// the world and provisioned exactly as `World::new` provisions founders
 /// (`initial_energy_per_agent` split by `provision_initial_reserve_structure`,
@@ -313,8 +301,8 @@ struct Control {
 struct Injection {
     role: Role,
     arm: Arm,
-    /// `realised` (the role's mean trait vector at `t_inj`) or `canonical`
-    /// (the role was absent; its pure vertex was used).
+    /// Always `realised` (the role's mean trait vector at `t_inj`): an absent
+    /// role is not injected (#491), it is recorded as `not_testable`.
     centroid_source: &'static str,
     centroid: TraitVector,
     cohort: usize,
@@ -331,18 +319,37 @@ struct Injection {
     growth_rate: f64,
     pure_births: usize,
     cross_births: usize,
+    /// `Consumed` events whose source is a lineage member over the window,
+    /// split by `target_was_carcass` (#491): does the cohort eat at all?
+    lineage_consumed_events: ConsumedCounts,
     /// The resident's (non-lineage) composition at the end of the window.
     resident_roles_end: RoleCounts,
+}
+
+/// Consumption events by target kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+struct ConsumedCounts {
+    living: usize,
+    carcass: usize,
 }
 
 /// The trait vector a role is injected at, and where it came from.
 #[derive(Clone, Debug, serde::Serialize)]
 struct Centroid {
     role: Role,
-    /// `realised` (the role's mean trait vector at `t_inj`) or `canonical`
-    /// (the role was absent; its pure vertex was used).
+    /// Always `realised` (see `Injection::centroid_source`).
     source: &'static str,
     traits: TraitVector,
+}
+
+/// A role that could not be injected on this seed and why: `role_absent`
+/// (no agent of the role in the resident at `t_inj`, so there is no realised
+/// centroid to inject at — Chesson's question is whether the role can
+/// re-invade *this* web, not whether an invented phenotype can).
+#[derive(Clone, Debug, serde::Serialize)]
+struct NotTestable {
+    role: Role,
+    reason: &'static str,
 }
 
 /// One (cell, seed): the resident, the control, and every injection.
@@ -351,7 +358,10 @@ struct SeedRecord {
     seed: u64,
     resident: Resident,
     centroids: Vec<Centroid>,
-    /// The reduction's boundary eigenvalues at these centroids.
+    /// Roles absent from the resident at `t_inj`: no injection, no centroid.
+    not_testable: Vec<NotTestable>,
+    /// The reduction's boundary eigenvalues at these centroids (only the
+    /// roles whose centroids exist).
     predicted: Vec<PredictedSign>,
     control: Option<Control>,
     injections: Vec<Injection>,
@@ -458,30 +468,32 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
             seed,
             resident,
             centroids: Vec::new(),
+            not_testable: Vec::new(),
             predicted: Vec::new(),
             control: None,
             injections: Vec::new(),
         };
     }
-    let centroids: Vec<Centroid> = ROLES
-        .iter()
-        .map(|&role| match role_centroid(world.agents(), &roles, role) {
-            Some(c) => Centroid {
+    let mut centroids = Vec::new();
+    let mut not_testable = Vec::new();
+    for role in ROLES {
+        match role_centroid(world.agents(), &roles, role) {
+            Some(traits) => centroids.push(Centroid {
                 role,
                 source: "realised",
-                traits: c,
-            },
-            None => Centroid {
+                traits,
+            }),
+            None => not_testable.push(NotTestable {
                 role,
-                source: "canonical",
-                traits: canonical_vertex(&dist, role),
-            },
-        })
-        .collect();
+                reason: "role_absent",
+            }),
+        }
+    }
+    let centroid_of = |role: Role| centroids.iter().find(|c| c.role == role).map(|c| &c.traits);
     let predicted = predicted_signs(
-        &centroids[0].traits,
-        &centroids[1].traits,
-        &centroids[2].traits,
+        centroid_of(Role::Producer),
+        centroid_of(Role::Consumer),
+        centroid_of(Role::Decomposer),
         world.params(),
     );
 
@@ -497,25 +509,10 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
         }
     };
 
-    let mut injections = Vec::with_capacity(ROLES.len() * arms.len());
+    let mut injections = Vec::with_capacity(centroids.len() * arms.len());
     for &arm in arms {
-        for (role_index, role) in ROLES.into_iter().enumerate() {
-            let centroid_source = centroids[role_index].source;
-            let centroid = centroids[role_index].traits;
-            // A removed arm with nothing to remove is the intact arm; reuse
-            // it rather than stepping the same fork twice.
-            if arm == Arm::Removed
-                && counts.count(role) == 0
-                && let Some(intact) = injections
-                    .iter()
-                    .find(|i: &&Injection| i.role == role && i.arm == Arm::Intact)
-            {
-                injections.push(Injection {
-                    arm,
-                    ..intact.clone()
-                });
-                continue;
-            }
+        for c in &centroids {
+            let (role, centroid_source, centroid) = (c.role, c.source, c.traits);
             let mut fork = world.clone();
             let mut fork_topo = topo.clone();
             let residents_removed = match arm {
@@ -554,6 +551,7 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
                 growth_rate: growth_rate(INVADER_COHORT, out.alive, out.ticks_run),
                 pure_births: lineage.pure_births,
                 cross_births: lineage.cross_births,
+                lineage_consumed_events: lineage.consumed,
                 resident_roles_end,
             });
         }
@@ -562,6 +560,7 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
         seed,
         resident,
         centroids,
+        not_testable,
         predicted,
         control: Some(control),
         injections,
@@ -581,6 +580,8 @@ struct Lineage {
     /// genes leaving through a resident mate. Counted as members (the
     /// either-parent rule) but reported so the reader can judge the rule.
     cross_births: usize,
+    /// `Consumed` events by a member, by target kind.
+    consumed: ConsumedCounts,
 }
 
 impl Lineage {
@@ -589,12 +590,22 @@ impl Lineage {
             members: founders.into_iter().collect(),
             pure_births: 0,
             cross_births: 0,
+            consumed: ConsumedCounts::default(),
         }
     }
 
-    /// Absorb a slice of the event log (in sequence order).
+    /// Absorb a slice of the event log (in sequence order): descent off
+    /// `Born`, diet off `Consumed`.
     fn absorb(&mut self, events: &[Event]) {
         for ev in events {
+            if ev.kind == EventKind::Consumed && self.members.contains(&ev.source) {
+                if ev.target_was_carcass {
+                    self.consumed.carcass += 1;
+                } else {
+                    self.consumed.living += 1;
+                }
+                continue;
+            }
             if ev.kind != EventKind::Born {
                 continue;
             }
@@ -705,12 +716,18 @@ struct PredictedSign {
 }
 
 fn predicted_signs(
-    producer: &TraitVector,
-    consumer: &TraitVector,
-    decomposer: &TraitVector,
+    producer: Option<&TraitVector>,
+    consumer: Option<&TraitVector>,
+    decomposer: Option<&TraitVector>,
     p: &explorers_sim::WorldParameters,
 ) -> Vec<PredictedSign> {
+    // Every eigenvalue is read against the producer's face; without a
+    // producer centroid nothing is predicted.
+    let Some(producer) = producer else {
+        return Vec::new();
+    };
     let (r_p, k_p, _) = producer_face(producer, p);
+    let mut out = Vec::new();
     // (i) the producer invades the virgin pool: λ_P(𝓥) = 1 + min(r_P, α_P/θ_P) − μ_P.
     let theta_p = explorers_sim::stoichiometric_demand(producer, 1.0, p) as f64;
     let alpha_p = producer.photosynthetic_absorption.max(0.0) as f64;
@@ -720,61 +737,64 @@ fn predicted_signs(
         r_p
     };
     let producer_excess = virgin_rate - REFERENCE_MU_P;
+    out.push(PredictedSign {
+        role: Role::Producer,
+        eigenvalue: "lambda_P(virgin)",
+        eigen_excess: producer_excess,
+        rate_coefficient: r_p,
+        positive: producer_excess > 0.0,
+    });
     // (ii) the consumer invades the standing crop: λ_C(K_P) = 1 + β·K_P − m.
-    let (_, m_c, _, beta_c) = heterotroph_terms(producer, consumer, p);
-    let consumer_excess = beta_c * k_p - m_c;
-    let invasion_ratio = if m_c > 0.0 {
-        beta_c * k_p / m_c
-    } else {
-        f64::INFINITY
-    };
-    // (iii) the heterotroph invades the lockup corner on the pile:
-    // λ_H(𝓛) = 1 + σ·N_total·min(χ_C·γ·e_C, q/θ_C) − m at the reference lumping.
-    let (a_d, m_d, e_d, _) = heterotroph_terms(producer, decomposer, p);
-    let theta_d = explorers_sim::stoichiometric_demand(decomposer, 1.0, p) as f64;
-    let chi_d_gamma = biomass_conversion(decomposer, p) * p.growth_efficiency as f64;
-    let n_total = p.initial_nutrient_pool as f64;
-    let (q, nu) = (theta_p, theta_p * REFERENCE_BODY_MASS as f64);
-    let sigma = if nu > 0.0 {
-        a_d * REFERENCE_IOTA / nu
-    } else {
-        0.0
-    };
-    let liebig = if theta_d > 0.0 {
-        (chi_d_gamma * e_d).min(q / theta_d)
-    } else {
-        chi_d_gamma * e_d
-    };
-    let pile_growth = sigma * n_total * liebig;
-    let decomposer_excess = pile_growth - m_d;
-    let lockup_escape_ratio = if m_d > 0.0 {
-        pile_growth / m_d
-    } else {
-        f64::INFINITY
-    };
-    vec![
-        PredictedSign {
-            role: Role::Producer,
-            eigenvalue: "lambda_P(virgin)",
-            eigen_excess: producer_excess,
-            rate_coefficient: r_p,
-            positive: producer_excess > 0.0,
-        },
-        PredictedSign {
+    if let Some(consumer) = consumer {
+        let (_, m_c, _, beta_c) = heterotroph_terms(producer, consumer, p);
+        let consumer_excess = beta_c * k_p - m_c;
+        let invasion_ratio = if m_c > 0.0 {
+            beta_c * k_p / m_c
+        } else {
+            f64::INFINITY
+        };
+        out.push(PredictedSign {
             role: Role::Consumer,
             eigenvalue: "lambda_C(K_P)",
             eigen_excess: consumer_excess,
             rate_coefficient: invasion_ratio,
             positive: consumer_excess > 0.0,
-        },
-        PredictedSign {
+        });
+    }
+    // (iii) the heterotroph invades the lockup corner on the pile:
+    // λ_H(𝓛) = 1 + σ·N_total·min(χ_C·γ·e_C, q/θ_C) − m at the reference lumping.
+    if let Some(decomposer) = decomposer {
+        let (a_d, m_d, e_d, _) = heterotroph_terms(producer, decomposer, p);
+        let theta_d = explorers_sim::stoichiometric_demand(decomposer, 1.0, p) as f64;
+        let chi_d_gamma = biomass_conversion(decomposer, p) * p.growth_efficiency as f64;
+        let n_total = p.initial_nutrient_pool as f64;
+        let (q, nu) = (theta_p, theta_p * REFERENCE_BODY_MASS as f64);
+        let sigma = if nu > 0.0 {
+            a_d * REFERENCE_IOTA / nu
+        } else {
+            0.0
+        };
+        let liebig = if theta_d > 0.0 {
+            (chi_d_gamma * e_d).min(q / theta_d)
+        } else {
+            chi_d_gamma * e_d
+        };
+        let pile_growth = sigma * n_total * liebig;
+        let decomposer_excess = pile_growth - m_d;
+        let lockup_escape_ratio = if m_d > 0.0 {
+            pile_growth / m_d
+        } else {
+            f64::INFINITY
+        };
+        out.push(PredictedSign {
             role: Role::Decomposer,
             eigenvalue: "lambda_H(lockup)",
             eigen_excess: decomposer_excess,
             rate_coefficient: lockup_escape_ratio,
             positive: decomposer_excess > 0.0,
-        },
-    ]
+        });
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1035,16 +1055,27 @@ struct Displacement {
     seeds_with_any_loss: usize,
 }
 
-/// One atlas live cell.
+/// An atlas live cell's metadata, carried on its record.
 #[derive(Clone, Debug, serde::Serialize)]
-struct CellRecord {
-    atlas_index: usize,
+struct AtlasMeta {
     cell: [usize; 3],
     fitness: f32,
     coexistence_fraction: f32,
     sample_count: u32,
     decomposer_fraction: f32,
-    /// `coexistence_fraction ≥ COEXISTENCE_FLOOR` (the projection's floor).
+}
+
+/// One config: an atlas live cell or a `sample:` config from the shared
+/// seed-421 LHS draw (#491).
+#[derive(Clone, Debug, serde::Serialize)]
+struct CellRecord {
+    source: ConfigSource,
+    /// Index into the source: the atlas's cell list or the LHS draw.
+    index: usize,
+    /// The atlas cell's metadata; `None` for a `sample:` config.
+    atlas: Option<AtlasMeta>,
+    /// `coexistence_fraction ≥ COEXISTENCE_FLOOR` (the projection's floor);
+    /// `false` for a `sample:` config, which the atlas never judged.
     atlas_coexisting: bool,
     initial_cluster_count: u32,
     initial_population_size: u32,
@@ -1063,20 +1094,22 @@ fn median_f64(values: &mut [f64]) -> f64 {
 }
 
 fn evaluate_cell(
-    atlas_index: usize,
-    cell: &AtlasCellIn,
+    source: ConfigSource,
+    index: usize,
+    unit: &[f64],
+    atlas: Option<AtlasMeta>,
     seeds: u64,
     t_inj: u64,
     window: u64,
     arms: &[Arm],
 ) -> CellRecord {
     let ranges = default_ranges();
-    let (params, dist) = decode(&cell.unit, &ranges);
+    let (params, dist) = decode(unit, &ranges);
     // Seeds are independent; rayon's indexed collect preserves seed order, so
     // the record is bit-identical to the sequential map.
     let records: Vec<SeedRecord> = (0..seeds)
         .into_par_iter()
-        .map(|s| run_cell_seed(&cell.unit, SEED_BASE + s, t_inj, window, arms))
+        .map(|s| run_cell_seed(unit, SEED_BASE + s, t_inj, window, arms))
         .collect();
     let reached: Vec<&SeedRecord> = records
         .iter()
@@ -1170,13 +1203,12 @@ fn evaluate_cell(
         .map(|r| r.resident.population as f64)
         .collect();
     CellRecord {
-        atlas_index,
-        cell: cell.cell,
-        fitness: cell.fitness,
-        coexistence_fraction: cell.coexistence_fraction,
-        sample_count: cell.sample_count,
-        decomposer_fraction: cell.decomposer_fraction,
-        atlas_coexisting: cell.coexistence_fraction >= COEXISTENCE_FLOOR,
+        source,
+        index,
+        atlas_coexisting: atlas
+            .as_ref()
+            .is_some_and(|a| a.coexistence_fraction >= COEXISTENCE_FLOOR),
+        atlas,
         initial_cluster_count: dist.initial_cluster_count,
         initial_population_size: params.initial_population_size,
         seeds_reached_injection: reached.len(),
@@ -1319,6 +1351,7 @@ struct Summary {
     n_seeds: u64,
     cohort: usize,
     atlas_cells: usize,
+    sampled_configs: usize,
     cells_run: usize,
     seeds_reached_injection: usize,
     arms: Vec<ArmSummary>,
@@ -1345,19 +1378,46 @@ struct AtlasCellIn {
     unit: Vec<f64>,
 }
 
-/// `INVASION_GROWTH_CELLS=0,5,12` (atlas indices); `None` when unset.
-fn parse_cell_filter() -> Option<HashSet<usize>> {
-    let raw = std::env::var("INVASION_GROWTH_CELLS").ok()?;
-    Some(
-        raw.split(',')
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .map(|t| {
-                t.parse()
-                    .unwrap_or_else(|_| panic!("INVASION_GROWTH_CELLS token {t:?} is not a usize"))
-            })
+impl AtlasCellIn {
+    fn meta(&self) -> AtlasMeta {
+        AtlasMeta {
+            cell: self.cell,
+            fitness: self.fitness,
+            coexistence_fraction: self.coexistence_fraction,
+            sample_count: self.sample_count,
+            decomposer_fraction: self.decomposer_fraction,
+        }
+    }
+}
+
+/// `INVASION_GROWTH_CELLS=atlas:3,sample:55` — the `source:index` grammar of
+/// `permanence_crosscheck` / `role_emergence`; a bare integer is an atlas
+/// index. `None` when unset.
+fn parse_cell_filter() -> Option<HashSet<(ConfigSource, usize)>> {
+    std::env::var("INVASION_GROWTH_CELLS")
+        .ok()
+        .map(|raw| parse_cell_filter_from(&raw))
+}
+
+fn parse_cell_filter_from(raw: &str) -> HashSet<(ConfigSource, usize)> {
+    parse_selector(raw, "INVASION_GROWTH_CELLS", Some(ConfigSource::Atlas))
+}
+
+/// The configs to run, in a fixed order (atlas, then the LHS draw). Unset
+/// filter means the full atlas run; `sample:` configs run only when named.
+fn select_tasks(
+    atlas_len: usize,
+    sample_len: usize,
+    filter: Option<&HashSet<(ConfigSource, usize)>>,
+) -> Vec<(ConfigSource, usize)> {
+    let atlas = (0..atlas_len).map(|i| (ConfigSource::Atlas, i));
+    match filter {
+        None => atlas.collect(),
+        Some(f) => atlas
+            .chain((0..sample_len).map(|i| (ConfigSource::Sample, i)))
+            .filter(|t| f.contains(t))
             .collect(),
-    )
+    }
 }
 
 /// `INVASION_GROWTH_ARMS=intact|removed|both` (default both).
@@ -1380,6 +1440,7 @@ fn main() {
         std::fs::read_to_string(&atlas_path).unwrap_or_else(|e| panic!("read {atlas_path}: {e}"));
     let atlas: AtlasFile =
         serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {atlas_path}: {e}"));
+    let sampled = sampled_units(default_ranges().len());
     let cell_filter = parse_cell_filter();
     let seeds = std::env::var("INVASION_GROWTH_SEEDS")
         .ok()
@@ -1387,8 +1448,9 @@ fn main() {
         .map_or(N_SEEDS, |n| n.clamp(1, N_SEEDS));
     let arms = parse_arms();
     eprintln!(
-        "invasion_growth: {} atlas cells × {} roles × {:?} × {seeds} seeds; t_inj {t_inj}, window {window}, cohort {INVADER_COHORT}",
+        "invasion_growth: {} atlas cells (+ {} sampled configs on request) × {} roles × {:?} × {seeds} seeds; t_inj {t_inj}, window {window}, cohort {INVADER_COHORT}",
         atlas.cells.len(),
+        sampled.len(),
         ROLES.len(),
         arms
     );
@@ -1398,12 +1460,7 @@ fn main() {
             cell_filter.as_ref().map(|f| f.len())
         );
     }
-    let tasks: Vec<(usize, &AtlasCellIn)> = atlas
-        .cells
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| cell_filter.as_ref().is_none_or(|f| f.contains(i)))
-        .collect();
+    let tasks = select_tasks(atlas.cells.len(), sampled.len(), cell_filter.as_ref());
     let total = tasks.len();
     let done = AtomicUsize::new(0);
     let start = Instant::now();
@@ -1412,8 +1469,12 @@ fn main() {
     // order-stable, so the artifact is byte-identical across runs.
     let records: Vec<CellRecord> = tasks
         .par_iter()
-        .map(|(i, cell)| {
-            let record = evaluate_cell(*i, cell, seeds, t_inj, window, &arms);
+        .map(|&(source, i)| {
+            let (unit, meta) = match source {
+                ConfigSource::Atlas => (&atlas.cells[i].unit, Some(atlas.cells[i].meta())),
+                ConfigSource::Sample => (&sampled[i], None),
+            };
+            let record = evaluate_cell(source, i, unit, meta, seeds, t_inj, window, &arms);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n.is_multiple_of(log_step) || n == total {
                 eprintln!(
@@ -1434,6 +1495,7 @@ fn main() {
         n_seeds: seeds,
         cohort: INVADER_COHORT,
         atlas_cells: atlas.cells.len(),
+        sampled_configs: sampled.len(),
         cells_run: records.len(),
         seeds_reached_injection: records.iter().map(|r| r.seeds_reached_injection).sum(),
         arms: arms.iter().map(|&a| arm_summary(&records, a)).collect(),
@@ -1448,8 +1510,9 @@ fn main() {
 fn print_summary(s: &Summary) {
     println!("\n# Invasion growth (issue #443)");
     println!(
-        "# {} atlas cells ({} run) × 3 roles × {} seeds; t_inj {}, window {}, cohort {}; {} seeds reached t_inj",
+        "# {} atlas cells + {} sampled configs ({} run) × 3 roles × {} seeds; t_inj {}, window {}, cohort {}; {} seeds reached t_inj",
         s.atlas_cells,
+        s.sampled_configs,
         s.cells_run,
         s.n_seeds,
         s.t_inj,
@@ -1562,8 +1625,9 @@ mod tests {
     }
 
     /// Smoke check on one (config, seed): the resident runs to `t_inj`, every
-    /// role is injected on both arms, the control runs alongside, and the
-    /// whole record is deterministic. No assertion on the emergent rates.
+    /// present role is injected on both arms (an absent role is
+    /// `not_testable`), the control runs alongside, and the whole record is
+    /// deterministic. No assertion on the emergent rates.
     #[test]
     fn run_cell_seed_injects_every_role_on_every_arm_and_is_deterministic() {
         let ranges = default_ranges();
@@ -1575,7 +1639,12 @@ mod tests {
         assert_eq!(record.resident.tick, 30);
         let control = record.control.as_ref().expect("control arm ran");
         assert_eq!(control.ticks_run, 30);
-        assert_eq!(record.injections.len(), ROLES.len() * 2);
+        let present = ROLES
+            .iter()
+            .filter(|&&r| record.resident.roles.count(r) > 0)
+            .count();
+        assert_eq!(record.injections.len(), present * 2);
+        assert_eq!(record.not_testable.len(), ROLES.len() - present);
         for inj in &record.injections {
             assert_eq!(inj.cohort, INVADER_COHORT);
             assert!(inj.growth_rate.is_finite(), "{inj:?}");
@@ -1706,7 +1775,7 @@ mod tests {
     #[test]
     fn predicted_signs_reproduce_the_reduction_on_example10() {
         let (producer, consumer, params) = example10();
-        let pred = predicted_signs(&producer, &consumer, &consumer, &params);
+        let pred = predicted_signs(Some(&producer), Some(&consumer), Some(&consumer), &params);
         let by_role = |r: Role| pred.iter().find(|p| p.role == r).unwrap();
         let p = by_role(Role::Producer);
         assert!(
@@ -1735,7 +1804,7 @@ mod tests {
         // Flux at the floor: the producer cannot invade the virgin pool.
         let mut p = params.clone();
         p.solar_flux_magnitude = 0.1;
-        let pred = predicted_signs(&producer, &consumer, &consumer, &p);
+        let pred = predicted_signs(Some(&producer), Some(&consumer), Some(&consumer), &p);
         assert!(
             !pred
                 .iter()
@@ -1746,7 +1815,7 @@ mod tests {
         // No heterotrophy: neither heterotroph route is open.
         let mut c = consumer;
         c.heterotrophy = 0.0;
-        let pred = predicted_signs(&producer, &c, &c, &params);
+        let pred = predicted_signs(Some(&producer), Some(&c), Some(&c), &params);
         assert!(
             !pred
                 .iter()
@@ -1765,7 +1834,7 @@ mod tests {
         // biomass: β and Λ stay positive (#482), so both routes stay open.
         let mut c = consumer;
         c.kappa = 0.0;
-        let pred = predicted_signs(&producer, &c, &c, &params);
+        let pred = predicted_signs(Some(&producer), Some(&c), Some(&c), &params);
         let cc = pred.iter().find(|p| p.role == Role::Consumer).unwrap();
         assert!(
             cc.positive && cc.rate_coefficient > 1.0,
@@ -1814,7 +1883,16 @@ mod tests {
             decomposer_fraction: 0.0,
             unit: vec![0.5; ranges.len()],
         };
-        let record = evaluate_cell(0, &cell, 2, 20, 20, &[Arm::Intact, Arm::Removed]);
+        let record = evaluate_cell(
+            ConfigSource::Atlas,
+            0,
+            &cell.unit,
+            Some(cell.meta()),
+            2,
+            20,
+            20,
+            &[Arm::Intact, Arm::Removed],
+        );
         assert_eq!(record.seeds.len(), 2);
         assert_eq!(record.role_verdicts.len(), 6);
         assert_eq!(record.sign_table.len(), 6);
@@ -1846,5 +1924,99 @@ mod tests {
         // 10 is dead (off the roster); 11, 20, 21, 22 alive; 23 and residents not counted.
         let alive = lineage.alive(&roster(&[0, 1, 2, 3, 11, 20, 21, 22, 23]));
         assert_eq!(alive, 4);
+    }
+
+    fn consumed(seq: u64, eater: u64, target: u64, carcass: bool) -> Event {
+        Event {
+            tick: 3,
+            seq,
+            kind: EventKind::Consumed,
+            source: eater,
+            target: Some(target),
+            energy_delta: 0.0,
+            position: None,
+            target_was_carcass: carcass,
+            second_parent: None,
+        }
+    }
+
+    /// `INVASION_GROWTH_CELLS` selects from both sources; unset runs the
+    /// atlas (the full run) and never the LHS draw.
+    #[test]
+    fn selector_picks_atlas_and_sample_configs_and_defaults_to_the_atlas() {
+        let filter = parse_cell_filter_from("atlas:1,sample:55,0");
+        let tasks = select_tasks(3, 60, Some(&filter));
+        assert_eq!(
+            tasks,
+            vec![
+                (ConfigSource::Atlas, 0),
+                (ConfigSource::Atlas, 1),
+                (ConfigSource::Sample, 55)
+            ]
+        );
+        let all = select_tasks(3, 60, None);
+        assert_eq!(
+            all,
+            (0..3).map(|i| (ConfigSource::Atlas, i)).collect::<Vec<_>>()
+        );
+    }
+
+    /// The lineage's diet is read off `Consumed` events whose source is a
+    /// member, split by whether the target was a carcass; residents eating
+    /// (even eating a lineage member) do not count.
+    #[test]
+    fn lineage_counts_its_members_consumption_split_by_carcass() {
+        let mut lineage = Lineage::new([10, 11]);
+        lineage.absorb(&[
+            consumed(0, 10, 1, false),
+            consumed(1, 11, 2, true),
+            consumed(2, 10, 3, true),
+            consumed(3, 1, 10, false),
+        ]);
+        assert_eq!(lineage.consumed.living, 1);
+        assert_eq!(lineage.consumed.carcass, 2);
+    }
+
+    /// An absent role is not injected at an invented phenotype: it is
+    /// recorded as `not_testable` (`role_absent`) and every injection is at
+    /// a realised centroid of a role present in the resident at `t_inj`.
+    #[test]
+    fn absent_role_is_not_testable_rather_than_injected_at_a_canonical_vertex() {
+        let ranges = default_ranges();
+        let unit = vec![0.5; ranges.len()];
+        // At t_inj = 1 no heterotroph has eaten a carcass, so the decomposer
+        // role is absent by construction.
+        let record = run_cell_seed(&unit, SEED_BASE, 1, 10, &[Arm::Intact, Arm::Removed]);
+        assert_eq!(record.resident.termination, "alive");
+        assert_eq!(record.resident.roles.decomposers, 0);
+        let absent: Vec<Role> = record.not_testable.iter().map(|n| n.role).collect();
+        assert!(absent.contains(&Role::Decomposer));
+        assert!(
+            record
+                .not_testable
+                .iter()
+                .all(|n| n.reason == "role_absent")
+        );
+        for role in ROLES {
+            let present = record.resident.roles.count(role) > 0;
+            let injected = record.injections.iter().filter(|i| i.role == role).count();
+            assert_eq!(injected, if present { 2 } else { 0 }, "{role:?}");
+            assert_eq!(absent.contains(&role), !present, "{role:?}");
+        }
+        assert!(
+            record
+                .injections
+                .iter()
+                .all(|i| i.centroid_source == "realised")
+        );
+        assert!(record.centroids.iter().all(|c| c.source == "realised"));
+        // The reduction's sign is read only where its centroids exist.
+        for p in &record.predicted {
+            assert!(
+                !absent.contains(&p.role),
+                "{:?} predicted while absent",
+                p.role
+            );
+        }
     }
 }
