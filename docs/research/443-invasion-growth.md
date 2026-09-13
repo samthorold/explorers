@@ -69,6 +69,14 @@ The atlas is the one #474 regenerated on the fixed stepper (PR #483, search run 
    `t_inj` is 22 agents; on 31 cells the 8-agent cohort is at least half the resident. The
    instrument reports the ratio; the criterion is read as stated but those cells are
    finite-size, not invasion, experiments.
+7. **Re-read (§4, 2026-09-13): the resident heterotrophs are single sessile
+   mixotrophic individuals, a quarter of them sterile at the `kappa` clamp — not guilds.**
+   The horizon question of §3 is closed (2000-tick evidence grows no guild in the atlas);
+   the rarity question is moot (`N = 1`); the 761 canonical-vertex injections are a
+   protocol artefact (sessile, non-photosynthetic vertex starves by tick 13). Heterotroph
+   populations of ~20 do exist in ~2 % of unselected configs and the search selected
+   against them. What follows is a guild observable in the evaluator and two protocol
+   fixes to this bin, not a longer window.
 
 ## 1. Method
 
@@ -362,6 +370,163 @@ resident population so the reader can condition on the ratio.
 an instrument reading, and it currently says the atlas's "coexistence" descriptor and
 mutual invasibility measure different things.
 
+## 4. Re-read (2026-09-13): the resident heterotrophs are individuals, not guilds
+
+**Status: addendum. No new runs; every number below is read off the artifact this note
+is generated from (SHA-1 `5f2a9ede…`) or off `target/role-emergence.json` (#421, run
+2026-06-15 on the pre-#444 stepper and the pre-#474 atlas — indicative, not
+authoritative).** §3 posed the open question as *horizon*: is 500 ticks too short for the
+heterotroph guild to be quasi-stationary, and is "rare" achievable when the median
+resident population is 22? This section answers it from the data already in hand. The
+answer is that the question was mis-posed: there is no heterotroph guild in the atlas for
+a horizon to stabilise or a cohort to be rare against.
+
+### 4.1 The resident heterotroph "guild" is one agent
+
+Per seed that reached `t_inj` with the role present, the resident count at `t = 500`:
+
+| role | seeds with role | count = 1 | = 2 | = 3–4 | ≥ 5 |
+|---|---|---|---|---|---|
+| consumers | 193 | 119 | 41 | 20 | 13 |
+| decomposers | 338 | 157 | 81 | 75 | 25 |
+
+Per *cell* (median over seeds, among the 21 / 51 role-present cells of §1.3): no
+consumer-present cell has a median guild of 3 or more; 4 of the 51 decomposer-present cells
+do (`[5,19,0]` 4.0, `[5,19,7]` 3.5, `[8,0,0]` 3.0, `[6,13,1]` 3.0). Seven consumer cells
+and fifteen decomposer cells are "present" with a *median of zero* — present on exactly half
+the seeds, at one agent.
+
+What the single agent does over the control window: consumers — still 1 on 70 seeds, lost
+on 45, grew on 4; decomposers — still 1 on 110, lost on 31, grew on 16. §2.3's "declining
+transients" is therefore mostly this: one long-lived individual that does not reproduce
+and sometimes dies. It is not a population in decline; there is no population.
+
+### 4.2 What the resident heterotrophs are
+
+`trophic_roles` reads producer vs heterotroph by trait (`photosynthetic_absorption ≥
+heterotrophy` → producer) and, among heterotrophs, consumer vs decomposer by realised
+diet, with a non-eater defaulting to consumer. The realised heterotroph centroids the
+instrument injected at (§1.1) are heterotrophy-dominant but far from pure:
+
+| role | n | `photosynthetic_absorption` median (q1–q3) | `< 0.1` | `mobility` median | `kappa ≥ 0.99` |
+|---|---|---|---|---|---|
+| producer | 635 | 1.11 (0.87–1.41) | 0 | — | 13 |
+| consumer | 193 | 0.43 (0.22–0.64) | 20 | 0.00 | 52 |
+| decomposer | 338 | 0.46 (0.28–0.73) | 11 | 0.07 | 45 |
+
+They photosynthesise at roughly 40 % of the producer's investment, are sessile, and a
+quarter of them sit at the `kappa` clamp. `kappa = 1` routes the whole mobilised flow to
+soma and none to the reproductive earmark (`repro_nutrient += amount · (1 − kappa)`,
+`explorers-sim/src/lib.rs`), so a `kappa = 1` agent is sterile by construction. The
+picture consistent with the artifact — not directly confirmed, since it does not carry
+per-agent consumption — is a sessile mixotroph that lives on its own photosynthesis, eats
+whatever dies beside it (or nothing), and never reproduces. That is an individual with a
+role tag, not a trophic level.
+
+### 4.3 The injected cohort does the same thing
+
+Splitting the `intact`-arm heterotroph injections by centroid source:
+
+| role, source | n | extinct | flat (constant over the last 250 ticks) | grew | declining / fluctuating |
+|---|---|---|---|---|---|
+| consumer, canonical | 453 | 452 | 0 | 0 | 1 |
+| consumer, realised | 193 | 15 | 69 | 35 | 74 |
+| decomposer, canonical | 308 | 307 | 1 | 0 | 0 |
+| decomposer, realised | 338 | 69 | 103 | 46 | 120 |
+
+On realised centroids the modal outcome is **flat**: alive at 500, constant count, median
+births 0 (consumer) / 3 (decomposer). Conditioning on `kappa`: the `kappa ≥ 0.99`
+consumer cohorts are flat 38 / 52 (decomposer 28 / 45), exactly the sterile-founder
+signature. The `grew` cohorts sit at `kappa` 0.44 / 0.36 and are the only ones with
+births in the tens.
+
+The injected lineage's rate and the resident guild's control rate on the same seed do not
+track (Pearson `r = 0.09` consumer, `0.11` decomposer; sign agreement 79 / 193 and
+104 / 338), and the invader's rate does not move with the resident's count (invader
+`r > 0` on 9 / 10 / 16 of 64 consumer seeds by resident-count tercile, 10 / 9 / 27 of
+~113 decomposer seeds). There is no density signal in either direction, which is what one
+expects when the "resident population" is one agent.
+
+### 4.4 The canonical-vertex injections measure nothing
+
+The canonical pure heterotroph vertex is `(0, α+h, 0, …)` — no photosynthesis and, as the
+sessile vertex, **mobility 0**. Of the 761 cohorts injected at it (the role-absent seeds),
+759 die with zero births at a median tick of 13 (q1–q3 8–20). A sessile heterotroph with
+no photosynthesis cannot reach food and starves on its founding provision. These 761 of
+the 3 750 windows are a protocol artefact and should be excluded from every count above
+them in this note; none of the headline verdicts change (they were already 0 / 54), but
+§2.2's "consumers present in 21 cells and invade in 0" was never a 21-cell result — it is
+a 21-cell result on the *realised* rows only, and the absent-role rows should read
+*not testable*.
+
+### 4.5 The mean-field signs do not separate the outcomes
+
+Per realised injection, `eigen_excess` at the centroid by observed shape: consumer
+−0.24 (flat) / −0.14 (grew) / −0.11 (declining) / −0.20 (extinct); decomposer +142
+(flat) / +210 (grew) / +194 (declining) / +119 (extinct). The consumer reduction predicts
+negative regardless, the decomposer reduction (at `ι = 1`) predicts strongly positive
+regardless; neither reads the `kappa`-clamp or the guild-of-one, because neither has a
+coordinate for them. §2.5's agreement table stands as written; it is just not
+informative here.
+
+### 4.6 Longer horizons do not grow a guild — but unselected configs sometimes have one
+
+`role-emergence.json` (#421) carries terminal role counts at `t = 2000` on 8 seeds for
+the then-atlas (56 configs) and the seed-421 LHS draw (198 configs), on the pre-fix
+stepper:
+
+| set | configs | median heterotrophs (C + D) ≥ 5 at `t = 2000` | ≥ 2 |
+|---|---|---|---|
+| atlas | 56 | 1 | 1 |
+| LHS `sample:` | 198 | 4 | 17 |
+
+The four: `sample:55` (median P 42 / C 5.5 / D 20.5, 6 / 8 seeds survive), `sample:20`
+(31 / 0.5 / 21.5), `sample:129` (436 / 0.5 / 19.5), `sample:127` (3 / 0 / 6). Decomposer
+guilds of ~20 that persist to 2000 on most seeds exist in the parameter space, at roughly
+2 % of a random draw; a consumer guild of ≥ 5 appears in one config. The atlas, selected
+on `coexistence_fraction`, contains essentially none — the objective rewarded the
+straggler configs (separated clusters read off one or two individuals) over the ones with
+a heterotroph population. This is the pre-fix stepper and the pre-#474 atlas, so the
+specific configs need re-checking on `main`; the shape of the result — populations exist
+unselected and are absent selected — is the finding.
+
+### 4.7 What this closes and what follows
+
+- **The horizon question is closed, not deferred.** Running the atlas resident to 2000
+  before injecting would show one mixotroph living or dying, not a hidden attractor
+  (§4.6, atlas row). Not worth a run.
+- **The rarity question is moot for heterotrophs.** The resident *is* rare (`N = 1`) and
+  is not growing. The 8-vs-22 concern in §3 applies to the producer rows only.
+- **The atlas's "coexisting multi-role" cells are producer monocultures plus one or two
+  sessile heterotrophy-dominant individuals.** `coexistence_fraction` reads separated
+  trait clusters — a `kappa = 1`, `heterotrophy = 1.2` individual *is* far from the
+  producer cluster — and mutual invasibility reads no second trophic level. Both are
+  correct about what they measure; they disagree because there was never a heterotroph
+  population to agree about. This is the same fault #486 names at the evaluator, one
+  level up: roles are being read off individuals, not guilds.
+- **The instrument needs two protocol changes** before its verdicts mean what the issue
+  intended: (i) an absent role is *not testable* — no canonical-vertex injection (§4.4);
+  (ii) "present" should require a guild, not a role tag on ≥ half the seeds (§4.1).
+- **The evaluator needs a guild observable** — reported, like `decomposer_fraction`, not
+  an objective or binning axis in the first instance. Proposed shape, with starting
+  values rather than settled thresholds: heterotroph-by-trait (the existing
+  `trophic_roles` read), count ≥ 5 on every sampled tick over the second half of the run,
+  at least one birth inside the guild over that window (rules out a long-lived sterile
+  founder cohort at exactly 5). Regenerating the atlas with it reported, and counting the
+  cells that pass, is what tests the thresholds and decides whether the observable becomes
+  a binning axis or folds into `coexistence_fraction`.
+- **The positive control** for the amended criterion is `sample:55 / 20 / 129 / 127` on
+  the fixed stepper — the first test of whether mutual invasibility can pass anywhere.
+  §4.6 is pre-#444 data: **re-run those four to 2000 on `main` first** (a `role_emergence`
+  run restricted to them) and confirm the guild is still there before spending an
+  invasion run on any of them. *Done in #492 —
+  [`421-guild-recheck.md`](421-guild-recheck.md): the guilds are still there and larger
+  post-fix; `sample:55` (the only consumer guild) and `sample:20` are the positive
+  controls; `sample:129` is a 2-seed partial.*
+- **The §4.2 mixotroph reading should be confirmed, not just stated.** The artifact has no
+  per-agent consumption; whether the flat, zero-birth heterotroph cohorts ever emit a
+  `Consumed` event is a one-cell, seconds-long check against the event log that belongs
+  in the bin-fix work, before this section is cited as the explanation.
 ## 5. Do the flat cohorts eat? (2026-09-13, #491)
 
 **Status: addendum. Subset run only — `atlas:0,atlas:1` × seeds 1000–1001 × both arms
