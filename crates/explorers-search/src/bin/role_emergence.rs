@@ -64,7 +64,11 @@
 //!
 //! Writes per-run milestone records + the summary to `target/role-emergence.json`
 //! (and a flat `target/role-emergence.csv`). `target/` is gitignored — the artifact
-//! is not committed. The summary is also printed to stdout.
+//! is not committed. The summary is also printed to stdout. Since #492 each run
+//! record also carries the per-sample role series (`role_series`, JSON only) and
+//! the evaluator's #490 guild predicate per role (`guild_consumer` /
+//! `guild_decomposer`), so a "sustained ≥ 5 over the second half" read can be made
+//! per seed, by hand or by the predicate.
 //!
 //! Run with:
 //!   cargo run --release -p explorers-search --bin role_emergence
@@ -85,6 +89,7 @@ use std::time::Instant;
 use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
+use explorers_genesis_eval::guild::{RosterSnapshot, heterotroph_guilds};
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{decode, default_ranges};
 use explorers_sim::World;
@@ -124,6 +129,18 @@ const PERSISTENCE_FRACTION: f64 = 0.25;
 /// `t_*` role milestone is resolved to the nearest sampled tick (±`CLASSIFY_INTERVAL`),
 /// and `t_persistent_guild`'s presence fraction is computed over the sampled series.
 const CLASSIFY_INTERVAL: u64 = 10;
+
+/// One classification sample (#492): the role composition on one tick of the
+/// `CLASSIFY_INTERVAL` cadence (plus the terminal tick). The full series is what
+/// lets a "sustained ≥ `GUILD_MIN_SIZE` over the second half" read be applied by
+/// hand, per seed, rather than inferred from the terminal counts alone.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+struct RoleSample {
+    tick: u64,
+    producers: usize,
+    consumers: usize,
+    decomposers: usize,
+}
 
 /// One (config × seed) run's milestone record. Every `t_*` is the tick of first
 /// occurrence, or `null` if it never happened within the horizon.
@@ -186,6 +203,16 @@ struct RunRecord {
     /// First tick from which ≥1 decomposer is present for ≥`PERSISTENCE_FRACTION` of
     /// the remaining run; `null` if the guild never reaches that persistence.
     t_persistent_guild: Option<u64>,
+    /// Role composition on every classification sample (#492, additive). The last
+    /// sample is the terminal tick, so `role_series.last()` agrees with `final_*`.
+    role_series: Vec<RoleSample>,
+    /// The evaluator's heterotroph-guild predicate (#490, `genesis_eval::guild`):
+    /// role count ≥ `GUILD_MIN_SIZE` on every sample in the second half of the
+    /// horizon and ≥ 1 birth naming a member — read off the same cadence as
+    /// `role_series`. Always `false` for a run that did not survive to the horizon
+    /// (a truncated window is not a second half).
+    guild_consumer: bool,
+    guild_decomposer: bool,
 }
 
 /// Drive one (config, seed) through the genesis step loop to the extended horizon,
@@ -228,6 +255,11 @@ fn run(source: ConfigSource, config_index: usize, unit: &[f64], seed: u64) -> Ru
     // (roles are classified only every `CLASSIFY_INTERVAL` ticks; see module docs).
     let mut decomposer_present: Vec<bool> = Vec::new();
     let mut sample_ticks: Vec<u64> = Vec::new();
+    let mut role_series: Vec<RoleSample> = Vec::new();
+    // Living roster on each second-half sample, for the evaluator's guild read
+    // (#490) — the guild is a population over time, so it needs the roster at
+    // each sample, which the history-free world cannot supply after the fact.
+    let mut roster_snapshots: Vec<RosterSnapshot> = Vec::new();
 
     let mut t_first_carcass = None;
     let mut t_first_decomposer = None;
@@ -307,6 +339,18 @@ fn run(source: ConfigSource, config_index: usize, unit: &[f64], seed: u64) -> Ru
             peak_decomposers = peak_decomposers.max(decomposers);
             decomposer_present.push(decomposers >= 1);
             sample_ticks.push(tick);
+            role_series.push(RoleSample {
+                tick,
+                producers,
+                consumers,
+                decomposers,
+            });
+            if tick > EXTENDED_HORIZON / 2 {
+                roster_snapshots.push((
+                    tick,
+                    world.agents().iter().map(|a| (a.id, a.traits)).collect(),
+                ));
+            }
             final_producers = producers;
             final_consumers = consumers;
             final_decomposers = decomposers;
@@ -327,6 +371,12 @@ fn run(source: ConfigSource, config_index: usize, unit: &[f64], seed: u64) -> Ru
     // Map the persistence onset (an index into the sampled series) back to its tick.
     let t_persistent_guild =
         first_persistent_index(&decomposer_present, PERSISTENCE_FRACTION).map(|i| sample_ticks[i]);
+
+    let guilds = if survived {
+        heterotroph_guilds(world.event_log(), &roster_snapshots, EXTENDED_HORIZON)
+    } else {
+        Default::default()
+    };
 
     let wall_time_s = run_start.elapsed().as_secs_f64();
     let final_population = world.agents().len();
@@ -357,6 +407,9 @@ fn run(source: ConfigSource, config_index: usize, unit: &[f64], seed: u64) -> Ru
         t_first_consumer_realised,
         t_first_all_three,
         t_persistent_guild,
+        role_series,
+        guild_consumer: guilds.consumer,
+        guild_decomposer: guilds.decomposer,
     }
 }
 
@@ -744,7 +797,7 @@ fn write_artifacts(artifact: &Artifact) {
          survived,terminal_mode,peak_decomposers,\
          final_producers,final_consumers,final_decomposers,\
          t_first_carcass,t_first_decomposer,t_first_consumer,t_first_consumer_realised,\
-         t_first_all_three,t_persistent_guild\n",
+         t_first_all_three,t_persistent_guild,guild_consumer,guild_decomposer\n",
     );
     let cell = |v: Option<u64>| v.map_or_else(String::new, |x| x.to_string());
     for r in &artifact.runs {
@@ -753,7 +806,7 @@ fn write_artifacts(artifact: &Artifact) {
             ConfigSource::Sample => "sample",
         };
         csv.push_str(&format!(
-            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             source,
             r.config_index,
             r.seed,
@@ -779,6 +832,8 @@ fn write_artifacts(artifact: &Artifact) {
             cell(r.t_first_consumer_realised),
             cell(r.t_first_all_three),
             cell(r.t_persistent_guild),
+            r.guild_consumer,
+            r.guild_decomposer,
         ));
     }
     std::fs::write(csv_path, csv).unwrap_or_else(|e| panic!("write {csv_path}: {e}"));
@@ -792,6 +847,7 @@ fn write_artifacts(artifact: &Artifact) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use explorers_genesis_eval::guild::GUILD_MIN_SIZE;
 
     /// Coarse smoke check: the instrument runs a config and produces a record with
     /// the milestone fields populated (no brittle assertion on emergent *timings*).
@@ -814,6 +870,47 @@ mod tests {
         // A realised consumer is a strictly stronger event than a classified one.
         if let (Some(realised), Some(any)) = (rec.t_first_consumer_realised, rec.t_first_consumer) {
             assert!(any <= realised);
+        }
+    }
+
+    /// The per-interval role series (#492) is on the classification cadence, ends
+    /// on the terminal sample, and agrees with the terminal counts; and the
+    /// evaluator's guild predicate (#490) can only hold where the hand-readable
+    /// series shows the role at ≥ `GUILD_MIN_SIZE` on every second-half sample.
+    #[test]
+    fn run_records_role_series_consistent_with_terminal_counts_and_guild_read() {
+        let ranges = default_ranges();
+        let unit = vec![0.5f64; ranges.len()];
+        let rec = run(ConfigSource::Sample, 0, &unit, SEED_BASE);
+        assert!(!rec.role_series.is_empty());
+        for w in rec.role_series.windows(2) {
+            assert!(w[0].tick < w[1].tick, "series ticks strictly increase");
+        }
+        for s in &rec.role_series[..rec.role_series.len() - 1] {
+            assert_eq!(s.tick % CLASSIFY_INTERVAL, 0, "interior samples on cadence");
+        }
+        let last = rec.role_series.last().unwrap();
+        assert_eq!(last.tick, rec.ran_ticks);
+        assert_eq!(
+            (last.producers, last.consumers, last.decomposers),
+            (
+                rec.final_producers,
+                rec.final_consumers,
+                rec.final_decomposers
+            )
+        );
+        let second_half = rec
+            .role_series
+            .iter()
+            .filter(|s| s.tick > EXTENDED_HORIZON / 2);
+        let sustained = |f: fn(&RoleSample) -> usize| {
+            rec.survived && second_half.clone().all(|s| f(s) >= GUILD_MIN_SIZE)
+        };
+        if rec.guild_consumer {
+            assert!(sustained(|s| s.consumers));
+        }
+        if rec.guild_decomposer {
+            assert!(sustained(|s| s.decomposers));
         }
     }
 
