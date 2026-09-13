@@ -115,18 +115,20 @@ fn representative_clusters(dist: &InitialDistribution) -> (TraitVector, TraitVec
 /// (`fecundity.max(0.1)` in `phase.rs`).
 const FECUNDITY_FLOOR: f64 = 0.1;
 
-/// The producer's biomass conversion `χ_P` (copied from
-/// `permanence_prototype::biomass_conversion`, #466): the structure built,
-/// before `γ`, per unit of mobilised surplus once both of `κ_P`'s branches are
-/// followed to the body they build. The reproductive branch reaches an
-/// offspring at `η_P = reproduction_efficiency · (1 − propagule share) ·
-/// (1 − e^{−fecundity})`; `s = offspring_structure_fraction` of that is
-/// embodied at birth and the rest is reserve the offspring re-splits by `κ_P`,
-/// so `χ_P = κ_P + (1 − κ_P)·η_P·(s + (1 − s)·χ_P)`.
-fn biomass_conversion(producer: &TraitVector, p: &WorldParameters) -> f64 {
-    let kappa = producer.kappa.clamp(0.0, 1.0) as f64;
-    let propagule = explorers_sim::dispersal_propagule_cost_fraction(producer.dispersal, p) as f64;
-    let fecundity = (producer.fecundity as f64).max(FECUNDITY_FLOOR);
+/// A cluster's biomass conversion `χ` (copied from
+/// `permanence_prototype::biomass_conversion`; `χ_P` in #466, `χ_C` in #482):
+/// the structure built, before `γ`, per unit of mobilised surplus once both of
+/// `κ`'s branches are followed to the body they build. The reproductive branch
+/// reaches an offspring at `η = reproduction_efficiency · (1 − propagule
+/// share) · (1 − e^{−fecundity})`; `s = offspring_structure_fraction` of that
+/// is embodied at birth and the rest is reserve the offspring re-splits by
+/// `κ`, so `χ = κ + (1 − κ)·η·(s + (1 − s)·χ)`. The reproductive path is the
+/// same `resolve_reproduction` for every trait vector, so the producer and
+/// the consumer share the form and differ only in `κ`, `δ`, `f`.
+fn biomass_conversion(traits: &TraitVector, p: &WorldParameters) -> f64 {
+    let kappa = traits.kappa.clamp(0.0, 1.0) as f64;
+    let propagule = explorers_sim::dispersal_propagule_cost_fraction(traits.dispersal, p) as f64;
+    let fecundity = (traits.fecundity as f64).max(FECUNDITY_FLOOR);
     let eta = (p.reproduction_efficiency as f64).clamp(0.0, 1.0)
         * (1.0 - propagule)
         * (1.0 - (-fecundity).exp());
@@ -151,7 +153,8 @@ struct A1Map {
     a: f64,
     /// Consumer maintenance floor `B_C`.
     m: f64,
-    /// Conversion `β = κ_C·γ·e·a`.
+    /// Conversion `β = χ_C·γ·e·a` (#482: both of `κ_C`'s branches become
+    /// biomass; `χ_C` is the consumer's conversion).
     beta: f64,
     /// Producer maintenance `B_P`.
     b_p: f64,
@@ -171,7 +174,7 @@ fn maintenance(traits: &TraitVector, p: &WorldParameters) -> f64 {
 
 impl A1Map {
     fn derive(producer: &TraitVector, consumer: &TraitVector, p: &WorldParameters) -> Self {
-        let kappa_c = consumer.kappa.clamp(0.0, 1.0) as f64;
+        let chi_c = biomass_conversion(consumer, p);
         let gamma = p.growth_efficiency as f64;
         let b_p = maintenance(producer, p);
         let b_c = maintenance(consumer, p);
@@ -188,7 +191,7 @@ impl A1Map {
             k_p,
             a,
             m,
-            beta: kappa_c * gamma * e * a,
+            beta: chi_c * gamma * e * a,
             b_p,
             d,
         }
@@ -228,9 +231,9 @@ struct A1Verdict {
     /// that only routes the surplus through offspring, it no longer zeroes
     /// `r_P`).
     kappa_p: f64,
-    /// Consumer somatic allocation `κ_C`. `β = κ_C·γ·e·a` still carries the
-    /// lumping #466 removed from `r_P` (#482): at `κ_C = 0` it zeroes `I`
-    /// and `Λ` although the reproductive branch becomes offspring biomass.
+    /// Consumer somatic allocation `κ_C` (the search box allows 0; since #482
+    /// that only routes the surplus through offspring, it no longer zeroes
+    /// `β`, `I`, or `Λ`).
     kappa_c: f64,
     #[serde(flatten)]
     map: A1Map,
@@ -301,13 +304,14 @@ fn a2_verdict(
     let theta_p = explorers_sim::stoichiometric_demand(producer, 1.0, p) as f64;
     let theta_c = explorers_sim::stoichiometric_demand(consumer, 1.0, p) as f64;
     let alpha_p = producer.photosynthetic_absorption.max(0.0) as f64;
-    let kappa_c_gamma = consumer.kappa.clamp(0.0, 1.0) as f64 * p.growth_efficiency as f64;
+    // The consumer's conversion χ_C·γ (#482), the carcass-route twin of β's.
+    let chi_c_gamma = biomass_conversion(consumer, p) * p.growth_efficiency as f64;
     let n_total = p.initial_nutrient_pool as f64;
     // Reference lumping: producer carcasses with no free store, so q = ν = θ_P
-    // and e_C = e = β / (κ_C·γ·a).
+    // and e_C = e = β / (χ_C·γ·a).
     let (q, nu) = (theta_p, theta_p * REFERENCE_BODY_MASS as f64);
-    let e_c = if kappa_c_gamma > 0.0 && map.a > 0.0 {
-        map.beta / (kappa_c_gamma * map.a)
+    let e_c = if chi_c_gamma > 0.0 && map.a > 0.0 {
+        map.beta / (chi_c_gamma * map.a)
     } else {
         0.0
     };
@@ -317,9 +321,9 @@ fn a2_verdict(
         0.0
     };
     let liebig = if theta_c > 0.0 {
-        (kappa_c_gamma * e_c).min(q / theta_c)
+        (chi_c_gamma * e_c).min(q / theta_c)
     } else {
-        kappa_c_gamma * e_c
+        chi_c_gamma * e_c
     };
     let pile_growth = sigma * n_total * liebig;
     let lockup_escape_ratio = if map.m > 0.0 {
@@ -616,10 +620,11 @@ fn fault_hypothesis(
                 )
             } else if !a1.producer_face_alive {
                 "reduction: extinction gate fails at the centroid but founders persisted - realised maintenance below the centroid's (trait draw / evolution)".to_string()
-            } else if a1.kappa_c == 0.0 {
+            } else if !a1.consumer_invades && a1.map.beta == 0.0 && a1.map.a > 0.0 {
                 format!(
-                    "#482 (beta lumping): kappa_C = 0 zeroes beta = kappa_C*gamma*e*a, so I = Lambda = 0 although rho = {:.1} > 1 - the consumer twin of the r_P lumping #466 corrected; the reproductive branch still becomes offspring biomass; consumers persisted on {}/{} seeds",
-                    a1.rho,
+                    "reduction: the consumer feeds (a = {:.2}) but beta = 0 - the biomass conversion chi_C is zero (kappa_C = {} and the reproductive branch burns everything: propagule share 1 or reproduction_efficiency 0); consumers persisted on {}/{} seeds",
+                    a1.map.a,
+                    a1.kappa_c,
                     agg.persisting_seeds_with_consumers,
                     agg.n - agg.collapsed
                 )
@@ -1282,14 +1287,16 @@ mod tests {
             &consumer,
         );
         assert!((v.rho - 71.111).abs() < 1e-2, "rho = {}", v.rho);
+        // #482: β = χ_C·γ·e·a with χ_C = 0.5012 at κ_C = 0.45 (pre-#482 the
+        // κ_C lumping gave β = 0.03677, I = 23.135).
         assert!(
-            (v.invasion_ratio - 23.135).abs() < 1e-2,
+            (v.invasion_ratio - 25.766).abs() < 1e-2,
             "I = {}",
             v.invasion_ratio
         );
         assert!((v.map.r_p - 1.3479).abs() < 1e-3, "r_P = {}", v.map.r_p);
         assert!((v.map.m - 0.1130).abs() < 1e-3);
-        assert!((v.map.beta - 0.03677).abs() < 1e-4);
+        assert!((v.map.beta - 0.04095).abs() < 1e-4, "beta = {}", v.map.beta);
         assert_eq!(v.prediction, Prediction::Permanent);
         assert!(v.hypothesis_h1);
     }
@@ -1357,8 +1364,10 @@ mod tests {
         let v = a2_verdict(&map, &producer, &consumer, &params);
         assert!((v.theta_p - 0.20).abs() < 1e-6);
         assert!((v.theta_c - 0.24).abs() < 1e-6);
+        // #482: Λ carries χ_C·γ·e_C in its Liebig branch (pre-#482 the κ_C
+        // lumping gave Λ = 81333.9).
         assert!(
-            (v.lockup_escape_ratio - 81333.9).abs() < 1.0,
+            (v.lockup_escape_ratio - 90583.8).abs() < 1.0,
             "Lambda = {}",
             v.lockup_escape_ratio
         );
@@ -1367,6 +1376,29 @@ mod tests {
             a2_prediction(&a1_verdict(map, &producer, &consumer), &v),
             Prediction::Permanent
         );
+    }
+
+    /// `κ_C = 0` routes the consumer's whole surplus to offspring, which are
+    /// biomass the map carries: clause (2) is `I > 1`, not `I > 1 ∧ κ_C > 0`,
+    /// and A2's `Λ` keeps its energy branch (#482). This is the shape of the
+    /// nineteen atlas cells A3 tagged `#482`.
+    #[test]
+    fn clause_two_and_lambda_hold_at_kappa_c_zero_when_the_consumer_can_feed() {
+        let (producer, mut consumer, params) = example10();
+        consumer.kappa = 0.0;
+        let map = A1Map::derive(&producer, &consumer, &params);
+        let a1 = a1_verdict(map, &producer, &consumer);
+        assert!(a1.map.beta > 0.0, "beta = {}", a1.map.beta);
+        assert!(a1.producer_face_alive && a1.consumer_invades);
+        assert_eq!(a1.prediction, Prediction::Permanent);
+        assert_eq!(a1.kappa_c, 0.0);
+        let a2 = a2_verdict(&map, &producer, &consumer, &params);
+        assert!(
+            a2.lockup_escape_ratio > 1.0,
+            "Lambda = {}",
+            a2.lockup_escape_ratio
+        );
+        assert!(a2.heterotroph_invades_lockup);
     }
 
     #[test]
@@ -1525,17 +1557,20 @@ mod tests {
         assert!(fault_hypothesis(Agreement::Agree, &permanent, &lockup, false).is_none());
     }
 
-    /// The consumer conversion `β = κ_C·γ·e·a` carries the lumping #466
-    /// corrected for the producer: at `κ_C = 0` it reads the consumer's whole
-    /// surplus as loss, so `I = 0` and clause (2) fails for a reason that is
-    /// the coefficient's, not the theorem's (#482). A false negative on such a
-    /// cell is attributed to #482 before any other cause.
+    /// `β = χ_C·γ·e·a` (#482) is zero only where `χ_C` is — `κ_C = 0` with a
+    /// reproductive branch that burns everything (here a propagule share of
+    /// 1). A false negative on such a cell is attributed to the degenerate
+    /// conversion, the consumer twin of the `χ_P = 0` hypothesis, before any
+    /// other cause; plain `κ_C = 0` no longer produces one.
     #[test]
-    fn fault_hypothesis_attributes_a_kappa_c_zero_false_negative_to_482() {
+    fn fault_hypothesis_names_a_zero_chi_c_false_negative() {
         let (producer, mut consumer, params) = example10();
         consumer.kappa = 0.0;
+        let mut burnt = params.clone();
+        burnt.dispersal_propagule_cost_coefficient = 1.0;
+        burnt.dispersal_propagule_cost_exponent = 1.0;
         let v = a1_verdict(
-            A1Map::derive(&producer, &consumer, &params),
+            A1Map::derive(&producer, &consumer, &burnt),
             &producer,
             &consumer,
         );
@@ -1543,7 +1578,7 @@ mod tests {
         assert!(v.producer_face_alive && !v.consumer_invades);
         let persist = aggregate(&[outcome(0, "none", 2)]);
         let h = fault_hypothesis(Agreement::FalseNegative, &v, &persist, false).unwrap();
-        assert!(h.starts_with("#482"), "{h}");
+        assert!(h.contains("chi_C is zero"), "{h}");
     }
 
     #[test]

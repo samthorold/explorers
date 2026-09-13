@@ -24,7 +24,7 @@
 //!
 //! ```text
 //!   P' = P + r_P · P · (1 − P/K_P)  −  a · P · C
-//!   C' = C + κ_C · γ · e · a · P · C  −  m · C
+//!   C' = C + χ_C · γ · e · a · P · C  −  m · C
 //! ```
 //!
 //! - `r_P · P · (1 − P/K_P)` — the **selection/growth diagonal** assembled from
@@ -32,6 +32,9 @@
 //!   denominator a density-dependent spatial convolution → the logistic ceiling
 //!   `K_P`) + metabolise (`phase.rs:156`, the cost floor) + grow (`phase.rs:189`,
 //!   κ-split × `growth_efficiency`). This is Brief F's `G(θ; M, A)` term.
+//!   (The consumer's conversion counts both of `κ_C`'s branches, `χ_C` — #482,
+//!   the twin of `permanence_prototype`'s `χ_P`; `r_P` here still lumps only
+//!   the somatic `κ_P` share, which the crossing does not depend on.)
 //! - `a · P · C` — the **bilinear (quadratic) trophic term**, the nonlinear heart
 //!   and *the seat of the Hopf*, read off resolve_drains (`phase.rs:386`): a
 //!   per-target segment reduction with edge weight `demand · trophic_eff`. In the
@@ -92,8 +95,12 @@ struct Compartments {
     /// Consumer per-tick removal rate: its metabolic floor (metabolise) it must
     /// out-ingest or decline toward the death threshold (check_death_thresholds).
     m: f32,
-    /// Consumer somatic allocation κ_C (grow phase, kappa split).
-    kappa_c: f32,
+    /// Consumer biomass conversion χ_C: the structure built, before γ, per
+    /// unit of intake once both of κ_C's branches are followed to the body
+    /// they build (grow phase's kappa split plus the reproductive branch at
+    /// its committed efficiency; #482, same closed loop as
+    /// `permanence_prototype::biomass_conversion`).
+    chi_c: f32,
     /// Energy→structure conversion `growth_efficiency` (grow phase).
     gamma: f32,
     /// Distance-independent part of the trophic kernel exponent: `exp(−decay·d)`.
@@ -114,9 +121,30 @@ impl Compartments {
             + REFERENCE_BODY_MASS * p.structure_maintenance_coefficient
     }
 
+    /// A cluster's biomass conversion χ (#466 / #482): κ builds κ structure;
+    /// (1 − κ) reaches offspring at η = reproduction_efficiency · (1 −
+    /// propagule share) · (1 − e^{−max(fecundity, 0.1)}), of which
+    /// `offspring_structure_fraction` s is embodied at birth and the rest is
+    /// reserve the offspring re-splits by κ: χ = κ + (1 − κ)·η·(s + (1 − s)·χ).
+    fn biomass_conversion(traits: &TraitVector, p: &WorldParameters) -> f32 {
+        let kappa = traits.kappa.clamp(0.0, 1.0);
+        let propagule = explorers_sim::dispersal_propagule_cost_fraction(traits.dispersal, p);
+        let fecundity = traits.fecundity.max(0.1);
+        let eta = p.reproduction_efficiency.clamp(0.0, 1.0)
+            * (1.0 - propagule)
+            * (1.0 - (-fecundity).exp());
+        let s = p.offspring_structure_fraction.clamp(0.0, 1.0);
+        let feedback = (1.0 - kappa) * eta * (1.0 - s);
+        if feedback >= 1.0 {
+            1.0
+        } else {
+            (kappa + (1.0 - kappa) * eta * s) / (1.0 - feedback)
+        }
+    }
+
     fn derive(producer: &TraitVector, consumer: &TraitVector, p: &WorldParameters) -> Self {
         let kappa_p = producer.kappa.clamp(0.0, 1.0);
-        let kappa_c = consumer.kappa.clamp(0.0, 1.0);
+        let chi_c = Self::biomass_conversion(consumer, p);
         let gamma = p.growth_efficiency;
 
         let b_p = Self::maintenance(producer, p);
@@ -149,7 +177,7 @@ impl Compartments {
             k_p,
             a,
             m,
-            kappa_c,
+            chi_c,
             gamma,
             e_dist,
             d,
@@ -161,9 +189,9 @@ impl Compartments {
         base * self.e_dist
     }
 
-    /// Consumer biomass-conversion coefficient β = κ_C · γ · e · a.
+    /// Consumer biomass-conversion coefficient β = χ_C · γ · e · a.
     fn beta(&self, base: f32) -> f32 {
-        self.kappa_c * self.gamma * self.e(base) * self.a
+        self.chi_c * self.gamma * self.e(base) * self.a
     }
 
     /// Interior (coexistence) fixed point (P*, C*) at a given base efficiency, or
@@ -236,12 +264,12 @@ fn spectrum(j: &[[f32; 2]; 2]) -> Spectrum {
 /// Algebra (verified in the unit test): at the interior FP the Jacobian has
 /// `det Δ = 1 − r_P·P*/K_P + m·r_P·(1 − P*/K_P)` and `Δ = 1` (the |λ|=1 crossing
 /// for a complex pair) reduces — `r_P` cancels — to `P*/K_P = m/(1+m)`. With
-/// `P* = m/(κ_C·γ·e·a)` and `e = base·exp(−decay·d)` this gives a closed form for
+/// `P* = m/(χ_C·γ·e·a)` and `e = base·exp(−decay·d)` this gives a closed form for
 /// `base*`. Returns `None` if the crossing falls outside the physical efficiency
 /// range (0, 1] — i.e. F predicts the example is unconditionally stable (frozen).
 fn analytic_crossing(c: &Compartments) -> Option<f32> {
-    // base* = (1+m) / (κ_C·γ·a·K_P·e_dist)
-    let denom = c.kappa_c * c.gamma * c.a * c.k_p * c.e_dist;
+    // base* = (1+m) / (χ_C·γ·a·K_P·e_dist)
+    let denom = c.chi_c * c.gamma * c.a * c.k_p * c.e_dist;
     if denom <= 0.0 {
         return None;
     }
@@ -347,8 +375,8 @@ fn main() {
     println!("  a    (mass-action attack rate)      = {:.4}", c.a);
     println!("  m    (consumer removal rate)        = {:.4}", c.m);
     println!(
-        "  kappa_C, gamma                      = {:.3}, {:.3}",
-        c.kappa_c, c.gamma
+        "  chi_C, gamma                        = {:.3}, {:.3}  (chi_C over both of kappa_C = {:.2}'s branches, #482)",
+        c.chi_c, c.gamma, consumer.kappa
     );
     println!();
 
@@ -419,7 +447,7 @@ fn main() {
     match analytic {
         Some(b) if b <= 1.0 => {
             println!(
-                "  analytic base* = {:.4}  (closed form: (1+m)/(kappa_C*gamma*a*K_P*e_dist))",
+                "  analytic base* = {:.4}  (closed form: (1+m)/(chi_C*gamma*a*K_P*e_dist))",
                 b
             );
         }
@@ -519,6 +547,24 @@ mod tests {
             s.complex,
             "the crossing must be a complex pair (Hopf), not real"
         );
+    }
+
+    /// The example10 crossing, pinned. `base* = (1 + m)/(χ_C·γ·a·K_P·e_dist)`
+    /// with the consumer's conversion `χ_C = 0.5012` at `κ_C = 0.45` (#482);
+    /// the pre-#482 `κ_C` lumping gave `0.3405` (post-#380), and
+    /// `F-hopf-validation.md` records the pre-#380 `0.4427`.
+    #[test]
+    fn example10_crossing_is_pinned() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../scenarios/example10_predator_prey_hopf.json"
+        );
+        let recipe: WorldRecipe =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let (producer, consumer) = extract_clusters(recipe.agents.as_ref().unwrap()).unwrap();
+        let c = Compartments::derive(&producer, &consumer, &recipe.parameters);
+        let base = analytic_crossing(&c).unwrap();
+        assert!((base - 0.3057).abs() < 5e-4, "base* = {base}");
     }
 
     /// Just below the crossing the interior point is stable; just above it is a

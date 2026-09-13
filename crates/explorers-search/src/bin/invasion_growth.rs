@@ -58,10 +58,9 @@
 //! consumer `λ_C(K_P) − 1 = β·K_P − m` (A1 clause 2, the sign of `I − 1`),
 //! decomposer `λ_H(𝓛) − 1` (A2 ii, the sign of `Λ − 1` at the reference
 //! lumping). The coefficient mapping is copied from `permanence_crosscheck`
-//! and pinned to its example10 numbers. Where a heterotroph centroid has
-//! `κ ≈ 0`, `β` and `Λ` are zeroed by the lumping #482 names, and a
-//! predicted-negative / observed-positive row is tagged `affected-482`, not
-//! read as a stepper fault.
+//! and pinned to its example10 numbers; both conversions count both of `κ`'s
+//! branches (`χ_P`, #466; `χ_C`, #482), so a heterotroph centroid at `κ ≈ 0`
+//! is read like any other.
 //!
 //! ## What it does NOT do
 //!
@@ -638,9 +637,6 @@ const FECUNDITY_FLOOR: f64 = 0.1;
 /// A2's reference lumping (`ι = 1`, `μ_P = 0.02`, `q = ν = θ_P`).
 const REFERENCE_MU_P: f64 = 0.02;
 const REFERENCE_IOTA: f64 = 1.0;
-/// Below this consumer `κ_C` the `β = κ_C·γ·e·a` lumping (#482) decides the
-/// heterotroph predictions on its own.
-const KAPPA_482_THRESHOLD: f64 = 0.05;
 
 fn maintenance(traits: &TraitVector, p: &explorers_sim::WorldParameters) -> f64 {
     let exp = p.maintenance_cost_exponent;
@@ -651,11 +647,12 @@ fn maintenance(traits: &TraitVector, p: &explorers_sim::WorldParameters) -> f64 
         + REFERENCE_BODY_MASS * p.structure_maintenance_coefficient) as f64
 }
 
-/// The producer's biomass conversion `χ_P` (#466).
-fn biomass_conversion(producer: &TraitVector, p: &explorers_sim::WorldParameters) -> f64 {
-    let kappa = producer.kappa.clamp(0.0, 1.0) as f64;
-    let propagule = explorers_sim::dispersal_propagule_cost_fraction(producer.dispersal, p) as f64;
-    let fecundity = (producer.fecundity as f64).max(FECUNDITY_FLOOR);
+/// A cluster's biomass conversion `χ` (`χ_P`, #466; `χ_C`, #482): both of
+/// `κ`'s branches followed to the body they build.
+fn biomass_conversion(traits: &TraitVector, p: &explorers_sim::WorldParameters) -> f64 {
+    let kappa = traits.kappa.clamp(0.0, 1.0) as f64;
+    let propagule = explorers_sim::dispersal_propagule_cost_fraction(traits.dispersal, p) as f64;
+    let fecundity = (traits.fecundity as f64).max(FECUNDITY_FLOOR);
     let eta = (p.reproduction_efficiency as f64).clamp(0.0, 1.0)
         * (1.0 - propagule)
         * (1.0 - (-fecundity).exp());
@@ -679,7 +676,7 @@ fn producer_face(producer: &TraitVector, p: &explorers_sim::WorldParameters) -> 
 }
 
 /// The heterotroph's A1 coefficients against a producer: attack `a`,
-/// maintenance `m`, kernel `e`, conversion `β = κ_C·γ·e·a`.
+/// maintenance `m`, kernel `e`, conversion `β = χ_C·γ·e·a` (#482).
 fn heterotroph_terms(
     producer: &TraitVector,
     heterotroph: &TraitVector,
@@ -689,8 +686,7 @@ fn heterotroph_terms(
     let m = maintenance(heterotroph, p) / REFERENCE_BODY_MASS as f64;
     let d = producer.distance(heterotroph) as f64;
     let e = p.base_trophic_efficiency as f64 * (-(p.trophic_distance_decay as f64) * d).exp();
-    let kappa_c = heterotroph.kappa.clamp(0.0, 1.0) as f64;
-    let beta = kappa_c * p.growth_efficiency as f64 * e * a;
+    let beta = biomass_conversion(heterotroph, p) * p.growth_efficiency as f64 * e * a;
     (a, m, e, beta)
 }
 
@@ -706,9 +702,6 @@ struct PredictedSign {
     /// The note's headline ratio for that clause: `r_P`, `I`, `Λ`.
     rate_coefficient: f64,
     positive: bool,
-    /// The heterotroph's `κ` at the centroid is (near) zero, so `β` and `Λ`
-    /// are zeroed by the lumping #482 names rather than by the dynamics.
-    affected_by_482: bool,
 }
 
 fn predicted_signs(
@@ -736,10 +729,10 @@ fn predicted_signs(
         f64::INFINITY
     };
     // (iii) the heterotroph invades the lockup corner on the pile:
-    // λ_H(𝓛) = 1 + σ·N_total·min(κ_C·γ·e_C, q/θ_C) − m at the reference lumping.
+    // λ_H(𝓛) = 1 + σ·N_total·min(χ_C·γ·e_C, q/θ_C) − m at the reference lumping.
     let (a_d, m_d, e_d, _) = heterotroph_terms(producer, decomposer, p);
     let theta_d = explorers_sim::stoichiometric_demand(decomposer, 1.0, p) as f64;
-    let kappa_d_gamma = decomposer.kappa.clamp(0.0, 1.0) as f64 * p.growth_efficiency as f64;
+    let chi_d_gamma = biomass_conversion(decomposer, p) * p.growth_efficiency as f64;
     let n_total = p.initial_nutrient_pool as f64;
     let (q, nu) = (theta_p, theta_p * REFERENCE_BODY_MASS as f64);
     let sigma = if nu > 0.0 {
@@ -748,9 +741,9 @@ fn predicted_signs(
         0.0
     };
     let liebig = if theta_d > 0.0 {
-        (kappa_d_gamma * e_d).min(q / theta_d)
+        (chi_d_gamma * e_d).min(q / theta_d)
     } else {
-        kappa_d_gamma * e_d
+        chi_d_gamma * e_d
     };
     let pile_growth = sigma * n_total * liebig;
     let decomposer_excess = pile_growth - m_d;
@@ -766,7 +759,6 @@ fn predicted_signs(
             eigen_excess: producer_excess,
             rate_coefficient: r_p,
             positive: producer_excess > 0.0,
-            affected_by_482: false,
         },
         PredictedSign {
             role: Role::Consumer,
@@ -774,7 +766,6 @@ fn predicted_signs(
             eigen_excess: consumer_excess,
             rate_coefficient: invasion_ratio,
             positive: consumer_excess > 0.0,
-            affected_by_482: (consumer.kappa as f64) < KAPPA_482_THRESHOLD,
         },
         PredictedSign {
             role: Role::Decomposer,
@@ -782,7 +773,6 @@ fn predicted_signs(
             eigen_excess: decomposer_excess,
             rate_coefficient: lockup_escape_ratio,
             positive: decomposer_excess > 0.0,
-            affected_by_482: (decomposer.kappa as f64) < KAPPA_482_THRESHOLD,
         },
     ]
 }
@@ -986,10 +976,6 @@ enum Agreement {
     PredictedPositiveObservedNegative,
     /// The reduction says the role cannot invade; the lineage grew.
     PredictedNegativeObservedPositive,
-    /// A predicted-negative / observed-positive disagreement on a heterotroph
-    /// whose centroid `κ` is (near) zero: the `β` / `Λ` lumping (#482), not a
-    /// stepper fault.
-    Affected482,
     /// The reduction's sign differs across seeds (the centroids move).
     PredictedSplit,
     /// The role is absent from the resident web; not compared.
@@ -998,7 +984,6 @@ enum Agreement {
 
 fn sign_agreement(
     predicted_positive: usize,
-    affected_by_482: usize,
     n: usize,
     observed_median: f64,
     present: bool,
@@ -1018,7 +1003,6 @@ fn sign_agreement(
         None => Agreement::PredictedSplit,
         Some(p) if p == observed => Agreement::Agree,
         Some(true) => Agreement::PredictedPositiveObservedNegative,
-        Some(false) if 2 * affected_by_482 > n => Agreement::Affected482,
         Some(false) => Agreement::PredictedNegativeObservedPositive,
     }
 }
@@ -1030,7 +1014,6 @@ struct SignRow {
     arm: Arm,
     eigenvalue: &'static str,
     predicted_positive_seeds: usize,
-    affected_by_482_seeds: usize,
     n_seeds: usize,
     median_eigen_excess: f64,
     observed_median_rate: f64,
@@ -1124,21 +1107,18 @@ fn evaluate_cell(
                 .flat_map(|r| r.predicted.iter().filter(|p| p.role == v.role))
                 .collect();
             let predicted_positive_seeds = preds.iter().filter(|p| p.positive).count();
-            let affected_by_482_seeds = preds.iter().filter(|p| p.affected_by_482).count();
             let mut excess: Vec<f64> = preds.iter().map(|p| p.eigen_excess).collect();
             SignRow {
                 role: v.role,
                 arm: v.arm,
                 eigenvalue: preds.first().map_or("", |p| p.eigenvalue),
                 predicted_positive_seeds,
-                affected_by_482_seeds,
                 n_seeds: preds.len(),
                 median_eigen_excess: median_f64(&mut excess),
                 observed_median_rate: v.rates.median,
                 observed_positive_seeds: v.rates.positive_seeds,
                 agreement: sign_agreement(
                     predicted_positive_seeds,
-                    affected_by_482_seeds,
                     preds.len(),
                     v.rates.median,
                     v.present,
@@ -1244,8 +1224,8 @@ struct ArmSummary {
     atlas_coexisting_multi_role_and_by_median: usize,
     /// Per role: (present cells, invading strict, invading by median).
     per_role: Vec<(Role, usize, usize, usize)>,
-    /// Per role: agreement tallies (agree, pred+/obs−, pred−/obs+, #482, split, absent).
-    sign_agreement: Vec<(Role, [usize; 6])>,
+    /// Per role: agreement tallies (agree, pred+/obs−, pred−/obs+, split, absent).
+    sign_agreement: Vec<(Role, [usize; 5])>,
 }
 
 fn arm_summary(records: &[CellRecord], arm: Arm) -> ArmSummary {
@@ -1271,7 +1251,7 @@ fn arm_summary(records: &[CellRecord], arm: Arm) -> ArmSummary {
     let sign_agreement = ROLES
         .into_iter()
         .map(|role| {
-            let mut tally = [0usize; 6];
+            let mut tally = [0usize; 5];
             for row in records
                 .iter()
                 .flat_map(|r| r.sign_table.iter())
@@ -1281,9 +1261,8 @@ fn arm_summary(records: &[CellRecord], arm: Arm) -> ArmSummary {
                     Agreement::Agree => 0,
                     Agreement::PredictedPositiveObservedNegative => 1,
                     Agreement::PredictedNegativeObservedPositive => 2,
-                    Agreement::Affected482 => 3,
-                    Agreement::PredictedSplit => 4,
-                    Agreement::Absent => 5,
+                    Agreement::PredictedSplit => 3,
+                    Agreement::Absent => 4,
                 };
                 tally[k] += 1;
             }
@@ -1508,8 +1487,8 @@ fn print_summary(s: &Summary) {
         }
         for (role, t) in &a.sign_agreement {
             println!(
-                "  sign vs reduction, {role:?}: agree {}, pred+/obs- {}, pred-/obs+ {}, #482 {}, split {}, absent {}",
-                t[0], t[1], t[2], t[3], t[4], t[5]
+                "  sign vs reduction, {role:?}: agree {}, pred+/obs- {}, pred-/obs+ {}, split {}, absent {}",
+                t[0], t[1], t[2], t[3], t[4]
             );
         }
     }
@@ -1737,15 +1716,17 @@ mod tests {
         );
         assert!(p.eigen_excess > 0.0 && p.positive);
         let c = by_role(Role::Consumer);
+        // #482: I = χ_C·γ·e·a·K_P/m with χ_C = 0.5012 at κ_C = 0.45 (pre-#482
+        // the κ_C lumping gave I = 23.135, Λ = 81333.9).
         assert!(
-            (c.rate_coefficient - 23.135).abs() < 1e-2,
+            (c.rate_coefficient - 25.766).abs() < 1e-2,
             "I {}",
             c.rate_coefficient
         );
-        assert!(c.positive && !c.affected_by_482);
+        assert!(c.positive);
         let d = by_role(Role::Decomposer);
         assert!(
-            (d.rate_coefficient - 81333.9).abs() < 1.0,
+            (d.rate_coefficient - 90583.8).abs() < 1.0,
             "Lambda {}",
             d.rate_coefficient
         );
@@ -1780,45 +1761,45 @@ mod tests {
                 .unwrap()
                 .positive
         );
-        // κ_C = 0 zeroes β and Λ through the #482 lumping: flagged, not read
-        // as a stepper fault.
+        // κ_C = 0 routes the consumer's surplus through offspring, which are
+        // biomass: β and Λ stay positive (#482), so both routes stay open.
         let mut c = consumer;
         c.kappa = 0.0;
         let pred = predicted_signs(&producer, &c, &c, &params);
         let cc = pred.iter().find(|p| p.role == Role::Consumer).unwrap();
-        assert!(!cc.positive && cc.affected_by_482);
         assert!(
-            pred.iter()
-                .find(|p| p.role == Role::Decomposer)
-                .unwrap()
-                .affected_by_482
+            cc.positive && cc.rate_coefficient > 1.0,
+            "I {}",
+            cc.rate_coefficient
+        );
+        let dd = pred.iter().find(|p| p.role == Role::Decomposer).unwrap();
+        assert!(
+            dd.positive && dd.rate_coefficient > 1.0,
+            "Lambda {}",
+            dd.rate_coefficient
         );
     }
 
     /// Predicted vs observed sign per (role, arm): the reduction's majority
-    /// sign over seeds against the criterion's median sign; a disagreement
-    /// on a heterotroph whose centroid `κ` is (near) zero is attributed to
-    /// #482, and an absent role is not compared.
+    /// sign over seeds against the criterion's median sign; an absent role
+    /// is not compared.
     #[test]
-    fn sign_agreement_separates_482_from_a_real_disagreement() {
-        let row =
-            |predicted_positive: usize, affected: usize, n: usize, observed: f64, present: bool| {
-                sign_agreement(predicted_positive, affected, n, observed, present)
-            };
-        assert_eq!(row(8, 0, 8, 0.01, true), Agreement::Agree);
-        assert_eq!(row(0, 0, 8, -0.01, true), Agreement::Agree);
+    fn sign_agreement_reads_the_majority_sign_against_the_median() {
+        let row = |predicted_positive: usize, n: usize, observed: f64, present: bool| {
+            sign_agreement(predicted_positive, n, observed, present)
+        };
+        assert_eq!(row(8, 8, 0.01, true), Agreement::Agree);
+        assert_eq!(row(0, 8, -0.01, true), Agreement::Agree);
         assert_eq!(
-            row(8, 0, 8, -0.01, true),
+            row(8, 8, -0.01, true),
             Agreement::PredictedPositiveObservedNegative
         );
         assert_eq!(
-            row(0, 0, 8, 0.01, true),
+            row(0, 8, 0.01, true),
             Agreement::PredictedNegativeObservedPositive
         );
-        assert_eq!(row(0, 8, 8, 0.01, true), Agreement::Affected482);
-        assert_eq!(row(0, 8, 8, -0.01, true), Agreement::Agree);
-        assert_eq!(row(8, 0, 8, 0.01, false), Agreement::Absent);
-        assert_eq!(row(4, 0, 8, 0.01, true), Agreement::PredictedSplit);
+        assert_eq!(row(8, 8, 0.01, false), Agreement::Absent);
+        assert_eq!(row(4, 8, 0.01, true), Agreement::PredictedSplit);
     }
 
     /// Smoke check on a whole cell record: no assertion on emergent values.

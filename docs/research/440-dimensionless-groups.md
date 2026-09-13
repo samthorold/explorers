@@ -41,7 +41,7 @@ Units are read from the code that realises each rule (`crates/explorers-sim/src/
    `dispersal_reach_coefficient`) and through the hidden unit anchors of smell S1.
 4. **Every gate is expressible in the groups.** Extinction: `π_F = F/B ≤ 1`. Energy
    death: `π_N ≥ π_ρ · ŝ_min · (1 + π_ρs · σ_min) + 1`. A1: `ρ = π_F / b_P`,
-   `I = κ_C·γ·e·ĥ_C·π_F / (b_P·b_C)`. A2: `Λ = ĥ_C·ι·(π_N/ν̂)·min(κ_C·γ·e_C, q/θ_C) / b_C`.
+   `I = χ_C·γ·e·ĥ_C·π_F / (b_P·b_C)`. A2: `Λ = ĥ_C·ι·(π_N/ν̂)·min(χ_C·γ·e_C, q/θ_C) / b_C`.
    B1: `N̄_max = π_F·m²`, `m = ⌊√2/π_r⌋ + 1`. Two of these carry a named offending
    constant: the prefilter's energy-death floor uses `STRUCTURE_MIN = 1.0` energy with no
    committed source (smell S3), and A1's `I` and A2's `Λ` are dimensionless only because
@@ -236,20 +236,22 @@ what the committed rules actually support.
 > `ρ = π_F / b_P > 1`
 
 — the extinction gate sharpened by the searched maintenance groups (`b_P = 1` is the
-corner `π_F ≤ 1`). Clause (2) `I = β·K_P/m = κ_C·γ·e·h_C·F/(B_P·B_C) > 1` ⟺
+corner `π_F ≤ 1`). Clause (2) `I = β·K_P/m = χ_C·γ·e·h_C·F/(B_P·B_C) > 1` ⟺
 
-> `I = κ_C · γ · e · ĥ_C · π_F / (b_P · b_C) > 1`.
+> `I = χ_C · γ · e · ĥ_C · π_F / (b_P · b_C) > 1`.
 
 `I` is dimensionless in raw parameters only because `h_C` is read as a drain of
-`u_H = 1 E/T` per trait unit — the anchor is load-bearing (S1). The `κ_P` factor in
-`r_P = κ_P·γ·(F − B_P)` that #439 flags as a lumping error is a pure number and does not
-affect the dimensional form; its consequence — the spurious conjunct `κ_P > 0` on clause
-(1) — is inherited unchanged and is A4's to fix, not this note's.
+`u_H = 1 E/T` per trait unit — the anchor is load-bearing (S1). The allocation factors are
+pure numbers and do not affect the dimensional form: `r_P = χ_P·γ·(F − B_P)` and
+`β = χ_C·γ·e·a` carry the biomass conversions `χ_P` (#466) and `χ_C` (#482), each a
+dimensionless function of the cluster's `κ`, `reproduction_efficiency`, propagule share,
+`1 − e^{−fecundity}` and `offspring_structure_fraction` (all pure numbers); an earlier
+version of this note wrote the `κ_C` lumping here, which #439 flagged and #482 corrected.
 
 **A2 lockup repeller (`437-permanence-alc.md`).**
-`Λ = (h_C·ι/ν) · N_total · min(κ_C·γ·e_C, q/θ_C) / B_C > 1` ⟺
+`Λ = (h_C·ι/ν) · N_total · min(χ_C·γ·e_C, q/θ_C) / B_C > 1` ⟺
 
-> `Λ = ĥ_C · ι · (π_N / ν̂) · min(κ_C·γ·e_C, q/θ_C) / b_C > 1`, `ν̂ = ν/N_r`.
+> `Λ = ĥ_C · ι · (π_N / ν̂) · min(χ_C·γ·e_C, q/θ_C) / b_C > 1`, `ν̂ = ν/N_r`.
 
 `ι` is a geometry fraction (`1`); `q` and `θ_C` are both `N/E`, so their ratio is
 homogeneous; `ν` is nutrient per carcass (`N`). Same anchor dependence as `I`.

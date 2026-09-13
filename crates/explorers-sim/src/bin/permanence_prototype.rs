@@ -10,7 +10,7 @@
 //!
 //! ```text
 //!   P' = P · f(P,C),  f = 1 + r_P·(1 − P/K_P) − a·C
-//!   C' = C · g(P,C),  g = 1 + β·P − m,          β = κ_C·γ·e·a
+//!   C' = C · g(P,C),  g = 1 + β·P − m,          β = χ_C·γ·e·a
 //! ```
 //!
 //! The finding: with `V = P^a·C^b` as an average Lyapunov function, the
@@ -61,14 +61,17 @@ const REFERENCE_BODY_MASS: f32 = 1.0;
 /// (`fecundity.max(0.1)` in `phase.rs`).
 const FECUNDITY_FLOOR: f64 = 0.1;
 
-/// How much of a producer's mobilised surplus ends up as **structure** — the
-/// biomass coordinate `P` carries — once both of `κ`'s branches are followed
-/// to the body they build (#466).
+/// How much of a cluster's mobilised surplus ends up as **structure** — the
+/// biomass coordinate `P` or `C` carries — once both of `κ`'s branches are
+/// followed to the body they build (`χ_P`, #466; `χ_C`, #482). The
+/// reproductive path is the same `resolve_reproduction` for every trait
+/// vector, so the two conversions share the form and differ only in the
+/// cluster's `κ`, dispersal and fecundity.
 #[derive(Debug, Clone, Copy)]
 pub struct BiomassConversion {
-    /// Somatic allocation `κ_P` (flow 9's split of the mobilised flow).
+    /// Somatic allocation `κ` (flow 9's split of the mobilised flow).
     pub kappa: f64,
-    /// Reproductive-branch efficiency `η_P`: the fraction of energy routed to
+    /// Reproductive-branch efficiency `η`: the fraction of energy routed to
     /// the reproductive allocation that reaches an offspring's body —
     /// `reproduction_efficiency` (flow 4 heat), times the dispersal propagule
     /// share left over, times the probability the Poisson brood is non-empty
@@ -77,18 +80,18 @@ pub struct BiomassConversion {
     /// `offspring_structure_fraction` — the share of an offspring's energy
     /// embodied at birth; the rest is reserve the offspring itself mobilises.
     pub structure_fraction: f64,
-    /// The conversion `χ_P`: structure built (before `γ`) per unit surplus,
-    /// closing the loop in which an offspring's reserve is re-split by `κ_P`.
-    /// `χ_P = 1` when `κ_P = 1` or the reproductive branch is lossless.
+    /// The conversion `χ`: structure built (before `γ`) per unit surplus,
+    /// closing the loop in which an offspring's reserve is re-split by `κ`.
+    /// `χ = 1` when `κ = 1` or the reproductive branch is lossless.
     pub chi: f64,
 }
 
-/// Derive the producer's biomass conversion from committed parameters and its
+/// Derive a cluster's biomass conversion from committed parameters and its
 /// trait vector (`kappa`, `dispersal`, `fecundity`).
-pub fn biomass_conversion(producer: &TraitVector, p: &WorldParameters) -> BiomassConversion {
-    let kappa = producer.kappa.clamp(0.0, 1.0) as f64;
-    let propagule = explorers_sim::dispersal_propagule_cost_fraction(producer.dispersal, p) as f64;
-    let fecundity = (producer.fecundity as f64).max(FECUNDITY_FLOOR);
+pub fn biomass_conversion(traits: &TraitVector, p: &WorldParameters) -> BiomassConversion {
+    let kappa = traits.kappa.clamp(0.0, 1.0) as f64;
+    let propagule = explorers_sim::dispersal_propagule_cost_fraction(traits.dispersal, p) as f64;
+    let fecundity = (traits.fecundity as f64).max(FECUNDITY_FLOOR);
     let eta = (p.reproduction_efficiency as f64).clamp(0.0, 1.0)
         * (1.0 - propagule)
         * (1.0 - (-fecundity).exp());
@@ -113,10 +116,10 @@ pub fn biomass_conversion(producer: &TraitVector, p: &WorldParameters) -> Biomas
 
 /// The lumped coefficients of the 2-compartment map. Same derivation as
 /// `hopf_prototype::Compartments` (citations there), except `r_p` is signed
-/// and the producer's growth counts both of `κ_P`'s branches (#466).
+/// and both conversions count both of `κ`'s branches (`χ_P` #466, `χ_C` #482).
 #[derive(Debug, Clone, Copy)]
 pub struct Map {
-    /// Producer intrinsic per-tick rate κ_P·γ·(F − B_P). **Signed.**
+    /// Producer intrinsic per-tick rate χ_P·γ·(F − B_P). **Signed.**
     pub r_p: f64,
     /// Producer light-saturated carrying capacity F / B_P.
     pub k_p: f64,
@@ -124,7 +127,8 @@ pub struct Map {
     pub a: f64,
     /// Consumer removal rate: its maintenance floor B_C.
     pub m: f64,
-    /// Consumer biomass-conversion coefficient β = κ_C·γ·e·a.
+    /// Consumer biomass-conversion coefficient β = χ_C·γ·e·a (#482: both of
+    /// `κ_C`'s branches become biomass; `χ_C` is the consumer's conversion).
     pub beta: f64,
 }
 
@@ -236,9 +240,10 @@ impl Map {
 
     /// Derive the map from committed parameters and the two cluster-mean trait
     /// vectors — as `hopf_prototype::Compartments::derive` except that `r_p`
-    /// keeps its sign and counts both of `κ_P`'s branches (`χ_P`, #466).
+    /// keeps its sign and both conversions count both of `κ`'s branches
+    /// (`χ_P` #466, `χ_C` #482).
     pub fn derive(producer: &TraitVector, consumer: &TraitVector, p: &WorldParameters) -> Self {
-        let kappa_c = consumer.kappa.clamp(0.0, 1.0) as f64;
+        let chi_c = biomass_conversion(consumer, p).chi;
         let gamma = p.growth_efficiency as f64;
         let b_p = Self::maintenance(producer, p);
         let b_c = Self::maintenance(consumer, p);
@@ -251,7 +256,7 @@ impl Map {
         let m = b_c / REFERENCE_BODY_MASS as f64;
         let d = producer.distance(consumer) as f64;
         let e = p.base_trophic_efficiency as f64 * (-(p.trophic_distance_decay as f64) * d).exp();
-        let beta = kappa_c * gamma * e * a;
+        let beta = chi_c * gamma * e * a;
         Map {
             r_p,
             k_p,
@@ -430,9 +435,10 @@ pub struct AlcMap {
     /// (`stoichiometric_demand` at unit structure).
     pub theta_p: f64,
     pub theta_c: f64,
-    /// Consumer somatic conversion `κ_C·γ` (grow phase), kept separate so
-    /// the carcass return can carry its own kernel `e_C`.
-    pub kappa_c_gamma: f64,
+    /// Consumer conversion `χ_C·γ` (grow phase over both of `κ_C`'s
+    /// branches, #482), kept separate so the carcass return can carry its
+    /// own kernel `e_C`.
+    pub chi_c_gamma: f64,
     /// Conserved nutrient total (`initial_nutrient_pool`; the unavailable pool
     /// is geological and constant, so it is left out of the ledger).
     pub n_total: f64,
@@ -462,7 +468,7 @@ impl AlcMap {
             alpha_p: producer.photosynthetic_absorption.max(0.0) as f64,
             theta_p,
             theta_c,
-            kappa_c_gamma: consumer.kappa.clamp(0.0, 1.0) as f64 * p.growth_efficiency as f64,
+            chi_c_gamma: biomass_conversion(consumer, p).chi * p.growth_efficiency as f64,
             n_total: p.initial_nutrient_pool as f64,
             lump,
         }
@@ -483,11 +489,11 @@ impl AlcMap {
 
     /// Trophic kernel on the carcass pool `e_C`. A producer carcass carries the
     /// producer's exact trait vector, so for a producer-dominated pile it is
-    /// A1's `e = β / (κ_C·γ·a)`.
+    /// A1's `e = β / (χ_C·γ·a)`.
     pub fn e_c(&self) -> f64 {
         self.lump
             .e_c
-            .unwrap_or(self.energy.beta / (self.kappa_c_gamma * self.energy.a))
+            .unwrap_or(self.energy.beta / (self.chi_c_gamma * self.energy.a))
     }
 
     /// Per-consumer-body, per-unit-carcass-nutrient clearance rate
@@ -497,14 +503,14 @@ impl AlcMap {
     }
 
     /// Per-consumer-body growth on the full carcass pile: the Liebig minimum
-    /// of the energy conversion `κ_C·γ·e_C` and the carcass richness over the
+    /// of the energy conversion `χ_C·γ·e_C` and the carcass richness over the
     /// consumer's own demand `q/θ_C`, times the clearance `σ·N_total`.
     fn pile_growth_per_body(&self) -> f64 {
-        let liebig = (self.kappa_c_gamma * self.e_c()).min(self.lump.q / self.theta_c);
+        let liebig = (self.chi_c_gamma * self.e_c()).min(self.lump.q / self.theta_c);
         self.sigma() * self.n_total * liebig
     }
 
-    /// The lockup-escape ratio `Λ = σ·N_total·min(κ_C·γ·e_C, q/θ_C) / m`: the
+    /// The lockup-escape ratio `Λ = σ·N_total·min(χ_C·γ·e_C, q/θ_C) / m`: the
     /// heterotroph's per-tick conversion on the whole carcass pile over its
     /// maintenance floor. `Λ > 1` is the lockup repeller condition — the
     /// carcass-pile analogue of A1's invasion ratio `I = β·K_P/m`.
@@ -632,7 +638,7 @@ impl AlcMap {
             && (c_n == 0.0 || q <= 0.0 || self.sigma() * c_e * c_n < c_n / q);
         // Consumer growth: A1's β·P on prey plus the carcass return, Liebig-
         // limited by the nutrient that arrives with the drained structure.
-        let energy_limited = m.beta * p * c_e + self.kappa_c_gamma * self.e_c() * d_c;
+        let energy_limited = m.beta * p * c_e + self.chi_c_gamma * self.e_c() * d_c;
         let nutrient_arriving = self.theta_p * d_l + q * d_c;
         let dc = energy_limited.min(nutrient_arriving / self.theta_c);
         // Stoichiometric mismatch: what the consumer does not bind is excreted
@@ -776,7 +782,16 @@ fn main() {
     println!("  r_P = chi_P*gamma*(F - B_P)    = {:.4}", map.r_p);
     println!("  K_P = F / B_P                  = {:.4}", map.k_p);
     println!("  a   (attack rate)              = {:.4}", map.a);
-    println!("  beta = kappa_C*gamma*e*a       = {:.5}", map.beta);
+    let conv_c = biomass_conversion(&consumer, params);
+    println!(
+        "  eta_C (reproductive branch)    = {:.4}  (= repro_eff*(1 - propagule)*(1 - exp(-fecundity)))",
+        conv_c.eta
+    );
+    println!(
+        "  chi_C (biomass conversion)     = {:.4}  (kappa_C = {:.2}, s = {:.2})",
+        conv_c.chi, conv_c.kappa, conv_c.structure_fraction
+    );
+    println!("  beta = chi_C*gamma*e*a         = {:.5}", map.beta);
     println!();
     println!("## Equilibria and eigenvalues");
     println!(
@@ -877,8 +892,8 @@ fn main() {
         alc.theta_p, alc.theta_c
     );
     println!(
-        "  kappa_C*gamma                    = {:.4}",
-        alc.kappa_c_gamma
+        "  chi_C*gamma                      = {:.4}",
+        alc.chi_c_gamma
     );
     println!(
         "  e_C (kernel on the pile)         = {:.4}   [lumped: producer carcasses]",
@@ -915,7 +930,7 @@ fn main() {
         cond.producer_invades_virgin
     );
     println!(
-        "  Lambda = sigma*N_total*min(kappa_C*gamma*e_C, q/theta_C)/m = {:.4} > 1   {}",
+        "  Lambda = sigma*N_total*min(chi_C*gamma*e_C, q/theta_C)/m = {:.4} > 1   {}",
         alc.lockup_escape_ratio(),
         cond.heterotroph_invades_lockup
     );
@@ -1103,6 +1118,41 @@ mod tests {
         assert!(map.permanence().producer_face_alive);
         assert!(map.permanence().permanent());
         assert_eq!(map.classify_by_simulation(20_000), NumericClass::Permanent);
+    }
+
+    /// `κ_C` splits the consumer's intake the same way, and no more decides
+    /// whether it becomes biomass than `κ_P` does (#482): a consumer that
+    /// routes everything to reproduction (`κ_C = 0`) still converts at
+    /// `β = χ_C·γ·e·a > 0`, invades the standing crop when `I > 1`, and
+    /// escapes the lockup corner on the pile (`Λ > 0`) — the map is permanent
+    /// and the numerics agree.
+    #[test]
+    fn kappa_zero_consumer_still_converts_and_invades() {
+        let mut c = consumer();
+        c.kappa = 0.0;
+        // A brood that is usually non-empty, so the reproductive branch
+        // carries a conversion worth invading on (the fixture's fecundity 0
+        // floors to 0.1, where 90 % of events provision nobody).
+        c.fecundity = 1.0;
+        let mut p = params();
+        p.base_trophic_efficiency = 0.3;
+        let map = Map::derive(&producer(), &c, &p);
+        let invasion = map.beta * map.k_p / map.m;
+        assert!(invasion > 1.0, "I = {invasion} should exceed 1 here");
+        assert!(
+            map.beta > 0.0,
+            "beta = {} should be positive at kappa_C = 0",
+            map.beta
+        );
+        assert!(map.permanence().consumer_invades);
+        assert!(map.permanence().permanent());
+        assert_eq!(map.classify_by_simulation(20_000), NumericClass::Permanent);
+        let alc = AlcMap::derive(&producer(), &c, &p, AlcLumping::default());
+        assert!(
+            alc.lockup_escape_ratio() > 0.0,
+            "Lambda = {} should be positive at kappa_C = 0",
+            alc.lockup_escape_ratio()
+        );
     }
 
     /// `r_P` is a `κ_P`-weighted mix of the two branches: the somatic limit
@@ -1338,7 +1388,7 @@ mod tests {
     /// The lockup repeller condition is a statement about the corner's
     /// transverse spectrum: in `(P, C_E)` the Jacobian at
     /// `(0, 0, 0, N_total)` is `diag(1 − μ_P, λ_C(𝓛))` with
-    /// `λ_C(𝓛) = 1 + σ·N_total·min(κ_C·γ·e_C, q/θ_C) − m`. A central-difference
+    /// `λ_C(𝓛) = 1 + σ·N_total·min(χ_C·γ·e_C, q/θ_C) − m`. A central-difference
     /// Jacobian of `step` at the corner must reproduce both entries — the
     /// producer cannot invade (no uptake from an empty pool), only the
     /// heterotroph feeding on the pile can.

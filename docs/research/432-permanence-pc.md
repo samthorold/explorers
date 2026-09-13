@@ -21,30 +21,32 @@ For the map
 
 ```
 P' = P · f(P,C),   f = 1 + r_P·(1 − P/K_P) − a·C
-C' = C · g(P,C),   g = 1 + β·P − m,             β = κ_C·γ·e·a,  e = base·exp(−λ·d)
+C' = C · g(P,C),   g = 1 + β·P − m,             β = χ_C·γ·e·a,  e = base·exp(−λ·d)
 ```
 
 the extinction boundary `{P = 0} ∪ {C = 0}` is a repeller — the system is **permanent** —
 iff
 
 > **(1)** `r_P > 0`  ⟺  `F > B_P`  (the producer face has a positive equilibrium; `r_P = χ_P·γ·(F − B_P)` with the biomass conversion `χ_P > 0` on every committed configuration short of a degenerate corner — see the coefficient table)
-> **(2)** `β·K_P > m`  ⟺  `κ_C · γ · base_trophic_efficiency · exp(−trophic_distance_decay·d) · h_C · F  >  B_P · B_C`  (the consumer invades it)
+> **(2)** `β·K_P > m`  ⟺  `χ_C · γ · base_trophic_efficiency · exp(−trophic_distance_decay·d) · h_C · F  >  B_P · B_C`  (the consumer invades it; `β = χ_C·γ·e·a` with the consumer's biomass conversion `χ_C > 0` short of the same degenerate corner)
 
 in the committed parameters `F = solar_flux_magnitude`, `B_P`, `B_C` the producer's and
 consumer's per-body maintenance (`base_metabolic_rate` plus the form-pinned trait and
-structure maintenance), `γ = growth_efficiency`, `κ_C` the consumer's somatic allocation,
-`h_C` its effective heterotrophy, `d` the trait-space distance producer↔consumer. Clause
-(1) **is** the extinction gate `F ≤ B` of `viability.md`, sharpened by trait maintenance
-(shown explicitly below). `κ_P`, the producer's somatic allocation, does **not** appear in
-it: the map carries biomass, and the `(1 − κ_P)` share of the surplus becomes offspring
-biomass through the committed reproductive branch — an earlier version of this note
-lumped `r_P = κ_P·γ·(F − B_P)` and thereby acquired a spurious conjunct `κ_P > 0`, which
-[`439-permanence-crosscheck.md`](439-permanence-crosscheck.md) (A3) caught on ten atlas
-cells; the correction (#466) is the `χ_P` row of the table below. The Hopf line of #358
+structure maintenance), `γ = growth_efficiency`, `χ_C` the consumer's biomass conversion
+(its somatic allocation `κ_C` followed through both branches, below), `h_C` its effective
+heterotrophy, `d` the trait-space distance producer↔consumer. Clause (1) **is** the
+extinction gate `F ≤ B` of `viability.md`, sharpened by trait maintenance (shown
+explicitly below). Neither somatic allocation appears as a *conjunct*: the map carries
+biomass, and the `(1 − κ)` share of a surplus becomes offspring biomass through the
+committed reproductive branch — an earlier version of this note lumped
+`r_P = κ_P·γ·(F − B_P)` and `β = κ_C·γ·e·a` and thereby acquired spurious conjuncts
+`κ_P > 0` and `κ_C > 0`, which [`439-permanence-crosscheck.md`](439-permanence-crosscheck.md)
+(A3) caught on ten and nineteen atlas cells respectively; the corrections are the `χ_P`
+(#466) and `χ_C` (#482) rows of the table below. The Hopf line of #358
 (`β·K_P/m = (1+m)/m`) lies strictly inside the permanent region, so the condition admits
 the oscillating regime, as it must — permanence constrains the *boundary*, never the
 interior attractor. Brute-force boundary-escape numerics agree with the analytic boundary
-on 550/550 scored cells of a 25×25 sweep (tolerance stated below), with 0 disagreements.
+on 538/538 scored cells of a 25×25 sweep (tolerance stated below), with 0 disagreements.
 
 ## The map, and what is reused
 
@@ -61,7 +63,7 @@ there:
 | `K_P` | `F / B_P` | biomass at which the density-dependent light share meets maintenance |
 | `a` | `h_C` (effective heterotrophy per reference body) | resolve_drains' per-consumer demand |
 | `m` | `B_C` | consumer maintenance floor (metabolise) |
-| `β` | `κ_C · γ · base · exp(−λ·d) · a` | grow phase × committed trophic kernel |
+| `β` | `χ_C · γ · base · exp(−λ·d) · a` | grow phase × committed trophic kernel, by **both** of `κ_C`'s branches (below) |
 
 with `B_X = base_metabolic_rate + c_photo·α_X^p + c_het·h_X^p + c_mob·μ_X^p + c_struct·M_ref`
 (the *form-pinned, coefficients-searched* tier of `viability.md`: the exponent `p` and the
@@ -111,16 +113,35 @@ empty brood the dominant cost (`1 − e^{−0.1} = 0.095`, so `η_P = 0.067`), a
 The reproduction *thresholds* still drop out (next-but-one paragraph): they set when the
 earmark is spent, not how much of it becomes body.
 
-**The same lumping sits in `β`, uncorrected here.** `β = κ_C·γ·e·a` reads the consumer's
-conversion as its somatic share only; by the argument above it should be `χ_C·γ·e·a` with
-`χ_C` the consumer's own conversion. It is left as is in this note because `κ_C` runs
-through the invasion ratio `I`, A2's `Λ`, the π-forms of
-[`440-dimensionless-groups.md`](440-dimensionless-groups.md), every per-cell `I` in A3, and
-`hopf_prototype`'s crossing — a separate correction. Its consequence is the symmetric
-spurious conjunct `κ_C > 0` on clause (2): the ten atlas cells A3 lists as clause-(1)
-failures have `mean_kappa = 0` on the *consumer* centroid too, so after this correction
-they clear clause (1) (`r_P` from 0.04 to 0.34) and fail clause (2) with `I = 0` — still
-predicted not-permanent, for the same reason in the other compartment.
+**The consumer's biomass conversion `χ_C` (the #482 correction).** The same lumping sat in
+`β`: `κ_C·γ·e·a` read the consumer's conversion as its somatic share only, so clause (2)
+carried a spurious conjunct `κ_C > 0` — the ten atlas cells above have `mean_kappa = 0` on
+the *consumer* centroid too, and after #466 they cleared clause (1) only to fail clause (2)
+with `I = 0` exactly; A3 tagged nineteen such cells `#482`. The reproductive path is the
+same `resolve_reproduction` for every trait vector, so the argument above carries over
+symbol for symbol: the consumer's intake `e·a·P` is mobilised surplus that the grow phase
+splits by `κ_C`, the `(1 − κ_C)` share reaches an offspring at
+`η_C = reproduction_efficiency · (1 − φ_C) · (1 − e^{−f_C})` (with `φ_C` the propagule share
+on the *consumer's* dispersal `δ_C` and `f_C = max(fecundity_C, 0.1)`), `s` of it is
+embodied at birth, and the rest is reserve the offspring re-splits by `κ_C`. Hence
+
+```
+χ_C = ( κ_C + (1 − κ_C)·η_C·s ) / ( 1 − (1 − κ_C)·η_C·(1 − s) ),      β = χ_C · γ · e · a
+```
+
+with the same limits: `χ_C = 1` at `κ_C = 1` or a lossless reproductive branch, increasing
+in `κ_C`, and `χ_C = η_C·s / (1 − η_C·(1 − s)) > 0` at `κ_C = 0` whenever `η_C·s > 0`. Clause
+(2) is therefore `I > 1` together with `χ_C > 0`, and the second conjunct fails only on the
+degenerate corner already named for `χ_P` (`reproduction_efficiency = 0`, a propagule share
+of 1, or `s = 0` with `κ_C = 0`). On example10 the consumer's `fecundity = 0.25` and
+`propagule share = 0` (`dispersal_propagule_cost_coefficient = 0`) give `η_C = 0.155`, and
+with `κ_C = 0.45`, `s = 0.2`: `χ_C = 0.5012` — `β` rises by 11 % over the `κ_C` lumping.
+Because `χ_C` multiplies `β` and nothing else, `I`, A2's `Λ` (through `χ_C·γ·e_C`), the
+π-forms of [`440-dimensionless-groups.md`](440-dimensionless-groups.md) and
+`hopf_prototype`'s crossing `base* = (1 + m)/(χ_C·γ·a·K_P·e_dist)` all carry it; the
+example10 numbers below and in those notes are re-pinned accordingly. `bifurcation.rs`
+(the single-founder mixotroph lift of `hopf_prototype`) still lumps `κ` in both its rows
+and is outside this note.
 
 **One deliberate deviation.** `hopf_prototype` clamps `r_P` at 0 (it only needs the interior
 fixed point). The sign of `r_P` *is* the extinction gate, so the boundary analysis keeps it
@@ -254,22 +275,24 @@ for this map, as is typical for planar Lotka–Volterra-type systems — but the
 persistence runs through the boundary, not through that point's stability.
 
 On `scenarios/example10_predator_prey_hopf.json` (committed parameters, current drain form
-— `a = 0.55`, so the Hopf crossing is now `base* = 0.3405`, not the pre-#380 `0.4427`
-quoted in `F-hopf-validation.md`; `hopf_prototype` reports the same):
+— `a = 0.55` and `χ_C = 0.5012`, so the Hopf crossing is now `base* = 0.3057`, not the
+`0.3405` of the `κ_C` lumping nor the pre-#380 `0.4427` quoted in `F-hopf-validation.md`;
+`hopf_prototype` reports the same and pins it by unit test):
 
 ```
   point                               P          C   lambda_1   lambda_2
   (0,0)      extinction          0.0000     0.0000     2.3479     0.8870
-  (K_P,0)    producer-only      71.1111     0.0000    -0.3479     3.5018
-  (P*,C*)    interior            3.0737     2.3449     1.0428     1.0428
+  (K_P,0)    producer-only      71.1111     0.0000    -0.3479     3.7992
+  (P*,C*)    interior            2.7599     2.3557     1.0460     1.0460
 ```
 
-(`r_P = 1.3479` with `χ_P = 0.5697`; the pre-#466 lumping gave `r_P = 1.3014` — the
-reproductive share adds 3.6 % on this low-fecundity producer, and moves nothing but the
-`r_P`-dependent entries: `λ_P` at the two boundary points, `C*`, and the interior modulus.
-`K_P`, `β`, `I`, the Hopf line, and the sweep below are unchanged.)
+(`r_P = 1.3479` with `χ_P = 0.5697` — the pre-#466 lumping gave `r_P = 1.3014`, the
+reproductive share adding 3.6 % on this low-fecundity producer; and `β = 0.04095` with
+`χ_C = 0.5012` — the pre-#482 lumping gave `β = 0.03677`, `I = 23.1`, and the table's
+`λ_C(K_P, 0) = 3.5018`, `P* = 3.0737`, `C* = 2.3449`, `|λ| = 1.0428`. `K_P`, `m`, the
+extinction point, and the Hopf line `(1 + m)/m` are untouched by either.)
 
-`ρ = F/B_P = 71.1 > 1` and `I = β·K_P/m = 23.1 > 1`: the mean field says example10 is
+`ρ = F/B_P = 71.1 > 1` and `I = β·K_P/m = 25.8 > 1`: the mean field says example10 is
 permanent, and (since `I > (1+m)/m = 9.85`) oscillating. See the authority boundary for
 what that does and does not mean for the committed file.
 
@@ -279,9 +302,9 @@ Both clauses are ratios of a gain to a maintenance floor:
 
 - **`ρ = F / B_P`** — the *extinction ratio*. Clause (1) is `ρ > 1`. It is also `K_P` in
   units of the reference body.
-- **`I = β·K_P / m = κ_C·γ·base·exp(−λ·d)·h_C · F / (B_P·B_C)`** — the *invasion ratio*:
+- **`I = β·K_P / m = χ_C·γ·base·exp(−λ·d)·h_C · F / (B_P·B_C)`** — the *invasion ratio*:
   the consumer's per-tick conversion at the producer's standing crop, over its own floor.
-  Clause (2) is `I > 1`. Note `I = ε·ρ` with `ε = κ_C·γ·base·exp(−λ·d)·h_C / B_C`, so in the
+  Clause (2) is `I > 1`. Note `I = ε·ρ` with `ε = χ_C·γ·base·exp(−λ·d)·h_C / B_C`, so in the
   `(ρ, base)` plane the invasion boundary is the hyperbola `base · ρ = const`.
 
 In these coordinates the Hopf validation's crossing `P*/K_P = m/(1+m)` reads
@@ -307,31 +330,31 @@ parameter of example10 fixed. Each cell is classified twice:
 
 ```
        rho  I@eff=1     |    |    |    |    |
-      0.50     0.20 .........................
-      0.62     0.25 .........................
-      0.78     0.32 .........................
-      0.97     0.39 .........................
-      1.21     0.49 .........................
-      1.51     0.61 .........................
-      1.88     0.76 .........................
-      2.34     0.95 .........................
-      2.92     1.19 ....................?####
-      3.65     1.48 ................#########
-      4.55     1.85 .............############
-      5.67     2.31 ..........###############
-      7.07     2.88 ........#################
-      8.82     3.59 ......###################
-     11.00     4.47 .....####################
-     13.71     5.58 ....#####################
-     17.10     6.95 ...######################
-     21.32     8.67 ..#######################
-     26.59    10.81 ..####################ooo
-     33.16    13.49 .#################oooxxxx
-     41.35    16.82 .#############oooxxxxxxxx
-     51.57    20.97 .##########oooxxxxxxxxxxx
-     64.31    26.15 #########ooxxxxxxxxxxxxxx
-     80.19    32.61 #######ooxxxxxxxxxxxxxxxx
-    100.00    40.67 ######oxxxxxxxxxxxxxxxxxx
+      0.50     0.23 .........................
+      0.62     0.28 .........................
+      0.78     0.35 .........................
+      0.97     0.44 .........................
+      1.21     0.55 .........................
+      1.51     0.68 .........................
+      1.88     0.85 .........................
+      2.34     1.06 .......................##
+      2.92     1.32 ..................#######
+      3.65     1.65 ...............##########
+      4.55     2.06 ............#############
+      5.67     2.57 .........################
+      7.07     3.20 .......##################
+      8.82     3.99 ......###################
+     11.00     4.98 ....?####################
+     13.71     6.21 ....#####################
+     17.10     7.74 ...######################
+     21.32     9.66 ..#######################
+     26.59    12.04 ..##################oooox
+     33.16    15.02 .###############oooxxxxxx
+     41.35    18.73 .############ooxxxxxxxxxx
+     51.57    23.36 .#########ooxxxxxxxxxxxxx
+     64.31    29.13 ########ooxxxxxxxxxxxxxxx
+     80.19    36.32 ######ooxxxxxxxxxxxxxxxxx
+    100.00    45.29 #####oxxxxxxxxxxxxxxxxxxx
   cols: eff = 0.04 .. 1.00 in steps of 0.04; '|' marks 0.2, 0.4, 0.6, 0.8, 1.0
   '#' permanent, stable interior   'o' permanent, above the Hopf line
   '.' not permanent                'x' Euler map left the unsaturated regime
@@ -341,9 +364,10 @@ parameter of example10 fixed. Each cell is classified twice:
 **Agreement, with tolerance.** Cells within **2 %** of either analytic boundary
 (`|ρ − 1| ≤ 0.02` or `|I − 1| ≤ 0.02`) are not scored: there the invasion growth factor is
 within `0.02·m ≈ 0.002` of 1 and a 20 000-tick horizon cannot separate slow growth from slow
-decay. Of the 625 cells, 4 are within tolerance (the single `?` at `ρ = 2.92, eff = 0.84`
-is one of them: `I = 1.00`), 71 left the unsaturated regime, and the remaining **550 agree,
-0 disagree**. The unit test `boundary_escape_numerics_agree_with_analytic_condition` runs
+decay. Of the 625 cells, 6 are within tolerance (the single `?` at `ρ = 11.0, eff = 0.20`
+is one of them: `I = 1.00`), 81 left the unsaturated regime, and the remaining **538 agree,
+0 disagree** (with the `κ_C` lumping the same sweep scored 550/550; `χ_C` raises every
+`I` by 11 %, which moves the `I = 1` hyperbola down a row and the H2 exit in by a column). The unit test `boundary_escape_numerics_agree_with_analytic_condition` runs
 the same check on a finer 40×40 grid (≥ 1000 scored cells, 0 disagreements allowed) in
 under half a second.
 
@@ -403,7 +427,7 @@ It says nothing else. Specifically:
   is the negative one — the direction a gate uses.
 - **No space.** `a·P·C` is an integral over an in-reach indicator that the mean field sets
   to 1. example10 is the standing counter-example: the mean field reads it as permanent
-  and oscillating (`ρ = 71`, `I = 23`), and the committed file's consumers go extinct by
+  and oscillating (`ρ = 71`, `I = 26`), and the committed file's consumers go extinct by
   tick 2 because their reach never meets the sparse standing crop
   ([`F-hopf-validation.md`](F-hopf-validation.md), primary fault). The gap between "permanent
   here" and "dead there" localises to the in-reach geometry, exactly as AC5 says a
@@ -435,10 +459,10 @@ per-tick conversion, was the binding constraint on the one example examined.
 
 - Research doc with the standard header; nothing added to `docs/system-design/` — this file.
 - The condition reduces to `F ≤ B` on the `C = 0` face — shown in *Reduction to the
-  extinction gate*, and unit-tested; the `r_P` row counts both of `κ_P`'s branches (#466),
-  so clause (1) carries no allocation conjunct.
+  extinction gate*, and unit-tested; the `r_P` and `β` rows count both of `κ_P`'s and
+  `κ_C`'s branches (#466, #482), so neither clause carries an allocation conjunct.
 - Boundary-equilibrium table with eigenvalues — above, symbolic and on example10.
-- Numerics agree with the analytic boundary within a stated tolerance — 550/550 scored
+- Numerics agree with the analytic boundary within a stated tolerance — 538/538 scored
   cells, 2 % boundary band, unit-tested on a 40×40 grid.
 - Authority boundary — stated.
 - No change to the stepper, phases, RNG, evaluator, or search — the only code is the
