@@ -78,6 +78,7 @@ pub fn photosynthesise(
             energy_delta: income,
             position: Some(agents[i].position),
             target_was_carcass: false,
+            second_parent: None,
         });
     }
     events
@@ -145,6 +146,7 @@ pub fn absorb_nutrients(
                 energy_delta: uptake,
                 position: Some(agents[i].position),
                 target_was_carcass: false,
+                second_parent: None,
             });
         }
     }
@@ -186,6 +188,7 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
             energy_delta: cost,
             position: Some(agent.position),
             target_was_carcass: false,
+            second_parent: None,
         });
     }
     (events, total_dissipated)
@@ -387,6 +390,7 @@ pub fn redistribute(
                 energy_delta: received,
                 position: Some(agents[donor].position),
                 target_was_carcass: false,
+                second_parent: None,
             });
         }
 
@@ -532,6 +536,7 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
                     energy_delta: to_structure,
                     position: Some(agent.position),
                     target_was_carcass: false,
+                    second_parent: None,
                 });
             }
         } else if growth_budget > 0.0 {
@@ -591,6 +596,7 @@ pub fn apply_wear(
                 energy_delta: total_wear_delta,
                 position: Some(agent.position),
                 target_was_carcass: false,
+                second_parent: None,
             });
         }
     }
@@ -804,6 +810,7 @@ pub fn resolve_drains(
                 energy_delta: actual_drain,
                 position: Some(agents[drain.target_idx].position),
                 target_was_carcass: false,
+                second_parent: None,
             });
         }
     }
@@ -958,6 +965,7 @@ pub fn resolve_drains(
                 energy_delta: actual_drain,
                 position: Some(carcass_pos),
                 target_was_carcass: true,
+                second_parent: None,
             });
         }
 
@@ -1010,6 +1018,7 @@ pub fn check_death_thresholds(
                 energy_delta: 0.0,
                 position: Some(agent.position),
                 target_was_carcass: false,
+                second_parent: None,
             });
             carcasses.push(Carcass {
                 id: agent.id,
@@ -1198,6 +1207,7 @@ pub fn move_agents(
             energy_delta: cost,
             position: Some(new_pos),
             target_was_carcass: false,
+            second_parent: None,
         });
     }
 
@@ -1209,11 +1219,20 @@ pub fn move_agents(
     }
 }
 
+/// An offspring awaiting its canonical id: its world-state sort key, the
+/// body, and its parentage `(parent, mate)`.
+type KeyedOffspring = ((u64, u64, usize), Agent, (u64, Option<u64>));
+
 /// Result of the reproduction resolution phase.
 pub struct ReproductionResult {
     pub events: Vec<Event>,
     pub dissipated: f32,
     pub offspring: Vec<Agent>,
+    /// Parentage of each offspring, index-aligned with `offspring`: the
+    /// parent (the seed parent of a pair) and the mate, if any. A raw descent
+    /// fact for the `Born` event the world emits once final ids are assigned
+    /// (#443); it changes no trajectory.
+    pub parents: Vec<(u64, Option<u64>)>,
 }
 
 /// Resolve reproduction: coordinated pass 2.
@@ -1245,7 +1264,7 @@ pub fn resolve_reproduction(
     // brood (the brood's draw order off its own local stream — deterministic).
     // Without canonical assignment, a shuffled reproduction loop would mint the
     // same offspring with different ids, diverging every downstream keyed stream.
-    let mut keyed_offspring: Vec<((u64, u64, usize), Agent)> = Vec::new();
+    let mut keyed_offspring: Vec<KeyedOffspring> = Vec::new();
     let extent = params.world_extent;
 
     // Build eligible set: alive, with both reproductive earmarks above their
@@ -1347,6 +1366,7 @@ pub fn resolve_reproduction(
                 energy_delta: investment,
                 position: Some(parent_pos),
                 target_was_carcass: false,
+                second_parent: None,
             });
             continue;
         }
@@ -1451,6 +1471,7 @@ pub fn resolve_reproduction(
                     birth_slot,
                 ),
                 child,
+                (parent_id, None),
             ));
         }
 
@@ -1464,6 +1485,7 @@ pub fn resolve_reproduction(
             energy_delta: investment,
             position: Some(parent_pos),
             target_was_carcass: false,
+            second_parent: None,
         });
     }
 
@@ -1650,6 +1672,7 @@ pub fn resolve_reproduction(
                 energy_delta: total_investment,
                 position: Some(mid_pos),
                 target_was_carcass: false,
+                second_parent: None,
             });
             continue;
         }
@@ -1800,7 +1823,11 @@ pub fn resolve_reproduction(
                 repro_nutrient: 0.0,
             };
             // Sort key: symmetric ordered pair (min id, max id), brood position.
-            keyed_offspring.push(((pair_key_lo, pair_key_hi, birth_slot), child));
+            keyed_offspring.push((
+                (pair_key_lo, pair_key_hi, birth_slot),
+                child,
+                (a_id, Some(b_id)),
+            ));
         }
 
         // Sexual event: target is Some(mate_id)
@@ -1815,6 +1842,7 @@ pub fn resolve_reproduction(
             // offspring originate from (issue #283).
             position: Some(seed_pos),
             target_was_carcass: false,
+            second_parent: None,
         });
     }
 
@@ -1830,9 +1858,10 @@ pub fn resolve_reproduction(
     // a reachable id, so the asexual/sexual orderings never interleave on a tie.
     keyed_offspring.sort_by(|a, b| a.0.cmp(&b.0));
     let mut next_id = next_id;
+    let parents: Vec<(u64, Option<u64>)> = keyed_offspring.iter().map(|(_, _, p)| *p).collect();
     let offspring: Vec<Agent> = keyed_offspring
         .into_iter()
-        .map(|(_, mut child)| {
+        .map(|(_, mut child, _)| {
             child.id = next_id;
             next_id += 1;
             child
@@ -1843,6 +1872,7 @@ pub fn resolve_reproduction(
         events,
         dissipated,
         offspring,
+        parents,
     }
 }
 

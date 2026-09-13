@@ -212,6 +212,7 @@ pub fn metabolise_soa(s: &mut AgentSoA, params: &WorldParameters) -> (Vec<Event>
             energy_delta: cost,
             position: Some((s.pos_x[i], s.pos_y[i])),
             target_was_carcass: false,
+            second_parent: None,
         });
     }
     (events, total_dissipated)
@@ -312,6 +313,7 @@ pub fn grow_soa(s: &mut AgentSoA, params: &WorldParameters) -> (Vec<Event>, f32)
                     energy_delta: to_structure,
                     position: Some((s.pos_x[i], s.pos_y[i])),
                     target_was_carcass: false,
+                    second_parent: None,
                 });
             }
         } else if growth_budget > 0.0 {
@@ -366,6 +368,7 @@ pub fn apply_wear_soa(
                 energy_delta: total_wear_delta,
                 position: Some((s.pos_x[i], s.pos_y[i])),
                 target_was_carcass: false,
+                second_parent: None,
             });
         }
     }

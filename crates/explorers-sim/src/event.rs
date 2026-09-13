@@ -14,6 +14,13 @@ pub enum EventKind {
     /// network connection. `energy_delta` is the net amount received by the
     /// recipient. Emitted only when the network is enabled; inert by default.
     Redistributed,
+    /// A birth (#443): `source` is the offspring's world id, `target` the
+    /// parent — for a sexual birth the seed parent, with the mate in
+    /// `second_parent`. One event per offspring, emitted after the litter's
+    /// `Reproduced` event once final ids are assigned. A raw descent fact, so
+    /// an observer can follow a lineage (an invader cohort and its
+    /// descendants) off the log alone; no state is added to `Agent`.
+    Born,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -31,8 +38,12 @@ pub struct Event {
     /// the green (predation) one without re-deriving carcass state. Always
     /// `false` for non-`Consumed` events.
     pub target_was_carcass: bool,
+    /// Set only on `Born` events: the second parent of a sexual birth. `None`
+    /// for asexual births and every other event kind.
+    pub second_parent: Option<u64>,
 }
 
+#[derive(Clone)]
 pub struct EventLog {
     events: Vec<Event>,
 }
@@ -101,6 +112,7 @@ mod tests {
             energy_delta: 10.0,
             position: None,
             target_was_carcass: false,
+            second_parent: None,
         }
     }
 
@@ -168,6 +180,7 @@ mod tests {
             energy_delta: 5.0,
             position: None,
             target_was_carcass: false,
+            second_parent: None,
         })
         .unwrap();
         log.append(Event {
@@ -179,6 +192,7 @@ mod tests {
             energy_delta: 8.0,
             position: None,
             target_was_carcass: false,
+            second_parent: None,
         })
         .unwrap();
         log.append(Event {
@@ -190,6 +204,7 @@ mod tests {
             energy_delta: 3.0,
             position: None,
             target_was_carcass: false,
+            second_parent: None,
         })
         .unwrap();
 

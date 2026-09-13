@@ -19,6 +19,7 @@ pub enum EnergyEndpoint {
 ///
 /// Enforces the open-system invariant: solar input is the sole tap,
 /// metabolic cost and trophic transfer loss are the drains.
+#[derive(Clone)]
 pub struct EnergyLedger {
     flows: Vec<(EnergyEndpoint, EnergyEndpoint, f32)>,
 }

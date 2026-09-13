@@ -36,6 +36,7 @@ pub struct PoolTotals {
 ///
 /// Enforces the closed-system invariant: nutrient is neither created nor
 /// destroyed, only moved between pools (grid cells, agents, carcasses).
+#[derive(Clone)]
 pub struct NutrientLedger {
     flows: Vec<(NutrientEndpoint, NutrientEndpoint, f32)>,
 }

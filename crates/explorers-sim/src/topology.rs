@@ -23,6 +23,7 @@ enum EdgeKind {
 /// such threshold (continuum in the sim, buckets in the readout).
 const DETRITAL_RELIANCE_THRESHOLD: f32 = 0.5;
 
+#[derive(Clone, Debug)]
 pub struct TopologyProjection {
     cursor: usize,
     active_agents: HashSet<u64>,
@@ -290,6 +291,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             // Heterotroph 1 drains carcass 99 — the detrital (brown) pathway.
             Event {
@@ -301,6 +303,7 @@ mod tests {
                 energy_delta: 5.0,
                 position: None,
                 target_was_carcass: true,
+                second_parent: None,
             },
         ]);
 
@@ -323,6 +326,7 @@ mod tests {
             energy_delta: 10.0,
             position: None,
             target_was_carcass: false,
+            second_parent: None,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -342,6 +346,7 @@ mod tests {
             energy_delta: 5.0,
             position: None,
             target_was_carcass: false,
+            second_parent: None,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -363,6 +368,7 @@ mod tests {
                 energy_delta: 5.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 2,
@@ -373,6 +379,7 @@ mod tests {
                 energy_delta: 3.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
         ]);
 
@@ -394,6 +401,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 1,
@@ -404,6 +412,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 2,
@@ -414,6 +423,7 @@ mod tests {
                 energy_delta: 5.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 3,
@@ -424,6 +434,7 @@ mod tests {
                 energy_delta: 0.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
         ]);
 
@@ -446,6 +457,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 1,
@@ -456,6 +468,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 1,
@@ -466,6 +479,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             // Agent 2 consumes agent 1 -> consumer
             Event {
@@ -477,6 +491,7 @@ mod tests {
                 energy_delta: 5.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             // Agent 3 drains carcass 99 -> detrital pathway
             Event {
@@ -488,6 +503,7 @@ mod tests {
                 energy_delta: 3.0,
                 position: None,
                 target_was_carcass: true,
+                second_parent: None,
             },
         ]);
 
@@ -517,6 +533,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 2,
@@ -527,6 +544,7 @@ mod tests {
                 energy_delta: 5.0,
                 position: None,
                 target_was_carcass: true,
+                second_parent: None,
             },
         ]);
 
@@ -550,6 +568,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 2,
@@ -560,6 +579,7 @@ mod tests {
                 energy_delta: 3.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 2,
@@ -570,6 +590,7 @@ mod tests {
                 energy_delta: 1.0,
                 position: None,
                 target_was_carcass: true,
+                second_parent: None,
             },
         ]);
 
@@ -593,6 +614,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 2,
@@ -603,6 +625,7 @@ mod tests {
                 energy_delta: 2.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 2,
@@ -613,6 +636,7 @@ mod tests {
                 energy_delta: 2.0,
                 position: None,
                 target_was_carcass: true,
+                second_parent: None,
             },
         ]);
 
@@ -636,6 +660,7 @@ mod tests {
             energy_delta: 10.0,
             position: None,
             target_was_carcass: false,
+            second_parent: None,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -658,6 +683,7 @@ mod tests {
                 energy_delta: 0.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 1,
@@ -668,6 +694,7 @@ mod tests {
                 energy_delta: 8.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
         ]);
 
@@ -690,6 +717,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 2,
@@ -700,6 +728,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 3,
@@ -710,6 +739,7 @@ mod tests {
                 energy_delta: 0.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 4,
@@ -720,6 +750,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
         ]);
 
@@ -745,6 +776,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 1,
@@ -755,6 +787,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 1,
@@ -765,6 +798,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             // Consumer 2 eats producer 1 twice
             Event {
@@ -776,6 +810,7 @@ mod tests {
                 energy_delta: 5.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 3,
@@ -786,6 +821,7 @@ mod tests {
                 energy_delta: 3.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             // Consumer 3 also eats producer 1
             Event {
@@ -797,6 +833,7 @@ mod tests {
                 energy_delta: 2.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
         ]);
 
@@ -828,6 +865,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 1,
@@ -838,6 +876,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             // Agent 1 and 2 mate -> child 3
             Event {
@@ -849,6 +888,7 @@ mod tests {
                 energy_delta: 0.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             Event {
                 tick: 2,
@@ -859,6 +899,7 @@ mod tests {
                 energy_delta: 8.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
             // Agent 4 born independently (separate lineage)
             Event {
@@ -870,6 +911,7 @@ mod tests {
                 energy_delta: 10.0,
                 position: None,
                 target_was_carcass: false,
+                second_parent: None,
             },
         ]);
 
@@ -896,6 +938,7 @@ mod tests {
             energy_delta: 10.0,
             position: None,
             target_was_carcass: false,
+            second_parent: None,
         })
         .unwrap();
 
@@ -912,6 +955,7 @@ mod tests {
             energy_delta: 10.0,
             position: None,
             target_was_carcass: false,
+            second_parent: None,
         })
         .unwrap();
         proj.update(&log);
