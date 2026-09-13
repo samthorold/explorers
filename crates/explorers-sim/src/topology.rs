@@ -23,6 +23,7 @@ enum EdgeKind {
 /// such threshold (continuum in the sim, buckets in the readout).
 const DETRITAL_RELIANCE_THRESHOLD: f32 = 0.5;
 
+#[derive(Clone, Debug)]
 pub struct TopologyProjection {
     cursor: usize,
     active_agents: HashSet<u64>,

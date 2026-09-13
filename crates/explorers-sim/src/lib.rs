@@ -713,6 +713,7 @@ impl Agent {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Carcass {
     pub id: u64,
     pub position: (f32, f32),
@@ -841,7 +842,11 @@ fn redistribution_flow(
     )
 }
 
+/// `Clone` forks the trajectory: a clone and its original step identically
+/// from the fork tick (every draw is keyed on world state, #376), so one run
+/// can feed several experimental arms (#443).
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct World {
     params: WorldParameters,
     agents: Vec<Agent>,
@@ -1065,6 +1070,26 @@ impl World {
         agent.id = self.next_agent_id;
         self.next_agent_id += 1;
         self.agents.push(agent);
+    }
+
+    /// Remove every agent the predicate rejects and hand them back (#443:
+    /// the invasion instrument's "resident web without the role"). Survivors
+    /// keep their ids and the id counter is untouched, so ids are never
+    /// reissued. The removed bodies' energy and nutrient leave the world with
+    /// them; a caller that wants a closed nutrient budget returns
+    /// `nutrient_total` to the grid itself.
+    pub fn retain_agents<F: FnMut(&Agent) -> bool>(&mut self, mut keep: F) -> Vec<Agent> {
+        let mut removed = Vec::new();
+        let mut kept = Vec::with_capacity(self.agents.len());
+        for agent in self.agents.drain(..) {
+            if keep(&agent) {
+                kept.push(agent);
+            } else {
+                removed.push(agent);
+            }
+        }
+        self.agents = kept;
+        removed
     }
 
     pub fn add_carcass(&mut self, carcass: Carcass) {
@@ -3477,6 +3502,76 @@ mod tests {
             carcass_ids.is_disjoint(&agent_ids),
             "seeded-carcass ids must never collide with agent ids: carcasses {carcass_ids:?}, agents {agent_ids:?}"
         );
+    }
+
+    /// A cloned world is a fork of the trajectory (#443): stepping the clone
+    /// and the original gives byte-identical rosters, so one resident run can
+    /// feed several experimental arms.
+    #[test]
+    fn a_cloned_world_steps_identically_to_its_original() {
+        let recipe: WorldRecipe = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../scenarios/example10_predator_prey_hopf.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut world = World::from_recipe(&recipe, 3);
+        for _ in 0..5 {
+            world.step();
+        }
+        let mut fork = world.clone();
+        for _ in 0..5 {
+            world.step();
+            fork.step();
+        }
+        assert_eq!(world.tick(), fork.tick());
+        assert_eq!(world.agents().len(), fork.agents().len());
+        for (a, b) in world.agents().iter().zip(fork.agents()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.reserve.to_bits(), b.reserve.to_bits());
+            assert_eq!(a.structure.to_bits(), b.structure.to_bits());
+            assert_eq!(a.position, b.position);
+        }
+        assert_eq!(world.event_log().len(), fork.event_log().len());
+    }
+
+    /// `retain_agents` removes the agents the predicate rejects and hands
+    /// them back, leaving the survivors' ids and the id counter untouched.
+    #[test]
+    fn retain_agents_removes_the_rejected_and_returns_them() {
+        let recipe: WorldRecipe = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../scenarios/example10_predator_prey_hopf.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut world = World::from_recipe(&recipe, 3);
+        let before = world.agents().len();
+        let consumers = world
+            .agents()
+            .iter()
+            .filter(|a| a.traits.heterotrophy > a.traits.photosynthetic_absorption)
+            .count();
+        assert!(consumers > 0 && consumers < before);
+        let removed =
+            world.retain_agents(|a| a.traits.heterotrophy <= a.traits.photosynthetic_absorption);
+        assert_eq!(removed.len(), consumers);
+        assert_eq!(world.agents().len(), before - consumers);
+        assert!(
+            world
+                .agents()
+                .iter()
+                .all(|a| a.traits.heterotrophy <= a.traits.photosynthetic_absorption)
+        );
+        // A later addition still gets a fresh id above every id ever issued.
+        let max_id = world.agents().iter().map(|a| a.id).max().unwrap();
+        let removed_max = removed.iter().map(|a| a.id).max().unwrap();
+        world.add_agent(removed[0].clone());
+        assert!(world.agents().last().unwrap().id > max_id.max(removed_max));
     }
 
     #[test]

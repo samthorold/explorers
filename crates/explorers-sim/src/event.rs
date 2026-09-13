@@ -43,6 +43,7 @@ pub struct Event {
     pub second_parent: Option<u64>,
 }
 
+#[derive(Clone)]
 pub struct EventLog {
     events: Vec<Event>,
 }

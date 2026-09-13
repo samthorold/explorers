@@ -1219,6 +1219,10 @@ pub fn move_agents(
     }
 }
 
+/// An offspring awaiting its canonical id: its world-state sort key, the
+/// body, and its parentage `(parent, mate)`.
+type KeyedOffspring = ((u64, u64, usize), Agent, (u64, Option<u64>));
+
 /// Result of the reproduction resolution phase.
 pub struct ReproductionResult {
     pub events: Vec<Event>,
@@ -1260,7 +1264,7 @@ pub fn resolve_reproduction(
     // brood (the brood's draw order off its own local stream — deterministic).
     // Without canonical assignment, a shuffled reproduction loop would mint the
     // same offspring with different ids, diverging every downstream keyed stream.
-    let mut keyed_offspring: Vec<((u64, u64, usize), Agent, (u64, Option<u64>))> = Vec::new();
+    let mut keyed_offspring: Vec<KeyedOffspring> = Vec::new();
     let extent = params.world_extent;
 
     // Build eligible set: alive, with both reproductive earmarks above their
