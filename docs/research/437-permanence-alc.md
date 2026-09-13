@@ -37,11 +37,13 @@ binary-reach drain run over carcasses:
    `λ_P(𝓛) = 1 − μ_P < 1`. Only a heterotroph feeding on the pile can.
 3. **Lockup repeller condition.** The corner repels iff the heterotroph's per-tick
    conversion on the whole carcass pile beats its maintenance floor:
-   > **`Λ = σ · N_total · min(κ_C·γ·e_C, q/θ_C) / B_C > 1`**, with `σ = h_C·ι/ν`
+   > **`Λ = σ · N_total · min(χ_C·γ·e_C, q/θ_C) / B_C > 1`**, with `σ = h_C·ι/ν`
    — `h_C` the consumer's effective heterotrophy (binary-reach drain per target), `ι` the
    in-reach geometry, `ν` nutrient per carcass (so `N_total/ν` is the carcass count),
    `e_C = base_trophic_efficiency·exp(−trophic_distance_decay·d)` at the consumer↔carcass
-   distance, `q` carcass richness (nutrient per unit carcass energy), `θ_C` the consumer's
+   distance, `χ_C` the consumer's biomass conversion (both of `κ_C`'s branches — A1's
+   `χ_C` row, #482; an earlier version lumped the somatic `κ_C` alone), `q` carcass
+   richness (nutrient per unit carcass energy), `θ_C` the consumer's
    stoichiometric demand, `B_C` its maintenance. `Λ` is the carcass-pile twin of A1's
    invasion ratio `I = β·K_P/m`: `K_P` (the producer standing crop) becomes `N_total/ν` (the
    carcass standing pile) and the kernel acquires a Liebig branch in carcass richness.
@@ -51,10 +53,10 @@ binary-reach drain run over carcasses:
    `ln λ_P(virgin) · ln λ_C(𝓛) > ln(1/(1−B_C)) · ln(1/(1−μ_P))`. (i) and (ii) are necessary;
    the product (iii) is what a common average-Lyapunov weight needs and is the classical
    heteroclinic-cycle criterion. Boundary-escape numerics agree with the analytic frontier
-   on 238/238 scored cells of a 25×25 sweep (0 disagreements), the frontier being the
+   on 230/230 scored cells of a 25×25 sweep (0 disagreements), the frontier being the
    hyperbola `Λ = 1` (`base_trophic_efficiency · N_total = const`).
 5. **Which part is a gate.** `Λ` contains `ι`, `ν`, `q`, `e_C`'s distance `d`, and the
-   cluster's `h_C, κ_C, θ_C, B_C` — all endogenous or per-cluster. The only pure-parameter
+   cluster's `h_C, χ_C, θ_C, B_C` — all endogenous or per-cluster. The only pure-parameter
    kills are `base_trophic_efficiency = 0` (then `Λ = 0` for every value of the endogenous
    terms) and the no-heterotroph/no-reach corner (`h_C·ι = 0`): exactly the degenerate
    corners `viability.md`'s decomposer-return finding already names. Everything else is a
@@ -112,7 +114,7 @@ G    = min( r_P·P·(1 − P/K_P)⁺ , (Φ + U)/θ_P )             producer grow
 S    = r_P·P·(P/K_P − 1)⁺                                   shading loss      A1's logistic decline branch
 D_L  = h_C·P·C_E                                            living drain      flow 3, A1's bilinear term
 D_C  = min( σ·C_E·C_N , C_N/q )                             carcass drain     flow 3 on carcass targets, σ = h_C·ι/ν
-ΔC   = min( β·P·C_E + κ_C·γ·e_C·D_C , (θ_P·D_L + q·D_C)/θ_C ) consumer growth  flows 3, 7, 9 (Liebig)
+ΔC   = min( β·P·C_E + χ_C·γ·e_C·D_C , (θ_P·D_L + q·D_C)/θ_C ) consumer growth  flows 3, 7, 9 (Liebig)
 X    = θ_P·D_L + q·D_C − θ_C·ΔC                             excretion → A     flow 3, stoichiometric mismatch
 M_P  = μ_P·P + S                                            producer deaths   flow 6 (wear; shading), check_death_thresholds
 M_C  = B_C·C_E                                              consumer deaths   A1's removal diagonal (metabolise → death)
@@ -156,8 +158,8 @@ Term by term:
   target is dead, no separate capability — which is also why there is **no separate
   decomposer compartment** (below).
 - **Consumer growth `ΔC` (Liebig).** Energy-limited: A1's `β·P·C_E` on living prey plus
-  `κ_C·γ·e_C·D_C` on carcasses (grow phase × the committed kernel at the consumer↔carcass
-  distance). Nutrient-limited: the consumer retains at most its stoichiometric need and
+  `χ_C·γ·e_C·D_C` on carcasses (grow phase over both of `κ_C`'s branches — A1's `χ_C`,
+  #482 — × the committed kernel at the consumer↔carcass distance). Nutrient-limited: the consumer retains at most its stoichiometric need and
   binds at `θ_C` per unit structure, so what arrives with the drained structure,
   `θ_P·D_L + q·D_C`, supports at most that over `θ_C`.
 - **Excretion `X`.** The remainder is excreted at the feeding site (stoichiometric
@@ -185,7 +187,7 @@ dead, so the split of its feeding between prey and pile is not a parameter but t
 the two standing stocks `P : ι·C_N/ν`. "Decomposer mass" is therefore the consumer
 compartment itself, weighted by that ratio, and the reduction stays at five named stocks
 with nothing folded away by fiat. Where a scenario carries a distinct sessile
-detritivore guild (example13) the same map applies with that guild's `h_C, κ_C, θ_C, B_C`
+detritivore guild (example13) the same map applies with that guild's `h_C, χ_C, θ_C, B_C`
 and its own distance `d` to the carcass pile — a second consumer compartment would only be
 needed to ask *coexistence* questions between guilds, which is the monoculture↔coexistence
 mode, not this one.
@@ -253,7 +255,7 @@ available pool `A`:
 ```
 λ_P(A) = 1 + min(r_P, α_P/θ_P) − μ_P     for A > 0    (uptake cap inactive for small P)
 λ_P(0) = 1 − μ_P                                       (no pool: Liebig closes growth)
-λ_C(A) = 1 + σ·(N_total − A)·min(κ_C·γ·e_C, q/θ_C) − B_C
+λ_C(A) = 1 + σ·(N_total − A)·min(χ_C·γ·e_C, q/θ_C) − B_C
 ```
 
 `λ_P` is constant along the open line and drops at the corner; `λ_C` rises linearly toward
@@ -270,7 +272,7 @@ unsaturated set where neither drain hits its cap) the coupled map is permanent i
 
 ```
 (i)   min(r_P, α_P/θ_P) > μ_P                                      producer invades 𝓥
-(ii)  Λ := σ·N_total·min(κ_C·γ·e_C, q/θ_C) / B_C > 1                heterotroph invades 𝓛
+(ii)  Λ := σ·N_total·min(χ_C·γ·e_C, q/θ_C) / B_C > 1                heterotroph invades 𝓛
 (iii) ln λ_P(𝓥) · ln λ_C(𝓛)  >  ln(1/(1 − B_C)) · ln(1/(1 − μ_P))     the cycle repels
 ```
 
@@ -307,33 +309,33 @@ ends: the producer at `𝓥`, the heterotroph at `𝓛`. It is not an artefact o
 family: an orbit can shuttle along `𝓓` (producers silt the pool → heterotrophs unlock it →
 producers regrow → …) and whether that shuttle spirals in to `𝓓` or out of it is exactly
 the balance (iii) states. In every committed example examined (iii) holds by a wide margin
-(example10: `7.5 > 0.002`), because `μ_P` and `B_C` are small per tick; it would bind only
+(example10: `7.8 > 0.002`), because `μ_P` and `B_C` are small per tick; it would bind only
 for a world whose heterotroph barely clears `Λ = 1` while its producers die fast.
 
 ## The lockup repeller condition, in committed symbols
 
 ```
-Λ  =  (h_C·ι/ν) · N_total · min( κ_C·γ·base·exp(−λ·d_C) ,  q/θ_C ) / B_C
-   =  σ·N_total·min(κ_C·γ·e_C, q/θ_C) / B_C                              > 1
+Λ  =  (h_C·ι/ν) · N_total · min( χ_C·γ·base·exp(−λ·d_C) ,  q/θ_C ) / B_C
+   =  σ·N_total·min(χ_C·γ·e_C, q/θ_C) / B_C                              > 1
 ```
 
-Reading left to right: (somatic allocation) × (per-target drain) × (reach geometry) ×
+Reading left to right: (biomass conversion) × (per-target drain) × (reach geometry) ×
 (carcasses in the pile) × Liebig-min of (energy conversion through the committed kernel)
 and (carcass richness over own demand), over (maintenance floor). Compare `viability.md`'s
 decomposer-return floor, `base_trophic_efficiency · (reachable carcass energy per tick) ≥
 base_metabolic_rate + maintenance(decomposer body)`: `Λ > 1` is that inequality with its
 terms named — the reachable carcass energy per tick is `h_C·ι·N_total/ν` (binary reach:
 every in-reach carcass drained at `h_C`, the cap inactive against a full pile), the return
-carries `κ_C·γ` and the distance kernel, and the nutrient branch is added.
+carries `χ_C·γ` and the distance kernel, and the nutrient branch is added.
 
 Two things the form makes visible:
 
-- **`Λ` is `I` with the pile in place of the crop.** A1's `I = κ_C·γ·e·h_C·K_P/B_C` is the
+- **`Λ` is `I` with the pile in place of the crop.** A1's `I = χ_C·γ·e·h_C·K_P/B_C` is the
   consumer's conversion at the producer standing crop `K_P` bodies; `Λ` is the same
   conversion at the carcass standing pile `N_total/ν` bodies, with `ι` explicit (A1 sets
   the living-prey indicator to 1 — the same lumping, silently) and the kernel Liebig-capped
   by richness. For a producer-dominated pile `e_C = e` (a carcass keeps its trait vector),
-  so `Λ/I = ι·(N_total/ν)/K_P · min(1, q/(κ_C·γ·e·θ_C))`: the pile-to-crop ratio.
+  so `Λ/I = ι·(N_total/ν)/K_P · min(1, q/(χ_C·γ·e·θ_C))`: the pile-to-crop ratio.
 - **Carcass *count*, not carcass mass, is what the drain multiplies.** The committed
   binary-reach drain is per target (#380), so at fixed `N_total` many small carcasses are
   cleared faster than few large ones (`ν` small ⟹ `Λ` large). Since the death threshold is
@@ -398,7 +400,7 @@ The issue asks for this to be explicit; here it is, term by term of `Λ > 1`:
 | term | status | consequence |
 |---|---|---|
 | `base_trophic_efficiency`, `trophic_distance_decay`, `growth_efficiency`, `N_total`, `base_metabolic_rate` | world parameters | enter `Λ` monotonically; can be swept |
-| `h_C`, `κ_C`, `θ_C`, `B_C` | per-cluster traits (as A1's `I`) | a gate would need a "best heterotroph" bound over the trait box |
+| `h_C`, `χ_C`, `θ_C`, `B_C` | per-cluster traits (as A1's `I`) | a gate would need a "best heterotroph" bound over the trait box |
 | `d_C` (distance to the pile's trait vectors) | per-cluster and per-history | as A1's `d` |
 | `ι` (reach geometry) | **endogenous** — committed form, emergent magnitude | *characterisation* |
 | `ν`, `q` (carcass count, richness) | **endogenous** — the dead bodies' content | *characterisation* |
@@ -419,7 +421,7 @@ heterotroph inoculum; it cannot say which seeds nucleate one.
 **What would make it a gate, and where this note stops.** If the design committed an upper
 bound `ῑ` on achievable reach fraction and a lower bound `ν̲` on nutrient per carcass (the
 smallest body that can die — which the peak-relative threshold does not currently supply,
-#433), then `Λ ≤ Λ̄ := (h̄_C·ῑ/ν̲)·N_total·min(κ̄_C·γ·base, q̄/θ̲_C)/B̲_C` with the trait
+#433), then `Λ ≤ Λ̄ := (h̄_C·ῑ/ν̲)·N_total·min(χ̄_C·γ·base, q̄/θ̲_C)/B̲_C` with the trait
 bounds from the search box, and **`Λ̄ ≤ 1` would be a search-box gate** — decidable before a
 run, with the same "gated dead that survives a rollout localises a mis-drawn bound"
 falsifiability as the existing prefilter. That is precisely the reserve remedy
@@ -443,35 +445,37 @@ free store so `q = ν = θ_P`):
 
 ```
      N_total  Lam@eff=1     |    |    |    |    |
-       0.100      0.203 .........................
-       0.147      0.298 .........................
-       0.215      0.438 .........................
-       0.316      0.643 .........................
-       0.464      0.944 .........................
-       0.681      1.385 .................?#######
-       1.000      2.033 ............#############
-       1.468      2.985 ........##############xxx
-       2.154      4.381 .....########xxxxxxxxxxxx
-       3.162      6.430 ...#####xxxxxxxxxxxxxxxxx
-       4.642      9.438 ..###xxxxxxxxxxxxxxxxxxxx
-       6.813     13.853 .##xxxxxxxxxxxxxxxxxxxxxx
-      10.000     20.333 .##xxxxxxxxxxxxxxxxxxxxxx
-      14.678     29.845 ##xxxxxxxxxxxxxxxxxxxxxxx
-      21.544     43.807 ##xxxxxxxxxxxxxxxxxxxxxxx
-      31.623     64.300 ##xxxxxxxxxxxxxxxxxxxxxxx
-      46.416     94.380 ##xxxxxxxxxxxxxxxxxxxxxxx
-      68.129    138.530 #xxxxxxxxxxxxxxxxxxxxxxxx
-     100.000    203.335 #xxxxxxxxxxxxxxxxxxxxxxxx
-     146.780    298.455 xxxxxxxxxxxxxxxxxxxxxxxxx
+       0.100      0.226 .........................
+       0.147      0.332 .........................
+       0.215      0.488 .........................
+       0.316      0.716 .........................
+       0.464      1.051 .......................?#
+       0.681      1.543 ................#########
+       1.000      2.265 ..........?##############
+       1.468      3.324 .......#############xxxxx
+       2.154      4.879 .....#######xxxxxxxxxxxxx
+       3.162      7.161 ...####xxxxxxxxxxxxxxxxxx
+       4.642     10.511 ..###xxxxxxxxxxxxxxxxxxxx
+       6.813     15.429 .##xxxxxxxxxxxxxxxxxxxxxx
+      10.000     22.646 .#xxxxxxxxxxxxxxxxxxxxxxx
+      14.678     33.240 ##xxxxxxxxxxxxxxxxxxxxxxx
+      21.544     48.789 ##xxxxxxxxxxxxxxxxxxxxxxx
+      31.623     71.613 ##xxxxxxxxxxxxxxxxxxxxxxx
+      46.416    105.113 #xxxxxxxxxxxxxxxxxxxxxxxx
+      68.129    154.285 #xxxxxxxxxxxxxxxxxxxxxxxx
+     100.000    226.459 #xxxxxxxxxxxxxxxxxxxxxxxx
+     146.780    332.397 xxxxxxxxxxxxxxxxxxxxxxxxx
        ...            ...  (all x to N_total = 1000)
   cols: eff = 0.04 .. 1.00 in steps of 0.04; '|' marks 0.2, 0.4, 0.6, 0.8, 1.0
   '#' persistent   '.' not persistent   'x' left the unsaturated regime   '!'/'?' disagreement
-  agree = 238, disagree = 0, within 2% of Lambda = 1 (not scored) = 1, left regime = 386
+  agree = 230, disagree = 0, within 2% of Lambda = 1 (not scored) = 3, left regime = 392
 ```
 
 - The `.`/`#` frontier is the hyperbola `Λ = 1`, i.e. `base_trophic_efficiency · N_total =
-  const` — the pile-side twin of A1's `I = 1` hyperbola in `(ρ, base)`. The single `?` at
-  `N_total = 0.68, eff = 0.72` is within the 2 % band (`Λ = 1.00`). The unit test
+  const` — the pile-side twin of A1's `I = 1` hyperbola in `(ρ, base)`. The two `?` at
+  `N_total = 0.46, eff = 0.96` and `N_total = 1.0, eff = 0.44` are within the 2 % band
+  (`Λ = 1.00`; with the `κ_C` lumping the same sweep scored 238/238 — `χ_C` raises every
+  `Λ` by 11 %, moving the frontier and the regime exit by about a column). The unit test
   `living_nutrient_persists_iff_the_coupled_condition_holds` runs the efficiency sweep at
   `N_total = 2` with 0 disagreements allowed (0.4 s for the whole bin).
 - **The `x` region is the "no space" clause made visible.** With `ι = 1` every carcass is
@@ -481,7 +485,8 @@ free store so `q = ν = θ_P`):
   grows with `N_total` exactly as A1's `x` region grows with `I`: the well-mixed mean field
   over-serves the heterotroph in proportion to the pile. Where the frontier *is* in regime
   it agrees with the analytic condition on every scored cell.
-- **example10 read through the coupled reduction**: `N_total = 50 000`, `Λ ≈ 8·10⁴`,
+- **example10 read through the coupled reduction**: `N_total = 50 000`, `Λ ≈ 9·10⁴`
+  (`90 584`; `81 334` with the `κ_C` lumping),
   (i)–(iii) all hold, numerics leave the regime on tick one. The mean field says a
   heterotroph facing 250 000 carcasses in reach is trivially viable; the committed file's
   consumers die by tick 2 because their reach never meets the sparse crop (A1's standing

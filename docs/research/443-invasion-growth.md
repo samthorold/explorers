@@ -167,10 +167,17 @@ and pinned to its example10 numbers by unit test:
 | consumer | `λ_C(K_P) = 1 + β·K_P − m` (A1 clause 2) | `I − 1` | the standing crop |
 | decomposer | `λ_H(𝓛) = 1 + σ·N_total·min(κ_C·γ·e_C, q/θ_C) − m` (A2 ii) | `Λ − 1` | the carcass pile, at A2's reference lumping `ι = 1`, `q = ν = θ_P` |
 
-The consumer's and decomposer's `β` / `Λ` still carry the `κ_C` lumping (#482); a
-heterotroph centroid with `κ < 0.05` is tagged `affected_by_482`, and a
-predicted-negative / observed-positive row on such a centroid is classed `affected-482`
-rather than as a disagreement. Per (cell, role, arm) the predicted sign is the majority
+**The `χ_C` correction (#482), landed after this run.** When these numbers were taken
+the consumer's and decomposer's `β` / `Λ` still carried the `κ_C` lumping, so a
+heterotroph centroid with `κ < 0.05` was tagged `affected_by_482` and a
+predicted-negative / observed-positive row on such a centroid was classed `affected-482`
+rather than as a disagreement. The bin now reads `β = χ_C·γ·e·a` and
+`Λ ∝ min(χ_C·γ·e_C, q/θ_C)` with the consumer's biomass conversion `χ_C` (derived in
+[`432-permanence-pc.md`](432-permanence-pc.md); example10 pins `I = 25.77`, `Λ = 90 584`),
+the tag and the `affected-482` agreement class are removed (the sign tallies are five-way:
+agree / pred+ obs− / pred− obs+ / split / absent), and the tables below — pre-#482 — are
+to be re-taken as a separate follow-up. Since #482 never decided a row here (§2.5), the
+headline is not expected to move. Per (cell, role, arm) the predicted sign is the majority
 over seeds (`predicted-split` when tied) and the observed sign is the median's.
 
 ### 1.5 Determinism and provenance

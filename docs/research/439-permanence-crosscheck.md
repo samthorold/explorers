@@ -15,6 +15,19 @@ The instrument is `crates/explorers-search/src/bin/permanence_crosscheck.rs` —
 diagnostic bin patterned on `energy_bound_check.rs` / `role_emergence.rs`, not a CI gate.
 Its artifact is `target/permanence-crosscheck.json` (gitignored).
 
+## The `χ_C` correction (#482) — landed after this run
+
+The `β` row has since been corrected: `β = χ_C·γ·e·a` with the consumer's biomass
+conversion `χ_C = (κ_C + (1 − κ_C)·η_C·s) / (1 − (1 − κ_C)·η_C·(1 − s))` — the twin of
+`χ_P`, derived in [`432-permanence-pc.md`](432-permanence-pc.md) — and A2's `Λ` carries
+`χ_C·γ·e_C` in its Liebig branch. The bin's `#482 (beta lumping)` fault hypothesis is
+gone (`κ_C = 0` no longer zeroes `β`; the only way `β = 0` with a feeding consumer is the
+degenerate `χ_C = 0` corner, which now gets the same hypothesis as `χ_P = 0`), and the
+example10 pins moved to `β = 0.04095`, `I = 25.77`, `Λ = 90 584`. **The numbers, tables
+and appendix below are the pre-#482 run** and still read `β = κ_C·γ·e·a`; the 19 cells
+tagged `#482` are expected to become clause-(2) *passes* on the re-run, which is a
+separate follow-up (each run is ~20–30 min).
+
 ## Change from the previous run
 
 The numbers here were re-taken on the stepper after the six post-atlas fixes
