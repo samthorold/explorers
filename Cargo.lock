@@ -609,6 +609,7 @@ dependencies = [
  "explorers-genesis-eval",
  "explorers-sim",
  "rayon",
+ "serde_json",
 ]
 
 [[package]]

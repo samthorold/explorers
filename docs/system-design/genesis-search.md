@@ -87,13 +87,27 @@ populated only by *running* worlds that survive yet strand their nutrient. Reach
 high-carcass region is the emitter's job (directed exploration along the carcass axis), not the
 prefilter's. The atlas maps the lockup cliff by running, because the physics forbids gating it.
 
-## Authority boundary: the decomposer guild is reported, never optimised
+## Authority boundary: the heterotroph guilds are reported, never optimised
 
 A **decomposer** is a behavioural role read from an agent's trait vector and diet, confirmed across seed
 ensembles but **sporadic per seed** — a persistent guild forms in only a fraction of surviving runs
 ([expected properties](expected-properties.md); CONTEXT.md, *Decomposition*). The atlas therefore records
-it as a **per-cell distribution** — the fraction of a cell's seed ensemble that sprouts a persistent
-guild, with the sample count — and **never** as a behaviour axis or a fitness term.
+it as a **per-cell distribution** — the fraction of a cell's seed ensemble that holds a
+**[heterotroph guild](../../CONTEXT.md)** of that role, with the sample count — and **never** as a
+behaviour axis or a fitness term. The same read is reported for the **consumer** role
+(`consumer_fraction` beside `decomposer_fraction`).
+
+A guild is a *population*, not a role tag on one agent (#490; the #443 re-read found the atlas's resident
+"guild" to be a single sessile mixotroph on most seeds, a quarter of them sterile at the `kappa` clamp).
+Membership is the evaluator's existing `trophic_roles` read — heterotroph by trait, consumer/decomposer
+by realised diet — taken on the rollout's roster snapshots (the `coexistence_sample_interval` cadence)
+over the **second half** of the run. The guild holds when the role's count reaches `GUILD_MIN_SIZE = 5`
+on **every** such sample *and* at least one `Born` event in that window names a member as a parent —
+sustained size rules out the lone long-lived individual, recruitment rules out a sterile founder cohort
+sitting at exactly the floor. Both values are starting points, not settled thresholds: regenerating the
+atlas with the read reported, and counting the cells that pass, is what tests them and decides whether
+the observable ever becomes a binning axis or folds into `coexistence_fraction`. Until then it is
+reported only.
 
 This is the same existence-vs-distributional boundary [viability](viability.md) already respects when it
 makes `C*` a *characterisation* rather than a gate: the atlas maps the existence/stability skeleton of
@@ -103,12 +117,14 @@ guild's truth is a *fraction of seeds*. The boundary is enforced mechanically: t
 the evaluator's output as a reported observable, alongside the other non-fitness readings, and is never
 summed into fitness nor binned on.
 
-A **second** reported per-seed distribution rides under the *same* boundary: the **coexistence
+A **further** reported per-seed distribution rides under the *same* boundary: the **coexistence
 fraction** — the share of a cell's seed ensemble that lands in the coexisting regime (alive, and either
 clustering or coexisting; the `||` is the #359 small-N disjunction so clustering's silent zero below
 n≈4 does not under-count). Like the decomposer fraction it is recorded with the sample count and is
 **never** a behaviour axis nor a fitness term; the monoculture↔coexistence *axis* is still the median
-seed's `clustering_strength`. What the fraction adds is visibility into how a cell's ensemble splits
+seed's `clustering_strength`. Note that a coexisting seed need not hold a guild: `coexistence_fraction`
+reads separated trait clusters, which one heterotrophy-dominant individual already supplies — the guild
+fractions are what say whether a second trophic *level* is present. What the fraction adds is visibility into how a cell's ensemble splits
 across the regime — the raw material the projection reads (below).
 
 Because each cell's elite is selected on a noisy median-over-seeds, a lucky elite can misrepresent its
@@ -187,8 +203,8 @@ never swallowed — the validation-triad cross-check both spikes prize. Each dis
   hardened cycle-detector lands (a separate issue).
 
 **Authority boundary.** Like the three axes and `C*`, these readings arbitrate **existence/stability
-only**. They never read the decomposer guild or any per-seed distributional property (the decomposer
-fraction, the coexistence fraction), are never summed into fitness, and are never a binning axis — the
+only**. They never read the heterotroph guilds or any per-seed distributional property (the decomposer and
+consumer fractions, the coexistence fraction), are never summed into fitness, and are never a binning axis — the
 same existence-vs-distributional boundary the rest of the atlas respects.
 
 ## The recipe is a projection of the atlas

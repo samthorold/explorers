@@ -141,31 +141,12 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
     // every tick, plus a coarse-interval trait-vector snapshot for coexistence
     // (#394). This binary observes the same rollout the search does, so it samples
     // the same way and bundles the series into the same `RolloutObservations`.
-    let cap = recipe.max_ticks as usize;
-    let mut observations = RolloutObservations {
-        free_energy: Vec::with_capacity(cap),
-        carcass_fraction: Vec::with_capacity(cap),
-        producer_share: Vec::with_capacity(cap),
-        cluster_snapshots: Vec::new(),
-    };
-    let interval = config.coexistence_sample_interval.max(1);
+    let mut observations = RolloutObservations::with_capacity(recipe.max_ticks as usize);
     for _ in 0..recipe.max_ticks {
         world.step();
         total_births += world.last_tick_births();
         total_deaths += world.last_tick_deaths();
-        observations.free_energy.push(world.free_energy());
-        observations
-            .carcass_fraction
-            .push(world.carcass_locked_nutrient_fraction());
-        observations
-            .producer_share
-            .push(world.producer_energy_share());
-        if world.tick() % interval as u64 == 0 {
-            observations.cluster_snapshots.push((
-                world.tick(),
-                world.agents().iter().map(|a| a.traits).collect(),
-            ));
-        }
+        observations.observe(&world, config.coexistence_sample_interval);
         if world.agents().is_empty() || world.agents().len() > config.max_population {
             break;
         }

@@ -185,13 +185,14 @@ fn main() {
     for cell in top.iter().take(10) {
         eprintln!(
             "  cell {:?}: fitness={:.4} osc={:.3} clus={:.3} carcass={:.3} \
-             decomposer_frac={:.2} coexist_frac={:.2} (n={})",
+             decomposer_frac={:.2} consumer_frac={:.2} coexist_frac={:.2} (n={})",
             cell.cell,
             cell.fitness,
             cell.oscillation,
             cell.clustering,
             cell.carcass,
             cell.decomposer_fraction,
+            cell.consumer_fraction,
             cell.coexistence_fraction,
             cell.sample_count,
         );

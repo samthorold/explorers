@@ -36,7 +36,8 @@
 use rand::Rng;
 
 use explorers_genesis::{
-    EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, RunConfig, RunResult, run_ensemble,
+    EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, FitnessBreakdown, RunConfig,
+    RunResult, run_ensemble,
 };
 use explorers_sim::WorldRecipe;
 
@@ -120,9 +121,13 @@ pub struct ConfigEval {
     /// Descriptors of the median-fitness seed (meaningful only when `cliff` is
     /// `None`).
     pub descriptors: Descriptors,
-    /// Fraction of the ensemble that sprouted a persistent decomposer guild
-    /// (reported distribution, never an axis or fitness term).
+    /// Fraction of the ensemble whose seed read a decomposer guild — a sustained,
+    /// recruiting population (`has_decomposer_guild`, #490). A reported
+    /// distribution, never an axis or fitness term.
     pub decomposer_fraction: f32,
+    /// The consumer twin of `decomposer_fraction` (`has_consumer_guild`, #490):
+    /// same computation, same authority boundary.
+    pub consumer_fraction: f32,
     /// Fraction of the ensemble that lands in the coexisting regime — alive and
     /// either clustering or coexisting (the #359 small-N disjunction). A reported
     /// per-seed distribution under the *same* authority boundary as
@@ -165,16 +170,20 @@ fn is_coexisting(r: &RunResult) -> bool {
 /// representative, matching the incumbent's median reduction.
 pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
     let sample_count = result.run_results.len() as u32;
-    let decomposer_fraction = if sample_count == 0 {
-        0.0
-    } else {
-        result
-            .run_results
-            .iter()
-            .filter(|r| r.breakdown.has_decomposer_guild)
-            .count() as f32
-            / sample_count as f32
+    let seed_fraction = |read: fn(&FitnessBreakdown) -> bool| {
+        if sample_count == 0 {
+            0.0
+        } else {
+            result
+                .run_results
+                .iter()
+                .filter(|r| read(&r.breakdown))
+                .count() as f32
+                / sample_count as f32
+        }
     };
+    let decomposer_fraction = seed_fraction(|b| b.has_decomposer_guild);
+    let consumer_fraction = seed_fraction(|b| b.has_consumer_guild);
     // Reported per-seed distribution (never an axis, never fitness): the share of
     // the ensemble that lands in the coexisting regime. The projection's
     // robustness floor reads this; binning and fitness do not.
@@ -209,6 +218,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
                 carcass: 0.0,
             },
             decomposer_fraction: 0.0,
+            consumer_fraction: 0.0,
             coexistence_fraction: 0.0,
             sample_count: 0,
             coexistence_duration: 0.0,
@@ -226,6 +236,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
             carcass: rep.breakdown.carcass_locked_fraction,
         },
         decomposer_fraction,
+        consumer_fraction,
         coexistence_fraction,
         sample_count,
         coexistence_duration: rep.breakdown.coexistence_duration,
@@ -245,6 +256,7 @@ pub struct CellRecord {
     pub descriptors: Descriptors,
     pub unit: Vec<f64>,
     pub decomposer_fraction: f32,
+    pub consumer_fraction: f32,
     /// Reported coexistence fraction of the cell's seed ensemble (see
     /// [`ConfigEval::coexistence_fraction`]) — read by the projection's robustness
     /// floor only, never binned on nor summed into fitness.
@@ -320,6 +332,7 @@ impl Archive {
                                 descriptors: eval.descriptors,
                                 unit: unit.to_vec(),
                                 decomposer_fraction: eval.decomposer_fraction,
+                                consumer_fraction: eval.consumer_fraction,
                                 coexistence_fraction: eval.coexistence_fraction,
                                 sample_count: eval.sample_count,
                                 predicted_oscillation_distance: eval.predicted_oscillation_distance,
@@ -343,6 +356,7 @@ impl Archive {
                                 rec.descriptors = eval.descriptors;
                                 rec.unit = unit.to_vec();
                                 rec.decomposer_fraction = eval.decomposer_fraction;
+                                rec.consumer_fraction = eval.consumer_fraction;
                                 rec.coexistence_fraction = eval.coexistence_fraction;
                                 rec.sample_count = eval.sample_count;
                                 rec.predicted_oscillation_distance =
@@ -589,8 +603,12 @@ pub struct AtlasCell {
     pub clustering: f32,
     pub carcass: f32,
     /// Per-cell decomposer-guild distribution: the fraction of the cell's seed
-    /// ensemble that sprouted a persistent guild (reported, never optimised).
+    /// ensemble that read a decomposer guild — a sustained, recruiting
+    /// population (#490) — reported, never optimised.
     pub decomposer_fraction: f32,
+    /// The consumer twin of `decomposer_fraction` (#490): same read for the
+    /// consumer role, same authority boundary.
+    pub consumer_fraction: f32,
     /// Per-cell coexistence distribution: the fraction of the cell's seed ensemble
     /// that lands in the coexisting regime. Reported like `decomposer_fraction`;
     /// read only by the projection's robustness floor — never a binning axis nor a
@@ -1324,6 +1342,7 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
             clustering: rec.descriptors.clustering,
             carcass: rec.descriptors.carcass,
             decomposer_fraction: rec.decomposer_fraction,
+            consumer_fraction: rec.consumer_fraction,
             coexistence_fraction: rec.coexistence_fraction,
             sample_count: rec.sample_count,
             predicted_oscillation_distance: rec.predicted_oscillation_distance,
@@ -1364,6 +1383,7 @@ mod tests {
             cliff: None,
             descriptors: d,
             decomposer_fraction: 0.0,
+            consumer_fraction: 0.0,
             coexistence_fraction: 1.0,
             sample_count: 5,
             coexistence_duration: 0.0,
@@ -1411,6 +1431,7 @@ mod tests {
             clustering: 0.0,
             carcass,
             decomposer_fraction: 0.0,
+            consumer_fraction: 0.0,
             coexistence_fraction: 1.0,
             sample_count: 5,
             predicted_oscillation_distance: 0.0,
@@ -2098,17 +2119,20 @@ mod tests {
     }
 
     #[test]
-    fn decomposer_fraction_feeds_neither_binning_nor_fitness_nor_the_crosscheck() {
-        // Authority boundary: the decomposer fraction is a reported distribution,
-        // never a behaviour axis, fitness term, or cross-check input. Two configs
-        // identical in every binning/fitness/descriptor field but with opposite
-        // decomposer fractions must bin to the same cell, yield the same archive
-        // fitness, and surface the same bifurcation cross-check.
+    fn guild_fractions_feed_neither_binning_nor_fitness_nor_the_crosscheck() {
+        // Authority boundary: the decomposer and consumer guild fractions are
+        // reported distributions, never a behaviour axis, fitness term, or
+        // cross-check input. Two configs identical in every binning/fitness/
+        // descriptor field but with opposite guild fractions must bin to the same
+        // cell, yield the same archive fitness, and surface the same bifurcation
+        // cross-check.
         let d = descr(0.5, 0.6, 0.2);
         let mut no_guild = live(0.4, d);
         let mut all_guild = live(0.4, d);
         no_guild.decomposer_fraction = 0.0;
+        no_guild.consumer_fraction = 0.0;
         all_guild.decomposer_fraction = 1.0;
+        all_guild.consumer_fraction = 1.0;
         // Same predicted coords + observed boundary so the only difference is the
         // decomposer fraction.
         for ev in [&mut no_guild, &mut all_guild] {
@@ -2163,6 +2187,7 @@ mod tests {
             ticks_survived: 0,
             carcass_locked_fraction: 0.0,
             has_decomposer_guild: false,
+            has_consumer_guild: false,
         }
     }
 
@@ -2202,6 +2227,26 @@ mod tests {
         };
         let eval = config_eval_from_ensemble(&result);
         assert_eq!(eval.coexistence_fraction, 3.0 / 8.0);
+    }
+
+    #[test]
+    fn config_eval_computes_consumer_fraction_alongside_decomposer_fraction() {
+        // Both heterotroph guild fractions (#490) are the share of the ensemble
+        // whose seed read the guild, computed the same way — including gated
+        // seeds in the denominator.
+        let mut run_results: Vec<RunResult> =
+            (0..4).map(|_| run_result(0.5, None, 0.5, 5.0)).collect();
+        run_results[0].breakdown.has_consumer_guild = true;
+        run_results[1].breakdown.has_consumer_guild = true;
+        run_results[1].breakdown.has_decomposer_guild = true;
+        run_results[3].breakdown.has_consumer_guild = true;
+        let result = EnsembleResult {
+            median_fitness: 0.5,
+            run_results,
+        };
+        let eval = config_eval_from_ensemble(&result);
+        assert_eq!(eval.consumer_fraction, 3.0 / 4.0);
+        assert_eq!(eval.decomposer_fraction, 1.0 / 4.0);
     }
 
     #[test]

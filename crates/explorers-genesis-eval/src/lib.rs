@@ -1,4 +1,5 @@
 pub mod ensemble;
+pub mod guild;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FailureMode {
@@ -31,13 +32,18 @@ pub struct FitnessBreakdown {
     /// gated (degenerate) path, where no behaviour coordinate is meaningful.
     pub carcass_locked_fraction: f32,
     /// Genesis decomposer-guild signal (genesis-search.md, the authority
-    /// boundary): whether a persistent decomposer guild was present, read off the
-    /// full-log `TopologyProjection` the evaluator already builds. A reported
-    /// observable — never a behaviour axis, never a fitness term. The atlas
-    /// aggregates it across a cell's seed ensemble into a *fraction of seeds*,
-    /// honouring the existence-vs-distributional boundary. False on the gated
-    /// path.
+    /// boundary): whether a decomposer *guild* — a population, not a role tag on
+    /// one individual — held over the second half of the run: at least
+    /// [`guild::GUILD_MIN_SIZE`] agents classified `Decomposer` on every sampled
+    /// tick, with at least one birth to a member in that window (#490). A
+    /// reported observable — never a behaviour axis, never a fitness term. The
+    /// atlas aggregates it across a cell's seed ensemble into a *fraction of
+    /// seeds*, honouring the existence-vs-distributional boundary. False on the
+    /// gated path.
     pub has_decomposer_guild: bool,
+    /// The consumer twin of `has_decomposer_guild`: the same guild read for
+    /// agents classified `Consumer`. Same authority boundary.
+    pub has_consumer_guild: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -100,6 +106,47 @@ pub struct RolloutObservations {
     /// not per-tick, because DBSCAN is O(n²) and clustering every tick of every
     /// seed is disproportionate for one noisy 0.2-weight term.
     pub cluster_snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)>,
+    /// Living roster (`(id, traits)` pairs) snapshotted at the same coarse
+    /// interval and tagged with its tick, for the heterotroph guild read (#490).
+    /// The guild is a population over time — role count on every sampled tick
+    /// of the second half plus recruitment — so it needs the roster *at each
+    /// sample*, which the history-free world cannot supply after the fact.
+    pub roster_snapshots: Vec<guild::RosterSnapshot>,
+}
+
+impl RolloutObservations {
+    /// Pre-size the per-tick series for a run of `max_ticks`.
+    pub fn with_capacity(max_ticks: usize) -> Self {
+        Self {
+            free_energy: Vec::with_capacity(max_ticks),
+            carcass_fraction: Vec::with_capacity(max_ticks),
+            producer_share: Vec::with_capacity(max_ticks),
+            cluster_snapshots: Vec::new(),
+            roster_snapshots: Vec::new(),
+        }
+    }
+
+    /// Record one stepped tick of `world`: the three per-tick series every
+    /// tick, and the trait-vector and roster snapshots when the world's tick is
+    /// a multiple of `sample_interval` (the evaluator's
+    /// `coexistence_sample_interval`). Pure observation — no clustering, no
+    /// classification; the evaluator owns both.
+    pub fn observe(&mut self, world: &explorers_sim::World, sample_interval: usize) {
+        self.free_energy.push(world.free_energy());
+        self.carcass_fraction
+            .push(world.carcass_locked_nutrient_fraction());
+        self.producer_share.push(world.producer_energy_share());
+        if world.tick().is_multiple_of(sample_interval.max(1) as u64) {
+            self.cluster_snapshots.push((
+                world.tick(),
+                world.agents().iter().map(|a| a.traits).collect(),
+            ));
+            self.roster_snapshots.push((
+                world.tick(),
+                world.agents().iter().map(|a| (a.id, a.traits)).collect(),
+            ));
+        }
+    }
 }
 
 pub fn evaluate_from_log(
@@ -113,6 +160,7 @@ pub fn evaluate_from_log(
         carcass_fraction: carcass_fraction_per_tick,
         producer_share: producer_share_per_tick,
         cluster_snapshots,
+        roster_snapshots,
     } = observations;
     let agents = world.agents();
     let ticks_survived = world.tick();
@@ -130,6 +178,7 @@ pub fn evaluate_from_log(
         // to the dead frontier by cliff, not binned), so the descriptors are zero.
         carcass_locked_fraction: 0.0,
         has_decomposer_guild: false,
+        has_consumer_guild: false,
     };
 
     if agents.is_empty() {
@@ -206,12 +255,6 @@ pub fn evaluate_from_log(
         }
     }
 
-    // The full-log topology projection is still required for the decomposer-guild
-    // signal below; the lineage-clustering machinery that once fed coexistence is
-    // gone (issue #394) — coexistence now reads trait-space clusters, not clades.
-    let mut topo = explorers_sim::topology::TopologyProjection::new();
-    topo.update(log);
-
     // Coexistence (issue #394): the fraction of post-grace sampled ticks whose
     // living population carries >=2 trait-space DBSCAN clusters. Genesis snapshots
     // raw trait vectors at a coarse interval through the rollout (pure observation,
@@ -256,15 +299,12 @@ pub fn evaluate_from_log(
     let carcass_locked_fraction =
         trailing_mean(carcass_fraction_per_tick, config.nutrient_lock_window);
 
-    // Decomposer-guild signal: read off the full-log topology projection the
-    // evaluator already built. A persistent guild reads as ≥1 surviving agent
-    // classified `Decomposer` by realised diet over the whole run. A reported
-    // observable, aggregated into a per-cell seed fraction by the atlas — never an
-    // axis, never a fitness term (the authority boundary, genesis-search.md).
-    let has_decomposer_guild = topo
-        .trophic_roles(agents)
-        .values()
-        .any(|&r| r == explorers_sim::topology::TrophicRole::Decomposer);
+    // Heterotroph guilds (#490): a population read over the second-half roster
+    // snapshots — sustained size plus recruitment — for both heterotroph roles.
+    // Reported observables, aggregated into per-cell seed fractions by the atlas
+    // — never an axis, never a fitness term (the authority boundary,
+    // genesis-search.md).
+    let guilds = guild::heterotroph_guilds(log, roster_snapshots, max_ticks);
 
     FitnessBreakdown {
         fitness,
@@ -276,7 +316,8 @@ pub fn evaluate_from_log(
         trophic_balance_score: tb,
         ticks_survived,
         carcass_locked_fraction,
-        has_decomposer_guild,
+        has_decomposer_guild: guilds.decomposer,
+        has_consumer_guild: guilds.consumer,
     }
 }
 
@@ -894,6 +935,7 @@ mod tests {
             carcass_fraction: carcass_fraction.to_vec(),
             producer_share: producer_share.to_vec(),
             cluster_snapshots: cluster_snapshots.to_vec(),
+            roster_snapshots: Vec::new(),
         }
     }
 
@@ -1266,6 +1308,64 @@ mod tests {
             }
         }
         traits
+    }
+
+    #[test]
+    fn evaluate_from_log_reads_both_heterotroph_guilds_off_the_roster_snapshots() {
+        // The guild read (#490) is a population read over the second-half roster
+        // snapshots, not a terminal-roster role tag. Feed a real run's log with
+        // fabricated roster snapshots: six heterotroph-by-trait ids on every
+        // sample, one of them a real second-half parent. With no consumption
+        // events they read as consumers (a non-eater defaults to Consumer), so
+        // the consumer guild holds and the decomposer guild does not.
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_period_fraction: 1.0,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 60;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let free = run_collecting_free_energy(&mut world, max_ticks);
+        if world.agents().is_empty() {
+            return;
+        }
+        let parent = world
+            .event_log()
+            .by_kind(&explorers_sim::event::EventKind::Born)
+            .iter()
+            .find(|e| e.tick >= max_ticks / 2)
+            .and_then(|e| e.target)
+            .expect("the test run breeds in its second half");
+        let heterotroph = make_trait_vector([0.1, 1.0, 0.0, 0.4]);
+        let roster: Vec<(u64, explorers_sim::TraitVector)> = [parent]
+            .into_iter()
+            .chain(900_001..900_006)
+            .map(|id| (id, heterotroph))
+            .collect();
+        let roster_snapshots: Vec<guild::RosterSnapshot> =
+            (1..=6).map(|k| (k * 10, roster.clone())).collect();
+        let observations = RolloutObservations {
+            free_energy: free,
+            roster_snapshots,
+            ..RolloutObservations::default()
+        };
+        let result = evaluate_from_log(&world, &observations, &config, max_ticks);
+        assert!(result.has_consumer_guild);
+        assert!(!result.has_decomposer_guild);
+
+        // Without any roster samples there is no population to read.
+        let none = evaluate_from_log(
+            &world,
+            &RolloutObservations {
+                free_energy: observations.free_energy.clone(),
+                ..RolloutObservations::default()
+            },
+            &config,
+            max_ticks,
+        );
+        assert!(!none.has_consumer_guild);
+        assert!(!none.has_decomposer_guild);
     }
 
     #[test]
@@ -2094,6 +2194,7 @@ mod tests {
             ticks_survived: 100,
             carcass_locked_fraction: 0.0,
             has_decomposer_guild: false,
+            has_consumer_guild: false,
         };
         assert!((result.fitness - expected).abs() < 1e-5);
     }
@@ -2185,6 +2286,7 @@ mod tests {
             ticks_survived: 100,
             carcass_locked_fraction: 0.0,
             has_decomposer_guild: false,
+            has_consumer_guild: false,
         };
         assert!((breakdown.fitness - 0.5).abs() < 1e-5);
     }
@@ -2202,6 +2304,7 @@ mod tests {
             ticks_survived: 50,
             carcass_locked_fraction: 0.0,
             has_decomposer_guild: false,
+            has_consumer_guild: false,
         };
         assert_eq!(breakdown.oscillation_strength, 0.1);
         assert_eq!(breakdown.clustering_strength, 0.2);
