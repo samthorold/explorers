@@ -518,8 +518,11 @@ unselected and are absent selected — is the finding.
 - **The positive control** for the amended criterion is `sample:55 / 20 / 129 / 127` on
   the fixed stepper — the first test of whether mutual invasibility can pass anywhere.
   §4.6 is pre-#444 data: **re-run those four to 2000 on `main` first** (a `role_emergence`
-  run restricted to them, minutes not tens of minutes) and confirm the guild is still
-  there before spending an invasion run on any of them.
+  run restricted to them) and confirm the guild is still there before spending an
+  invasion run on any of them. *Done in #492 —
+  [`421-guild-recheck.md`](421-guild-recheck.md): the guilds are still there and larger
+  post-fix; `sample:55` (the only consumer guild) and `sample:20` are the positive
+  controls; `sample:129` is a 2-seed partial.*
 - **The §4.2 mixotroph reading should be confirmed, not just stated.** The artifact has no
   per-agent consumption; whether the flat, zero-birth heterotroph cohorts ever emit a
   `Consumed` event is a one-cell, seconds-long check against the event log that belongs
