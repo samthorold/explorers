@@ -353,6 +353,12 @@ struct Injection {
     /// `Consumed` events whose source is a lineage member over the window,
     /// split by `target_was_carcass` (#491): does the cohort eat at all?
     lineage_consumed_events: ConsumedCounts,
+    /// `Consumed` events on a *living* lineage member (the lineage as prey).
+    lineage_preyed_upon_events: usize,
+    /// Lineage deaths in a tick the member was drained alive (drain-kill or
+    /// predation) vs. with no drain that tick (starvation / threshold).
+    lineage_deaths_drained: usize,
+    lineage_deaths_undrained: usize,
     /// The resident's (non-lineage) composition at the end of the window.
     resident_roles_end: RoleCounts,
 }
@@ -616,6 +622,9 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
                 pure_births: lineage.pure_births,
                 cross_births: lineage.cross_births,
                 lineage_consumed_events: lineage.consumed,
+                lineage_preyed_upon_events: lineage.preyed_upon_events,
+                lineage_deaths_drained: lineage.deaths_drained,
+                lineage_deaths_undrained: lineage.deaths_undrained,
                 resident_roles_end,
             });
         }
@@ -646,6 +655,14 @@ struct Lineage {
     cross_births: usize,
     /// `Consumed` events by a member, by target kind.
     consumed: ConsumedCounts,
+    /// Mortality attribution (#493 §6): `Consumed` events whose *target* is a
+    /// living member (the lineage being eaten), and member deaths split by
+    /// whether the member was drained in the tick it died.
+    preyed_upon_events: usize,
+    deaths_drained: usize,
+    deaths_undrained: usize,
+    /// Tick on which each member was last drained alive.
+    last_drained: HashMap<u64, u64>,
 }
 
 impl Lineage {
@@ -655,6 +672,10 @@ impl Lineage {
             pure_births: 0,
             cross_births: 0,
             consumed: ConsumedCounts::default(),
+            preyed_upon_events: 0,
+            deaths_drained: 0,
+            deaths_undrained: 0,
+            last_drained: HashMap::new(),
         }
     }
 
@@ -662,11 +683,25 @@ impl Lineage {
     /// `Born`, diet off `Consumed`.
     fn absorb(&mut self, events: &[Event]) {
         for ev in events {
-            if ev.kind == EventKind::Consumed && self.members.contains(&ev.source) {
-                if ev.target_was_carcass {
-                    self.consumed.carcass += 1;
+            if ev.kind == EventKind::Consumed {
+                if self.members.contains(&ev.source) {
+                    if ev.target_was_carcass {
+                        self.consumed.carcass += 1;
+                    } else {
+                        self.consumed.living += 1;
+                    }
+                }
+                if !ev.target_was_carcass && ev.target.is_some_and(|t| self.members.contains(&t)) {
+                    self.preyed_upon_events += 1;
+                    self.last_drained.insert(ev.target.unwrap(), ev.tick);
+                }
+                continue;
+            }
+            if ev.kind == EventKind::Died && self.members.contains(&ev.source) {
+                if self.last_drained.get(&ev.source) == Some(&ev.tick) {
+                    self.deaths_drained += 1;
                 } else {
-                    self.consumed.living += 1;
+                    self.deaths_undrained += 1;
                 }
                 continue;
             }
@@ -2088,6 +2123,37 @@ mod tests {
         ]);
         assert_eq!(lineage.consumed.living, 1);
         assert_eq!(lineage.consumed.carcass, 2);
+        // Event 3 is a resident (1) draining member 10 alive.
+        assert_eq!(lineage.preyed_upon_events, 1);
+    }
+
+    /// A member's death is attributed to the drain if it was drained alive in
+    /// the tick it died, otherwise to starvation / the structure threshold.
+    #[test]
+    fn lineage_splits_deaths_by_whether_the_member_was_drained_that_tick() {
+        let died = |tick: u64, seq: u64, id: u64| Event {
+            tick,
+            seq,
+            kind: EventKind::Died,
+            source: id,
+            target: None,
+            energy_delta: 0.0,
+            position: None,
+            target_was_carcass: false,
+            second_parent: None,
+        };
+        let mut lineage = Lineage::new([10, 11, 12]);
+        // 10 is drained on tick 3 and dies on tick 3; 11 is drained on tick 3
+        // and dies later (tick 7) undrained; 12 is never drained.
+        lineage.absorb(&[consumed(0, 1, 10, false), consumed(1, 1, 11, false)]);
+        lineage.absorb(&[died(3, 2, 10)]);
+        lineage.absorb(&[died(7, 0, 11), died(7, 1, 12)]);
+        assert_eq!(lineage.preyed_upon_events, 2);
+        assert_eq!(lineage.deaths_drained, 1);
+        assert_eq!(lineage.deaths_undrained, 2);
+        // A non-member's death is not counted.
+        lineage.absorb(&[died(8, 0, 99)]);
+        assert_eq!(lineage.deaths_drained + lineage.deaths_undrained, 3);
     }
 
     /// An absent role is not injected at an invented phenotype: it is
