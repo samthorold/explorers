@@ -482,6 +482,17 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
     let (params, dist) = decode(unit, &ranges);
     let max_population = EvalConfig::default().max_population;
     let mut world = World::new(params, dist.clone(), seed);
+    // Everything this instrument reads off the log — the projection's roles
+    // (Consumed / Reproduced / Died), the guild read and lineage (Born,
+    // Consumed, Died) — is in these kinds; the per-agent-per-tick
+    // bookkeeping events are dropped at source so a 2000-tick resident at
+    // P ≈ 1000 fits in memory. Observer-side: no trajectory changes.
+    world.retain_event_kinds(&[
+        EventKind::Consumed,
+        EventKind::Reproduced,
+        EventKind::Died,
+        EventKind::Born,
+    ]);
     let mut topo = TopologyProjection::new();
     let mut termination = "alive";
     // Living roster on each second-half sample (and on `t_inj` itself), for

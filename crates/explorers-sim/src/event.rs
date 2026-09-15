@@ -56,6 +56,10 @@ pub struct EventLog {
     /// Sequence number of the last event appended, kept across compaction
     /// so the monotonic-seq guard does not reset.
     last_seq: Option<u64>,
+    /// Observer-side retention filter: when set, only these kinds are kept
+    /// (others are dropped at append, still consuming their seq). `None`
+    /// keeps everything.
+    retain_kinds: Option<Vec<EventKind>>,
 }
 
 impl EventLog {
@@ -64,7 +68,17 @@ impl EventLog {
             events: Vec::new(),
             base: 0,
             last_seq: None,
+            retain_kinds: None,
         }
+    }
+
+    /// Keep only events of these kinds from now on. The per-agent-per-tick
+    /// bookkeeping kinds (`Photosynthesized`, `Metabolized`, `Grew`, `Moved`,
+    /// `Wore`, …) are the bulk of a long run's log; an observer that reads
+    /// only the interaction and descent facts can drop the rest at source.
+    /// Already-retained events are untouched.
+    pub fn retain_only(&mut self, kinds: &[EventKind]) {
+        self.retain_kinds = Some(kinds.to_vec());
     }
 
     pub fn append(&mut self, event: Event) -> Result<(), &'static str> {
@@ -74,6 +88,13 @@ impl EventLog {
             }
         }
         self.last_seq = Some(event.seq);
+        if self
+            .retain_kinds
+            .as_ref()
+            .is_some_and(|kinds| !kinds.contains(&event.kind))
+        {
+            return Ok(());
+        }
         self.events.push(event);
         Ok(())
     }
@@ -338,5 +359,28 @@ mod tests {
         // Compacting before an index already dropped is a no-op.
         log.compact_before(3);
         assert_eq!(log.retained(), 1);
+    }
+
+    #[test]
+    fn retain_only_drops_other_kinds_at_append_and_keeps_the_seq_guard() {
+        let mut log = EventLog::new();
+        log.append(make_event(0, 0, EventKind::Metabolized))
+            .unwrap();
+        log.retain_only(&[EventKind::Consumed, EventKind::Born]);
+        log.append(make_event(1, 1, EventKind::Metabolized))
+            .unwrap();
+        log.append(make_event(1, 2, EventKind::Consumed)).unwrap();
+        log.append(make_event(1, 3, EventKind::Grew)).unwrap();
+        log.append(make_event(2, 4, EventKind::Born)).unwrap();
+        // The pre-filter event stays; the two filtered kinds are dropped.
+        assert_eq!(log.len(), 3);
+        let kinds: Vec<EventKind> = log.since(0).iter().map(|e| e.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![EventKind::Metabolized, EventKind::Consumed, EventKind::Born]
+        );
+        // A dropped event still advanced the seq guard.
+        assert!(log.append(make_event(2, 3, EventKind::Consumed)).is_err());
+        assert!(log.append(make_event(2, 5, EventKind::Consumed)).is_ok());
     }
 }

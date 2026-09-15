@@ -1718,6 +1718,13 @@ impl World {
         self.event_log.compact_before(index);
     }
 
+    /// Observer-side: keep only these event kinds from now on (see
+    /// [`event::EventLog::retain_only`]). The stepper never reads the log,
+    /// so this changes no trajectory.
+    pub fn retain_event_kinds(&mut self, kinds: &[event::EventKind]) {
+        self.event_log.retain_only(kinds);
+    }
+
     pub fn energy_ledger(&self) -> &energy_ledger::EnergyLedger {
         &self.ledger
     }
