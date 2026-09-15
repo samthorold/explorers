@@ -559,6 +559,12 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
         .iter()
         .filter(|c| guilds.get(c.role.trophic()))
         .collect();
+    // The history has been read (guilds, roles, centroids) and the projection
+    // is at the present; drop it so the control and each injection fork clone
+    // a near-empty log rather than the resident's whole past — at P ≈ 1000 ×
+    // 2000 ticks that past is what does not fit in memory. Absolute indices
+    // are kept, so the projection's cursor and the lineage's stay valid.
+    world.compact_event_log_before(world.event_log().len());
     let centroid_of = |role: Role| centroids.iter().find(|c| c.role == role).map(|c| &c.traits);
     let predicted = predicted_signs(
         centroid_of(Role::Producer),
