@@ -31,21 +31,29 @@ pub fn run_single(
     seed: u64,
 ) -> RunResult {
     let mut world = explorers_sim::World::new(params.clone(), distribution.clone(), seed);
+    // The log keeps only what the evaluator reads (#502): the retention list
+    // and the audit of the reads behind it live with the evaluator
+    // (`EVALUATOR_EVENT_KINDS`). Observer-side — no trajectory changes.
+    world.retain_event_kinds(explorers_genesis_eval::EVALUATOR_EVENT_KINDS);
 
     // Per-tick series the rollout observes for the descriptors that need a
     // temporal trace: free energy (issue #302), carcass fraction (#342) and
     // producer share (#392) sampled every tick, plus a coarse-interval trait-
-    // vector snapshot for coexistence (#394) and a roster snapshot for the
-    // heterotroph guild read (#490). The world stays history-free — the
-    // series live here, bundled as `RolloutObservations` for the evaluator. The
-    // snapshots are pure observation; genesis does NOT cluster, the evaluator runs
-    // DBSCAN on each.
+    // vector snapshot for coexistence (#394) and a role-classified roster
+    // snapshot for the heterotroph guild read (#490), and the turnover counts
+    // and descent facts read off the log tail. The world stays history-free —
+    // the series live here, bundled as `RolloutObservations` for the
+    // evaluator, and the log is dropped as soon as `observe` has read it, so
+    // a settled-community horizon (`T = 2000`) fits in memory on dense
+    // configs. The snapshots are pure observation; genesis does NOT cluster,
+    // the evaluator runs DBSCAN on each.
     let mut observations =
         explorers_genesis_eval::RolloutObservations::with_capacity(run_config.max_ticks as usize);
     let interval = run_config.eval_config.coexistence_sample_interval;
     for _ in 0..run_config.max_ticks {
         world.step();
         observations.observe(&world, interval);
+        world.compact_event_log_before(observations.consumed_events());
         if world.agents().is_empty() {
             break;
         }
