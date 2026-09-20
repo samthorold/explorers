@@ -66,6 +66,24 @@ Trait space collapses to a single cluster. The system has persistence but no div
 
 Free energy trends to zero. Energy accumulates in carcass structure and is not returned to the living system. This occurs when decomposer strategies are not viable — either the cost of decomposition exceeds its energy return, or decomposer populations cannot sustain themselves. The living system starves while energy sits locked in dead matter. Its nutrient-side sibling, **nutrient lockup**, is the same dead-pool sequestration measured on the nutrient pool rather than the energy pool; the two often co-occur but need not (see below).
 
+**How it is read.** Energy death is *the living stock being small against what the resource base can
+sustain* — a trailing-window read of the free-energy stock against the world's **sustainable stock**,
+the closed-form ceiling [viability](viability.md#bound--sustained-population-solar-ceiling) derives
+from solar flux and metabolism (`N̄_max = π_F·m²` in count; its energy form scales it by body
+maintenance). The reference is a property of the config, not of the run's own history, and that is
+deliberate: the rollout runs past the founder bloom into the settled community
+([genesis search](genesis-search.md#the-atlas-maps-the-settled-community-not-the-founder-bloom)),
+and the settled stock sits several-fold below the bloom peak on every world where succession
+happens. A read against *the peak the run once held* therefore calls a world dead for having ceded
+its bloom-stage producer stock to the heterotroph niche — the ecology working, filed on the frontier
+as its failure — and the misfire gets worse the sharper the bloom. A history-free reference means the
+gate says the same thing at every horizon and for every bloom shape, and it is the lens-1 → lens-3
+interlock the design already prizes: a closed-form quantity predicting a rollout verdict, falsified by
+every sweep. Like every promoted gate it must first clear the zero-false-positive check against the
+atlas's live cells and a low-discrepancy sample of the search box
+([viability](viability.md)); until it does, the implemented gate reads against the post-grace
+history peak (`COLLAPSE_FRACTION = 0.1`) as a stand-in, and the doc records that as the gap.
+
 ### Nutrient lockup
 
 Nutrient sequesters irreversibly into the dead pool. The conserved system nutrient — which cycles between the substrate grid, living agents, and carcasses — silts up in carcasses faster than the living decomposers can turn it over, on a rising trend that does not reverse. Producers cannot reproduce without nutrient *even when solar flux provides ample energy*, so the living system can starve for nutrient while its energy budget looks healthy. This is the distinction from energy death: a world whose producers photosynthesise fine (free energy does not collapse) can still lock its nutrient away, because the decomposers that would return it are absent, out of reach, or non-viable. It is the pathology the decomposer role exists to prevent ([trophic roles](../ecology/trophic-roles.md), [world rules](world-rules.md): "a world without decomposers accumulates resources in the dead pool until the living system starves"). The canonical case is a producer→carcass front whose carcass rain falls outside any decomposer's reach (`scenarios/example9_detrital_pathway.json`): energy flow is sustained, but nutrient accumulates unconsumed in the dead pool.
