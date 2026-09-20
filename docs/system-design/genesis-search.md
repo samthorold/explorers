@@ -87,6 +87,88 @@ populated only by *running* worlds that survive yet strand their nutrient. Reach
 high-carcass region is the emitter's job (directed exploration along the carcass axis), not the
 prefilter's. The atlas maps the lockup cliff by running, because the physics forbids gating it.
 
+## The atlas maps the settled community, not the founder bloom
+
+Every rollout the search scores starts from a founder cohort and passes through a **pioneer bloom** —
+the producers colonise the empty world, peak, and then fall back as their own mortality feeds the
+carcass flux that the heterotroph niche lives on ([disturbance and succession](../ecology/disturbance-and-succession.md)).
+The heterotroph guilds are a **later successional stage**: on the strongest known guild configs the
+producers fall 2–3× and the decomposers rise 2–18× *after* the bloom peaks, and a guild that reads on
+7 / 8 seeds over the settled phase reads on 0 / 8 at peak bloom
+([443 §6.2](../research/443-invasion-growth.md)).
+
+The atlas characterises the **settled community** — the post-bloom stage the player is dropped into —
+not the bloom. The reason is what the axes are for: they are existence/stability coordinates, and the
+existence or stability of a colonisation transient is not the thing the design maps; the failure modes
+the frontier tallies (frozen, monoculture, lockup) are properties of where the ecology *settles*, and
+a bloom-stage read cannot tell "the search selects against guilds" from "the guild forms after the
+search stops looking". A bloom-stage map is therefore a map of the wrong object, however cheap. The
+rollout horizon is consequently a **design quantity set by the ecology's own settling time**, not a
+search tuning knob.
+
+**One rollout, one settled window.** Each rollout runs to the horizon `T`; the terminal gates
+(extinction, energy death, lockup) fire whenever they fire along the way, so the dead frontier is the
+frontier of the *whole* trajectory — a world that blooms and then locks up is on the lockup cliff,
+which a bloom-length rollout could not see. Every behaviour axis and every reported distribution (the
+guild fractions, the coexistence fraction) is read off the **settled window `(T/2, T]`** — the same
+window the guild predicate is defined on — not off the bloom or the whole run. The window changes
+*when* each axis is read, not *what* it reads: `clustering_strength` stays the existence read on the
+final snapshot (now a settled tick; the existence-vs-persistence pair with `coexistence_duration` in
+[expected properties](expected-properties.md) is deliberate and a window-typical dip would blur it);
+`oscillation_strength` reads the window's share series (a thousand settled ticks instead of a few
+hundred of bloom — the demographic-pulsing contamination #358 found at the short horizon is a
+bloom-stage artefact); the carcass-locked fraction stays the trailing mean the lockup gate reads, so
+axis and gate cannot diverge — if the dead pool has not settled by `T − window` the horizon is too
+short, not the read. The two halves are not separable: a bloom-length rollout with a "longer guild-only read" bolted on still has to run
+the world to `T` to see the guild, saves only the per-tick observation (which is not where the cost
+is), and leaves the axes reading the bloom while the guild reads the settled stage — a map whose
+coordinates and whose reported distributions describe different objects.
+
+**The frontier costs a bloom, the atlas costs the horizon.** A rollout that hits a terminal gate is
+tallied and stopped where it dies; only a world still alive past the bloom is carried to `T`. Nothing
+is *scored* before `T` — an early stop is a frontier entry, never a cell — so the map is the same map
+as if every rollout ran the full horizon; the search simply does not pay a settled-community price
+for a world that has no settled community. This is the tick-0 prefilter's interlock moved along the
+trajectory, and it is why the longer horizon does not force the map to get coarser: cutting
+generations or batch to hold wall-clock trades the atlas's resolution for its correctness, and
+shrinking the seed ensemble makes the median-over-seeds selection signal noisier exactly where
+[the projection](#the-recipe-is-a-projection-of-the-atlas) already struggles. Neither is taken.
+
+**The gates' reference excludes the founder transient, by a measured tick count.** Lockup is read as
+a trailing window against the trajectory's earlier history (the low the dead pool once reached), and
+so is energy death until its history-free read is promoted ([expected
+properties](expected-properties.md#energy-death): the peak the living stock once held is the
+stand-in). Tick 0 is not part of that history: the founder
+cohort is *provisioned*, so its stock is an artefact of the founder budget rather than anything the
+ecology produced, and for the first few tens of ticks — until photosynthetic income overtakes the
+provisioning — the series describes the budget, not the world. The reference therefore starts after a
+**grace** of fixed tick count, sized from the *provisioning transient* — the tick at which the living
+stock first exceeds its tick-0 value, measured across the atlas's live cells and a low-discrepancy
+sample of the search box, taken at an upper quantile — and recorded here beside the measurement that
+produced it. It is an ecological constant, not a fraction of the horizon: a longer rollout does not
+make the founder budget last longer, and a grace scaled to the horizon would blind the gates to a
+world that genuinely dies early. It is also not per-run: a world that never recovers its founder stock
+would then never acquire a reference and would pass as live. When the stepper changes materially the
+transient is re-measured, the same way [viability](viability.md)'s tightness claims are re-checked
+against the atlas and the search box.
+
+**The horizon is the settling time, measured the same way.** `T` is set so that the settled window
+`(T/2, T]` opens *after* succession has run: the measurement is, per run, the tick at which the
+producer count last leaves the band it holds over the run's final stretch (succession is the producer
+ceding stock to the heterotroph niche, so the producer series is where it reads), taken at an upper
+quantile across the atlas's live cells and a low-discrepancy sample of the search box, with `T/2`
+placed above it. The evidence that it is a succession timescale and not a threshold is
+[443 §6.2–6.3](../research/443-invasion-growth.md): at 1000 ticks decomposers are still rising
+2–18× on the strongest guild configs, at 2000 the control arm only drifts, and the guild's own
+doubling time where it lives is ~700 ticks. A round number chosen for convenience would carry no
+procedure to re-run when the stepper changes; this one is re-measured with the grace, off the same
+long rollouts, since both are transient ticks of the same trajectory.
+
+*Current values: both unmeasured. Grace — the committed 0.2 · T (100 ticks at the 500-tick horizon)
+predates the measurement and is superseded by it. Horizon — `T = 2000` is the working value, taken
+from the #492 / 443 §6.3 window the guild predicate was validated on; the measurement confirms or
+moves it.*
+
 ## Authority boundary: the heterotroph guilds are reported, never optimised
 
 A **decomposer** is a behavioural role read from an agent's trait vector and diet, confirmed across seed
