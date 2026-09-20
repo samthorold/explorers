@@ -1,6 +1,36 @@
 pub mod ensemble;
 pub mod guild;
 
+use explorers_sim::event::EventKind;
+use explorers_sim::topology::TopologyProjection;
+
+/// The event kinds the evaluator consumes — the retention a rollout applies
+/// with `World::retain_event_kinds` so a settled-community horizon fits in
+/// memory (#502). Every read the evaluator takes off the log is taken tick by
+/// tick in [`RolloutObservations::observe`], so a rollout may also drop the
+/// log before [`RolloutObservations::consumed_events`] after each step; what
+/// it keeps at all is this list. Audit of the reads, so a future read that
+/// needs another kind knows to add it here:
+///
+/// - `Reproduced`, `Died` — counted for the turnover term
+///   (`turnover_score`; `total_births` / `total_deaths`).
+/// - `Consumed`, `Reproduced`, `Died` — walked by the
+///   [`TopologyProjection`] whose realised-diet edges classify each roster
+///   sample into trophic roles for the heterotroph guild read (#490).
+/// - `Born` — the guild's recruitment clause: a second-half birth naming a
+///   guild member as a parent ([`guild::Birth`]).
+///
+/// Nothing else the evaluator computes reads the log: the energy-death,
+/// lockup, oscillation and coexistence reads are off the per-tick series and
+/// snapshots in [`RolloutObservations`], and clustering, trophic balance,
+/// monoculture and generalist dominance read the final roster.
+pub const EVALUATOR_EVENT_KINDS: &[EventKind] = &[
+    EventKind::Consumed,
+    EventKind::Reproduced,
+    EventKind::Died,
+    EventKind::Born,
+];
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum FailureMode {
     Extinction,
@@ -84,13 +114,21 @@ impl Default for EvalConfig {
 
 /// The per-tick series a rollout observes about a world, sampled over time and
 /// handed to the evaluator as one bundle. Each field is one signal the caller
-/// samples once per tick (or, for `cluster_snapshots`, at a coarse interval)
-/// during the rollout; the evaluator reads them to compute the descriptors that
-/// need a temporal trace rather than just the final state. Bundling them keeps
+/// samples once per tick (or, for the snapshots, at a coarse interval) during
+/// the rollout; the evaluator reads them to compute the descriptors that need
+/// a temporal trace rather than just the final state. Bundling them keeps
 /// `evaluate_from_log`'s signature from accreting a new slice parameter every
 /// time a descriptor grows a per-tick appetite — the series are conceptually one
 /// thing: what the rollout observed, sampled over time.
-#[derive(Clone, Debug, Default)]
+///
+/// The bundle also carries every read the evaluator takes off the event log,
+/// consumed tick by tick from the log's tail (#502): the turnover counts, the
+/// `Born` descent facts, and the roster samples already classified into
+/// trophic roles by the projection as of the sample tick. Reading them as they
+/// happen is what lets a rollout keep only [`EVALUATOR_EVENT_KINDS`] and drop
+/// the log before [`consumed_events`](Self::consumed_events) after every
+/// step — the world stays history-free and so, at the horizon, does the log.
+#[derive(Clone, Debug)]
 pub struct RolloutObservations {
     /// Free (non-carcass-locked) energy stock per tick, for the energy-death
     /// stock-trend signal (issue #302).
@@ -106,12 +144,31 @@ pub struct RolloutObservations {
     /// not per-tick, because DBSCAN is O(n²) and clustering every tick of every
     /// seed is disproportionate for one noisy 0.2-weight term.
     pub cluster_snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)>,
-    /// Living roster (`(id, traits)` pairs) snapshotted at the same coarse
-    /// interval and tagged with its tick, for the heterotroph guild read (#490).
-    /// The guild is a population over time — role count on every sampled tick
-    /// of the second half plus recruitment — so it needs the roster *at each
-    /// sample*, which the history-free world cannot supply after the fact.
-    pub roster_snapshots: Vec<guild::RosterSnapshot>,
+    /// Living roster snapshotted at the same coarse interval, tagged with its
+    /// tick and read into trophic roles by the projection as of that tick, for
+    /// the heterotroph guild read (#490). The guild is a population over time
+    /// — role count on every sampled tick of the second half plus recruitment
+    /// — so it needs the roster *at each sample*, which the history-free world
+    /// cannot supply after the fact; classifying at the sample is what lets
+    /// the log history behind the projection be dropped (#502).
+    pub role_snapshots: Vec<guild::RoleSnapshot>,
+    /// `Reproduced` events seen so far — the turnover term's births.
+    pub total_births: usize,
+    /// `Died` events seen so far — the turnover term's deaths.
+    pub total_deaths: usize,
+    /// Every `Born` event's descent facts, for the guild's recruitment clause.
+    pub born: Vec<guild::Birth>,
+    /// The projection that classifies each roster sample, walked to the
+    /// present on every `observe`.
+    topology: TopologyProjection,
+    /// Absolute log index up to which the counts and `born` have been read.
+    log_cursor: usize,
+}
+
+impl Default for RolloutObservations {
+    fn default() -> Self {
+        Self::with_capacity(0)
+    }
 }
 
 impl RolloutObservations {
@@ -122,16 +179,39 @@ impl RolloutObservations {
             carcass_fraction: Vec::with_capacity(max_ticks),
             producer_share: Vec::with_capacity(max_ticks),
             cluster_snapshots: Vec::new(),
-            roster_snapshots: Vec::new(),
+            role_snapshots: Vec::new(),
+            total_births: 0,
+            total_deaths: 0,
+            born: Vec::new(),
+            topology: TopologyProjection::new(),
+            log_cursor: 0,
         }
     }
 
-    /// Record one stepped tick of `world`: the three per-tick series every
-    /// tick, and the trait-vector and roster snapshots when the world's tick is
-    /// a multiple of `sample_interval` (the evaluator's
-    /// `coexistence_sample_interval`). Pure observation — no clustering, no
-    /// classification; the evaluator owns both.
+    /// Record one stepped tick of `world`: the log tail since the last call
+    /// (turnover counts, `Born` facts, the projection), the three per-tick
+    /// series every tick, and the trait-vector and role snapshots when the
+    /// world's tick is a multiple of `sample_interval` (the evaluator's
+    /// `coexistence_sample_interval`). Pure observation — no clustering; the
+    /// evaluator owns that. Role classification is the projection's read of
+    /// the log as of this tick, taken here because it cannot be taken later
+    /// from a log that has been dropped.
     pub fn observe(&mut self, world: &explorers_sim::World, sample_interval: usize) {
+        let log = world.event_log();
+        for event in log.since(self.log_cursor) {
+            match event.kind {
+                EventKind::Reproduced => self.total_births += 1,
+                EventKind::Died => self.total_deaths += 1,
+                EventKind::Born => self.born.extend(guild::Birth::of(event)),
+                _ => {}
+            }
+        }
+        self.log_cursor = log.len();
+        // Events are stamped with the tick they happened in and the world's
+        // counter advances after the step, so walking to the present here is
+        // the projection as of `world.tick()`.
+        self.topology.update(log);
+
         self.free_energy.push(world.free_energy());
         self.carcass_fraction
             .push(world.carcass_locked_nutrient_fraction());
@@ -141,11 +221,19 @@ impl RolloutObservations {
                 world.tick(),
                 world.agents().iter().map(|a| a.traits).collect(),
             ));
-            self.roster_snapshots.push((
+            self.role_snapshots.push((
                 world.tick(),
-                world.agents().iter().map(|a| (a.id, a.traits)).collect(),
+                self.topology
+                    .trophic_roles_of(world.agents().iter().map(|a| (a.id, &a.traits))),
             ));
         }
+    }
+
+    /// Absolute event-log index below which everything has been read: a
+    /// rollout that wants to drop history once read compacts the world's log
+    /// before it (`World::compact_event_log_before`) after each `observe`.
+    pub fn consumed_events(&self) -> usize {
+        self.log_cursor
     }
 }
 
@@ -160,7 +248,11 @@ pub fn evaluate_from_log(
         carcass_fraction: carcass_fraction_per_tick,
         producer_share: producer_share_per_tick,
         cluster_snapshots,
-        roster_snapshots,
+        role_snapshots,
+        total_births,
+        total_deaths,
+        born,
+        ..
     } = observations;
     let agents = world.agents();
     let ticks_survived = world.tick();
@@ -189,12 +281,10 @@ pub fn evaluate_from_log(
         return zero_breakdown(FailureMode::PopulationExplosion);
     }
 
-    let log = world.event_log();
-    let total_births = log
-        .by_kind(&explorers_sim::event::EventKind::Reproduced)
-        .len();
-    let total_deaths = log.by_kind(&explorers_sim::event::EventKind::Died).len();
-    let ts = turnover_score(total_births, total_deaths, max_ticks);
+    // Turnover reads the counts the rollout took off the log tail tick by
+    // tick (`EVALUATOR_EVENT_KINDS`), not the log itself, which the rollout
+    // may have dropped.
+    let ts = turnover_score(*total_births, *total_deaths, max_ticks);
 
     let trait_vectors: Vec<_> = agents.iter().map(|a| a.traits).collect();
     let energies: Vec<_> = agents.iter().map(|a| a.energy()).collect();
@@ -299,12 +389,12 @@ pub fn evaluate_from_log(
     let carcass_locked_fraction =
         trailing_mean(carcass_fraction_per_tick, config.nutrient_lock_window);
 
-    // Heterotroph guilds (#490): a population read over the second-half roster
+    // Heterotroph guilds (#490): a population read over the second-half role
     // snapshots — sustained size plus recruitment — for both heterotroph roles.
     // Reported observables, aggregated into per-cell seed fractions by the atlas
     // — never an axis, never a fitness term (the authority boundary,
     // genesis-search.md).
-    let guilds = guild::heterotroph_guilds(log, roster_snapshots, max_ticks);
+    let guilds = guild::role_guilds_from_samples(role_snapshots, born, max_ticks);
 
     FitnessBreakdown {
         fitness,
@@ -935,7 +1025,7 @@ mod tests {
             carcass_fraction: carcass_fraction.to_vec(),
             producer_share: producer_share.to_vec(),
             cluster_snapshots: cluster_snapshots.to_vec(),
-            roster_snapshots: Vec::new(),
+            ..RolloutObservations::default()
         }
     }
 
@@ -998,8 +1088,15 @@ mod tests {
         };
         let max_ticks = 50;
         let mut world = explorers_sim::World::new(params, dist, 42);
-        let free = run_collecting_free_energy(&mut world, max_ticks);
-        let result = evaluate_from_log(&world, &obs(&free, &[], &[], &[]), &config, max_ticks);
+        let mut observations = RolloutObservations::with_capacity(max_ticks as usize);
+        for _ in 0..max_ticks {
+            world.step();
+            observations.observe(&world, config.coexistence_sample_interval);
+            if world.agents().is_empty() {
+                break;
+            }
+        }
+        let result = evaluate_from_log(&world, &observations, &config, max_ticks);
         let born_count = world
             .event_log()
             .by_kind(&explorers_sim::event::EventKind::Reproduced)
@@ -1311,13 +1408,78 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_from_log_reads_both_heterotroph_guilds_off_the_roster_snapshots() {
-        // The guild read (#490) is a population read over the second-half roster
-        // snapshots, not a terminal-roster role tag. Feed a real run's log with
-        // fabricated roster snapshots: six heterotroph-by-trait ids on every
-        // sample, one of them a real second-half parent. With no consumption
-        // events they read as consumers (a non-eater defaults to Consumer), so
-        // the consumer guild holds and the decomposer guild does not.
+    fn evaluation_is_unchanged_when_the_rollout_keeps_only_the_evaluator_kinds_and_drops_history_once_read()
+     {
+        // Issue #502: the evaluator's reads off the event log (turnover counts,
+        // the guild's roles and recruitment) are taken tick by tick by
+        // `observe`, so a rollout can retain only `EVALUATOR_EVENT_KINDS` and
+        // compact the log before `consumed_events()` after every step. That is
+        // observer-side only — the breakdown must be identical to a full-log
+        // rollout's.
+        // A live fixture: `test_world_params` is extinct by tick 1.
+        let params = explorers_sim::WorldParameters {
+            base_metabolic_rate: 0.1,
+            movement_cost_coefficient: 0.01,
+            reproduction_energy_threshold: 10.0,
+            offspring_structure_fraction: 0.0,
+            initial_nutrient_pool: 50.0,
+            ..test_world_params()
+        };
+        let dist = explorers_sim::InitialDistribution {
+            initial_energy_per_agent: 100.0,
+            mean_traits: explorers_sim::TraitVector {
+                fecundity: 0.5,
+                asexual_propensity: 1.0,
+                kappa: 0.5,
+                ..test_distribution().mean_traits
+            },
+            ..test_distribution()
+        };
+        let config = EvalConfig::default();
+        let max_ticks: u64 = 200;
+        let interval = config.coexistence_sample_interval;
+
+        let mut full = explorers_sim::World::new(params.clone(), dist.clone(), 42);
+        let mut full_obs = RolloutObservations::with_capacity(max_ticks as usize);
+        let mut lean = explorers_sim::World::new(params, dist, 42);
+        let mut lean_obs = RolloutObservations::with_capacity(max_ticks as usize);
+        lean.retain_event_kinds(EVALUATOR_EVENT_KINDS);
+        for _ in 0..max_ticks {
+            full.step();
+            full_obs.observe(&full, interval);
+            lean.step();
+            lean_obs.observe(&lean, interval);
+            lean.compact_event_log_before(lean_obs.consumed_events());
+            assert_eq!(
+                lean.event_log().retained(),
+                0,
+                "history is dropped once read"
+            );
+            if full.agents().is_empty() {
+                break;
+            }
+        }
+        assert!(
+            full.event_log().len() > lean.event_log().retained(),
+            "the full-log rollout is the one paying for history"
+        );
+
+        let expected = evaluate_from_log(&full, &full_obs, &config, max_ticks);
+        let actual = evaluate_from_log(&lean, &lean_obs, &config, max_ticks);
+        assert!(
+            expected.turnover_score > 0.0,
+            "the fixture turns over, so the counts are exercised: {expected:?}"
+        );
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+    }
+
+    #[test]
+    fn evaluate_from_log_reads_both_heterotroph_guilds_off_the_role_snapshots() {
+        // The guild read (#490) is a population read over the second-half role
+        // snapshots, not a terminal-roster role tag. Feed a real run's births
+        // with fabricated role snapshots: six ids read as consumers on every
+        // sample, one of them a real second-half parent, so the consumer guild
+        // holds and the decomposer guild does not.
         let params = test_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
@@ -1337,17 +1499,23 @@ mod tests {
             .find(|e| e.tick >= max_ticks / 2)
             .and_then(|e| e.target)
             .expect("the test run breeds in its second half");
-        let heterotroph = make_trait_vector([0.1, 1.0, 0.0, 0.4]);
-        let roster: Vec<(u64, explorers_sim::TraitVector)> = [parent]
+        let born: Vec<guild::Birth> = world
+            .event_log()
+            .by_kind(&explorers_sim::event::EventKind::Born)
+            .into_iter()
+            .filter_map(guild::Birth::of)
+            .collect();
+        let roles: std::collections::HashMap<u64, explorers_sim::topology::TrophicRole> = [parent]
             .into_iter()
             .chain(900_001..900_006)
-            .map(|id| (id, heterotroph))
+            .map(|id| (id, explorers_sim::topology::TrophicRole::Consumer))
             .collect();
-        let roster_snapshots: Vec<guild::RosterSnapshot> =
-            (1..=6).map(|k| (k * 10, roster.clone())).collect();
+        let role_snapshots: Vec<guild::RoleSnapshot> =
+            (1..=6).map(|k| (k * 10, roles.clone())).collect();
         let observations = RolloutObservations {
             free_energy: free,
-            roster_snapshots,
+            role_snapshots,
+            born,
             ..RolloutObservations::default()
         };
         let result = evaluate_from_log(&world, &observations, &config, max_ticks);

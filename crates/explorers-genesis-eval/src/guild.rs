@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use explorers_sim::TraitVector;
-use explorers_sim::event::{EventKind, EventLog};
+use explorers_sim::event::{Event, EventKind, EventLog};
 use explorers_sim::topology::{TopologyProjection, TrophicRole};
 
 /// The living roster at one world tick, as `(id, traits)` pairs.
@@ -58,19 +58,84 @@ pub fn heterotroph_guilds(
     }
 }
 
-/// Read every role's guild off a finished run. Membership is the
-/// `trophic_roles` read (heterotroph by trait, consumer/decomposer by realised
-/// diet) on each roster snapshot whose tick falls in the second half of the
-/// run (`tick > max_ticks / 2`); the projection is walked incrementally to each
-/// sample rather than rebuilt. A guild holds when the role count reaches
-/// [`GUILD_MIN_SIZE`] on every such sample **and** at least one `Born` event in
-/// the window names a member of the role (either parent) — which rules out a
-/// long-lived sterile founder cohort sitting at exactly the floor. "Member"
-/// is the union of the role over the window's samples, so a parent that bred
-/// between two samples still counts as long as it was read in the role at one.
+/// The living roster at one world tick, each agent read into its trophic
+/// role by the projection as of that tick (`TopologyProjection::update_before`
+/// then `trophic_roles_of`).
+pub type RoleSnapshot = (u64, HashMap<u64, TrophicRole>);
+
+/// The descent facts of one `Born` event — what the guild's recruitment clause
+/// reads. Taken off the log at observation time so the rollout need not keep
+/// the event itself (#502).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Birth {
+    /// The tick the birth happened in (the event's stamp).
+    pub tick: u64,
+    /// The parent — for a sexual birth the seed parent.
+    pub parent: Option<u64>,
+    /// The mate of a sexual birth; `None` for an asexual one.
+    pub second_parent: Option<u64>,
+}
+
+impl Birth {
+    /// The descent facts of a `Born` event; `None` for any other kind.
+    pub fn of(event: &Event) -> Option<Self> {
+        (event.kind == EventKind::Born).then_some(Self {
+            tick: event.tick,
+            parent: event.target,
+            second_parent: event.second_parent,
+        })
+    }
+}
+
+/// Read every role's guild off a finished run whose log still holds its
+/// `Consumed` / `Reproduced` / `Died` / `Born` history: the projection is
+/// walked to each second-half roster snapshot to classify it, and the rule is
+/// [`role_guilds_from_samples`]. A rollout that drops history once read
+/// classifies each sample as it is taken instead
+/// (`RolloutObservations::observe`) and calls the rule directly.
 pub fn role_guilds(
     log: &EventLog,
     roster_snapshots: &[RosterSnapshot],
+    max_ticks: u64,
+) -> RoleGuilds {
+    let window_start = window_start(max_ticks);
+    let mut topo = TopologyProjection::new();
+    let role_snapshots: Vec<RoleSnapshot> = roster_snapshots
+        .iter()
+        .filter(|(t, _)| *t >= window_start)
+        .map(|(tick, roster)| {
+            topo.update_before(log, *tick);
+            (
+                *tick,
+                topo.trophic_roles_of(roster.iter().map(|(id, tr)| (*id, tr))),
+            )
+        })
+        .collect();
+    let births: Vec<Birth> = log
+        .by_kind(&EventKind::Born)
+        .into_iter()
+        .filter_map(Birth::of)
+        .collect();
+    role_guilds_from_samples(&role_snapshots, &births, max_ticks)
+}
+
+/// First tick of the guild window: the second half of the run.
+fn window_start(max_ticks: u64) -> u64 {
+    max_ticks / 2 + 1
+}
+
+/// The guild rule over classified samples. Membership is the `trophic_roles`
+/// read (heterotroph by trait, consumer/decomposer by realised diet) on each
+/// role snapshot whose tick falls in the second half of the run
+/// (`tick > max_ticks / 2`). A guild holds when the role count reaches
+/// [`GUILD_MIN_SIZE`] on every such sample **and** at least one birth in the
+/// window names a member of the role (either parent) — which rules out a
+/// long-lived sterile founder cohort sitting at exactly the floor. "Member"
+/// is the union of the role over the window's samples, so a parent that bred
+/// between two samples still counts as long as it was read in the role at one.
+pub fn role_guilds_from_samples(
+    role_snapshots: &[RoleSnapshot],
+    births: &[Birth],
     max_ticks: u64,
 ) -> RoleGuilds {
     const ROLES: [TrophicRole; 3] = [
@@ -78,21 +143,18 @@ pub fn role_guilds(
         TrophicRole::Consumer,
         TrophicRole::Decomposer,
     ];
-    let window_start = max_ticks / 2 + 1;
-    let mut topo = TopologyProjection::new();
+    let window_start = window_start(max_ticks);
     let mut sustained: HashMap<TrophicRole, bool> = ROLES.iter().map(|r| (*r, true)).collect();
     let mut members: HashMap<TrophicRole, HashSet<u64>> = HashMap::new();
     let mut sampled = false;
-    for (tick, roster) in roster_snapshots.iter().filter(|(t, _)| *t >= window_start) {
+    for (_, roles) in role_snapshots.iter().filter(|(t, _)| *t >= window_start) {
         sampled = true;
-        topo.update_before(log, *tick);
-        let roles = topo.trophic_roles_of(roster.iter().map(|(id, tr)| (*id, tr)));
         for (role, ok) in sustained.iter_mut() {
             let count = roles.values().filter(|r| *r == role).count();
             *ok &= count >= GUILD_MIN_SIZE;
         }
         for (id, role) in roles {
-            members.entry(role).or_default().insert(id);
+            members.entry(*role).or_default().insert(*id);
         }
     }
     // Recruitment: a birth is stamped with the tick it happened in, and the
@@ -102,9 +164,9 @@ pub fn role_guilds(
         let Some(members) = members.get(&role) else {
             return false;
         };
-        log.by_kind(&EventKind::Born).iter().any(|e| {
-            e.tick + 1 >= window_start
-                && [e.target, e.second_parent]
+        births.iter().any(|b| {
+            b.tick + 1 >= window_start
+                && [b.parent, b.second_parent]
                     .into_iter()
                     .flatten()
                     .any(|parent| members.contains(&parent))
