@@ -5,9 +5,18 @@
 //! history once read (`explorers_genesis_eval::EVALUATOR_EVENT_KINDS`). That
 //! is an observer-side change — no trajectory changes — so every read must
 //! come out byte-identical to the full-log evaluator. The golden values below
-//! were captured from the full-log evaluator (main at ec79277) with
+//! were first captured from the full-log evaluator (main at ec79277) with
 //! `cargo test -p explorers-search --test evaluator_pin -- --ignored
 //! print_golden --nocapture`, and are compared bit-for-bit.
+//!
+//! Re-captured under #503, where the evaluator's reads changed *by design*:
+//! `oscillation_strength` and `coexistence_duration` read the settled window
+//! `(T/2, T]` (here `(250, 500]`) instead of the post-grace series, and the
+//! grace became an absolute tick count (100 — the same 100 ticks the old
+//! 0.2 fraction gave at this horizon, so every gate verdict, `ticks_survived`,
+//! `clustering_strength`, `turnover_score`, `trophic_balance_score` and
+//! `carcass_locked_fraction` came out bit-identical to the ec79277 capture;
+//! only the two windowed reads and the fitness that sums them moved).
 
 use explorers_genesis::{EvalConfig, FailureMode, FitnessBreakdown, RunConfig, run_single};
 use explorers_search::search::{decode, default_ranges};
@@ -118,9 +127,9 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 0,
             seed: 1000,
-            fitness: 0x3f0058d4,
+            fitness: 0x3ef148ee,
             failure: None,
-            oscillation_strength: 0x3ee5c61d,
+            oscillation_strength: 0x3e98ba78,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x0,
             turnover_score: 0x3d6d9168,
@@ -133,11 +142,11 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 0,
             seed: 1001,
-            fitness: 0x3f31fd8b,
+            fitness: 0x3f3125c6,
             failure: None,
-            oscillation_strength: 0x3eb77cec,
+            oscillation_strength: 0x3e95759d,
             clustering_strength: 0x3f800000,
-            coexistence_duration: 0x3f733333,
+            coexistence_duration: 0x3f800000,
             turnover_score: 0x3e2c0831,
             trophic_balance_score: 0x3f800000,
             ticks_survived: 500,
@@ -148,11 +157,11 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 6,
             seed: 1000,
-            fitness: 0x3f1b1725,
+            fitness: 0x3f1b08c4,
             failure: None,
-            oscillation_strength: 0x3eb5329c,
+            oscillation_strength: 0x3e891db3,
             clustering_strength: 0x3f800000,
-            coexistence_duration: 0x3ef33333,
+            coexistence_duration: 0x3f0f5c29,
             turnover_score: 0x3ed81062,
             trophic_balance_score: 0x3f47389f,
             ticks_survived: 500,
@@ -163,11 +172,11 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 6,
             seed: 1001,
-            fitness: 0x3f09f045,
+            fitness: 0x3f091b91,
             failure: None,
-            oscillation_strength: 0x3e8acf44,
+            oscillation_strength: 0x3ea8e69f,
             clustering_strength: 0x3f800000,
-            coexistence_duration: 0x3d99999a,
+            coexistence_duration: 0x0,
             turnover_score: 0x3eb22d0e,
             trophic_balance_score: 0x3f800000,
             ticks_survived: 500,
@@ -178,9 +187,9 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 9,
             seed: 1000,
-            fitness: 0x3f5c02a3,
+            fitness: 0x3f543afe,
             failure: None,
-            oscillation_strength: 0x3eff86e3,
+            oscillation_strength: 0x3eb1ba75,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f800000,
             turnover_score: 0x3f4c49ba,
@@ -193,9 +202,9 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 9,
             seed: 1001,
-            fitness: 0x3f59ac41,
+            fitness: 0x3f60e5cc,
             failure: None,
-            oscillation_strength: 0x3e80ba8c,
+            oscillation_strength: 0x3ec8f9f8,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f800000,
             turnover_score: 0x3f800000,
@@ -208,9 +217,9 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 52,
             seed: 1000,
-            fitness: 0x3f61d7d1,
+            fitness: 0x3f58ba06,
             failure: None,
-            oscillation_strength: 0x3ed26e2f,
+            oscillation_strength: 0x3e6e8881,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f800000,
             turnover_score: 0x3f800000,
@@ -238,9 +247,9 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 54,
             seed: 1000,
-            fitness: 0x3efa68cc,
+            fitness: 0x3f00a7e5,
             failure: None,
-            oscillation_strength: 0x3e2d783e,
+            oscillation_strength: 0x3e727e21,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x0,
             turnover_score: 0x3e8d4fdf,
@@ -253,9 +262,9 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 54,
             seed: 1001,
-            fitness: 0x3d9585ed,
+            fitness: 0x3db3afb9,
             failure: None,
-            oscillation_strength: 0x3e8ac6a4,
+            oscillation_strength: 0x3eb07ae3,
             clustering_strength: 0x0,
             coexistence_duration: 0x0,
             turnover_score: 0x3dc08312,
@@ -283,9 +292,9 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 64,
             seed: 1001,
-            fitness: 0x3d828bf8,
+            fitness: 0x3d03126f,
             failure: None,
-            oscillation_strength: 0x3e2286e1,
+            oscillation_strength: 0x0,
             clustering_strength: 0x0,
             coexistence_duration: 0x0,
             turnover_score: 0x3e23d70a,

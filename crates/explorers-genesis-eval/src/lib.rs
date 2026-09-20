@@ -85,14 +85,24 @@ pub struct EvalConfig {
     /// for the coexistence descriptor (issue #394). Coarse, not per-tick: DBSCAN is
     /// O(n²) and `max_population` is large, so clustering every tick of every seed
     /// is disproportionate for one noisy 0.2-weight term. A co-presence *fraction*
-    /// needs only a representative sample of the post-grace window.
+    /// needs only a representative sample of the settled window `(T/2, T]`.
     pub coexistence_sample_interval: usize,
     pub clustering_threshold: f32,
     pub dbscan_eps: f32,
     pub dbscan_min_points: usize,
     pub generalist_threshold: f32,
     pub generalist_dominance_fraction: f32,
-    pub grace_period_fraction: f32,
+    /// Ticks of trajectory the gates' reference excludes: the founder cohort is
+    /// *provisioned*, so until photosynthetic income overtakes the provisioning
+    /// the stock series describes the founder budget, not the world. An
+    /// absolute tick count sized from that provisioning transient — an
+    /// ecological constant, not a fraction of the horizon (genesis-search.md,
+    /// *The gates' reference excludes the founder transient*). Used only to
+    /// start the energy-death and lockup references and to hold the roster
+    /// gates (monoculture, generalist dominance) off the founder cohort; the
+    /// behaviour axes read the settled window `(T/2, T]` instead. 100 is the
+    /// working placeholder until the transient is measured.
+    pub grace_ticks: u64,
 }
 
 impl Default for EvalConfig {
@@ -107,7 +117,7 @@ impl Default for EvalConfig {
             dbscan_min_points: 5,
             generalist_threshold: 0.3,
             generalist_dominance_fraction: 0.5,
-            grace_period_fraction: 0.2,
+            grace_ticks: 100,
         }
     }
 }
@@ -298,7 +308,7 @@ pub fn evaluate_from_log(
     let labels = dbscan(&trait_vectors, config.dbscan_eps, config.dbscan_min_points);
     let tb = trophic_balance_score(&trait_vectors, &labels, &energies);
 
-    let grace_ticks = (max_ticks as f32 * config.grace_period_fraction) as u64;
+    let grace_ticks = config.grace_ticks;
     if ticks_survived > grace_ticks {
         // Free (non-carcass-locked) energy stock, sampled once per tick by the
         // caller. Energy death is this living-system stock trending irreversibly
@@ -345,33 +355,32 @@ pub fn evaluate_from_log(
         }
     }
 
-    // Coexistence (issue #394): the fraction of post-grace sampled ticks whose
-    // living population carries >=2 trait-space DBSCAN clusters. Genesis snapshots
+    // Coexistence (issue #394): the fraction of settled-window sampled ticks
+    // (tick in `(T/2, T]`, the window the guild predicate shares) whose living
+    // population carries >=2 trait-space DBSCAN clusters. Genesis snapshots
     // raw trait vectors at a coarse interval through the rollout (pure observation,
     // no clustering); the evaluator owns all clustering, running DBSCAN on each
-    // post-grace snapshot here. Each snapshot's tick is stored so the grace cutoff
+    // settled snapshot here. Each snapshot's tick is stored so the window cutoff
     // stays index/interval-free. Seed-invariant by construction: a pure function of
     // the snapshots and the DBSCAN config, with no `initial_population_size` leak.
     let cluster_counts_per_snapshot: Vec<usize> = cluster_snapshots
         .iter()
-        .filter(|(tick, _)| *tick > grace_ticks)
+        .filter(|(tick, _)| *tick > max_ticks / 2)
         .map(|(_, traits)| {
             distinct_cluster_count(traits, config.dbscan_eps, config.dbscan_min_points)
         })
         .collect();
 
     // Oscillation: the producer↔consumer rhythm read off the per-tick producer-
-    // energy-share series the caller sampled (issue #392). Drop the grace prefix
-    // (same skip the energy/nutrient gates and clustering use) so the early
-    // colonization transient doesn't count, then measure over the full post-grace
-    // window — a slow ecological cycle needs several periods, not a trailing tail.
-    let post_grace_share: Vec<f32> = producer_share_per_tick
-        .iter()
-        .copied()
-        .skip(grace_ticks as usize)
-        .collect();
+    // energy-share series the caller sampled (issue #392), over the settled
+    // window `(T/2, T]` (genesis-search.md, *One rollout, one settled window*):
+    // the atlas maps the settled community, and the bloom-stage rhythm is a
+    // colonisation artefact. The series is indexed from tick 1, so the window
+    // is the slice from index `T/2` on. Measured over the whole window — a
+    // slow ecological cycle needs several periods, not a trailing tail.
+    let settled_share = settled_window(producer_share_per_tick, max_ticks);
     let os = if ticks_survived > grace_ticks {
-        oscillation_strength(&post_grace_share)
+        oscillation_strength(settled_share)
     } else {
         0.0
     };
@@ -409,6 +418,15 @@ pub fn evaluate_from_log(
         has_decomposer_guild: guilds.decomposer,
         has_consumer_guild: guilds.consumer,
     }
+}
+
+/// The settled window `(T/2, T]` of a per-tick series sampled from tick 1 —
+/// the tail of the series from index `T/2` on, empty if the series never got
+/// there. The window every behaviour axis with a temporal read shares with
+/// the guild predicate (genesis-search.md, *One rollout, one settled window*).
+fn settled_window(series: &[f32], max_ticks: u64) -> &[f32] {
+    let start = (max_ticks / 2) as usize;
+    series.get(start..).unwrap_or(&[])
 }
 
 /// Mean of the trailing `window` samples (the whole series if shorter), 0 on an
@@ -1061,6 +1079,19 @@ mod tests {
         (free, share)
     }
 
+    /// A world that survives to a 200-tick horizon on every seed tried: the
+    /// base fixture packs 30 agents within one contact range of each other on
+    /// a 20-unit world and consumes itself in a single step, which is fine for
+    /// the final-state and gate tests but leaves nothing to read a settled
+    /// window off. Widening the world keeps the founders apart.
+    fn live_world_params() -> explorers_sim::WorldParameters {
+        explorers_sim::WorldParameters {
+            contact_range_coefficient: 2.0,
+            world_extent: 50.0,
+            ..test_world_params()
+        }
+    }
+
     fn test_distribution() -> explorers_sim::InitialDistribution {
         explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {
@@ -1083,7 +1114,7 @@ mod tests {
         let params = test_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 1.0,
+            grace_ticks: 50,
             ..EvalConfig::default()
         };
         let max_ticks = 50;
@@ -1120,7 +1151,7 @@ mod tests {
         let params = test_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 0.0,
+            grace_ticks: 0,
             energy_death_window: 5,
             ..EvalConfig::default()
         };
@@ -1152,6 +1183,53 @@ mod tests {
     }
 
     #[test]
+    fn gate_reference_starts_at_grace_ticks_whatever_the_horizon() {
+        // The gates' reference excludes the founder provisioning transient by
+        // an absolute tick count, not a fraction of the horizon
+        // (genesis-search.md): a longer rollout does not make the founder
+        // budget last longer. The same free-energy series — a provisioned
+        // founder stock for the first 20 ticks, then a steady living stock —
+        // must read the same at two horizons: alive under a 20-tick grace
+        // (the founder peak is outside the reference), energy death under no
+        // grace (the founder peak is the reference the steady stock collapses
+        // against). Under a horizon fraction the two horizons would disagree.
+        let founder_ticks = 20usize;
+        let series = |n: usize| -> Vec<f32> {
+            (0..n)
+                .map(|t| if t < founder_ticks { 2000.0 } else { 100.0 })
+                .collect()
+        };
+        let verdict = |max_ticks: u64, grace_ticks: u64| {
+            let config = EvalConfig {
+                grace_ticks,
+                energy_death_window: 10,
+                ..EvalConfig::default()
+            };
+            let mut world = explorers_sim::World::new(live_world_params(), test_distribution(), 42);
+            let _ = run_collecting_free_energy(&mut world, max_ticks);
+            assert!(
+                !world.agents().is_empty() && world.tick() == max_ticks,
+                "fixture world must survive to the horizon"
+            );
+            let n = max_ticks as usize;
+            evaluate_from_log(&world, &obs(&series(n), &[], &[], &[]), &config, max_ticks).failure
+        };
+
+        for horizon in [60u64, 120] {
+            assert_ne!(
+                verdict(horizon, founder_ticks as u64),
+                Some(FailureMode::EnergyDeath),
+                "T = {horizon}: the founder stock is outside a 20-tick grace"
+            );
+            assert_eq!(
+                verdict(horizon, 0),
+                Some(FailureMode::EnergyDeath),
+                "T = {horizon}: with no grace the founder stock is the reference"
+            );
+        }
+    }
+
+    #[test]
     fn evaluate_from_log_reports_carcass_locked_fraction_as_trailing_window_mean() {
         // Genesis behaviour axis iii (genesis-search.md): the breakdown must
         // carry the carcass-locked fraction the lockup gate reads — the
@@ -1163,7 +1241,7 @@ mod tests {
         let params = test_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 0.0,
+            grace_ticks: 0,
             nutrient_lock_window: 4,
             ..EvalConfig::default()
         };
@@ -1225,7 +1303,7 @@ mod tests {
         let params = test_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 0.0,
+            grace_ticks: 0,
             nutrient_lock_window: 5,
             ..EvalConfig::default()
         };
@@ -1354,7 +1432,7 @@ mod tests {
             ..test_distribution()
         };
         let config = EvalConfig {
-            grace_period_fraction: 0.0,
+            grace_ticks: 0,
             ..EvalConfig::default()
         };
         let max_ticks: u64 = 10;
@@ -1483,7 +1561,7 @@ mod tests {
         let params = test_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 1.0,
+            grace_ticks: 60,
             ..EvalConfig::default()
         };
         let max_ticks: u64 = 60;
@@ -1538,31 +1616,32 @@ mod tests {
 
     #[test]
     fn evaluate_from_log_coexistence_fraction_from_cluster_snapshots() {
-        // Coexistence is the fraction of post-grace sampled ticks whose living
-        // population carries >=2 trait-space clusters (issue #394). Feed a known
-        // K of N post-grace snapshots that carry >=2 clusters and assert the
-        // breakdown's coexistence_duration is exactly K/N. The fitness is the
-        // weighted sum of the five components.
-        let params = test_world_params();
+        // Coexistence is the fraction of settled-window sampled ticks whose
+        // living population carries >=2 trait-space clusters (issue #394). Feed
+        // a known K of N settled snapshots that carry >=2 clusters and assert
+        // the breakdown's coexistence_duration is exactly K/N. The fitness is
+        // the weighted sum of the five components.
+        let params = live_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 0.0,
+            grace_ticks: 0,
             ..EvalConfig::default()
         };
         let max_ticks: u64 = 50;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let free = run_collecting_free_energy(&mut world, max_ticks);
-        if world.agents().is_empty() {
-            return;
-        }
-        // 5 snapshots (all post-grace because grace_period_fraction = 0): 3 with
-        // >=2 clusters, 2 with a single cluster → K/N = 3/5.
+        assert!(
+            !world.agents().is_empty() && world.tick() == max_ticks,
+            "fixture world must survive to the horizon"
+        );
+        // 5 snapshots, all in the settled window (tick > 25): 3 with >=2
+        // clusters, 2 with a single cluster → K/N = 3/5.
         let snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = vec![
-            (1, snapshot_with_clusters(2)),
-            (2, snapshot_with_clusters(1)),
-            (3, snapshot_with_clusters(3)),
-            (4, snapshot_with_clusters(1)),
-            (5, snapshot_with_clusters(2)),
+            (30, snapshot_with_clusters(2)),
+            (35, snapshot_with_clusters(1)),
+            (40, snapshot_with_clusters(3)),
+            (45, snapshot_with_clusters(1)),
+            (50, snapshot_with_clusters(2)),
         ];
         let result = evaluate_from_log(
             &world,
@@ -1595,32 +1674,34 @@ mod tests {
         // must report identical coexistence_duration.
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 0.0,
+            grace_ticks: 0,
             ..EvalConfig::default()
         };
         let max_ticks: u64 = 50;
 
+        // Settled-window snapshots (tick > 25): 2 of 3 carry >=2 clusters.
         let snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = vec![
-            (1, snapshot_with_clusters(2)),
-            (2, snapshot_with_clusters(1)),
-            (3, snapshot_with_clusters(2)),
+            (30, snapshot_with_clusters(2)),
+            (40, snapshot_with_clusters(1)),
+            (50, snapshot_with_clusters(2)),
         ];
 
         let build = |pop: u32| {
             let params = explorers_sim::WorldParameters {
                 initial_population_size: pop,
-                ..test_world_params()
+                ..live_world_params()
             };
             let mut world = explorers_sim::World::new(params, dist.clone(), 42);
             let free = run_collecting_free_energy(&mut world, max_ticks);
+            assert!(
+                !world.agents().is_empty() && world.tick() == max_ticks,
+                "fixture world must survive to the horizon"
+            );
             (world, free)
         };
 
         let (world_a, free_a) = build(10);
-        let (world_b, free_b) = build(80);
-        if world_a.agents().is_empty() || world_b.agents().is_empty() {
-            return;
-        }
+        let (world_b, free_b) = build(30);
         let a = evaluate_from_log(
             &world_a,
             &obs(&free_a, &[], &[], &snapshots),
@@ -1633,48 +1714,75 @@ mod tests {
             &config,
             max_ticks,
         );
+        assert!(
+            a.failure.is_none() && b.failure.is_none(),
+            "both fixtures must reach the ungated read (a: {:?}, b: {:?})",
+            a.failure,
+            b.failure
+        );
         assert_eq!(
             a.coexistence_duration, b.coexistence_duration,
             "coexistence must not depend on initial_population_size"
         );
+        assert!((a.coexistence_duration - 2.0 / 3.0).abs() < 1e-5);
     }
 
     #[test]
-    fn coexistence_excludes_snapshots_at_or_before_grace() {
-        // Only snapshots with tick > grace_ticks count. With grace_ticks = 10
-        // (max_ticks=50, grace_fraction=0.2), the two pre-grace 2-cluster
-        // snapshots are excluded; only the post-grace snapshots set the fraction.
-        let params = test_world_params();
+    fn coexistence_reads_snapshots_in_the_settled_window_only() {
+        // Coexistence is the fraction of settled-window snapshots — tick in
+        // `(T/2, T]` — carrying >=2 clusters (genesis-search.md, *One rollout,
+        // one settled window*), not the post-grace snapshots. Structure that
+        // exists only in the first half reads zero; structure on every settled
+        // snapshot reads full, however many bloom-stage snapshots carried one
+        // cluster. The snapshot at exactly T/2 is outside the window.
+        let params = live_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 0.2,
+            grace_ticks: 0,
             ..EvalConfig::default()
         };
-        let max_ticks: u64 = 50;
+        let max_ticks: u64 = 100;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let free = run_collecting_free_energy(&mut world, max_ticks);
-        if world.agents().is_empty() || world.tick() <= 10 {
-            return;
-        }
-        // grace_ticks = 10. Pre-grace snapshots (excluded) all carry 2 clusters;
-        // post-grace snapshots are 1 of 2 with >=2 clusters → fraction = 1/2, not
-        // dragged up by the excluded pre-grace ones.
-        let snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = vec![
-            (5, snapshot_with_clusters(2)),
+        assert!(
+            !world.agents().is_empty() && world.tick() == max_ticks,
+            "fixture world must survive to the horizon"
+        );
+
+        let first_half_only: Vec<(u64, Vec<explorers_sim::TraitVector>)> = vec![
             (10, snapshot_with_clusters(2)),
-            (15, snapshot_with_clusters(2)),
-            (20, snapshot_with_clusters(1)),
+            (30, snapshot_with_clusters(3)),
+            (50, snapshot_with_clusters(2)),
+            (70, snapshot_with_clusters(1)),
+            (90, snapshot_with_clusters(1)),
         ];
-        let result = evaluate_from_log(
+        let bd = evaluate_from_log(
             &world,
-            &obs(&free, &[], &[], &snapshots),
+            &obs(&free, &[], &[], &first_half_only),
             &config,
             max_ticks,
         );
-        assert!(
-            (result.coexistence_duration - 0.5).abs() < 1e-5,
-            "only post-grace snapshots count: expected 1/2, got {}",
-            result.coexistence_duration
+        assert_eq!(
+            bd.coexistence_duration, 0.0,
+            "clusters confined to the bloom half (and the T/2 snapshot) read zero"
+        );
+
+        let second_half_only: Vec<(u64, Vec<explorers_sim::TraitVector>)> = vec![
+            (10, snapshot_with_clusters(1)),
+            (30, snapshot_with_clusters(1)),
+            (50, snapshot_with_clusters(1)),
+            (70, snapshot_with_clusters(2)),
+            (90, snapshot_with_clusters(3)),
+        ];
+        let bd = evaluate_from_log(
+            &world,
+            &obs(&free, &[], &[], &second_half_only),
+            &config,
+            max_ticks,
+        );
+        assert_eq!(
+            bd.coexistence_duration, 1.0,
+            "clusters on every settled snapshot read full"
         );
     }
 
@@ -1684,10 +1792,10 @@ mod tests {
         // grace_ticks, coexistence_duration is 0.0 regardless of snapshots.
         let params = test_world_params();
         let dist = test_distribution();
-        // grace_period_fraction = 1.0 → grace_ticks = max_ticks, so a surviving
+        // grace_ticks = max_ticks, so a surviving
         // world never exceeds grace.
         let config = EvalConfig {
-            grace_period_fraction: 1.0,
+            grace_ticks: 50,
             ..EvalConfig::default()
         };
         let max_ticks: u64 = 50;
@@ -1719,7 +1827,7 @@ mod tests {
         let params = test_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 0.0,
+            grace_ticks: 0,
             ..EvalConfig::default()
         };
         let max_ticks: u64 = 50;
@@ -1734,32 +1842,29 @@ mod tests {
 
     #[test]
     fn evaluate_from_log_oscillation_from_producer_share_series() {
-        // Oscillation now reads the per-tick producer-energy-share series the
-        // caller samples (issue #392), over the post-grace window. A surviving
+        // Oscillation reads the per-tick producer-energy-share series the
+        // caller samples (issue #392), over the settled window. A surviving
         // world fed an oscillating share series surfaces a positive oscillation
-        // strength that matches the standalone descriptor on the post-grace slice;
+        // strength that matches the standalone descriptor on the settled slice;
         // a flat series surfaces ~0. Seed-invariant by construction — no lineage
         // clusters, no initial_population_size.
-        let params = test_world_params();
+        let params = live_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 0.2,
+            grace_ticks: 12,
             ..EvalConfig::default()
         };
         let max_ticks: u64 = 64;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let (free, _share) = run_collecting_free_energy_and_share(&mut world, max_ticks);
-        if world.agents().is_empty() {
-            return;
-        }
-        let n = world.tick() as usize;
-        let grace_ticks = (max_ticks as f32 * config.grace_period_fraction) as u64;
-        if (n as u64) <= grace_ticks {
-            return;
-        }
+        assert!(
+            !world.agents().is_empty() && world.tick() == max_ticks,
+            "fixture world must survive to the horizon"
+        );
+        let n = max_ticks as usize;
 
         // A synthetic oscillating producer-share series: a clean producer↔consumer
-        // rhythm the evaluator should pick up over the post-grace window.
+        // rhythm the evaluator should pick up over the settled window.
         let period = 8.0;
         let oscillating: Vec<f32> = (0..n)
             .map(|i| 0.5 + 0.3 * (2.0 * std::f32::consts::PI * i as f32 / period).sin())
@@ -1770,15 +1875,10 @@ mod tests {
             &config,
             max_ticks,
         );
-        let post_grace: Vec<f32> = oscillating
-            .iter()
-            .copied()
-            .skip(grace_ticks as usize)
-            .collect();
         assert_eq!(
             bd.oscillation_strength,
-            oscillation_strength(&post_grace),
-            "breakdown oscillation must be the descriptor over the post-grace slice"
+            oscillation_strength(&oscillating[n / 2..]),
+            "breakdown oscillation must be the descriptor over the settled slice"
         );
         assert!(
             bd.oscillation_strength > 0.6,
@@ -1796,11 +1896,71 @@ mod tests {
     }
 
     #[test]
+    fn oscillation_reads_the_settled_window_not_the_post_grace_series() {
+        // The atlas maps the settled community: oscillation is read off the
+        // producer-share series over `(T/2, T]` (genesis-search.md, *One
+        // rollout, one settled window*), not the post-grace series. A rhythm
+        // that lives only in the first half reads zero; one that lives only in
+        // the second half reads exactly the descriptor on that half.
+        let params = live_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_ticks: 0,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 64;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let (free, _share) = run_collecting_free_energy_and_share(&mut world, max_ticks);
+        assert!(
+            !world.agents().is_empty() && world.tick() == max_ticks,
+            "fixture world must survive to the horizon for the window to be read"
+        );
+        let n = max_ticks as usize;
+        let half = n / 2;
+        let period = 8.0;
+        let rhythm = |i: usize| 0.5 + 0.3 * (2.0 * std::f32::consts::PI * i as f32 / period).sin();
+
+        let first_half_only: Vec<f32> = (0..n)
+            .map(|i| if i < half { rhythm(i) } else { 0.5 })
+            .collect();
+        let bd = evaluate_from_log(
+            &world,
+            &obs(&free, &[], &first_half_only, &[]),
+            &config,
+            max_ticks,
+        );
+        assert_eq!(
+            bd.oscillation_strength, 0.0,
+            "a rhythm confined to the bloom half must not read on the settled window"
+        );
+
+        let second_half_only: Vec<f32> = (0..n)
+            .map(|i| if i >= half { rhythm(i) } else { 0.5 })
+            .collect();
+        let bd = evaluate_from_log(
+            &world,
+            &obs(&free, &[], &second_half_only, &[]),
+            &config,
+            max_ticks,
+        );
+        assert_eq!(
+            bd.oscillation_strength,
+            oscillation_strength(&second_half_only[half..]),
+            "the settled window is exactly the second half of the series"
+        );
+        assert!(
+            bd.oscillation_strength > 0.6,
+            "a rhythm over the whole settled window reads high: {}",
+            bd.oscillation_strength
+        );
+    }
+
+    #[test]
     fn evaluate_from_log_clustering_and_trophic_from_final_state() {
         let params = test_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
-            grace_period_fraction: 1.0,
+            grace_ticks: 50,
             ..EvalConfig::default()
         };
         let max_ticks = 50;
@@ -2483,8 +2643,11 @@ mod tests {
     }
 
     #[test]
-    fn grace_period_defaults_to_twenty_percent() {
+    fn grace_is_an_absolute_tick_count_defaulting_to_one_hundred() {
+        // The gates' reference prefix is sized from the founder provisioning
+        // transient, an ecological constant — not a fraction of the horizon
+        // (genesis-search.md). 100 is the placeholder until it is measured.
         let config = EvalConfig::default();
-        assert!((config.grace_period_fraction - 0.2).abs() < 1e-5);
+        assert_eq!(config.grace_ticks, 100u64);
     }
 }

@@ -1840,7 +1840,13 @@ mod tests {
         let mut total_below = 0usize;
         let mut total_above = 0usize;
         let mut best_live_carcass = 0.0f32;
-        for &seed in &[11_u64, 23, 37, 5, 19] {
+        // Sweep seed 37 was retired under #503: with the behaviour axes read
+        // off the settled window the emitter's path on that seed reaches, in
+        // its last generation, a knife-edge config whose second ensemble seed
+        // blooms past 5,000 agents by tick 200 (the sibling seed peaks at 41)
+        // and the sim then costs seconds per tick — a cost problem at high
+        // density, not a property this test is about.
+        for &seed in &[11_u64, 23, 41, 5, 19] {
             let mut rng = ChaCha8Rng::seed_from_u64(seed);
             let atlas = run_qd(&config, seed, &mut rng);
             let check = atlas.lockup_boundary_crosscheck();
