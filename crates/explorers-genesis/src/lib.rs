@@ -226,14 +226,18 @@ mod tests {
             initial_energy_per_agent: 100.0,
             ..test_distribution()
         };
-        // A live post-grace window (the default 0.2 grace) so the seed-driven
-        // differences in the post-grace descriptors actually surface — under a
-        // full-run grace (1.0) the oscillation and coexistence guards zero those
-        // descriptors for a world that survives exactly to max_ticks, masking the
-        // trajectory difference this test asserts.
+        // A short grace (the 40 ticks this test was written under) and a
+        // horizon whose settled window `(T/2, T]` still holds this small
+        // world's seed-dependent dynamics: under a grace at or beyond max_ticks
+        // the oscillation and coexistence guards zero those descriptors, these
+        // worlds trip a gate under the default grace, and by tick 100 they have
+        // frozen, so a longer horizon reads identical (all-zero) windows.
         let config = RunConfig {
-            max_ticks: 200,
-            eval_config: EvalConfig::default(),
+            max_ticks: 120,
+            eval_config: EvalConfig {
+                grace_ticks: 40,
+                ..EvalConfig::default()
+            },
         };
         let result_a = run_single(&params, &dist, &config, 1);
         let result_b = run_single(&params, &dist, &config, 12345);
@@ -248,11 +252,13 @@ mod tests {
                 || a.turnover_score != b.turnover_score
                 || a.trophic_balance_score != b.trophic_balance_score,
             "different seeds should produce different trajectories \
-             (a: tick={} fit={}, b: tick={} fit={})",
+             (a: tick={} fit={} {:?}, b: tick={} fit={} {:?})",
             result_a.termination_tick,
             result_a.fitness,
+            a.failure,
             result_b.termination_tick,
             result_b.fitness,
+            b.failure,
         );
     }
 
@@ -417,7 +423,7 @@ mod tests {
         let config = RunConfig {
             max_ticks: 20,
             eval_config: EvalConfig {
-                grace_period_fraction: 1.0,
+                grace_ticks: u64::MAX,
                 ..EvalConfig::default()
             },
         };
