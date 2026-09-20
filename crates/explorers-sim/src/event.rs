@@ -43,36 +43,95 @@ pub struct Event {
     pub second_parent: Option<u64>,
 }
 
+/// Append-only event log with observer-side compaction. Indices are
+/// **absolute**: `len()` counts every event ever appended and `since(n)`
+/// reads from absolute position `n`, so a projection's cursor stays valid
+/// across [`EventLog::compact_before`]. The stepper only ever appends; what
+/// the log retains is an observer's concern.
 #[derive(Clone)]
 pub struct EventLog {
     events: Vec<Event>,
+    /// Absolute index of `events[0]`: how many events have been dropped.
+    base: usize,
+    /// Sequence number of the last event appended, kept across compaction
+    /// so the monotonic-seq guard does not reset.
+    last_seq: Option<u64>,
+    /// Observer-side retention filter: when set, only these kinds are kept
+    /// (others are dropped at append, still consuming their seq). `None`
+    /// keeps everything.
+    retain_kinds: Option<Vec<EventKind>>,
 }
 
 impl EventLog {
     pub fn new() -> Self {
-        Self { events: Vec::new() }
+        Self {
+            events: Vec::new(),
+            base: 0,
+            last_seq: None,
+            retain_kinds: None,
+        }
+    }
+
+    /// Keep only events of these kinds from now on. The per-agent-per-tick
+    /// bookkeeping kinds (`Photosynthesized`, `Metabolized`, `Grew`, `Moved`,
+    /// `Wore`, …) are the bulk of a long run's log; an observer that reads
+    /// only the interaction and descent facts can drop the rest at source.
+    /// Already-retained events are untouched.
+    pub fn retain_only(&mut self, kinds: &[EventKind]) {
+        self.retain_kinds = Some(kinds.to_vec());
     }
 
     pub fn append(&mut self, event: Event) -> Result<(), &'static str> {
-        if let Some(last) = self.events.last() {
-            if event.seq <= last.seq {
+        if let Some(last) = self.last_seq {
+            if event.seq <= last {
                 return Err("sequence number must be monotonically increasing");
             }
+        }
+        self.last_seq = Some(event.seq);
+        if self
+            .retain_kinds
+            .as_ref()
+            .is_some_and(|kinds| !kinds.contains(&event.kind))
+        {
+            return Ok(());
         }
         self.events.push(event);
         Ok(())
     }
 
+    /// Drop every event with absolute index `< index`, keeping the absolute
+    /// indexing (`len()`, `since()`) intact. An observer that has finished
+    /// with the history — a projection walked to the present, a guild read
+    /// over a closed window — calls this before a long-lived fork so the
+    /// fork does not clone the whole past. Range and kind queries afterwards
+    /// see only what is retained.
+    pub fn compact_before(&mut self, index: usize) {
+        let drop = index.saturating_sub(self.base).min(self.events.len());
+        if drop == 0 {
+            return;
+        }
+        self.events.drain(..drop);
+        self.base += drop;
+    }
+
+    /// Events currently held (after compaction), as opposed to `len()`.
+    pub fn retained(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Retained events in `[start, end)` by tick.
     pub fn by_tick_range(&self, start: u64, end: u64) -> &[Event] {
         let lo = self.events.partition_point(|e| e.tick < start);
         let hi = self.events.partition_point(|e| e.tick < end);
         &self.events[lo..hi]
     }
 
+    /// Retained events of one kind.
     pub fn by_kind(&self, kind: &EventKind) -> Vec<&Event> {
         self.events.iter().filter(|e| &e.kind == kind).collect()
     }
 
+    /// Retained events naming the agent as source or target.
     pub fn by_agent(&self, agent_id: u64) -> Vec<&Event> {
         self.events
             .iter()
@@ -80,19 +139,24 @@ impl EventLog {
             .collect()
     }
 
+    /// Total events ever appended (absolute length), including any dropped
+    /// by compaction.
     pub fn len(&self) -> usize {
-        self.events.len()
+        self.base + self.events.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.events.is_empty()
+        self.len() == 0
     }
 
+    /// Events from absolute index `index` on; an index inside dropped history
+    /// yields everything retained.
     pub fn since(&self, index: usize) -> &[Event] {
-        if index >= self.events.len() {
+        let rel = index.saturating_sub(self.base);
+        if rel >= self.events.len() {
             &[]
         } else {
-            &self.events[index..]
+            &self.events[rel..]
         }
     }
 }
@@ -265,5 +329,58 @@ mod tests {
             EventKind::Moved,
         ];
         assert_eq!(variants.len(), 9);
+    }
+
+    /// Compaction drops history but keeps the log's absolute indexing, so an
+    /// observer holding a cursor (`since(n)`, `len()`) reads on unchanged.
+    #[test]
+    fn compact_before_keeps_absolute_indices_and_the_seq_guard() {
+        let mut log = EventLog::new();
+        for seq in 0..10 {
+            log.append(make_event(seq / 2, seq, EventKind::Metabolized))
+                .unwrap();
+        }
+        let cursor = log.len();
+        log.compact_before(7);
+        assert_eq!(log.len(), 10);
+        assert_eq!(log.retained(), 3);
+        assert_eq!(log.since(cursor).len(), 0);
+        assert_eq!(log.since(8).len(), 2);
+        assert_eq!(log.since(8)[0].seq, 8);
+        // Asking for dropped history yields what is retained, not a panic.
+        assert_eq!(log.since(0).len(), 3);
+        // The monotonic-seq guard survives an empty retained buffer.
+        log.compact_before(10);
+        assert_eq!(log.retained(), 0);
+        assert!(log.append(make_event(5, 9, EventKind::Died)).is_err());
+        assert!(log.append(make_event(5, 10, EventKind::Died)).is_ok());
+        assert_eq!(log.len(), 11);
+        assert_eq!(log.since(cursor).len(), 1);
+        // Compacting before an index already dropped is a no-op.
+        log.compact_before(3);
+        assert_eq!(log.retained(), 1);
+    }
+
+    #[test]
+    fn retain_only_drops_other_kinds_at_append_and_keeps_the_seq_guard() {
+        let mut log = EventLog::new();
+        log.append(make_event(0, 0, EventKind::Metabolized))
+            .unwrap();
+        log.retain_only(&[EventKind::Consumed, EventKind::Born]);
+        log.append(make_event(1, 1, EventKind::Metabolized))
+            .unwrap();
+        log.append(make_event(1, 2, EventKind::Consumed)).unwrap();
+        log.append(make_event(1, 3, EventKind::Grew)).unwrap();
+        log.append(make_event(2, 4, EventKind::Born)).unwrap();
+        // The pre-filter event stays; the two filtered kinds are dropped.
+        assert_eq!(log.len(), 3);
+        let kinds: Vec<EventKind> = log.since(0).iter().map(|e| e.kind.clone()).collect();
+        assert_eq!(
+            kinds,
+            vec![EventKind::Metabolized, EventKind::Consumed, EventKind::Born]
+        );
+        // A dropped event still advanced the seq guard.
+        assert!(log.append(make_event(2, 3, EventKind::Consumed)).is_err());
+        assert!(log.append(make_event(2, 5, EventKind::Consumed)).is_ok());
     }
 }

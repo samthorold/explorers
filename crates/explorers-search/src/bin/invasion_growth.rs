@@ -12,15 +12,23 @@
 //! atlas's `coexistence_fraction`.
 //!
 //! Per (cell, seed): the resident web is `World::new` on the cell's decoded
-//! config, stepped to `t_inj` (the 500-tick search horizon). At `t_inj` the
+//! config, stepped to `t_inj` (the 500-tick search horizon by default;
+//! `INVASION_GROWTH_T_INJ` overrides it). At `t_inj` the
 //! roles are classified and each role's **realised centroid** (mean trait
 //! vector of the agents in that role) is read; a role absent from the
 //! resident is **not testable** (`not_testable`, reason `role_absent`) and
 //! gets no injection — Chesson's question is whether the role can re-invade
 //! *this* web, and a phenotype the web never produced does not ask it
 //! (#491; the canonical-vertex injections it replaces starved at a median
-//! tick of 13). The resident is then forked (`World: Clone`) into one
-//! control and, per present role × arm, one injection: a cohort of
+//! tick of 13). A role that is tagged but is not a **guild** over the
+//! resident phase — the evaluator's #490 predicate (`genesis_eval::guild`)
+//! read over `(t_inj/2, t_inj]` on roster samples every
+//! `GUILD_SAMPLE_INTERVAL` ticks: role count ≥ `GUILD_MIN_SIZE` on every
+//! sample plus ≥ 1 birth naming a member — is likewise not testable
+//! (`no_guild`, #493): one sessile individual is not a community to ask
+//! Chesson's question of (443 §4.1). The resident is then forked
+//! (`World: Clone`) into one
+//! control and, per testable role × arm, one injection: a cohort of
 //! `INVADER_COHORT` agents at the centroid, spread uniformly over the world
 //! and provisioned exactly as founders are. Two
 //! arms: `intact` injects into the resident as it stands (the issue's literal
@@ -53,8 +61,10 @@
 //! test's order-statistic interval, #434's binomial computation applied to
 //! the sign of each seed's rate; at `n = 8` the ≥ 95 % interval is
 //! `[min, max]`) does not straddle zero. A role is *present* in a cell when
-//! it is present at `t_inj` on at least half the seeds that reached `t_inj`.
-//! A cell is **coexisting-by-criterion** when every present role invades;
+//! it holds the guild predicate on at least half the seeds that reached
+//! `t_inj` (`guild_seeds`); the pre-#493 tag count (≥ 1 agent at `t_inj`)
+//! is kept alongside as `role_tagged_seeds`. A cell is
+//! **coexisting-by-criterion** when every present role invades;
 //! the relaxed read (median > 0 only) is reported alongside.
 //!
 //! ## Cross-check against the reduction
@@ -84,7 +94,9 @@
 //! runs. `target/invasion-growth.json` (gitignored) plus a stdout summary.
 //! Subset selectors: `INVASION_GROWTH_CELLS=atlas:3,sample:55` (a bare
 //! integer is an atlas index; the unfiltered run is the atlas only),
-//! `INVASION_GROWTH_SEEDS=2`, `INVASION_GROWTH_ARMS=intact|removed|both`.
+//! `INVASION_GROWTH_SEEDS=2`, `INVASION_GROWTH_ARMS=intact|removed|both`,
+//! `INVASION_GROWTH_T_INJ=2000` (resident phase; the window follows it
+//! unless `INVASION_GROWTH_WINDOW` is set), `INVASION_GROWTH_OUT=<path>`.
 //!
 //! Run with:
 //!   cargo run --release -p explorers-search --bin invasion_growth
@@ -102,6 +114,7 @@ use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
+use explorers_genesis_eval::guild::{RoleGuilds, RosterSnapshot, role_guilds};
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::qd::COEXISTENCE_FLOOR;
 use explorers_search::search::{SearchConfig, decode, default_ranges};
@@ -118,6 +131,11 @@ const SEED_BASE: u64 = 1000;
 const INVADER_COHORT: usize = 8;
 /// Lineage size is sampled into the record every this many ticks.
 const SERIES_INTERVAL: u64 = 25;
+/// The living roster is sampled every this many ticks over the second half
+/// of the resident phase for the guild read (#493) — `role_emergence`'s
+/// classification cadence, so the predicate reads the same series here as
+/// there.
+const GUILD_SAMPLE_INTERVAL: u64 = 10;
 /// A lineage with no survivor is logged at half an agent so its rate is a
 /// finite negative number; only the sign carries meaning for the criterion.
 const EXTINCT_FLOOR: f64 = 0.5;
@@ -139,6 +157,14 @@ impl Role {
             TrophicRole::Producer => Role::Producer,
             TrophicRole::Consumer => Role::Consumer,
             TrophicRole::Decomposer => Role::Decomposer,
+        }
+    }
+
+    fn trophic(self) -> TrophicRole {
+        match self {
+            Role::Producer => TrophicRole::Producer,
+            Role::Consumer => TrophicRole::Consumer,
+            Role::Decomposer => TrophicRole::Decomposer,
         }
     }
 
@@ -284,6 +310,11 @@ struct Resident {
     tick: u64,
     population: usize,
     roles: RoleCounts,
+    /// The #490 guild predicate per role over `(t_inj/2, t_inj]` (#493):
+    /// role count ≥ `GUILD_MIN_SIZE` on every sampled tick and ≥ 1 birth
+    /// naming a member. This, not the tag count, is what makes a role
+    /// testable.
+    guilds: RoleGuilds,
 }
 
 /// The control arm: the resident stepped through the window with nothing
@@ -322,6 +353,12 @@ struct Injection {
     /// `Consumed` events whose source is a lineage member over the window,
     /// split by `target_was_carcass` (#491): does the cohort eat at all?
     lineage_consumed_events: ConsumedCounts,
+    /// `Consumed` events on a *living* lineage member (the lineage as prey).
+    lineage_preyed_upon_events: usize,
+    /// Lineage deaths in a tick the member was drained alive (drain-kill or
+    /// predation) vs. with no drain that tick (starvation / threshold).
+    lineage_deaths_drained: usize,
+    lineage_deaths_undrained: usize,
     /// The resident's (non-lineage) composition at the end of the window.
     resident_roles_end: RoleCounts,
 }
@@ -345,7 +382,10 @@ struct Centroid {
 /// A role that could not be injected on this seed and why: `role_absent`
 /// (no agent of the role in the resident at `t_inj`, so there is no realised
 /// centroid to inject at — Chesson's question is whether the role can
-/// re-invade *this* web, not whether an invented phenotype can).
+/// re-invade *this* web, not whether an invented phenotype can) or
+/// `no_guild` (the role is tagged on the resident but is not a population by
+/// the #490 predicate — one sessile individual is not a community to ask
+/// Chesson's question of, #493).
 #[derive(Clone, Debug, serde::Serialize)]
 struct NotTestable {
     role: Role,
@@ -358,7 +398,7 @@ struct SeedRecord {
     seed: u64,
     resident: Resident,
     centroids: Vec<Centroid>,
-    /// Roles absent from the resident at `t_inj`: no injection, no centroid.
+    /// Roles not injected on this seed and why (`role_absent` / `no_guild`).
     not_testable: Vec<NotTestable>,
     /// The reduction's boundary eigenvalues at these centroids (only the
     /// roles whose centroids exist).
@@ -442,8 +482,23 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
     let (params, dist) = decode(unit, &ranges);
     let max_population = EvalConfig::default().max_population;
     let mut world = World::new(params, dist.clone(), seed);
+    // Everything this instrument reads off the log — the projection's roles
+    // (Consumed / Reproduced / Died), the guild read and lineage (Born,
+    // Consumed, Died) — is in these kinds; the per-agent-per-tick
+    // bookkeeping events are dropped at source so a 2000-tick resident at
+    // P ≈ 1000 fits in memory. Observer-side: no trajectory changes.
+    world.retain_event_kinds(&[
+        EventKind::Consumed,
+        EventKind::Reproduced,
+        EventKind::Died,
+        EventKind::Born,
+    ]);
     let mut topo = TopologyProjection::new();
     let mut termination = "alive";
+    // Living roster on each second-half sample (and on `t_inj` itself), for
+    // the guild read: the guild is a population over time, which the
+    // history-free world cannot supply after the fact.
+    let mut roster_snapshots: Vec<RosterSnapshot> = Vec::new();
     for _ in 0..t_inj {
         world.step();
         if world.agents().is_empty() {
@@ -454,14 +509,27 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
             termination = "explosion";
             break;
         }
+        let tick = world.tick();
+        if tick > t_inj / 2 && (tick % GUILD_SAMPLE_INTERVAL == 0 || tick == t_inj) {
+            roster_snapshots.push((
+                tick,
+                world.agents().iter().map(|a| (a.id, a.traits)).collect(),
+            ));
+        }
     }
     topo.update(world.event_log());
     let (roles, counts) = role_counts(&topo, world.agents(), None);
+    let guilds = if termination == "alive" {
+        role_guilds(world.event_log(), &roster_snapshots, t_inj)
+    } else {
+        RoleGuilds::default()
+    };
     let resident = Resident {
         termination,
         tick: world.tick(),
         population: world.agents().len(),
         roles: counts,
+        guilds,
     };
     if termination != "alive" {
         return SeedRecord {
@@ -478,17 +546,36 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
     let mut not_testable = Vec::new();
     for role in ROLES {
         match role_centroid(world.agents(), &roles, role) {
-            Some(traits) => centroids.push(Centroid {
-                role,
-                source: "realised",
-                traits,
-            }),
+            Some(traits) => {
+                centroids.push(Centroid {
+                    role,
+                    source: "realised",
+                    traits,
+                });
+                if !guilds.get(role.trophic()) {
+                    not_testable.push(NotTestable {
+                        role,
+                        reason: "no_guild",
+                    });
+                }
+            }
             None => not_testable.push(NotTestable {
                 role,
                 reason: "role_absent",
             }),
         }
     }
+    // Injected: tagged *and* a guild.
+    let testable: Vec<&Centroid> = centroids
+        .iter()
+        .filter(|c| guilds.get(c.role.trophic()))
+        .collect();
+    // The history has been read (guilds, roles, centroids) and the projection
+    // is at the present; drop it so the control and each injection fork clone
+    // a near-empty log rather than the resident's whole past — at P ≈ 1000 ×
+    // 2000 ticks that past is what does not fit in memory. Absolute indices
+    // are kept, so the projection's cursor and the lineage's stay valid.
+    world.compact_event_log_before(world.event_log().len());
     let centroid_of = |role: Role| centroids.iter().find(|c| c.role == role).map(|c| &c.traits);
     let predicted = predicted_signs(
         centroid_of(Role::Producer),
@@ -509,9 +596,9 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
         }
     };
 
-    let mut injections = Vec::with_capacity(centroids.len() * arms.len());
+    let mut injections = Vec::with_capacity(testable.len() * arms.len());
     for &arm in arms {
-        for c in &centroids {
+        for c in &testable {
             let (role, centroid_source, centroid) = (c.role, c.source, c.traits);
             let mut fork = world.clone();
             let mut fork_topo = topo.clone();
@@ -552,6 +639,9 @@ fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm])
                 pure_births: lineage.pure_births,
                 cross_births: lineage.cross_births,
                 lineage_consumed_events: lineage.consumed,
+                lineage_preyed_upon_events: lineage.preyed_upon_events,
+                lineage_deaths_drained: lineage.deaths_drained,
+                lineage_deaths_undrained: lineage.deaths_undrained,
                 resident_roles_end,
             });
         }
@@ -582,6 +672,14 @@ struct Lineage {
     cross_births: usize,
     /// `Consumed` events by a member, by target kind.
     consumed: ConsumedCounts,
+    /// Mortality attribution (#493 §6): `Consumed` events whose *target* is a
+    /// living member (the lineage being eaten), and member deaths split by
+    /// whether the member was drained in the tick it died.
+    preyed_upon_events: usize,
+    deaths_drained: usize,
+    deaths_undrained: usize,
+    /// Tick on which each member was last drained alive.
+    last_drained: HashMap<u64, u64>,
 }
 
 impl Lineage {
@@ -591,6 +689,10 @@ impl Lineage {
             pure_births: 0,
             cross_births: 0,
             consumed: ConsumedCounts::default(),
+            preyed_upon_events: 0,
+            deaths_drained: 0,
+            deaths_undrained: 0,
+            last_drained: HashMap::new(),
         }
     }
 
@@ -598,11 +700,25 @@ impl Lineage {
     /// `Born`, diet off `Consumed`.
     fn absorb(&mut self, events: &[Event]) {
         for ev in events {
-            if ev.kind == EventKind::Consumed && self.members.contains(&ev.source) {
-                if ev.target_was_carcass {
-                    self.consumed.carcass += 1;
+            if ev.kind == EventKind::Consumed {
+                if self.members.contains(&ev.source) {
+                    if ev.target_was_carcass {
+                        self.consumed.carcass += 1;
+                    } else {
+                        self.consumed.living += 1;
+                    }
+                }
+                if !ev.target_was_carcass && ev.target.is_some_and(|t| self.members.contains(&t)) {
+                    self.preyed_upon_events += 1;
+                    self.last_drained.insert(ev.target.unwrap(), ev.tick);
+                }
+                continue;
+            }
+            if ev.kind == EventKind::Died && self.members.contains(&ev.source) {
+                if self.last_drained.get(&ev.source) == Some(&ev.tick) {
+                    self.deaths_drained += 1;
                 } else {
-                    self.consumed.living += 1;
+                    self.deaths_undrained += 1;
                 }
                 continue;
             }
@@ -911,30 +1027,38 @@ fn summarise_rates(rates: &[f64]) -> RateSummary {
 struct RoleVerdict {
     role: Role,
     arm: Arm,
-    /// Seeds on which the role was present in the resident web at `t_inj`.
-    present_seeds: usize,
+    /// Seeds on which ≥ 1 agent carried the role at `t_inj` — the pre-#493
+    /// presence read, kept so the two sit side by side.
+    role_tagged_seeds: usize,
+    /// Seeds on which the role held the #490 guild predicate over the
+    /// resident phase (the seeds that were injected).
+    guild_seeds: usize,
     n_seeds: usize,
-    /// Present on at least half the seeds.
+    /// A guild on at least half the seeds (#493).
     present: bool,
     rates: RateSummary,
 }
 
-/// Per-seed input to the verdict: the resident's roles at `t_inj` and each
-/// (role, arm) growth rate.
-type SeedRates = (RoleCounts, Vec<(Role, Arm, f64)>);
+/// Per-seed input to the verdict: the resident's roles and guilds at `t_inj`
+/// and each (role, arm) growth rate.
+type SeedRates = (RoleCounts, RoleGuilds, Vec<(Role, Arm, f64)>);
 
 fn role_verdicts(seeds: &[SeedRates], arms: &[Arm]) -> Vec<RoleVerdict> {
     let n_seeds = seeds.len();
     let mut out = Vec::new();
     for &arm in arms {
         for role in ROLES {
-            let present_seeds = seeds
+            let role_tagged_seeds = seeds
                 .iter()
-                .filter(|(counts, _)| counts.count(role) > 0)
+                .filter(|(counts, _, _)| counts.count(role) > 0)
+                .count();
+            let guild_seeds = seeds
+                .iter()
+                .filter(|(_, guilds, _)| guilds.get(role.trophic()))
                 .count();
             let rates: Vec<f64> = seeds
                 .iter()
-                .flat_map(|(_, rs)| {
+                .flat_map(|(_, _, rs)| {
                     rs.iter()
                         .filter(|(r, a, _)| *r == role && *a == arm)
                         .map(|(_, _, rate)| *rate)
@@ -943,9 +1067,10 @@ fn role_verdicts(seeds: &[SeedRates], arms: &[Arm]) -> Vec<RoleVerdict> {
             out.push(RoleVerdict {
                 role,
                 arm,
-                present_seeds,
+                role_tagged_seeds,
+                guild_seeds,
                 n_seeds,
-                present: n_seeds > 0 && 2 * present_seeds >= n_seeds,
+                present: n_seeds > 0 && 2 * guild_seeds >= n_seeds,
                 rates: summarise_rates(&rates),
             });
         }
@@ -1120,6 +1245,7 @@ fn evaluate_cell(
         .map(|r| {
             (
                 r.resident.roles,
+                r.resident.guilds,
                 r.injections
                     .iter()
                     .map(|i| (i.role, i.arm, i.growth_rate))
@@ -1256,6 +1382,9 @@ struct ArmSummary {
     atlas_coexisting_multi_role_and_by_median: usize,
     /// Per role: (present cells, invading strict, invading by median).
     per_role: Vec<(Role, usize, usize, usize)>,
+    /// Per role: cells on which the role was *tagged* on ≥ half the seeds —
+    /// the pre-#493 presence read, next to the guild read in `per_role`.
+    per_role_tagged: Vec<(Role, usize)>,
     /// Per role: agreement tallies (agree, pred+/obs−, pred−/obs+, split, absent).
     sign_agreement: Vec<(Role, [usize; 5])>,
 }
@@ -1302,6 +1431,23 @@ fn arm_summary(records: &[CellRecord], arm: Arm) -> ArmSummary {
         })
         .collect();
     let multi = |r: &CellRecord| verdict(r).is_some_and(|v| v.roles_present >= 2);
+    let per_role_tagged = ROLES
+        .into_iter()
+        .map(|role| {
+            let n = records
+                .iter()
+                .filter(|r| {
+                    r.role_verdicts.iter().any(|v| {
+                        v.arm == arm
+                            && v.role == role
+                            && v.n_seeds > 0
+                            && 2 * v.role_tagged_seeds >= v.n_seeds
+                    })
+                })
+                .count();
+            (role, n)
+        })
+        .collect();
     ArmSummary {
         arm,
         cells: records.len(),
@@ -1340,6 +1486,7 @@ fn arm_summary(records: &[CellRecord], arm: Arm) -> ArmSummary {
             .filter(|r| !r.atlas_coexisting && by_median(r))
             .count(),
         per_role,
+        per_role_tagged,
         sign_agreement,
     }
 }
@@ -1434,8 +1581,13 @@ fn main() {
     let atlas_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "atlas.json".to_string());
-    let t_inj = SearchConfig::default().max_ticks;
-    let window = t_inj;
+    let env_u64 = |name: &str| std::env::var(name).ok().and_then(|v| v.parse::<u64>().ok());
+    let t_inj = env_u64("INVASION_GROWTH_T_INJ")
+        .filter(|&t| t > 0)
+        .unwrap_or(SearchConfig::default().max_ticks);
+    let window = env_u64("INVASION_GROWTH_WINDOW")
+        .filter(|&w| w > 0)
+        .unwrap_or(t_inj);
     let contents =
         std::fs::read_to_string(&atlas_path).unwrap_or_else(|e| panic!("read {atlas_path}: {e}"));
     let atlas: AtlasFile =
@@ -1454,9 +1606,9 @@ fn main() {
         ROLES.len(),
         arms
     );
-    if cell_filter.is_some() || seeds != N_SEEDS {
+    if cell_filter.is_some() || seeds != N_SEEDS || t_inj != SearchConfig::default().max_ticks {
         eprintln!(
-            "invasion_growth: SUBSET MODE — cells={:?}, seeds={seeds} (summary is partial)",
+            "invasion_growth: SUBSET MODE — cells={:?}, seeds={seeds}, t_inj={t_inj} (summary is partial)",
             cell_filter.as_ref().map(|f| f.len())
         );
     }
@@ -1544,8 +1696,13 @@ fn print_summary(s: &Summary) {
             a.atlas_coexisting_multi_role_and_by_median
         );
         for (role, present, strict, by_median) in &a.per_role {
+            let tagged = a
+                .per_role_tagged
+                .iter()
+                .find(|(r, _)| r == role)
+                .map_or(0, |(_, n)| *n);
             println!(
-                "  {role:?}: present in {present} cells, invades strict {strict}, by median {by_median}"
+                "  {role:?}: present (guild) in {present} cells [tagged in {tagged}], invades strict {strict}, by median {by_median}"
             );
         }
         for (role, t) in &a.sign_agreement {
@@ -1559,9 +1716,10 @@ fn print_summary(s: &Summary) {
 
 fn write_artifact(artifact: &Artifact) {
     std::fs::create_dir_all("target").ok();
-    let path = "target/invasion-growth.json";
+    let path = std::env::var("INVASION_GROWTH_OUT")
+        .unwrap_or_else(|_| "target/invasion-growth.json".to_string());
     let json = serde_json::to_string_pretty(artifact).expect("serialise artifact");
-    std::fs::write(path, json).unwrap_or_else(|e| panic!("write {path}: {e}"));
+    std::fs::write(&path, json).unwrap_or_else(|e| panic!("write {path}: {e}"));
     eprintln!(
         "invasion_growth: wrote {path} ({} cells)",
         artifact.cells.len()
@@ -1625,9 +1783,9 @@ mod tests {
     }
 
     /// Smoke check on one (config, seed): the resident runs to `t_inj`, every
-    /// present role is injected on both arms (an absent role is
-    /// `not_testable`), the control runs alongside, and the whole record is
-    /// deterministic. No assertion on the emergent rates.
+    /// role with a guild is injected on both arms (an absent or guild-less
+    /// role is `not_testable`), the control runs alongside, and the whole
+    /// record is deterministic. No assertion on the emergent rates.
     #[test]
     fn run_cell_seed_injects_every_role_on_every_arm_and_is_deterministic() {
         let ranges = default_ranges();
@@ -1639,13 +1797,15 @@ mod tests {
         assert_eq!(record.resident.tick, 30);
         let control = record.control.as_ref().expect("control arm ran");
         assert_eq!(control.ticks_run, 30);
-        let present = ROLES
+        let guilds = ROLES
             .iter()
-            .filter(|&&r| record.resident.roles.count(r) > 0)
+            .filter(|&&r| record.resident.guilds.get(r.trophic()))
             .count();
-        assert_eq!(record.injections.len(), present * 2);
-        assert_eq!(record.not_testable.len(), ROLES.len() - present);
+        assert!(guilds >= 1, "the producers breed inside 30 ticks");
+        assert_eq!(record.injections.len(), guilds * 2);
+        assert_eq!(record.not_testable.len(), ROLES.len() - guilds);
         for inj in &record.injections {
+            assert!(record.resident.guilds.get(inj.role.trophic()));
             assert_eq!(inj.cohort, INVADER_COHORT);
             assert!(inj.growth_rate.is_finite(), "{inj:?}");
             assert!(inj.ticks_run >= 1 && inj.ticks_run <= 30);
@@ -1718,6 +1878,11 @@ mod tests {
         let seeds: Vec<SeedRates> = (0..4)
             .map(|i| {
                 let counts = present(10, 5, if i < 2 { 1 } else { 0 });
+                let guilds = RoleGuilds {
+                    producer: true,
+                    consumer: true,
+                    decomposer: i < 2,
+                };
                 let rates = vec![
                     (Role::Producer, Arm::Intact, 0.01),
                     (Role::Consumer, Arm::Intact, 0.02),
@@ -1730,14 +1895,14 @@ mod tests {
                     (Role::Consumer, Arm::Removed, 0.02),
                     (Role::Decomposer, Arm::Removed, 0.03),
                 ];
-                (counts, rates)
+                (counts, guilds, rates)
             })
             .collect();
         let verdicts = role_verdicts(&seeds, &[Arm::Intact, Arm::Removed]);
         let find = |r: Role, a: Arm| verdicts.iter().find(|v| v.role == r && v.arm == a).unwrap();
         assert!(find(Role::Producer, Arm::Intact).present);
         assert!(find(Role::Decomposer, Arm::Intact).present);
-        assert_eq!(find(Role::Decomposer, Arm::Intact).present_seeds, 2);
+        assert_eq!(find(Role::Decomposer, Arm::Intact).guild_seeds, 2);
         // n = 4 has no interval, so the strict criterion cannot fire; the
         // median criterion can.
         let cell = cell_verdict(&verdicts, Arm::Intact);
@@ -1975,6 +2140,37 @@ mod tests {
         ]);
         assert_eq!(lineage.consumed.living, 1);
         assert_eq!(lineage.consumed.carcass, 2);
+        // Event 3 is a resident (1) draining member 10 alive.
+        assert_eq!(lineage.preyed_upon_events, 1);
+    }
+
+    /// A member's death is attributed to the drain if it was drained alive in
+    /// the tick it died, otherwise to starvation / the structure threshold.
+    #[test]
+    fn lineage_splits_deaths_by_whether_the_member_was_drained_that_tick() {
+        let died = |tick: u64, seq: u64, id: u64| Event {
+            tick,
+            seq,
+            kind: EventKind::Died,
+            source: id,
+            target: None,
+            energy_delta: 0.0,
+            position: None,
+            target_was_carcass: false,
+            second_parent: None,
+        };
+        let mut lineage = Lineage::new([10, 11, 12]);
+        // 10 is drained on tick 3 and dies on tick 3; 11 is drained on tick 3
+        // and dies later (tick 7) undrained; 12 is never drained.
+        lineage.absorb(&[consumed(0, 1, 10, false), consumed(1, 1, 11, false)]);
+        lineage.absorb(&[died(3, 2, 10)]);
+        lineage.absorb(&[died(7, 0, 11), died(7, 1, 12)]);
+        assert_eq!(lineage.preyed_upon_events, 2);
+        assert_eq!(lineage.deaths_drained, 1);
+        assert_eq!(lineage.deaths_undrained, 2);
+        // A non-member's death is not counted.
+        lineage.absorb(&[died(8, 0, 99)]);
+        assert_eq!(lineage.deaths_drained + lineage.deaths_undrained, 3);
     }
 
     /// An absent role is not injected at an invented phenotype: it is
@@ -1989,19 +2185,19 @@ mod tests {
         let record = run_cell_seed(&unit, SEED_BASE, 1, 10, &[Arm::Intact, Arm::Removed]);
         assert_eq!(record.resident.termination, "alive");
         assert_eq!(record.resident.roles.decomposers, 0);
-        let absent: Vec<Role> = record.not_testable.iter().map(|n| n.role).collect();
+        let absent: Vec<Role> = record
+            .not_testable
+            .iter()
+            .filter(|n| n.reason == "role_absent")
+            .map(|n| n.role)
+            .collect();
         assert!(absent.contains(&Role::Decomposer));
-        assert!(
-            record
-                .not_testable
-                .iter()
-                .all(|n| n.reason == "role_absent")
-        );
         for role in ROLES {
             let present = record.resident.roles.count(role) > 0;
-            let injected = record.injections.iter().filter(|i| i.role == role).count();
-            assert_eq!(injected, if present { 2 } else { 0 }, "{role:?}");
             assert_eq!(absent.contains(&role), !present, "{role:?}");
+            if !present {
+                assert!(record.injections.iter().all(|i| i.role != role));
+            }
         }
         assert!(
             record
@@ -2018,5 +2214,75 @@ mod tests {
                 p.role
             );
         }
+    }
+
+    /// #493: a role that is *tagged* on the resident but has no guild over the
+    /// resident phase is `not_testable: no_guild` and is not injected. At
+    /// `t_inj = 1` the producers are all there (tagged) but nothing has bred
+    /// inside the window, so the guild predicate cannot hold.
+    #[test]
+    fn tagged_role_without_a_guild_is_not_testable_no_guild() {
+        let ranges = default_ranges();
+        let unit = vec![0.5; ranges.len()];
+        let record = run_cell_seed(&unit, SEED_BASE, 1, 10, &[Arm::Intact, Arm::Removed]);
+        assert_eq!(record.resident.termination, "alive");
+        assert!(record.resident.roles.producers > 0);
+        assert!(!record.resident.guilds.producer);
+        let producer = record
+            .not_testable
+            .iter()
+            .find(|n| n.role == Role::Producer)
+            .expect("producer not testable");
+        assert_eq!(producer.reason, "no_guild");
+        assert!(record.injections.is_empty());
+        // The realised centroid is still recorded — it is the tag, not the
+        // guild, that defines it.
+        assert!(record.centroids.iter().any(|c| c.role == Role::Producer));
+        // Absent roles keep their own reason.
+        let decomposer = record
+            .not_testable
+            .iter()
+            .find(|n| n.role == Role::Decomposer)
+            .unwrap();
+        assert_eq!(decomposer.reason, "role_absent");
+    }
+
+    /// #493: cell presence is the guild read on ≥ half the seeds; the role-tag
+    /// count is kept alongside.
+    #[test]
+    fn cell_presence_is_the_guild_read_and_keeps_the_tag_count() {
+        let counts = RoleCounts {
+            producers: 10,
+            consumers: 5,
+            decomposers: 1,
+        };
+        // Four seeds: consumer tagged on 4/4 but a guild on 1/4; producer a
+        // guild on 4/4; decomposer tagged on 4/4, never a guild.
+        let seeds: Vec<SeedRates> = (0..4)
+            .map(|i| {
+                let guilds = RoleGuilds {
+                    producer: true,
+                    consumer: i == 0,
+                    decomposer: false,
+                };
+                let mut rates = vec![(Role::Producer, Arm::Intact, 0.01)];
+                if i == 0 {
+                    rates.push((Role::Consumer, Arm::Intact, 0.02));
+                }
+                (counts, guilds, rates)
+            })
+            .collect();
+        let verdicts = role_verdicts(&seeds, &[Arm::Intact]);
+        let find = |r: Role| verdicts.iter().find(|v| v.role == r).unwrap();
+        assert!(find(Role::Producer).present);
+        assert_eq!(find(Role::Producer).guild_seeds, 4);
+        assert_eq!(find(Role::Producer).role_tagged_seeds, 4);
+        assert!(!find(Role::Consumer).present);
+        assert_eq!(find(Role::Consumer).guild_seeds, 1);
+        assert_eq!(find(Role::Consumer).role_tagged_seeds, 4);
+        assert!(!find(Role::Decomposer).present);
+        assert_eq!(find(Role::Decomposer).role_tagged_seeds, 4);
+        let cell = cell_verdict(&verdicts, Arm::Intact);
+        assert_eq!(cell.roles_present, 1);
     }
 }

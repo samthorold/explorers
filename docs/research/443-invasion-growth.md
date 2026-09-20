@@ -1,7 +1,10 @@
 # Issue #443 — formal viability D1: the invasion-growth-rate instrument (mutual invasibility as the coexistence oracle)
 
 **Status: research finding. Commits the instrument and one observability addition to the
-event log; changes no trajectory.** This note asks Chesson's question of every atlas live
+event log; changes no trajectory.** *Amended 2026-09-15 (§6, #493): a role is testable only where
+it holds the #490 guild predicate; under that gate the atlas asks the coexistence question
+of no cell, and the positive control answers it at 2000 ticks — relaxed read only, `removed`
+arm only.* This note asks Chesson's question of every atlas live
 cell: can each trophic role invade the resident web when rare? It builds the instrument
 that measures the answer — a lineage-tracked per-capita growth rate of an injected
 cohort over a 500-tick window, eight seeds per cell, three roles, two injection
@@ -554,6 +557,211 @@ selector check only (one seed, `intact` arm), `sample:55` — §4.6's positive c
 with all three roles present at `t_inj` (P 1441 / C 4 / D 6) and its consumer cohort went
 8 → 62 with 12 617 living / 17 077 carcass events; a single seed, not a verdict.
 
+## 6. Presence is a guild (2026-09-15, #493)
+
+**Status: addendum. Protocol change — a role is testable on a seed only when it holds the
+#490 guild predicate over the resident phase — plus the atlas and the #492 positive
+controls re-run under it, at `t_inj = 500` and, for the controls, `t_inj = 2000`. No
+stepper, evaluator-score, or search change.** §4.7 asked for the second protocol change:
+"present" should require a guild, not a role tag on ≥ half the seeds. `invasion_growth`
+now samples the living roster every 10 ticks over `(t_inj/2, t_inj]` and reads
+`genesis_eval::guild::role_guilds` on it — role count ≥ `GUILD_MIN_SIZE = 5` on every sample
+plus ≥ 1 `Born` naming a member, the predicate #490 committed and #492 validated at 2000
+ticks, applied to all three roles by the same rule. A tagged role with no guild is
+`not_testable: no_guild` and is not injected; cell presence is a guild on ≥ half the seeds
+that reached `t_inj` (`guild_seeds`), with the pre-#493 tag count kept alongside
+(`role_tagged_seeds`). Each injection also now records the lineage as *prey* — `Consumed`
+events on a living member, and member deaths split by whether the member was drained in
+the tick it died — so an eaten cohort can be told from a starved one (§6.4).
+
+### 6.1 The atlas at `t_inj = 500`: the multi-role table is empty
+
+82 cells, 646 seeds reached `t_inj`, both arms; two runs byte-identical
+(SHA-1 `bdb9189a8433ba425b6c7cefc7e74b08ab17b1ec`, 543 s / 556 s release).
+
+| read | producer | consumer | decomposer | multi-role cells |
+|---|---|---|---|---|
+| tagged on ≥ ½ seeds (§1.3, pre-#493) | 82 | 21 | 51 | **54** |
+| guild on ≥ ½ seeds (#493) | 73 | **0** | **0** | **0** |
+
+Per seed: producers tagged on 635 / 646, a guild on 524 (the 111 tagged-not-guild seeds
+have a median of 3 producers — the near-extinct residents of `atlas:1, 4, 7, 8, …`);
+consumers tagged on 193, a guild on **5**; decomposers tagged on 338, a guild on **8**. No
+cell has a heterotroph guild on more than one of its eight seeds. The role sets present
+are P-only (73 cells) and nothing (9 cells). §4.1's reading — the atlas's "coexisting
+multi-role" cells are producer monocultures plus one or two sessile heterotrophy-dominant
+individuals — is now the instrument's own reading, not a re-read of its appendix.
+
+With the one-agent heterotroph rows no longer vetoing the cell, the producer-only
+verdicts rise: `removed` strict 8 → **29** (`atlas:2, 3, 5, 9, 10, 11, 12, 13, 14, 15, 17,
+18, 21, 24, 26, 29, 40, 46, 50, 51, 52, 56, 59, 62, 65, 68, 73, 78, 81`), by median 15 →
+65; `intact` strict 0 → 2 (`atlas:56, 78`), by median 3 → 26. These are the same fact §2.1
+reported with the heterotroph rows attached: the producer re-invades its own emptied world
+on most cells and its own intact bloom on almost none. By `coexistence_fraction` band
+(`removed`; `intact` in brackets):
+
+| band | cells | strict | by median |
+|---|---|---|---|
+| `== 1.0` | 36 | 11 (0) | 32 (13) |
+| `≥ 0.8` | 58 | 22 (2) | 54 (23) |
+| `≥ 0.5` | 70 | 28 (2) | 61 (26) |
+| `< 0.5` | 12 | 1 (0) | 4 (0) |
+
+None of it is about coexistence: a P-only cell passes as soon as the producer can invade
+(§1.3). **On the atlas, mutual invasibility is asked of no cell.** The 13 seeds that did
+hold a heterotroph guild are in Appendix B; their injected cohorts mostly persist (10 / 13
+alive at the end of the window; `atlas:10` seed 1003's consumer cohort 8 → 109), which
+matters for §6.4.
+
+### 6.2 The positive controls at `t_inj = 500`: the guilds are not there yet
+
+`sample:55`, `sample:20` (#492's positive controls), 8 seeds, both arms; two runs
+byte-identical (SHA-1 `c467f8fa13c97fd1d05172b32273ab48e80b70b1`; 4342 s at 3 rayon threads
+— the full-parallel run was killed for memory at P ≈ 1000–2000 × 16 seeds).
+
+| config | pop at 500 | P tag / guild | C tag / guild | D tag / guild | verdict intact | verdict removed |
+|---|---|---|---|---|---|---|
+| `sample:20` | 930 | 8 / 8 | 7 / **2** | 8 / **2** | no (P only) | median (P only) |
+| `sample:55` | 1003 | 8 / 8 | 6 / **0** | 8 / **0** | no (P only) | strict (P only) |
+
+The guilds #492 read on 7 / 8 seeds of each config over `(1000, 2000]` are on 2 / 8 and
+0 / 8 over `(250, 500]`. At t = 500 `sample:55` has C 0–4, D 2–9 in a producer bloom of
+725–1441; `sample:20` has D ≥ 5 on six seeds but sustained-with-births on two (1000: D 40,
+1006: D 54). Neither role is present by the cell rule, so **at the search horizon the
+criterion passes on no positive control** — the condition the issue set for the
+2000-tick resident phase (§6.3).
+
+Why the horizon matters is in the control arm, which runs each resident to t = 1000 with
+nothing injected:
+
+| seed | P / C / D at 500 | P / C / D at 1000 |
+|---|---|---|
+| `sample:20` 1003 | 1956 / 5 / 4 | 708 / 9 / 9 |
+| `sample:20` 1000 | 412 / 20 / 40 | 144 / 3 / 47 |
+| `sample:55` 1000 | 1441 / 4 / 6 | 981 / 5 / 43 |
+| `sample:55` 1006 | 996 / 3 / 6 | 375 / 32 / 108 |
+| `sample:55` 1007 | 32 / 1 / 4 | 271 / 17 / 31 |
+
+Producers fall 2–3× over those 500 ticks and decomposers rise 2–18×. In a closed nutrient
+budget the heterotroph niche is fed by producer *mortality* — carcass flux — and mortality
+follows the bloom. At t = 500 the producers are at their peak and mostly alive; there is
+little to decompose. The guild is a successional stage, and its demography is slow: where
+a guild lives its per-capita growth is 0 to +1.5 × 10⁻³ per tick (§4.6, §6.4), so the 3–9
+decomposers of t = 500 become the 40–170 of t = 2000 over three to five ~700-tick
+doublings. A guild at the floor of 5, sustained from t = 250, is unreachable at the
+ecology's own rates. The predicate is not wrong at 500 ticks; the thing it measures has not
+happened yet.
+
+### 6.3 The positive controls at `t_inj = 2000`
+
+`sample:55` only, 8 seeds, both arms, window kept at 500 so the rate is on the same footing
+as every other number in this note. **One run** (SHA-1
+`b4913321358207055af0d077ba35ad6173ce3b86`); the byte-identity twin and the `sample:20`
+run were each stopped by the host's low-memory watchdog — the 8 GB machine sits at
+< 100 MB free with the instrument at ~50–500 MB — and are the gap named in §6.5. Two
+observer-side changes made the run fit at all: the instrument drops the resident's event
+history once it has been read (`EventLog::compact_before`, absolute indices kept so the
+projection's and lineage's cursors survive) and retains only the kinds its observers
+consume (`retain_only`: `Consumed`, `Reproduced`, `Died`, `Born`); both verified to leave
+the `sample:20` seed-1000 record byte-identical.
+
+| role | tag / guild seeds | present | `intact`: median × 10³ (positive / n) | `removed`: median × 10³ (positive / n) |
+|---|---|---|---|---|
+| producer | 8 / 8 | yes | −5.5 (0 / 8) − | **+6.8 (8 / 8) strict** |
+| decomposer | 8 / **7** | **yes** | −5.5 (0 / 7) − | **+1.0 (4 / 7) by median** |
+| consumer | 8 / 2 | no | · | · |
+
+Cell verdict: **`intact` no (0 of 2 present roles invade); `removed` coexisting by median
+(2 of 2), not strict.** The guild read reproduces #492 exactly (D on 7 / 8, C on 2 / 8),
+so the instrument and the evaluator agree on what a guild is once they look at the same
+window. Median resident population 470 (P 202–526, D 9–174); the control arm drifts
+gently (P −10 to −30 %, D flat) over the window — no succession is in progress at
+t = 2000 the way it is at 500 (§6.2).
+
+Per seed, the decomposer cohort:
+
+| seed | D at 2000 | `intact` | `removed` (D removed) |
+|---|---|---|---|
+| 1000 | 76 | extinct tick 4, 8 / 0 drained / undrained | +2.1, ends 23, 517 + 91 births, 592 / 1 |
+| 1001 | 14 | ends 1, 39 / 0 | ends 1, 51 / 0 |
+| 1002 | 25 | extinct tick 227, 8 / 0 | extinct tick 79, 11 / 0 |
+| 1003 | 57 | ends 1, 27 / 0 | +1.0, ends 13, 162 + 75 births, 232 / 0 |
+| 1004 | 23 | extinct tick 80, 8 / 0 | ends 1, 92 / 0 |
+| 1006 | 174 | extinct tick 2, 8 / 0 | +1.9, ends 21, 539 + 194 births, 720 / 0 |
+| 1007 | 123 | extinct tick 496, 37 / 0 | +1.3, ends 15, 62 + 134 births, 188 / 1 |
+
+Two readings. First, the `intact` arm is §6.4 at 2000 ticks: 7 / 7 cohorts fail, 135 of
+135 deaths drained. Second, on `removed` the cohort grows exactly where the emptied niche
+was large (D 57–174 → +1.0 to +2.1 × 10⁻³, hundreds of births) and dies where it was small
+(D 14–25 → 1 or 0 survivors). The invader's growth when rare is set by the size of the
+hole the resident guild leaves, not by the invader's phenotype — which is why the strict
+interval straddles zero (4 / 7) and will keep doing so on any config whose guild size
+varies across seeds as much as this one's does. The consumer, a guild on 2 / 8, is not
+testable by the cell rule; on those two seeds it is eaten on both arms (seed 1006 extinct
+at tick 7 either way; 1007 −0.6 with residents removed).
+
+### 6.4 Where a guild lives, the rare invader is eaten
+
+On the two `sample:20` seeds that hold a guild at t = 500 the heterotroph cohorts die within
+ticks, and the arms separate the cause. Seed 1000 (P 412 / C 20 / D 40), with the new
+mortality fields:
+
+| cohort | arm | fate | drains on members | deaths drained / undrained |
+|---|---|---|---|---|
+| consumer | intact | extinct tick 1 | 11 | **8 / 0** |
+| consumer | removed (20 C) | extinct tick 1 | 10 | **8 / 0** |
+| decomposer | intact | extinct tick 9 | 16 | **10 / 0** |
+| decomposer | removed (40 D) | survives; 136 + 139 births; ends 3 | 1059 | **280 / 0** |
+| producer | intact | extinct tick 27 | 24 | 15 / 0 |
+| producer | removed | 137 alive; 12 435 + 2 908 births | 56 404 | 15 177 / 37 |
+
+Seed 1006 (C 32 / D 54) reads the same: consumer extinct at tick 6 on both arms,
+decomposer extinct at tick 1 intact and persistent (337 + 425 births, ends 8) with its
+residents removed. Not one heterotroph death in any cohort is undrained: **nobody starved;
+they were eaten.** The founder-provisioned mixotroph centroid (α 0.8, h 1.4) was a
+candidate explanation for a tick-1 death — an overdraft on a phenotype the founder budget
+was not calibrated for — and it is excluded. The candidate that stands is the resident web
+itself: every role in it drains living targets (the producer lineage alone was bitten
+56 404 times in 500 ticks), and an 8-agent cohort of founder-sized agents is the easiest
+prey in the world. Removing the decomposer guild lets the decomposer cohort hold its niche
+(280 eaten, 275 born — zero net growth in an emptied niche, i.e. the niche is at capacity
+for what remains of the web); removing the consumers changes nothing for the consumer
+cohort, because the 40 decomposers (h 1.31, thousands of living-target drains) eat it at
+tick 1 either way.
+
+This is a priority effect by intraguild predation, and it is the ecology's mechanism, not
+the instrument's: the guild #490 counts is a mixotroph swarm that holds its niche by eating
+newcomers, so "can this role invade when rare" is answered *no* by the resident's diet
+before the invader's own fitness is consulted. It is also web-dependent: in the atlas's
+small worlds (§6.1; P 6–77) the same 8-agent heterotroph cohorts persist on 10 / 13
+guild seeds and grow on several. Mutual invasibility fails on the dense webs that have
+guilds and is not asked on the sparse webs that lack them.
+
+### 6.5 What this closes and what follows
+
+- **Does mutual invasibility pass anywhere on `main`?** No by the strict criterion,
+  anywhere, at either horizon. By the relaxed read it passes once: `sample:55` at `t_inj = 2000`, `removed` arm only — the producer
+  strict, the decomposer by median (4 / 7 seeds). It passes on no `intact` arm anywhere,
+  because the resident guild eats the rare cohort (§6.4, §6.3). On the atlas the question
+  is asked of no cell (§6.1). The residual gaps are the `sample:55`-2000 byte-identity twin
+  and `sample:20` at 2000, both stopped by the host's memory watchdog, not the instrument.
+- **The §4.7 protocol changes are both in.** Absent roles are not testable (#491), tagged
+  roles without a guild are not testable (this section). The multi-role table's 54 cells
+  were an artefact of the presence read; the true count at the search horizon is 0.
+- **For #494.** At the evaluator's 500-tick horizon the guild predicate reads 8 + 5 seeds
+  out of 646 across the atlas and 0 / 8 on the strongest known guild config. A regenerated
+  atlas reporting `decomposer_fraction` under the guild semantics will read 0.0 on every
+  cell, and the count that #494 wants to put to a human cannot separate "the search selects
+  against guilds" (§4.6) from "the guild forms after the search stops looking" (§6.2). The
+  horizon question has to be settled before or alongside that decision; §6.2's control-arm
+  table is the evidence that it is a succession timescale, not a threshold choice.
+- **For the criterion.** Where a guild exists it excludes rare conspecifics by predation
+  (§6.4). Chesson's criterion as implemented — a founder-sized cohort dropped uniformly into
+  the resident — measures that exclusion, faithfully. Whether that is the coexistence
+  question the design wants answered (it says these webs are *not* mutually invasible,
+  while sustaining three trophic levels for 2000 ticks) is for the designer; the instrument
+  can now say why it says no.
+
 ## Deliverables against the acceptance criteria
 
 - **Deterministic across two runs; covers every atlas live cell × 3 roles × ≥ 8 seeds** —
@@ -666,3 +874,103 @@ across seeds).
 | `atlas:80` | 1.0 | 11 | -1.7 (0/8) − | (-5.5 (0/8) −) | -4.9 (1/8) − | no | +0.0 (3/8) − | (-5.5 (0/8) −) | -4.9 (0/8) − | no | ✗ (+/−) / · / ✗ (+/−) |
 | `atlas:81` | 0.8 | 33 | -0.1 (3/8) − | (-5.5 (0/8) −) | -1.7 (0/8) − | no | +2.2 (8/8) **+** | (-5.5 (0/8) −) | -2.0 (0/8) − | no | ✓ / · / ✗ (+/−) |
 
+## Appendix B — every cell under the guild gate (#493)
+
+Columns: cell (`atlas:i`; `sample:i @t_inj` for the positive controls), `coexistence_fraction`,
+median resident population at `t_inj`; per role the two presence reads as **tagged seeds /
+guild seeds / seeds that reached `t_inj`** (bold = present by the guild rule, a guild on
+≥ half); per role and arm the median rate × 10³ over the *guild* seeds (positive / n) with
+**+** = invades (strict), + = median positive, − = median non-positive, · = no guild seed
+(not injected); and the cell verdict per arm with the number of present roles in brackets.
+Producer-only cells pass as soon as the producer can invade (§1.3) and say nothing about
+coexistence. Atlas rows are from the 2026-09-19 re-run on the final instrument (SHA-1
+`146cf1cb504136f8ea57394d107562399c2713c4`; every verdict and presence count identical to
+the 2026-09-13 byte-identical pair of §6.1, which predate the mortality fields).
+
+| cell | cf | pop | P tag / guild / n | C tag / guild / n | D tag / guild / n | P intact | C intact | D intact | verdict intact | P removed | C removed | D removed | verdict removed |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `atlas:0` | 0.6 | 186 | **8 / 7 / 8** | 2 / 0 / 8 | 4 / 0 / 8 | -5.5 (1/7) − | · | · | no (1) | +0.0 (2/7) − | · | · | no (1) |
+| `atlas:1` | 0.2 | 2 | 7 / 0 / 8 | 0 / 0 / 8 | 2 / 0 / 8 | · | · | · | none | · | · | · | none |
+| `atlas:2` | 1.0 | 34 | **8 / 8 / 8** | 0 / 0 / 8 | 0 / 0 / 8 | -5.5 (0/8) − | · | · | no (1) | +2.7 (8/8) **+** | · | · | strict (1) |
+| `atlas:3` | 0.6 | 63 | **8 / 8 / 8** | 0 / 0 / 8 | 2 / 0 / 8 | -5.5 (1/8) − | · | · | no (1) | +4.0 (8/8) **+** | · | · | strict (1) |
+| `atlas:4` | 0.0 | 1 | 3 / 0 / 5 | 0 / 0 / 5 | 2 / 0 / 5 | · | · | · | none | · | · | · | none |
+| `atlas:5` | 0.6 | 150 | **8 / 7 / 8** | 1 / 0 / 8 | 6 / 0 / 8 | +4.1 (6/7) + | · | · | median (1) | +6.6 (7/7) **+** | · | · | strict (1) |
+| `atlas:6` | 1.0 | 24 | **8 / 7 / 8** | 7 / 1 / 8 | 7 / 0 / 8 | +0.0 (3/7) − | -1.4 (0/1) − | · | no (1) | +0.4 (4/7) + | +0.4 (1/1) + | · | median (1) |
+| `atlas:7` | 0.0 | 2 | 6 / 2 / 6 | 0 / 0 / 6 | 0 / 0 / 6 | -4.9 (0/2) − | · | · | none | +0.1 (1/2) + | · | · | none |
+| `atlas:8` | 0.4 | 2 | 6 / 0 / 7 | 1 / 0 / 7 | 4 / 0 / 7 | · | · | · | none | · | · | · | none |
+| `atlas:9` | 1.0 | 183 | **8 / 8 / 8** | 8 / 0 / 8 | 8 / 0 / 8 | +3.0 (7/8) + | · | · | median (1) | +5.0 (8/8) **+** | · | · | strict (1) |
+| `atlas:10` | 0.8 | 100 | **8 / 8 / 8** | 1 / 1 / 8 | 1 / 0 / 8 | +0.4 (4/8) + | +5.2 (1/1) + | · | median (1) | +4.6 (8/8) **+** | +4.8 (1/1) + | · | strict (1) |
+| `atlas:11` | 1.0 | 36 | **8 / 8 / 8** | 3 / 0 / 8 | 7 / 0 / 8 | -0.6 (2/8) − | · | · | no (1) | +2.0 (8/8) **+** | · | · | strict (1) |
+| `atlas:12` | 1.0 | 56 | **8 / 8 / 8** | 3 / 0 / 8 | 6 / 0 / 8 | +3.7 (7/8) + | · | · | median (1) | +4.7 (8/8) **+** | · | · | strict (1) |
+| `atlas:13` | 1.0 | 54 | **8 / 8 / 8** | 8 / 0 / 8 | 6 / 0 / 8 | +1.0 (6/8) + | · | · | median (1) | +3.4 (8/8) **+** | · | · | strict (1) |
+| `atlas:14` | 0.8 | 17 | **8 / 7 / 8** | 0 / 0 / 8 | 2 / 0 / 8 | -5.5 (0/7) − | · | · | no (1) | +0.6 (7/7) **+** | · | · | strict (1) |
+| `atlas:15` | 0.4 | 74 | **8 / 7 / 8** | 4 / 0 / 8 | 7 / 0 / 8 | -5.5 (1/7) − | · | · | no (1) | +4.0 (7/7) **+** | · | · | strict (1) |
+| `atlas:16` | 0.8 | 21 | **8 / 6 / 8** | 0 / 0 / 8 | 2 / 0 / 8 | -4.9 (1/6) − | · | · | no (1) | +1.9 (5/6) + | · | · | median (1) |
+| `atlas:17` | 1.0 | 14 | **8 / 8 / 8** | 3 / 0 / 8 | 6 / 0 / 8 | -1.1 (0/8) − | · | · | no (1) | +0.9 (8/8) **+** | · | · | strict (1) |
+| `atlas:18` | 0.6 | 54 | **7 / 6 / 8** | 0 / 0 / 8 | 4 / 0 / 8 | -4.2 (1/6) − | · | · | no (1) | +4.7 (6/6) **+** | · | · | strict (1) |
+| `atlas:19` | 0.8 | 107 | **8 / 7 / 8** | 3 / 0 / 8 | 5 / 0 / 8 | +0.2 (4/7) + | · | · | median (1) | +1.3 (5/7) + | · | · | median (1) |
+| `atlas:20` | 1.0 | 77 | **8 / 8 / 8** | 2 / 0 / 8 | 5 / 0 / 8 | -1.5 (3/8) − | · | · | no (1) | +4.1 (7/8) + | · | · | median (1) |
+| `atlas:21` | 0.6 | 52 | **8 / 8 / 8** | 7 / 0 / 8 | 7 / 1 / 8 | +0.3 (4/8) + | · | -5.5 (0/1) − | median (1) | +1.6 (8/8) **+** | · | -2.0 (0/1) − | strict (1) |
+| `atlas:22` | 1.0 | 11 | **8 / 7 / 8** | 1 / 0 / 8 | 1 / 0 / 8 | -5.5 (1/7) − | · | · | no (1) | +0.2 (6/7) + | · | · | median (1) |
+| `atlas:23` | 1.0 | 10 | **8 / 7 / 8** | 0 / 0 / 8 | 3 / 0 / 8 | -2.0 (0/7) − | · | · | no (1) | +0.2 (4/7) + | · | · | median (1) |
+| `atlas:24` | 0.8 | 15 | **8 / 8 / 8** | 4 / 0 / 8 | 4 / 0 / 8 | +0.9 (7/8) + | · | · | median (1) | +1.0 (8/8) **+** | · | · | strict (1) |
+| `atlas:25` | 0.4 | 20 | **6 / 5 / 7** | 2 / 0 / 7 | 4 / 0 / 7 | +0.0 (2/5) − | · | · | no (1) | +1.9 (4/5) + | · | · | median (1) |
+| `atlas:26` | 0.6 | 85 | **8 / 8 / 8** | 0 / 0 / 8 | 1 / 0 / 8 | -0.2 (4/8) − | · | · | no (1) | +5.7 (8/8) **+** | · | · | strict (1) |
+| `atlas:27` | 0.8 | 16 | **8 / 8 / 8** | 1 / 0 / 8 | 4 / 0 / 8 | -0.1 (2/8) − | · | · | no (1) | +1.4 (7/8) + | · | · | median (1) |
+| `atlas:28` | 1.0 | 17 | **8 / 8 / 8** | 0 / 0 / 8 | 0 / 0 / 8 | -3.5 (0/8) − | · | · | no (1) | -1.2 (1/8) − | · | · | no (1) |
+| `atlas:29` | 0.8 | 58 | **8 / 8 / 8** | 6 / 0 / 8 | 8 / 0 / 8 | +0.7 (6/8) + | · | · | median (1) | +2.9 (8/8) **+** | · | · | strict (1) |
+| `atlas:30` | 0.8 | 21 | **8 / 7 / 8** | 0 / 0 / 8 | 3 / 0 / 8 | -0.9 (2/7) − | · | · | no (1) | +0.8 (5/7) + | · | · | median (1) |
+| `atlas:31` | 1.0 | 11 | **8 / 7 / 8** | 1 / 0 / 8 | 4 / 0 / 8 | -4.2 (0/7) − | · | · | no (1) | +0.8 (5/7) + | · | · | median (1) |
+| `atlas:32` | 0.8 | 14 | **8 / 8 / 8** | 3 / 0 / 8 | 6 / 0 / 8 | -1.4 (1/8) − | · | · | no (1) | +0.5 (6/8) + | · | · | median (1) |
+| `atlas:33` | 0.6 | 2 | 5 / 1 / 7 | 1 / 0 / 7 | 3 / 0 / 7 | -5.5 (0/1) − | · | · | none | -1.4 (0/1) − | · | · | none |
+| `atlas:34` | 0.6 | 26 | **8 / 7 / 8** | 2 / 0 / 8 | 5 / 0 / 8 | -4.2 (1/7) − | · | · | no (1) | +0.0 (3/7) − | · | · | no (1) |
+| `atlas:35` | 1.0 | 9 | **8 / 7 / 8** | 1 / 0 / 8 | 4 / 0 / 8 | -2.8 (1/7) − | · | · | no (1) | -0.3 (1/7) − | · | · | no (1) |
+| `atlas:36` | 0.8 | 46 | **8 / 7 / 8** | 4 / 0 / 8 | 5 / 0 / 8 | -2.8 (2/7) − | · | · | no (1) | +1.1 (5/7) + | · | · | median (1) |
+| `atlas:37` | 0.8 | 30 | **8 / 8 / 8** | 3 / 0 / 8 | 4 / 0 / 8 | +0.9 (6/8) + | · | · | median (1) | +3.2 (7/8) + | · | · | median (1) |
+| `atlas:38` | 1.0 | 30 | **8 / 8 / 8** | 1 / 0 / 8 | 7 / 0 / 8 | +0.2 (4/8) + | · | · | median (1) | +1.9 (7/8) + | · | · | median (1) |
+| `atlas:39` | 0.2 | 3 | 6 / 1 / 7 | 0 / 0 / 7 | 3 / 0 / 7 | -1.4 (0/1) − | · | · | none | +0.8 (1/1) + | · | · | none |
+| `atlas:40` | 1.0 | 11 | **8 / 6 / 8** | 3 / 0 / 8 | 4 / 0 / 8 | +0.7 (4/6) + | · | · | median (1) | +1.2 (6/6) **+** | · | · | strict (1) |
+| `atlas:41` | 1.0 | 17 | **8 / 8 / 8** | 4 / 0 / 8 | 5 / 0 / 8 | -0.6 (2/8) − | · | · | no (1) | +0.9 (6/8) + | · | · | median (1) |
+| `atlas:42` | 0.6 | 175 | **8 / 8 / 8** | 3 / 0 / 8 | 5 / 0 / 8 | +1.7 (5/8) + | · | · | median (1) | +5.3 (7/8) + | · | · | median (1) |
+| `atlas:43` | 1.0 | 8 | **8 / 7 / 8** | 4 / 0 / 8 | 4 / 0 / 8 | -1.4 (2/7) − | · | · | no (1) | +0.4 (4/7) + | · | · | median (1) |
+| `atlas:44` | 1.0 | 8 | **8 / 5 / 8** | 3 / 0 / 8 | 4 / 0 / 8 | -0.6 (0/5) − | · | · | no (1) | +0.2 (3/5) + | · | · | median (1) |
+| `atlas:45` | 1.0 | 28 | **8 / 8 / 8** | 2 / 0 / 8 | 5 / 0 / 8 | -1.7 (2/8) − | · | · | no (1) | +0.4 (5/8) + | · | · | median (1) |
+| `atlas:46` | 1.0 | 25 | **8 / 8 / 8** | 0 / 0 / 8 | 2 / 0 / 8 | -2.0 (3/8) − | · | · | no (1) | +2.5 (8/8) **+** | · | · | strict (1) |
+| `atlas:47` | 0.8 | 6 | **8 / 4 / 8** | 2 / 0 / 8 | 4 / 0 / 8 | -0.3 (1/4) − | · | · | no (1) | +0.2 (3/4) + | · | · | median (1) |
+| `atlas:48` | 0.8 | 18 | **8 / 4 / 8** | 2 / 0 / 8 | 4 / 0 / 8 | -3.2 (1/4) − | · | · | no (1) | +2.4 (3/4) + | · | · | median (1) |
+| `atlas:49` | 1.0 | 16 | **8 / 6 / 8** | 2 / 0 / 8 | 4 / 0 / 8 | +0.2 (3/6) + | · | · | median (1) | +0.4 (4/6) + | · | · | median (1) |
+| `atlas:50` | 0.6 | 105 | **8 / 7 / 8** | 3 / 0 / 8 | 4 / 0 / 8 | -2.0 (1/7) − | · | · | no (1) | +5.0 (7/7) **+** | · | · | strict (1) |
+| `atlas:51` | 1.0 | 38 | **8 / 8 / 8** | 5 / 0 / 8 | 8 / 0 / 8 | +2.0 (7/8) + | · | · | median (1) | +2.7 (8/8) **+** | · | · | strict (1) |
+| `atlas:52` | 0.8 | 47 | **8 / 8 / 8** | 0 / 0 / 8 | 8 / 1 / 8 | +0.6 (5/8) + | · | -4.2 (0/1) − | median (1) | +3.2 (8/8) **+** | · | -4.2 (0/1) − | strict (1) |
+| `atlas:53` | 1.0 | 19 | **8 / 7 / 8** | 3 / 0 / 8 | 6 / 1 / 8 | +0.6 (5/7) + | · | +0.8 (1/1) + | median (1) | +1.3 (6/7) + | · | +0.8 (1/1) + | median (1) |
+| `atlas:54` | 0.2 | 9 | **8 / 5 / 8** | 0 / 0 / 8 | 0 / 0 / 8 | -5.5 (0/5) − | · | · | no (1) | -0.9 (0/5) − | · | · | no (1) |
+| `atlas:55` | 1.0 | 20 | **8 / 7 / 8** | 5 / 0 / 8 | 8 / 1 / 8 | -0.6 (3/7) − | · | +0.0 (0/1) − | no (1) | +1.1 (6/7) + | · | +0.0 (0/1) − | median (1) |
+| `atlas:56` | 0.8 | 34 | **8 / 8 / 8** | 4 / 1 / 8 | 3 / 2 / 8 | +1.6 (8/8) **+** | +1.6 (1/1) + | +0.9 (2/2) + | strict (1) | +2.3 (8/8) **+** | +0.8 (1/1) + | +0.5 (1/2) + | strict (1) |
+| `atlas:57` | 1.0 | 38 | **8 / 8 / 8** | 7 / 1 / 8 | 8 / 0 / 8 | +1.6 (6/8) + | +0.2 (1/1) + | · | median (1) | +2.1 (7/8) + | +0.6 (1/1) + | · | median (1) |
+| `atlas:58` | 0.6 | 3 | 8 / 0 / 8 | 3 / 0 / 8 | 2 / 0 / 8 | · | · | · | none | · | · | · | none |
+| `atlas:59` | 1.0 | 2616 | **8 / 8 / 8** | 0 / 0 / 8 | 1 / 0 / 8 | -5.5 (0/8) − | · | · | no (1) | +9.8 (8/8) **+** | · | · | strict (1) |
+| `atlas:60` | 0.8 | 7 | **7 / 4 / 8** | 5 / 0 / 8 | 3 / 0 / 8 | +0.1 (2/4) + | · | · | median (1) | +0.3 (4/4) + | · | · | median (1) |
+| `atlas:61` | 1.0 | 11 | **8 / 7 / 8** | 5 / 0 / 8 | 5 / 0 / 8 | -0.6 (2/7) − | · | · | no (1) | +0.0 (3/7) − | · | · | no (1) |
+| `atlas:62` | 1.0 | 33 | **8 / 8 / 8** | 4 / 0 / 8 | 5 / 0 / 8 | +2.4 (6/8) + | · | · | median (1) | +3.5 (8/8) **+** | · | · | strict (1) |
+| `atlas:63` | 1.0 | 30 | **8 / 8 / 8** | 3 / 0 / 8 | 3 / 0 / 8 | +1.3 (5/8) + | · | · | median (1) | +1.8 (7/8) + | · | · | median (1) |
+| `atlas:64` | 0.0 | 8 | **7 / 4 / 7** | 0 / 0 / 7 | 2 / 0 / 7 | -0.5 (2/4) − | · | · | no (1) | +0.1 (2/4) + | · | · | median (1) |
+| `atlas:65` | 0.8 | 43 | **8 / 8 / 8** | 5 / 0 / 8 | 6 / 1 / 8 | +1.0 (6/8) + | · | -4.2 (0/1) − | median (1) | +2.3 (8/8) **+** | · | +0.4 (1/1) + | strict (1) |
+| `atlas:66` | 0.8 | 10 | **8 / 6 / 8** | 1 / 0 / 8 | 2 / 0 / 8 | -2.0 (0/6) − | · | · | no (1) | +0.3 (4/6) + | · | · | median (1) |
+| `atlas:67` | 0.6 | 3 | 8 / 1 / 8 | 0 / 0 / 8 | 0 / 0 / 8 | -5.5 (0/1) − | · | · | none | +0.4 (1/1) + | · | · | none |
+| `atlas:68` | 0.8 | 64 | **8 / 8 / 8** | 1 / 0 / 8 | 3 / 0 / 8 | -0.0 (4/8) − | · | · | no (1) | +2.8 (8/8) **+** | · | · | strict (1) |
+| `atlas:69` | 1.0 | 13 | **8 / 6 / 8** | 3 / 0 / 8 | 3 / 0 / 8 | -1.0 (2/6) − | · | · | no (1) | +0.3 (3/6) + | · | · | median (1) |
+| `atlas:70` | 1.0 | 24 | **8 / 8 / 8** | 2 / 0 / 8 | 5 / 0 / 8 | -3.1 (1/8) − | · | · | no (1) | +1.1 (6/8) + | · | · | median (1) |
+| `atlas:71` | 0.4 | 6 | **8 / 5 / 8** | 2 / 0 / 8 | 5 / 0 / 8 | -4.2 (0/5) − | · | · | no (1) | -1.4 (0/5) − | · | · | no (1) |
+| `atlas:72` | 1.0 | 23 | **8 / 7 / 8** | 2 / 0 / 8 | 4 / 1 / 8 | -2.8 (1/7) − | · | +0.6 (1/1) + | no (1) | +0.6 (4/7) + | · | +1.0 (1/1) + | median (1) |
+| `atlas:73` | 0.8 | 27 | **8 / 7 / 8** | 0 / 0 / 8 | 1 / 0 / 8 | -5.5 (1/7) − | · | · | no (1) | +2.7 (7/7) **+** | · | · | strict (1) |
+| `atlas:74` | 1.0 | 19 | **8 / 7 / 8** | 4 / 0 / 8 | 2 / 0 / 8 | -1.4 (1/7) − | · | · | no (1) | +0.6 (5/7) + | · | · | median (1) |
+| `atlas:75` | 1.0 | 28 | **8 / 8 / 8** | 2 / 0 / 8 | 3 / 0 / 8 | +2.6 (6/8) + | · | · | median (1) | +3.1 (7/8) + | · | · | median (1) |
+| `atlas:76` | 1.0 | 37 | **8 / 8 / 8** | 5 / 0 / 8 | 6 / 0 / 8 | +1.3 (6/8) + | · | · | median (1) | +2.3 (7/8) + | · | · | median (1) |
+| `atlas:77` | 0.4 | 6 | **7 / 4 / 8** | 1 / 0 / 8 | 5 / 0 / 8 | -1.7 (1/4) − | · | · | no (1) | +0.1 (2/4) + | · | · | median (1) |
+| `atlas:78` | 0.8 | 29 | **8 / 8 / 8** | 6 / 1 / 8 | 8 / 0 / 8 | +1.7 (8/8) **+** | +1.3 (1/1) + | · | strict (1) | +2.2 (8/8) **+** | +1.3 (1/1) + | · | strict (1) |
+| `atlas:79` | 0.0 | 4 | 8 / 2 / 8 | 2 / 0 / 8 | 2 / 0 / 8 | -1.8 (1/2) − | · | · | none | -0.7 (1/2) − | · | · | none |
+| `atlas:80` | 1.0 | 11 | **8 / 7 / 8** | 0 / 0 / 8 | 6 / 0 / 8 | -2.0 (0/7) − | · | · | no (1) | +0.0 (3/7) − | · | · | no (1) |
+| `atlas:81` | 0.8 | 33 | **8 / 7 / 8** | 2 / 0 / 8 | 8 / 0 / 8 | +0.0 (3/7) − | · | · | no (1) | +2.7 (7/7) **+** | · | · | strict (1) |
+| `sample:20 @500` | – | 930 | **8 / 8 / 8** | 7 / 2 / 8 | 8 / 2 / 8 | -5.5 (0/8) − | -5.5 (0/2) − | -5.5 (0/2) − | no (1) | +6.5 (6/8) + | -5.5 (0/2) − | -1.0 (0/2) − | median (1) |
+| `sample:55 @500` | – | 1003 | **8 / 8 / 8** | 6 / 0 / 8 | 8 / 0 / 8 | -5.5 (1/8) − | · | · | no (1) | +9.4 (8/8) **+** | · | · | strict (1) |
+| `sample:55 @2000` | – | 470 | **8 / 8 / 8** | 8 / 2 / 8 | **8 / 7 / 8** | -5.5 (0/8) − | -5.5 (0/2) − | -5.5 (0/7) − | no (2) | +6.7 (8/8) **+** | -3.1 (0/2) − | +1.0 (4/7) + | median (2) |

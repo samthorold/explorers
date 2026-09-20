@@ -1710,6 +1710,21 @@ impl World {
         &self.event_log
     }
 
+    /// Observer-side: drop the event log's history before absolute index
+    /// `index` (see [`event::EventLog::compact_before`]). The stepper never
+    /// reads the log, so this changes no trajectory; it exists so an
+    /// instrument that has finished with the past can fork the world cheaply.
+    pub fn compact_event_log_before(&mut self, index: usize) {
+        self.event_log.compact_before(index);
+    }
+
+    /// Observer-side: keep only these event kinds from now on (see
+    /// [`event::EventLog::retain_only`]). The stepper never reads the log,
+    /// so this changes no trajectory.
+    pub fn retain_event_kinds(&mut self, kinds: &[event::EventKind]) {
+        self.event_log.retain_only(kinds);
+    }
+
     pub fn energy_ledger(&self) -> &energy_ledger::EnergyLedger {
         &self.ledger
     }
