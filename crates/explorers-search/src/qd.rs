@@ -1079,7 +1079,7 @@ impl Default for RefinementConfig {
         RefinementConfig {
             top_k: REFINE_TOP_K,
             ensemble_size: REFINE_ENSEMBLE_SIZE,
-            max_ticks: 500,
+            max_ticks: 2000,
         }
     }
 }
@@ -1252,7 +1252,7 @@ impl Default for QdConfig {
         QdConfig {
             ranges: default_ranges(),
             ensemble_size: 5,
-            max_ticks: 500,
+            max_ticks: 2000,
             batch: 32,
             generations: 10,
             sigma: 0.15,
@@ -1469,6 +1469,19 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_horizon_is_the_settled_community_working_value() {
+        // genesis-search.md, *Current values*: `T = 2000` is the working horizon
+        // (#507). The search, the refinement and the CLI all read it from these
+        // defaults, so the three must agree — one place each, no hard-coded copy.
+        assert_eq!(QdConfig::default().max_ticks, 2000);
+        assert_eq!(RefinementConfig::default().max_ticks, 2000);
+        assert_eq!(
+            crate::search::SearchConfig::default().max_ticks,
+            QdConfig::default().max_ticks
+        );
+    }
 
     fn descr(o: f32, c: f32, k: f32) -> Descriptors {
         Descriptors {
@@ -1988,6 +2001,75 @@ mod tests {
             "most live cells should sit below the LOCK_FRACTION gate ({total_below} \
              below, {total_above} at/above, {total_live} total)"
         );
+    }
+
+    #[test]
+    fn slow_smoke_search_at_the_default_horizon_reads_live_cells_over_the_settled_window() {
+        // End-to-end at the settled-community horizon (#507): a reduced search
+        // (tiny batch, no adaptation generations, one seed per config) runs the
+        // pipeline at the DEFAULT `max_ticks` — the search bin's working value —
+        // and every config lands on a live cell, the dead frontier, or the
+        // prefilter's skip tally. `slow_` — real 2000-tick sims, but few.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let horizon = QdConfig::default().max_ticks;
+        let config = QdConfig {
+            ensemble_size: 1,
+            batch: 3,
+            generations: 0,
+            ..QdConfig::default()
+        };
+        let base_seed = 11;
+        let mut rng = ChaCha8Rng::seed_from_u64(base_seed);
+        let atlas = run_qd(&config, base_seed, &mut rng);
+
+        let dead: usize = atlas.dead_frontier.values().sum();
+        assert!(
+            atlas.coverage + dead + atlas.rollouts_skipped >= 1,
+            "every config routes to a cell, the frontier or the skip tally"
+        );
+        assert!(
+            !atlas.cells.is_empty(),
+            "the smoke search should illuminate at least one live cell to read"
+        );
+
+        // A live cell's guild fractions are the evaluator's reads over the
+        // settled window `(T/2, T]` of the rollout that placed it. With one seed
+        // per config the placing rollout is recoverable: bootstrap config `i`
+        // rolls seed `base_seed + i*1000`, and the cell's recorded fitness is
+        // that run's fitness bit-for-bit. Re-running it at the horizon must
+        // reach `T` (a live seed is alive at `T`, so the window `(1000, 2000]`
+        // is fully populated) and reproduce the guild reads the cell carries.
+        for cell in &atlas.cells {
+            assert_eq!(cell.sample_count, 1);
+            let (wp, dist) = decode(&cell.unit, &config.ranges);
+            let run_config = RunConfig {
+                max_ticks: horizon,
+                eval_config: EvalConfig::default(),
+                early_stop_crosscheck_fraction: 0.0,
+            };
+            let placing = (0..config.batch as u64)
+                .map(|i| {
+                    explorers_genesis::run_single(&wp, &dist, &run_config, base_seed + i * 1000)
+                })
+                .find(|r| r.fitness.to_bits() == cell.fitness.to_bits())
+                .expect("the rollout that placed the live cell is one of the bootstrap seeds");
+            assert_eq!(
+                placing.termination_tick, 2000,
+                "a live seed reaches the horizon"
+            );
+            assert!(placing.failure.is_none());
+            let read = |guild: bool| if guild { 1.0f32 } else { 0.0 };
+            assert_eq!(
+                cell.decomposer_fraction,
+                read(placing.breakdown.has_decomposer_guild)
+            );
+            assert_eq!(
+                cell.consumer_fraction,
+                read(placing.breakdown.has_consumer_guild)
+            );
+        }
     }
 
     #[test]

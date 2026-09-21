@@ -66,8 +66,9 @@
 //!   cargo run --release -p explorers-search --bin permanence_crosscheck
 //! (optional first arg: path to the atlas JSON; default `atlas.json`)
 //!
-//! Full run: 256 configs × 8 seeds × 500 ticks — the `energy_bound_check`
-//! workload; budget ~10 minutes.
+//! Full run: 256 configs × 8 seeds × the search horizon (`SearchConfig::max_ticks`,
+//! 2000 ticks since #507) — the `energy_bound_check` workload; the 500-tick run
+//! was ~10 minutes, so budget accordingly.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};

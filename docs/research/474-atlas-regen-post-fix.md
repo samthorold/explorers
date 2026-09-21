@@ -1,7 +1,9 @@
 # Issue #474 — regenerate the atlas and recipe on the fixed stepper (post #444–#453)
 
 **Status: data regeneration with a before/after reading. Commits `atlas.json` and
-`recipe.json`; changes no code.** Six stepper fixes landed after the committed atlas was
+`recipe.json`; changes no code.** *Superseded as a baseline: this 500-tick atlas is replaced
+by the settled-horizon atlas once the search runs at `T = 2000` (default flipped in #507;
+the regeneration itself is #494).* Six stepper fixes landed after the committed atlas was
 produced — founder trait floor (#444), metabolic overdraft (#445), nutrient bind (#446),
 chemotaxis order (#451), drain stoichiometry order (#452), carcass nutrient release
 (#453). #444 alone changed 57 % of founders across the search box, so every live cell,
