@@ -13,7 +13,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let mut ensemble_size = 5;
-    let mut max_ticks = 500;
+    let mut max_ticks = 2000;
     let mut batch = 32;
     let mut generations = 10;
     let mut seed = 42u64;
@@ -277,7 +277,7 @@ fn print_usage() {
     eprintln!("  --batch N           Solutions evaluated per generation (default: 32)");
     eprintln!("  --generations N     Adaptation generations after bootstrap (default: 10)");
     eprintln!("  --ensemble N        Ensemble size per parameterisation (default: 5)");
-    eprintln!("  --max-ticks N       Max simulation ticks per run (default: 500)");
+    eprintln!("  --max-ticks N       Max simulation ticks per run (default: 2000)");
     eprintln!("  --seed N            Random seed (default: 42)");
     eprintln!("  --output PATH       Atlas JSON path (default: atlas.json)");
     eprintln!("  --recipe-output PATH  Recipe JSON path (default: recipe.json)");

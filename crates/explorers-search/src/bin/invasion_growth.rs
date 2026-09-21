@@ -12,8 +12,9 @@
 //! atlas's `coexistence_fraction`.
 //!
 //! Per (cell, seed): the resident web is `World::new` on the cell's decoded
-//! config, stepped to `t_inj` (the 500-tick search horizon by default;
-//! `INVASION_GROWTH_T_INJ` overrides it). At `t_inj` the
+//! config, stepped to `t_inj` (the search horizon, `SearchConfig::max_ticks` —
+//! 2000 ticks since #507 — by default; `INVASION_GROWTH_T_INJ` overrides it).
+//! At `t_inj` the
 //! roles are classified and each role's **realised centroid** (mean trait
 //! vector of the agents in that role) is read; a role absent from the
 //! resident is **not testable** (`not_testable`, reason `role_absent`) and
@@ -50,9 +51,9 @@
 //! (`lineage_consumed_events`, living / carcass), so a flat cohort can be
 //! told from a starving one.
 //!
-//! The rate is `r = ln(max(N_end, ½) / N_0) / ticks` over the 500-tick window
-//! (an extinct lineage reads at half an agent so its rate is a finite
-//! negative number; only the sign enters the criterion).
+//! The rate is `r = ln(max(N_end, ½) / N_0) / ticks` over the window (`t_inj`
+//! ticks by default; an extinct lineage reads at half an agent so its rate is a
+//! finite negative number; only the sign enters the criterion).
 //!
 //! ## Criterion
 //!
@@ -102,8 +103,9 @@
 //!   cargo run --release -p explorers-search --bin invasion_growth
 //! (optional first arg: path to the atlas JSON; default `atlas.json`)
 //!
-//! Full run: 82 cells × 8 seeds × (500 resident + up to 7 × 500 window
-//! ticks); budget ~15 minutes in release.
+//! Full run: 82 cells × 8 seeds × (2000 resident + up to 7 × 2000 window
+//! ticks) at the #507 horizon; the 500-tick run was ~15 minutes in release,
+//! so budget hours, or subset it (`INVASION_GROWTH_CELLS`, `_SEEDS`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};

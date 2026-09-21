@@ -52,7 +52,7 @@ impl Default for SearchConfig {
         SearchConfig {
             ranges: default_ranges(),
             ensemble_size: 5,
-            max_ticks: 500,
+            max_ticks: 2000,
             batch: 32,
             generations: 10,
             sigma: 0.15,

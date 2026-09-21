@@ -1,5 +1,8 @@
 //! Pins the evaluator's per-seed [`FitnessBreakdown`] on committed atlas live
-//! cells at the 500-tick horizon (issue #502).
+//! cells at the 500-tick horizon (issue #502). The horizon is pinned here
+//! explicitly (`HORIZON`), not read from `SearchConfig::default()` — the
+//! search default moved to 2000 under #507, and these goldens document the
+//! evaluator's reads on the committed 500-tick atlas, not the search's horizon.
 //!
 //! The rollout now keeps only the event kinds the evaluator reads and drops
 //! history once read (`explorers_genesis_eval::EVALUATOR_EVENT_KINDS`). That
