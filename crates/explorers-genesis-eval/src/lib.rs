@@ -100,8 +100,11 @@ pub struct EvalConfig {
     /// *The gates' reference excludes the founder transient*). Used only to
     /// start the energy-death and lockup references and to hold the roster
     /// gates (monoculture, generalist dominance) off the founder cohort; the
-    /// behaviour axes read the settled window `(T/2, T]` instead. 100 is the
-    /// working placeholder until the transient is measured.
+    /// behaviour axes read the settled window `(T/2, T]` instead. 260 is the
+    /// measured value — the 90th percentile of the provisioning-transient
+    /// tick over the live runs of the #505 sweep (atlas live cells + the
+    /// 200-point LHS box, 8 seeds, 3000-tick horizon), rounded up to 10;
+    /// `docs/research/505-settling-time.md` holds the distribution.
     pub grace_ticks: u64,
 }
 
@@ -117,7 +120,7 @@ impl Default for EvalConfig {
             dbscan_min_points: 5,
             generalist_threshold: 0.3,
             generalist_dominance_fraction: 0.5,
-            grace_ticks: 100,
+            grace_ticks: 260,
         }
     }
 }
@@ -2643,11 +2646,14 @@ mod tests {
     }
 
     #[test]
-    fn grace_is_an_absolute_tick_count_defaulting_to_one_hundred() {
+    fn grace_is_the_measured_provisioning_transient_of_two_hundred_and_sixty_ticks() {
         // The gates' reference prefix is sized from the founder provisioning
         // transient, an ecological constant — not a fraction of the horizon
-        // (genesis-search.md). 100 is the placeholder until it is measured.
+        // (genesis-search.md). 260 is the measured value: the 90th percentile
+        // of the provisioning-transient tick over the 1357 live runs of the
+        // #505 sweep (253), rounded up to the nearest 10
+        // (docs/research/505-settling-time.md).
         let config = EvalConfig::default();
-        assert_eq!(config.grace_ticks, 100u64);
+        assert_eq!(config.grace_ticks, 260u64);
     }
 }

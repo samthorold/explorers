@@ -164,11 +164,27 @@ doubling time where it lives is ~700 ticks. A round number chosen for convenienc
 procedure to re-run when the stepper changes; this one is re-measured with the grace, off the same
 long rollouts, since both are transient ticks of the same trajectory.
 
-*Current values: both unmeasured. The instrument is `crates/explorers-search/src/bin/settling_time.rs`
-(one resumable JSON-lines row per config; the summary restates the procedure beside the quantiles). Grace — the committed 0.2 · T (100 ticks at the 500-tick horizon)
-predates the measurement and is superseded by it. Horizon — `T = 2000` is the working value, taken
-from the #492 / 443 §6.3 window the guild predicate was validated on; the measurement confirms or
-moves it.*
+*Current values — measured by `crates/explorers-search/src/bin/settling_time.rs` (one resumable
+JSON-lines row per config; the summary restates the procedure beside the quantiles) over the 82 atlas
+live cells and the 200-point LHS sample of the search box, 8 seeds each, at a 3000-tick horizon: 2256
+runs, 1480 live (mode `none`, reached the horizon), the rest tallied by mode
+([505](../research/505-settling-time.md)). Both quantiles are nearest-rank over the live runs, atlas
+and sample pooled.* **Grace = 260 ticks** (`EvalConfig::grace_ticks`): the 90th percentile of the
+provisioning-transient tick over the 1357 live runs whose stock re-exceeds the founder budget, rounded
+up to 10 — the distribution is 50 / 90 / 95 / max = **2 / 253 / 514 / 2586** pooled (atlas, n = 401:
+1 / 198 / 419 / 1885; sample, n = 956: 3 / 296 / 551 / 2586); 123 live runs (8 %) never re-exceed
+tick 0, the case that rules out a per-run grace. **Horizon: `T = 2000` stands as the working value;
+the settling read did not measure it.** The producer-settling tick (last tick outside ±20 % of the
+final-500-tick mean) reads 50 / 90 / 95 / max = **1677 / 2981 / 3000 / 3000** pooled over the 1407
+live runs with producers in the tail (atlas, n = 396: 2021 / 2989 / 3000 / 3000; sample, n = 1011:
+1527 / 2973 / 3000 / 3000), so the rule *smallest multiple of 500 with `T/2` above the 90th
+percentile* returns 6000 — but the statistic is saturated, not the ecology unsettled: 29 % of live
+runs leave the band *inside* the 500-tick tail the band is defined from (the median settled producer
+count is 3, so ±20 % is narrower than one agent and every birth or death breaks it), the upper
+quantiles sit at the horizon on every sub-population (tail count ≥ 20: 90th percentile 3000), and
+the reading would move with any horizon it was run at. `SearchConfig::max_ticks` is therefore not
+moved on it; the band statistic is re-designed (a band in absolute agents, or a smoothed series)
+before `T` is read again, and #492 / 443 §6.3 remain the evidence the working value rests on.*
 
 ## Authority boundary: the heterotroph guilds are reported, never optimised
 
