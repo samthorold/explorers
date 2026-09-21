@@ -49,6 +49,7 @@ fn readings(seed: u64) -> [u32; 7] {
     let run_config = RunConfig {
         max_ticks: recipe.max_ticks,
         eval_config: EvalConfig::default(),
+        early_stop_crosscheck_fraction: 0.0,
     };
     let dist = recipe
         .initial_distribution

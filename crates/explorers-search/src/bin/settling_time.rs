@@ -74,7 +74,9 @@ use std::time::{Duration, Instant};
 use rayon::prelude::*;
 
 use explorers_genesis::{EvalConfig, FailureMode};
-use explorers_genesis_eval::{EVALUATOR_EVENT_KINDS, RolloutObservations, evaluate_from_log};
+use explorers_genesis_eval::{
+    EVALUATOR_EVENT_KINDS, RolloutObservations, early_stop, evaluate_from_log,
+};
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{decode, default_ranges};
 use explorers_sim::{InitialDistribution, World, WorldParameters};
@@ -195,9 +197,10 @@ fn mode_label(failure: &Option<FailureMode>) -> &'static str {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct SeedRecord {
     seed: u64,
-    /// The world's tick when the rollout stopped: the horizon, where the
-    /// population hit zero or the explosion cap, or where the wall-clock
-    /// budget ran out.
+    /// The world's tick when the rollout stopped: the horizon, where a
+    /// terminal gate fired (population zero or over the explosion cap, or a
+    /// dead-pool gate on the series-so-far), or where the wall-clock budget
+    /// ran out.
     termination_tick: u64,
     /// The evaluator's terminal classification (`evaluate_from_log`), or
     /// `"timeout"` when the rollout exceeded its wall-clock budget
@@ -247,6 +250,7 @@ fn run_seed(
     let eval_config = EvalConfig::default();
     let started = Instant::now();
     let mut timed_out = false;
+    let mut stopped: Option<FailureMode> = None;
     let mut world = World::new(params.clone(), dist.clone(), seed);
     world.retain_event_kinds(EVALUATOR_EVENT_KINDS);
     let mut observations = RolloutObservations::with_capacity(horizon as usize);
@@ -260,10 +264,11 @@ fn run_seed(
         world.compact_event_log_before(observations.consumed_events());
         free_energy.push(world.free_energy());
         producers.push(producer_count(&world));
-        if world.agents().is_empty() {
-            break;
-        }
-        if world.agents().len() > eval_config.max_population {
+        // The evaluator's incremental terminal check — extinction, explosion,
+        // and the dead-pool gates on the series-so-far (#506) — stops the
+        // rollout where it dies, as `run_single` does.
+        stopped = early_stop(world.agents().len(), &observations, &eval_config);
+        if stopped.is_some() {
             break;
         }
         if started.elapsed() > run_timeout {
@@ -273,6 +278,8 @@ fn run_seed(
     }
     let mode = if timed_out {
         "timeout"
+    } else if let Some(failure) = stopped {
+        mode_label(&Some(failure))
     } else {
         let breakdown = evaluate_from_log(&world, &observations, &eval_config, horizon);
         mode_label(&breakdown.failure)

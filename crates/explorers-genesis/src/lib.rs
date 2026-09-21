@@ -5,6 +5,18 @@ use rayon::prelude::*;
 pub struct RunConfig {
     pub max_ticks: u64,
     pub eval_config: EvalConfig,
+    /// Fraction of rollouts an incremental dead-pool gate stops (energy
+    /// death, nutrient lockup) that are carried to the horizon anyway and
+    /// re-verdicted on the full series, in `[0, 1]`. The gates as defined are
+    /// not proven irreversible — a world flagged at tick 600 might recover by
+    /// `T` — so the carry is the falsification interlock the prefilter
+    /// cross-check already is at tick 0, moved along the trajectory
+    /// (genesis-search.md). A carried run's own verdict is still the gate's;
+    /// the horizon read is *recorded* on [`RunResult::early_stop`] for the
+    /// search to surface as a disagreement, never swallowed and never a
+    /// cell. The draw is seeded from the rollout seed
+    /// ([`crosscheck_selected`]) so it is reproducible. 0 disables the carry.
+    pub early_stop_crosscheck_fraction: f32,
 }
 
 pub struct RunResult {
@@ -12,6 +24,64 @@ pub struct RunResult {
     pub failure: Option<FailureMode>,
     pub termination_tick: u64,
     pub breakdown: FitnessBreakdown,
+    /// Set when an incremental dead-pool gate stopped the rollout before the
+    /// horizon (extinction and explosion stop it too, but are terminal by
+    /// definition and are not recorded here). Carries the horizon verdict
+    /// when the rollout was drawn into the carry-to-`T` cross-check.
+    pub early_stop: Option<EarlyStop>,
+}
+
+/// A rollout stopped where a dead-pool gate fired (#506).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EarlyStop {
+    /// The gate that fired: `EnergyDeath` or `NutrientLockup`.
+    pub failure: FailureMode,
+    /// The tick it fired on — the run's termination tick and the frontier
+    /// entry's `ticks_survived`.
+    pub tick: u64,
+    /// The full-series verdict, present only when the rollout was drawn into
+    /// the cross-check and carried to the horizon.
+    pub horizon: Option<HorizonVerdict>,
+}
+
+/// What a carried rollout read at the horizon.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HorizonVerdict {
+    pub failure: Option<FailureMode>,
+    pub fitness: f32,
+    /// Where the carried run actually ended: the horizon, or earlier if it
+    /// went extinct or exploded on the way.
+    pub termination_tick: u64,
+}
+
+impl EarlyStop {
+    /// The cross-check disagreement, if any: the gate said dead but the
+    /// carried run is *alive* at the horizon (no failure on the full series).
+    /// A carried run that dies of something else by `T` still agrees with
+    /// the gate's claim that the world was dead.
+    pub fn disagreement(&self) -> Option<&HorizonVerdict> {
+        self.horizon.as_ref().filter(|h| h.failure.is_none())
+    }
+}
+
+/// Whether the rollout on `seed` is drawn into the carry-to-horizon
+/// cross-check at `fraction`: a deterministic coin on the seed alone
+/// (a SplitMix64 mix of it against the unit interval), so the draw is
+/// reproducible across runs and independent of evaluation order.
+pub fn crosscheck_selected(seed: u64, fraction: f32) -> bool {
+    let fraction = fraction.clamp(0.0, 1.0);
+    if fraction <= 0.0 {
+        return false;
+    }
+    if fraction >= 1.0 {
+        return true;
+    }
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    let unit = (z >> 40) as f64 / (1u64 << 24) as f64;
+    unit < fraction as f64
 }
 
 pub struct EnsembleConfig {
@@ -50,30 +120,70 @@ pub fn run_single(
     let mut observations =
         explorers_genesis_eval::RolloutObservations::with_capacity(run_config.max_ticks as usize);
     let interval = run_config.eval_config.coexistence_sample_interval;
+    let eval_config = &run_config.eval_config;
+    // The rollout stops where it dies (genesis-search.md, *The frontier costs
+    // a bloom, the atlas costs the horizon*): the evaluator's incremental
+    // terminal check reads extinction and explosion every tick and the two
+    // dead-pool gates on the series-so-far at the window cadence. A stop is
+    // a dead-frontier entry, never a cell — the gated breakdown is built
+    // here, nothing is scored.
+    //
+    // A sampled fraction of dead-pool stops is carried to the horizon anyway
+    // (the cross-check): the gate's verdict is kept as the run's, the
+    // full-series verdict is recorded beside it.
+    let carry = crosscheck_selected(seed, run_config.early_stop_crosscheck_fraction);
+    let mut stopped: Option<EarlyStop> = None;
     for _ in 0..run_config.max_ticks {
         world.step();
         observations.observe(&world, interval);
         world.compact_event_log_before(observations.consumed_events());
-        if world.agents().is_empty() {
-            break;
-        }
-        if world.agents().len() > run_config.eval_config.max_population {
-            break;
+        match explorers_genesis_eval::early_stop(world.agents().len(), &observations, eval_config) {
+            None => {}
+            Some(FailureMode::Extinction) | Some(FailureMode::PopulationExplosion) => break,
+            Some(failure) => {
+                if stopped.is_none() {
+                    stopped = Some(EarlyStop {
+                        failure,
+                        tick: world.tick(),
+                        horizon: None,
+                    });
+                    if !carry {
+                        break;
+                    }
+                }
+            }
         }
     }
 
-    let breakdown = explorers_genesis_eval::evaluate_from_log(
-        &world,
-        &observations,
-        &run_config.eval_config,
-        run_config.max_ticks,
-    );
-    let termination_tick = world.tick();
+    let horizon_breakdown = || {
+        explorers_genesis_eval::evaluate_from_log(
+            &world,
+            &observations,
+            eval_config,
+            run_config.max_ticks,
+        )
+    };
+    let (breakdown, termination_tick, early_stop) = match stopped {
+        Some(mut stop) => {
+            if carry {
+                let full = horizon_breakdown();
+                stop.horizon = Some(HorizonVerdict {
+                    failure: full.failure,
+                    fitness: full.fitness,
+                    termination_tick: world.tick(),
+                });
+            }
+            let breakdown = FitnessBreakdown::gated(stop.failure.clone(), stop.tick);
+            (breakdown, stop.tick, Some(stop))
+        }
+        None => (horizon_breakdown(), world.tick(), None),
+    };
     RunResult {
         fitness: breakdown.fitness,
         failure: breakdown.failure.clone(),
         termination_tick,
         breakdown,
+        early_stop,
     }
 }
 
@@ -238,6 +348,7 @@ mod tests {
                 grace_ticks: 40,
                 ..EvalConfig::default()
             },
+            early_stop_crosscheck_fraction: 0.0,
         };
         let result_a = run_single(&params, &dist, &config, 1);
         let result_b = run_single(&params, &dist, &config, 12345);
@@ -271,6 +382,7 @@ mod tests {
             run_config: RunConfig {
                 max_ticks: 30,
                 eval_config: EvalConfig::default(),
+                early_stop_crosscheck_fraction: 0.0,
             },
         };
 
@@ -311,6 +423,7 @@ mod tests {
             run_config: RunConfig {
                 max_ticks: 120,
                 eval_config: EvalConfig::default(),
+                early_stop_crosscheck_fraction: 0.0,
             },
         };
         let base_seed: u64 = 7;
@@ -352,6 +465,7 @@ mod tests {
             run_config: RunConfig {
                 max_ticks: 1000,
                 eval_config: EvalConfig::default(),
+                early_stop_crosscheck_fraction: 0.0,
             },
         };
 
@@ -372,6 +486,7 @@ mod tests {
         let config = RunConfig {
             max_ticks: 50,
             eval_config: EvalConfig::default(),
+            early_stop_crosscheck_fraction: 0.0,
         };
 
         let result1 = run_single(&params, &distribution, &config, 123);
@@ -396,6 +511,7 @@ mod tests {
         let config = RunConfig {
             max_ticks: 1000,
             eval_config: EvalConfig::default(),
+            early_stop_crosscheck_fraction: 0.0,
         };
 
         let result = run_single(&params, &distribution, &config, 42);
@@ -426,11 +542,122 @@ mod tests {
                 grace_ticks: u64::MAX,
                 ..EvalConfig::default()
             },
+            early_stop_crosscheck_fraction: 0.0,
         };
 
         let result = run_single(&params, &distribution, &config, 42);
 
         assert_eq!(result.termination_tick, 20);
         assert!(result.failure.is_none());
+    }
+
+    /// A world whose living stock drains after the founder provisioning and
+    /// never recovers: under a zero grace (the founder stock is the
+    /// reference) it reads `EnergyDeath` at a 600-tick horizon on seed 3.
+    fn energy_dying_world() -> (WorldParameters, InitialDistribution) {
+        (
+            WorldParameters {
+                solar_flux_magnitude: 0.5,
+                base_metabolic_rate: 0.05,
+                initial_population_size: 30,
+                contact_range_coefficient: 10.0,
+                world_extent: 20.0,
+                growth_efficiency: 0.5,
+                ..test_params()
+            },
+            InitialDistribution {
+                initial_energy_per_agent: 100.0,
+                trait_covariance: 0.5,
+                ..test_distribution()
+            },
+        )
+    }
+
+    #[test]
+    fn single_run_stops_where_the_energy_death_gate_fires() {
+        // The frontier costs a bloom, the atlas costs the horizon
+        // (genesis-search.md): a rollout the dead-pool gate catches is
+        // tallied and stopped where it dies, carrying the mode and the
+        // termination tick as an extinction does — never scored.
+        let (params, dist) = energy_dying_world();
+        let config = RunConfig {
+            max_ticks: 600,
+            eval_config: EvalConfig {
+                grace_ticks: 0,
+                ..EvalConfig::default()
+            },
+            early_stop_crosscheck_fraction: 0.0,
+        };
+        let result = run_single(&params, &dist, &config, 3);
+        assert_eq!(result.failure, Some(FailureMode::EnergyDeath));
+        assert!(
+            result.termination_tick < 600,
+            "stopped where it died, not at the horizon (tick {})",
+            result.termination_tick
+        );
+        assert_eq!(result.breakdown.ticks_survived, result.termination_tick);
+        assert_eq!(result.fitness, 0.0);
+    }
+
+    #[test]
+    fn crosscheck_carries_a_stopped_rollout_to_the_horizon_without_changing_its_verdict() {
+        // The gates are not proven irreversible, so a configurable fraction of
+        // early-stopped rollouts are carried to T anyway and re-verdicted on
+        // the full series. The carry changes only what is *recorded* — the
+        // run's own verdict stays the gate's, so the atlas is the same map
+        // whether or not a rollout was drawn for the check.
+        let (params, dist) = energy_dying_world();
+        let config = |fraction: f32| RunConfig {
+            max_ticks: 600,
+            eval_config: EvalConfig {
+                grace_ticks: 0,
+                ..EvalConfig::default()
+            },
+            early_stop_crosscheck_fraction: fraction,
+        };
+        let stopped = run_single(&params, &dist, &config(0.0), 3);
+        let carried = run_single(&params, &dist, &config(1.0), 3);
+
+        let stop = stopped.early_stop.as_ref().expect("the gate stopped it");
+        assert_eq!(stop.failure, FailureMode::EnergyDeath);
+        assert_eq!(stop.tick, stopped.termination_tick);
+        assert!(stop.horizon.is_none(), "not drawn: never carried");
+
+        let carry = carried.early_stop.as_ref().expect("the gate still fired");
+        assert_eq!(
+            (carry.failure.clone(), carry.tick),
+            (stop.failure.clone(), stop.tick)
+        );
+        let horizon = carry.horizon.as_ref().expect("drawn: carried to T");
+        assert_eq!(horizon.termination_tick, 600);
+        // This world stays dead: the horizon read agrees with the gate.
+        assert_eq!(horizon.failure, Some(FailureMode::EnergyDeath));
+        assert!(carry.disagreement().is_none());
+
+        // The recorded verdict is the gate's either way.
+        assert_eq!(carried.failure, stopped.failure);
+        assert_eq!(carried.termination_tick, stopped.termination_tick);
+        assert_eq!(carried.fitness, 0.0);
+    }
+
+    #[test]
+    fn crosscheck_selection_is_a_deterministic_draw_on_the_rollout_seed() {
+        // Seeded from the rollout seed, not the search rng: the same seed is
+        // drawn the same way on every run, so search output stays
+        // reproducible under rayon, and a fraction in (0, 1) draws some seeds
+        // and not others.
+        let drawn: Vec<bool> = (0..200u64)
+            .map(|seed| crosscheck_selected(seed, 0.3))
+            .collect();
+        assert_eq!(
+            drawn,
+            (0..200u64)
+                .map(|seed| crosscheck_selected(seed, 0.3))
+                .collect::<Vec<_>>()
+        );
+        let n = drawn.iter().filter(|&&d| d).count();
+        assert!((30..=90).contains(&n), "≈30 % of 200 seeds drawn, got {n}");
+        assert!((0..200u64).all(|seed| !crosscheck_selected(seed, 0.0)));
+        assert!((0..200u64).all(|seed| crosscheck_selected(seed, 1.0)));
     }
 }

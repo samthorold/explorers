@@ -134,6 +134,20 @@ generations or batch to hold wall-clock trades the atlas's resolution for its co
 shrinking the seed ensemble makes the median-over-seeds selection signal noisier exactly where
 [the projection](#the-recipe-is-a-projection-of-the-atlas) already struggles. Neither is taken.
 
+The two dead-pool gates are read *incrementally* for this: on the series-so-far, exactly the
+horizon definitions with the reference starting at the grace, at the lockup-window cadence, so a
+world that collapses at tick `t` and stays collapsed stops at the first window boundary past
+`t + window` (`early_stop` in the evaluator; extinction and explosion read the count every tick).
+But the gates as defined are **not proven irreversible** — a world flagged at tick 600 might
+recover by `T` — so the stop carries the same falsification interlock the prefilter has: a
+configurable fraction of stopped rollouts (`early_stop_crosscheck_fraction`, default 5 %, drawn
+deterministically from the rollout seed) is carried to `T` anyway and re-verdicted on the full
+series, and every stopped-dead / alive-at-`T` disagreement is surfaced beside the prefilter and
+bifurcation disagreements (`early_stop_disagreements`), never swallowed. The carry changes only
+what is *recorded*: a carried rollout's own verdict stays the gate's, so the atlas is the same map
+at any carry fraction. A non-empty list localises a gate firing on a reversible collapse — the
+evidence for tightening the gate's definition, not for lengthening the grace.
+
 **The gates' reference excludes the founder transient, by a measured tick count.** Lockup is read as
 a trailing window against the trajectory's earlier history (the low the dead pool once reached), and
 so is energy death until its history-free read is promoted ([expected

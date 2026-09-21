@@ -250,6 +250,24 @@ fn main() {
         "  (a weak-observable disagreement localises to the genesis observable, not F's reading; \
          objective-promotion stays gated on observable-hardening — #358/#359.)"
     );
+
+    // Early-stop cross-check (#506): rollouts the incremental energy-death /
+    // lockup gates stopped where they died, but which the carry took to the
+    // horizon anyway. A stopped-dead / alive-at-T disagreement is a gate that
+    // fired on a reversible collapse — surfaced here, never swallowed.
+    eprintln!(
+        "Early-stop cross-check disagreements: {} of {} stopped rollout(s) carried to the \
+         horizon read alive on the full series (carry fraction {:.2})",
+        atlas.early_stop_disagreements.len(),
+        atlas.early_stop_crosschecks,
+        config.early_stop_crosscheck_fraction,
+    );
+    for d in &atlas.early_stop_disagreements {
+        eprintln!(
+            "  {:<16} stopped at tick {:<6} seed #{:<2} horizon fitness={:.4}",
+            d.gate, d.stop_tick, d.seed_index, d.observed_fitness
+        );
+    }
 }
 
 fn print_usage() {
