@@ -149,10 +149,10 @@ at any carry fraction. A non-empty list localises a gate firing on a reversible 
 evidence for tightening the gate's definition, not for lengthening the grace.
 
 **The gates' reference excludes the founder transient, by a measured tick count.** Lockup is read as
-a trailing window against the trajectory's earlier history (the low the dead pool once reached), and
-so is energy death until its history-free read is promoted ([expected
-properties](expected-properties.md#energy-death): the peak the living stock once held is the
-stand-in). Tick 0 is not part of that history: the founder
+a trailing window against the trajectory's earlier history (the low the dead pool once reached);
+energy death is read against a history-free reference, the config's sustainable stock ([expected
+properties](expected-properties.md#energy-death)), but its trailing window is likewise taken from the
+grace on. Tick 0 is not part of either read: the founder
 cohort is *provisioned*, so its stock is an artefact of the founder budget rather than anything the
 ecology produced, and for the first few tens of ticks — until photosynthetic income overtakes the
 provisioning — the series describes the budget, not the world. The reference therefore starts after a

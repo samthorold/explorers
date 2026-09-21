@@ -132,12 +132,20 @@ pub fn run_single(
     // (the cross-check): the gate's verdict is kept as the run's, the
     // full-series verdict is recorded beside it.
     let carry = crosscheck_selected(seed, run_config.early_stop_crosscheck_fraction);
+    // The energy-death reference is a property of the config (#508),
+    // computed once per rollout.
+    let sustainable_stock = explorers_genesis_eval::sustainable_stock(params);
     let mut stopped: Option<EarlyStop> = None;
     for _ in 0..run_config.max_ticks {
         world.step();
         observations.observe(&world, interval);
         world.compact_event_log_before(observations.consumed_events());
-        match explorers_genesis_eval::early_stop(world.agents().len(), &observations, eval_config) {
+        match explorers_genesis_eval::early_stop(
+            world.agents().len(),
+            &observations,
+            eval_config,
+            sustainable_stock,
+        ) {
             None => {}
             Some(FailureMode::Extinction) | Some(FailureMode::PopulationExplosion) => break,
             Some(failure) => {
@@ -551,22 +559,27 @@ mod tests {
         assert!(result.failure.is_none());
     }
 
-    /// A world whose living stock drains after the founder provisioning and
-    /// never recovers: under a zero grace (the founder stock is the
-    /// reference) it reads `EnergyDeath` at a 600-tick horizon on seed 3.
+    /// A world whose living stock is small against what its resource base
+    /// could sustain: a light radius of 1 on a 100-wide torus gives a
+    /// sustainable stock of `F·m² ≈ 20 000 E`, while its starved founders —
+    /// base metabolism 0.9 against a flux of 1, provisioned at 5 E — hold
+    /// under a thousand for the whole run (15 bodies at tick 600 on seed
+    /// 3). Reads `EnergyDeath` from the first post-grace window on under a
+    /// zero grace, and still at a 600-tick horizon.
     fn energy_dying_world() -> (WorldParameters, InitialDistribution) {
         (
             WorldParameters {
-                solar_flux_magnitude: 0.5,
-                base_metabolic_rate: 0.05,
+                solar_flux_magnitude: 1.0,
+                base_metabolic_rate: 0.9,
                 initial_population_size: 30,
                 contact_range_coefficient: 10.0,
-                world_extent: 20.0,
+                world_extent: 100.0,
+                light_competition_radius: 1.0,
                 growth_efficiency: 0.5,
                 ..test_params()
             },
             InitialDistribution {
-                initial_energy_per_agent: 100.0,
+                initial_energy_per_agent: 5.0,
                 trait_covariance: 0.5,
                 ..test_distribution()
             },

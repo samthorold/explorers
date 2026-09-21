@@ -99,6 +99,13 @@ impl FitnessBreakdown {
     }
 }
 
+/// The smallest living roster the roster gates (monoculture, generalist
+/// dominance) read: below it a population is too small to carry a trait
+/// distribution worth classifying. Also the population floor of "visibly
+/// alive at the horizon" in the zero-false-positive checks a gate must clear
+/// before promotion (viability.md).
+pub const ROSTER_FLOOR: usize = 20;
+
 #[derive(Clone, Debug)]
 pub struct EvalConfig {
     pub max_population: usize,
@@ -320,11 +327,11 @@ pub fn evaluate_from_log(
     let tb = trophic_balance_score(&trait_vectors, &labels, &energies);
 
     let grace_ticks = config.grace_ticks;
-    if let Some(failure) = dead_pool_gate(observations, config) {
+    if let Some(failure) = dead_pool_gate(observations, config, sustainable_stock(world.params())) {
         return zero_breakdown(failure);
     }
 
-    if ticks_survived > grace_ticks && trait_vectors.len() >= 20 {
+    if ticks_survived > grace_ticks && trait_vectors.len() >= ROSTER_FLOOR {
         if is_monoculture(&trait_vectors, config.clustering_threshold) {
             return zero_breakdown(FailureMode::Monoculture);
         }
@@ -405,24 +412,31 @@ pub fn evaluate_from_log(
 }
 
 /// The two dead-pool gates read on a rollout's series-so-far: energy death
-/// first, then nutrient lockup, each a trailing window against the history
-/// since `grace_ticks`. This is the one definition both the horizon verdict
+/// first, then nutrient lockup, each a trailing window read from
+/// `grace_ticks` on — energy death against the config's `sustainable_stock`
+/// ([`is_free_energy_dead_sustainable`]), lockup against the history since
+/// the grace. This is the one definition both the horizon verdict
 /// ([`evaluate_from_log`]) and the incremental stop ([`early_stop`]) read, so
 /// a rollout stopped where it dies is verdicted exactly as it would be had
 /// the same series been read at the horizon (#506). `None` inside the grace.
-fn dead_pool_gate(observations: &RolloutObservations, config: &EvalConfig) -> Option<FailureMode> {
+fn dead_pool_gate(
+    observations: &RolloutObservations,
+    config: &EvalConfig,
+    sustainable_stock: f32,
+) -> Option<FailureMode> {
     let ticks_so_far = observations.free_energy.len() as u64;
     if ticks_so_far <= config.grace_ticks {
         return None;
     }
     let grace = config.grace_ticks as usize;
     // Free (non-carcass-locked) energy stock, sampled once per tick by the
-    // caller. Energy death is this living-system stock trending irreversibly
-    // toward zero as energy locks into carcasses — a stock trend, not the
-    // predation flow the old detector summed (issue #302). The grace prefix
-    // is dropped so early transients before the world settles don't count.
+    // caller. Energy death is this living-system stock being small against
+    // what the resource base can sustain — a stock read against a
+    // history-free reference (#508), not the predation flow the old
+    // detector summed (issue #302). The grace prefix is dropped so the
+    // founder provisioning is never consulted.
     let post_grace = observations.free_energy.get(grace..).unwrap_or(&[]);
-    if is_free_energy_dead(post_grace, config.energy_death_window) {
+    if is_free_energy_dead_sustainable(post_grace, config.energy_death_window, sustainable_stock) {
         return Some(FailureMode::EnergyDeath);
     }
     // Carcass-locked nutrient fraction, sampled once per tick by the caller.
@@ -453,10 +467,14 @@ fn dead_pool_gate(observations: &RolloutObservations, config: &EvalConfig) -> Op
 /// might recover by the horizon — which is why the search carries a sampled
 /// fraction of early-stopped rollouts to the horizon anyway and surfaces
 /// every disagreement (the same falsification interlock the prefilter has).
+///
+/// `sustainable_stock` is the config's [`sustainable_stock`], computed once
+/// per rollout by the caller, the energy-death reference.
 pub fn early_stop(
     agent_count: usize,
     observations: &RolloutObservations,
     config: &EvalConfig,
+    sustainable_stock: f32,
 ) -> Option<FailureMode> {
     if is_extinct(agent_count) {
         return Some(FailureMode::Extinction);
@@ -469,7 +487,7 @@ pub fn early_stop(
     if !tick.is_multiple_of(cadence) {
         return None;
     }
-    dead_pool_gate(observations, config)
+    dead_pool_gate(observations, config, sustainable_stock)
 }
 
 /// The settled window `(T/2, T]` of a per-tick series sampled from tick 1 —
@@ -956,21 +974,19 @@ fn region_query(trait_vectors: &[explorers_sim::TraitVector], idx: usize, eps: f
     neighbors
 }
 
-/// Energy death: free (non-carcass-locked) energy trends irreversibly toward
-/// zero (expected-properties.md). `free_energy_per_tick` is the living-system
-/// energy stock sampled once per tick — agent reserve + structure summed across
-/// the population, i.e. energy NOT locked in carcasses.
+/// The **history-peak** energy-death read — the stand-in the evaluator used
+/// until the history-free read ([`is_free_energy_dead_sustainable`]) cleared
+/// the zero-false-positive check (#508; `docs/research/508-energy-death-sustainable.md`).
+/// No longer wired into any gate; kept as the comparison arm of that check
+/// (`energy_death_check`), so the check stays re-runnable when the stepper
+/// changes.
 ///
-/// The signal is a *stock trend*, not a flow: energy death is the living pool
-/// collapsing as energy locks into carcasses faster than decomposition returns
-/// it. We flag it when, over the trailing `window`, the free-energy stock has
-/// collapsed to a small fraction of its earlier peak and does not recover — the
-/// best the window manages stays far below the peak the system once held.
-///
-/// A living, reproducing or producer-fed world keeps regenerating free energy,
-/// so its trailing window holds a substantial fraction of its peak and is not
-/// flagged. A world whose living pool drains into carcasses sees the trailing
-/// window sit near zero relative to the peak.
+/// `free_energy_per_tick` is the living-system energy stock sampled once per
+/// tick. Flagged when, over the trailing `window`, the stock has collapsed to
+/// a small fraction of its earlier peak and does not recover. Its defect is
+/// the reference: a world that cedes its bloom-stage stock to the heterotroph
+/// niche reads as dead for the ecology working, and a world that never
+/// recovers its founder stock never acquires a reference and passes as live.
 pub fn is_free_energy_dead(free_energy_per_tick: &[f32], window: usize) -> bool {
     if free_energy_per_tick.len() < window || window == 0 {
         return false;
@@ -991,6 +1007,60 @@ pub fn is_free_energy_dead(free_energy_per_tick: &[f32], window: usize) -> bool 
     // small fraction of the free energy the living system previously held.
     const COLLAPSE_FRACTION: f32 = 0.1;
     window_peak < peak * COLLAPSE_FRACTION
+}
+
+/// The fraction of the config's [`sustainable_stock`] below which the
+/// history-free energy-death read ([`is_free_energy_dead_sustainable`]) calls
+/// the living stock dead: an order of magnitude under the reference, the
+/// same tenth the history-peak stand-in reads (`COLLAPSE_FRACTION`).
+pub const SUSTAINABLE_FRACTION: f32 = 0.1;
+
+/// The world's **sustainable stock** — the energy form of viability's solar
+/// ceiling (viability.md, *Bound — sustained population*), a property of the
+/// config alone.
+///
+/// Derivation from the committed rules. Solar flux is the sole external
+/// energy source and is capped per tick at `P_max = F·m²`, one flux per
+/// light-competition tile, `m = ⌊√2·L/r⌋ + 1`; every survivor is charged at
+/// least the base metabolic rate `B` every tick (flow 8). So the long-run
+/// mean survivor count is bounded by `N̄_max = F·m²/B = π_F·m²`. A survivor of
+/// a tick paid `≥ B` from its own stock and ended the tick with reserve still
+/// positive, so a body at the ceiling holds at least one tick of base
+/// metabolism, `ε = B·τ` — the energy unit of the dimensionless groups. The
+/// stock of a population at the ceiling is therefore scaled by body
+/// maintenance as `N̄_max · ε = F·m²·τ`: one tick of the solar cap, in energy
+/// (`τ = 1`). Independent of `B` — a cheaper body means more bodies, each
+/// holding less — and of every searched coefficient but `F`, `L`, `r`.
+/// Requires `r > 0`, which the search box guarantees.
+pub fn sustainable_stock(params: &explorers_sim::WorldParameters) -> f32 {
+    let l = f64::from(params.world_extent);
+    let r = f64::from(params.light_competition_radius);
+    let f = f64::from(params.solar_flux_magnitude);
+    let m = (std::f64::consts::SQRT_2 * l / r).floor() + 1.0;
+    (f * m * m) as f32
+}
+
+/// Energy death read against the sustainable stock (expected-properties.md,
+/// *Energy death — How it is read*): the trailing `window` peak of the living
+/// free-energy stock sits below [`SUSTAINABLE_FRACTION`] of the config's
+/// [`sustainable_stock`]. `post_grace` is the stock series from the grace on
+/// (the founder provisioning is never consulted); the reference is a property
+/// of the config, not of the run's own history, so the read says the same
+/// thing at every horizon and for every bloom shape. Not flagged while the
+/// series is shorter than the window.
+pub fn is_free_energy_dead_sustainable(
+    post_grace: &[f32],
+    window: usize,
+    sustainable_stock: f32,
+) -> bool {
+    if post_grace.len() < window || window == 0 {
+        return false;
+    }
+    let window_peak = post_grace[post_grace.len() - window..]
+        .iter()
+        .copied()
+        .fold(0.0_f32, f32::max);
+    window_peak < sustainable_stock * SUSTAINABLE_FRACTION
 }
 
 /// Whether nutrient is locked irreversibly in the dead pool — the pathology a
@@ -1235,20 +1305,26 @@ mod tests {
     }
 
     #[test]
-    fn gate_reference_starts_at_grace_ticks_whatever_the_horizon() {
-        // The gates' reference excludes the founder provisioning transient by
-        // an absolute tick count, not a fraction of the horizon
-        // (genesis-search.md): a longer rollout does not make the founder
-        // budget last longer. The same free-energy series — a provisioned
-        // founder stock for the first 20 ticks, then a steady living stock —
-        // must read the same at two horizons: alive under a 20-tick grace
-        // (the founder peak is outside the reference), energy death under no
-        // grace (the founder peak is the reference the steady stock collapses
-        // against). Under a horizon fraction the two horizons would disagree.
+    fn energy_death_verdict_is_history_free_whatever_the_horizon_or_grace() {
+        // The reference is the config's sustainable stock, not the run's own
+        // history (#508): the same free-energy series — a provisioned founder
+        // stock two hundred times the steady living stock for the first 20
+        // ticks, then that steady stock — reads alive at two horizons and
+        // under either grace, because the bloom-scale peak it once held is
+        // not a reference anything collapses against. (Under the old
+        // history-peak read the no-grace verdict was energy death.) Held at
+        // the fixture's sustainable stock, the steady stock is at the ceiling.
         let founder_ticks = 20usize;
+        let stock = sustainable_stock(&live_world_params());
         let series = |n: usize| -> Vec<f32> {
             (0..n)
-                .map(|t| if t < founder_ticks { 2000.0 } else { 100.0 })
+                .map(|t| {
+                    if t < founder_ticks {
+                        200.0 * stock
+                    } else {
+                        stock
+                    }
+                })
                 .collect()
         };
         let verdict = |max_ticks: u64, grace_ticks: u64| {
@@ -1268,16 +1344,13 @@ mod tests {
         };
 
         for horizon in [60u64, 120] {
-            assert_ne!(
-                verdict(horizon, founder_ticks as u64),
-                Some(FailureMode::EnergyDeath),
-                "T = {horizon}: the founder stock is outside a 20-tick grace"
-            );
-            assert_eq!(
-                verdict(horizon, 0),
-                Some(FailureMode::EnergyDeath),
-                "T = {horizon}: with no grace the founder stock is the reference"
-            );
+            for grace in [founder_ticks as u64, 0] {
+                assert_ne!(
+                    verdict(horizon, grace),
+                    Some(FailureMode::EnergyDeath),
+                    "T = {horizon}, grace {grace}: a steady stock at the ceiling is alive"
+                );
+            }
         }
     }
 
@@ -1286,6 +1359,10 @@ mod tests {
     /// report the first `(failure, tick)` it fires on — the trajectory a
     /// rollout would actually take under the gates (#506). The other series
     /// are held healthy so only the one under test can fire.
+    /// The synthetic series read against a sustainable stock of
+    /// `SYNTHETIC_STOCK`, so a stock of 100 is at the reference and 1 is 1 %.
+    const SYNTHETIC_STOCK: f32 = 100.0;
+
     fn first_early_stop(
         free_energy: &[f32],
         carcass_fraction: &[f32],
@@ -1297,7 +1374,7 @@ mod tests {
             observations.carcass_fraction.push(*cf);
             observations.producer_share.push(1.0);
             let tick = observations.free_energy.len() as u64;
-            if let Some(failure) = early_stop(30, &observations, config) {
+            if let Some(failure) = early_stop(30, &observations, config, SYNTHETIC_STOCK) {
                 return Some((failure, tick));
             }
         }
@@ -1350,21 +1427,31 @@ mod tests {
 
     #[test]
     fn early_stop_holds_off_inside_the_grace_and_between_window_boundaries() {
-        // A stock collapsed from tick 1: the reference starts at the grace, so
-        // there is no peak to collapse against until the post-grace history
-        // holds one — with a flat series it never does, so the gate never
-        // fires; and a collapse at tick 270 (inside the first post-grace
-        // window) is read only at the next window boundary, tick 350, never
-        // at tick 320 between boundaries.
+        // A founder provisioning at 1 % of the sustainable stock is never
+        // consulted: the gate is silent through the grace, and fires only
+        // once a full post-grace window sits below the reference — the first
+        // window boundary past `grace + window`, tick 350 — so a world whose
+        // stock climbs to the ceiling by tick 300 is never stopped, and a
+        // world that stays at the founder scale is (the case the history-peak
+        // read passed as live for want of a reference). A collapse at tick
+        // 270 (inside the first post-grace window) is likewise read only at
+        // tick 350, never at tick 320 between boundaries.
         let config = EvalConfig {
             grace_ticks: 260,
             energy_death_window: 50,
             nutrient_lock_window: 50,
             ..EvalConfig::default()
         };
-        let flat = vec![1.0; 2000];
         let carcass = vec![0.1; 2000];
-        assert_eq!(first_early_stop(&flat, &carcass, &config), None);
+        let climbs: Vec<f32> = (1..=2000)
+            .map(|t| if t <= 300 { 1.0 } else { 100.0 })
+            .collect();
+        assert_eq!(first_early_stop(&climbs, &carcass, &config), None);
+        let founder_scale = vec![1.0; 2000];
+        assert_eq!(
+            first_early_stop(&founder_scale, &carcass, &config),
+            Some((FailureMode::EnergyDeath, 350))
+        );
 
         let stock: Vec<f32> = (1..=2000)
             .map(|t| if t <= 270 { 100.0 } else { 1.0 })
@@ -1557,6 +1644,86 @@ mod tests {
     fn free_energy_not_dead_when_shorter_than_window() {
         let stock = vec![0.0, 0.0];
         assert!(!is_free_energy_dead(&stock, 5));
+    }
+
+    /// The viable baseline of the search box: `F = 10`, `L = 100`, `r = 8`
+    /// (`m = 18`), `B = 0.3`.
+    fn baseline_params() -> explorers_sim::WorldParameters {
+        let mut p = test_world_params();
+        p.solar_flux_magnitude = 10.0;
+        p.world_extent = 100.0;
+        p.light_competition_radius = 8.0;
+        p.base_metabolic_rate = 0.3;
+        p
+    }
+
+    #[test]
+    fn sustainable_stock_is_one_tick_of_base_metabolism_for_the_ceiling_population() {
+        // N̄_max = F·m²/B = 10·324/0.3 bodies; each holds one tick of `B`,
+        // so the stock is F·m² = 3240 E — independent of `B`.
+        let stock = sustainable_stock(&baseline_params());
+        assert!((stock - 3240.0).abs() < 1e-3, "{stock}");
+        let mut cheaper = baseline_params();
+        cheaper.base_metabolic_rate = 0.01;
+        assert_eq!(sustainable_stock(&cheaper), stock);
+        // A radius wider than the world tiles to one cell: F alone.
+        let mut one_cell = baseline_params();
+        one_cell.light_competition_radius = 1000.0;
+        assert!((sustainable_stock(&one_cell) - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sustainable_read_alive_when_trailing_window_holds_the_ceiling_stock() {
+        let ceiling = sustainable_stock(&baseline_params());
+        let stock = vec![ceiling; 8];
+        assert!(!is_free_energy_dead_sustainable(&stock, 4, ceiling));
+    }
+
+    #[test]
+    fn sustainable_read_dead_when_trailing_window_peaks_at_five_percent_of_the_ceiling() {
+        let ceiling = sustainable_stock(&baseline_params());
+        // A bloom to the ceiling earlier in the run does not rescue a window
+        // that peaks at 5 %: the reference is the config's, not the peak's.
+        let mut stock = vec![ceiling; 4];
+        stock.extend([
+            0.05 * ceiling,
+            0.04 * ceiling,
+            0.05 * ceiling,
+            0.03 * ceiling,
+        ]);
+        assert!(is_free_energy_dead_sustainable(&stock, 4, ceiling));
+        // Shorter than the window: not consulted.
+        assert!(!is_free_energy_dead_sustainable(&stock[..3], 4, ceiling));
+    }
+
+    #[test]
+    fn sustainable_read_never_consults_the_founder_stock_inside_the_grace() {
+        // A founder cohort provisioned at 1 % of the ceiling, then a world
+        // that climbs to it: the horizon verdict reads post-grace only, so
+        // the tick-0 stock is not on the series the read sees, and a run
+        // still inside the grace has no read at all.
+        let params = baseline_params();
+        let ceiling = sustainable_stock(&params);
+        let founder = 0.01 * ceiling;
+        let mut series = vec![founder; 20];
+        series.extend(vec![ceiling; 40]);
+        let grace = 20usize;
+        let window = 10usize;
+        assert!(!is_free_energy_dead_sustainable(
+            &series[grace..],
+            window,
+            ceiling
+        ));
+        // Inside the grace the caller hands the read nothing.
+        let inside: &[f32] = series.get(grace..5).unwrap_or(&[]);
+        assert!(!is_free_energy_dead_sustainable(inside, window, ceiling));
+        // And the same founder stock, read with no grace at all, would be
+        // consulted — the grace is what keeps the provisioning out.
+        assert!(is_free_energy_dead_sustainable(
+            &series[..grace],
+            window,
+            ceiling
+        ));
     }
 
     #[test]
