@@ -164,7 +164,8 @@ doubling time where it lives is ~700 ticks. A round number chosen for convenienc
 procedure to re-run when the stepper changes; this one is re-measured with the grace, off the same
 long rollouts, since both are transient ticks of the same trajectory.
 
-*Current values: both unmeasured. Grace — the committed 0.2 · T (100 ticks at the 500-tick horizon)
+*Current values: both unmeasured. The instrument is `crates/explorers-search/src/bin/settling_time.rs`
+(one resumable JSON-lines row per config; the summary restates the procedure beside the quantiles). Grace — the committed 0.2 · T (100 ticks at the 500-tick horizon)
 predates the measurement and is superseded by it. Horizon — `T = 2000` is the working value, taken
 from the #492 / 443 §6.3 window the guild predicate was validated on; the measurement confirms or
 moves it.*

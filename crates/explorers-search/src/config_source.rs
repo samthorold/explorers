@@ -16,7 +16,7 @@ pub const SAMPLE_CONFIGS: usize = 200;
 pub const SAMPLE_SEED: u64 = 421;
 
 /// Where a config came from: an atlas live cell or the shared LHS draw.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ConfigSource {
     Atlas,
