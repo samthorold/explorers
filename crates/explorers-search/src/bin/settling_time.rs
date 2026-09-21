@@ -74,7 +74,7 @@ use rayon::prelude::*;
 
 use explorers_genesis::{EvalConfig, FailureMode};
 use explorers_genesis_eval::{
-    EVALUATOR_EVENT_KINDS, RolloutObservations, early_stop, evaluate_from_log,
+    EVALUATOR_EVENT_KINDS, RolloutObservations, early_stop, evaluate_from_log, sustainable_stock,
 };
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{decode, default_ranges};
@@ -196,6 +196,7 @@ fn run_seed(
     run_timeout: Duration,
 ) -> SeedRecord {
     let eval_config = EvalConfig::default();
+    let stock = sustainable_stock(params);
     let started = Instant::now();
     let mut timed_out = false;
     let mut stopped: Option<FailureMode> = None;
@@ -215,7 +216,7 @@ fn run_seed(
         // The evaluator's incremental terminal check — extinction, explosion,
         // and the dead-pool gates on the series-so-far (#506) — stops the
         // rollout where it dies, as `run_single` does.
-        stopped = early_stop(world.agents().len(), &observations, &eval_config);
+        stopped = early_stop(world.agents().len(), &observations, &eval_config, stock);
         if stopped.is_some() {
             break;
         }

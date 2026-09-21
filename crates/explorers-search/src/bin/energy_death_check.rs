@@ -2,10 +2,13 @@
 //! #508): `explorers_genesis_eval::is_free_energy_dead_sustainable` — the
 //! trailing lockup-window peak of the living stock against a fraction of the
 //! config's sustainable stock (`sustainable_stock`, the energy form of
-//! viability's solar ceiling) — compared against the history-peak stand-in
-//! (`is_free_energy_dead`, `COLLAPSE_FRACTION`) on every run that reaches
-//! the settled horizon, over the atlas's live cells and the 200-point LHS
-//! sample of the search box, 8 seeds each.
+//! viability's solar ceiling) — compared against the history-peak read it
+//! replaced (`is_free_energy_dead`, `COLLAPSE_FRACTION`; "the stand-in"
+//! below) on every run that reaches the settled horizon, over the atlas's
+//! live cells and the 200-point LHS sample of the search box, 8 seeds each.
+//! The check passed and the read was promoted
+//! (`docs/research/508-energy-death-sustainable.md`); the bin stays so the
+//! check can be re-taken when the stepper changes.
 //!
 //! ## The promotion rule
 //!
@@ -19,12 +22,14 @@
 //!
 //! ## How the runs reach `T`
 //!
-//! The comparison needs the stand-in's full-series read, so the rollout does
-//! **not** stop on the incremental energy-death gate: the genesis step loop
-//! is run as `explorers_genesis::run_single` does (retained event kinds,
-//! per-step compaction, the evaluator's `early_stop`), but an `EnergyDeath`
-//! stop is recorded (the tick it first fired) and the rollout carries on to
-//! the horizon — the carry-to-`T` cross-check at fraction 1 for this one gate.
+//! The comparison needs both full-series reads, so the rollout does **not**
+//! stop on the incremental energy-death gate (whichever read it runs): the
+//! genesis step loop is run as `explorers_genesis::run_single` does
+//! (retained event kinds, per-step compaction, the evaluator's
+//! `early_stop`), but an `EnergyDeath` stop is recorded (the tick it first
+//! fired) and the rollout carries on to the horizon — the carry-to-`T`
+//! cross-check at fraction 1 for this one gate. Both verdicts are then taken
+//! directly on the post-grace series at `T`.
 //! Extinction, explosion and nutrient lockup stop the rollout as usual; those
 //! runs do not reach `T` and are excluded from the comparison. Note that the
 //! evaluator reads energy death before lockup, so a run the energy-death gate
@@ -100,8 +105,8 @@ struct SeedRecord {
     /// The stand-in (`is_free_energy_dead`, post-grace history peak) on the
     /// full series at the horizon.
     standin_dead: bool,
-    /// First tick the incremental energy-death gate fired, if it did (the
-    /// rollout carried on regardless).
+    /// First tick the incremental energy-death gate (the evaluator's wired
+    /// read) fired, if it did — the rollout carried on regardless.
     standin_first_fire_tick: Option<u64>,
     /// The new read (`is_free_energy_dead_sustainable`) at the horizon.
     sustainable_dead: bool,
@@ -131,6 +136,7 @@ fn run_seed(
     run_timeout: Duration,
 ) -> SeedRecord {
     let eval_config = EvalConfig::default();
+    let stock = sustainable_stock(params);
     let started = Instant::now();
     let mut timed_out = false;
     let mut stopped: Option<FailureMode> = None;
@@ -142,7 +148,7 @@ fn run_seed(
         world.step();
         observations.observe(&world, eval_config.coexistence_sample_interval);
         world.compact_event_log_before(observations.consumed_events());
-        match early_stop(world.agents().len(), &observations, &eval_config) {
+        match early_stop(world.agents().len(), &observations, &eval_config, stock) {
             None => {}
             Some(FailureMode::EnergyDeath) => {
                 standin_first_fire_tick.get_or_insert(world.tick());
@@ -170,7 +176,6 @@ fn run_seed(
     let grace = eval_config.grace_ticks as usize;
     let window = eval_config.energy_death_window;
     let post_grace = observations.free_energy.get(grace..).unwrap_or(&[]);
-    let stock = sustainable_stock(params);
     let window_peak_stock = post_grace[post_grace.len().saturating_sub(window)..]
         .iter()
         .copied()

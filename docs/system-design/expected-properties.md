@@ -79,10 +79,17 @@ its bloom-stage producer stock to the heterotroph niche — the ecology working,
 as its failure — and the misfire gets worse the sharper the bloom. A history-free reference means the
 gate says the same thing at every horizon and for every bloom shape, and it is the lens-1 → lens-3
 interlock the design already prizes: a closed-form quantity predicting a rollout verdict, falsified by
-every sweep. Like every promoted gate it must first clear the zero-false-positive check against the
-atlas's live cells and a low-discrepancy sample of the search box
-([viability](viability.md)); until it does, the implemented gate reads against the post-grace
-history peak (`COLLAPSE_FRACTION = 0.1`) as a stand-in, and the doc records that as the gap.
+every sweep. Like every promoted gate it first cleared the zero-false-positive check against the
+atlas's live cells and a low-discrepancy sample of the search box ([viability](viability.md)): at the
+settled horizon, 8 seeds each, no run the read called dead was one the history-peak read called alive
+*and* that was visibly alive at `T` — 1593 runs at `T`, zero false positives, the read's 18
+disagreements all rosters of one to five bodies
+([508](../research/508-energy-death-sustainable.md)). The implemented read is
+`is_free_energy_dead_sustainable`: the trailing lockup-window peak of the living stock below
+`SUSTAINABLE_FRACTION = 0.1` of `sustainable_stock = F·m²·τ` — the count ceiling scaled by one tick of
+base metabolism per body, the stock a population at the ceiling must hold to pay its way through a
+tick. The margin is thin at one sample config (the smallest ratio on a visibly-alive run is 0.106),
+which is the number to watch when the check is re-taken.
 
 ### Nutrient lockup
 
