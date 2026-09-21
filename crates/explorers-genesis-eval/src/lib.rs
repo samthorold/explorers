@@ -76,6 +76,29 @@ pub struct FitnessBreakdown {
     pub has_consumer_guild: bool,
 }
 
+impl FitnessBreakdown {
+    /// The breakdown of a world that hit a terminal gate at `ticks_survived`:
+    /// zero fitness, the mode, and every descriptor zero. A degenerate world
+    /// has no meaningful behaviour coordinate (it is routed to the dead
+    /// frontier by cliff, not binned), so nothing is scored — whether the
+    /// gate fired at the horizon or stopped the rollout where it died.
+    pub fn gated(failure: FailureMode, ticks_survived: u64) -> Self {
+        FitnessBreakdown {
+            fitness: 0.0,
+            failure: Some(failure),
+            oscillation_strength: 0.0,
+            clustering_strength: 0.0,
+            coexistence_duration: 0.0,
+            turnover_score: 0.0,
+            trophic_balance_score: 0.0,
+            ticks_survived,
+            carcass_locked_fraction: 0.0,
+            has_decomposer_guild: false,
+            has_consumer_guild: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EvalConfig {
     pub max_population: usize,
@@ -257,7 +280,6 @@ pub fn evaluate_from_log(
     max_ticks: u64,
 ) -> FitnessBreakdown {
     let RolloutObservations {
-        free_energy: free_energy_per_tick,
         carcass_fraction: carcass_fraction_per_tick,
         producer_share: producer_share_per_tick,
         cluster_snapshots,
@@ -270,21 +292,7 @@ pub fn evaluate_from_log(
     let agents = world.agents();
     let ticks_survived = world.tick();
 
-    let zero_breakdown = |failure: FailureMode| FitnessBreakdown {
-        fitness: 0.0,
-        failure: Some(failure),
-        oscillation_strength: 0.0,
-        clustering_strength: 0.0,
-        coexistence_duration: 0.0,
-        turnover_score: 0.0,
-        trophic_balance_score: 0.0,
-        ticks_survived,
-        // A degenerate world has no meaningful behaviour coordinate (it is routed
-        // to the dead frontier by cliff, not binned), so the descriptors are zero.
-        carcass_locked_fraction: 0.0,
-        has_decomposer_guild: false,
-        has_consumer_guild: false,
-    };
+    let zero_breakdown = |failure: FailureMode| FitnessBreakdown::gated(failure, ticks_survived);
 
     if agents.is_empty() {
         return zero_breakdown(FailureMode::Extinction);
@@ -312,35 +320,8 @@ pub fn evaluate_from_log(
     let tb = trophic_balance_score(&trait_vectors, &labels, &energies);
 
     let grace_ticks = config.grace_ticks;
-    if ticks_survived > grace_ticks {
-        // Free (non-carcass-locked) energy stock, sampled once per tick by the
-        // caller. Energy death is this living-system stock trending irreversibly
-        // toward zero as energy locks into carcasses — a stock trend, not the
-        // predation flow the old detector summed (issue #302). The grace prefix
-        // is dropped so early transients before the world settles don't count.
-        let post_grace: Vec<f32> = free_energy_per_tick
-            .iter()
-            .copied()
-            .skip(grace_ticks as usize)
-            .collect();
-        if is_free_energy_dead(&post_grace, config.energy_death_window) {
-            return zero_breakdown(FailureMode::EnergyDeath);
-        }
-
-        // Carcass-locked nutrient fraction, sampled once per tick by the caller.
-        // Nutrient lockup is the dead pool's share trending high and staying
-        // there — nutrient sequestered into carcasses the living decomposers
-        // cannot turn over (issue #342). The nutrient-side sibling of energy
-        // death, checked after it: a world can photosynthesise fine while its
-        // nutrient irreversibly silts up the dead pool. Same grace prefix drop.
-        let post_grace_nutrient: Vec<f32> = carcass_fraction_per_tick
-            .iter()
-            .copied()
-            .skip(grace_ticks as usize)
-            .collect();
-        if is_nutrient_locked(&post_grace_nutrient, config.nutrient_lock_window) {
-            return zero_breakdown(FailureMode::NutrientLockup);
-        }
+    if let Some(failure) = dead_pool_gate(observations, config) {
+        return zero_breakdown(failure);
     }
 
     if ticks_survived > grace_ticks && trait_vectors.len() >= 20 {
@@ -421,6 +402,74 @@ pub fn evaluate_from_log(
         has_decomposer_guild: guilds.decomposer,
         has_consumer_guild: guilds.consumer,
     }
+}
+
+/// The two dead-pool gates read on a rollout's series-so-far: energy death
+/// first, then nutrient lockup, each a trailing window against the history
+/// since `grace_ticks`. This is the one definition both the horizon verdict
+/// ([`evaluate_from_log`]) and the incremental stop ([`early_stop`]) read, so
+/// a rollout stopped where it dies is verdicted exactly as it would be had
+/// the same series been read at the horizon (#506). `None` inside the grace.
+fn dead_pool_gate(observations: &RolloutObservations, config: &EvalConfig) -> Option<FailureMode> {
+    let ticks_so_far = observations.free_energy.len() as u64;
+    if ticks_so_far <= config.grace_ticks {
+        return None;
+    }
+    let grace = config.grace_ticks as usize;
+    // Free (non-carcass-locked) energy stock, sampled once per tick by the
+    // caller. Energy death is this living-system stock trending irreversibly
+    // toward zero as energy locks into carcasses — a stock trend, not the
+    // predation flow the old detector summed (issue #302). The grace prefix
+    // is dropped so early transients before the world settles don't count.
+    let post_grace = observations.free_energy.get(grace..).unwrap_or(&[]);
+    if is_free_energy_dead(post_grace, config.energy_death_window) {
+        return Some(FailureMode::EnergyDeath);
+    }
+    // Carcass-locked nutrient fraction, sampled once per tick by the caller.
+    // Nutrient lockup is the dead pool's share trending high and staying
+    // there — nutrient sequestered into carcasses the living decomposers
+    // cannot turn over (issue #342). The nutrient-side sibling of energy
+    // death, checked after it: a world can photosynthesise fine while its
+    // nutrient irreversibly silts up the dead pool. Same grace prefix drop.
+    let post_grace_nutrient = observations.carcass_fraction.get(grace..).unwrap_or(&[]);
+    if is_nutrient_locked(post_grace_nutrient, config.nutrient_lock_window) {
+        return Some(FailureMode::NutrientLockup);
+    }
+    None
+}
+
+/// The rollout's incremental terminal check, asked after every stepped tick
+/// has been observed: the failure mode on which to stop the rollout *now*,
+/// or `None` to keep stepping (genesis-search.md, *The frontier costs a
+/// bloom, the atlas costs the horizon*). Extinction and population explosion
+/// read the living count every tick; the two dead-pool gates are read on the
+/// series-so-far — exactly the horizon definitions, reference starting at
+/// `grace_ticks` — at the lockup-window cadence, so a world that collapses
+/// at tick `t` and stays collapsed stops at the first window boundary past
+/// `t + window`, tallied to the dead frontier where it died rather than
+/// carried to the horizon. Nothing is scored at an early stop.
+///
+/// The gates as defined are not proven irreversible — a world flagged here
+/// might recover by the horizon — which is why the search carries a sampled
+/// fraction of early-stopped rollouts to the horizon anyway and surfaces
+/// every disagreement (the same falsification interlock the prefilter has).
+pub fn early_stop(
+    agent_count: usize,
+    observations: &RolloutObservations,
+    config: &EvalConfig,
+) -> Option<FailureMode> {
+    if is_extinct(agent_count) {
+        return Some(FailureMode::Extinction);
+    }
+    if is_population_explosion(agent_count, config.max_population) {
+        return Some(FailureMode::PopulationExplosion);
+    }
+    let tick = observations.free_energy.len() as u64;
+    let cadence = config.nutrient_lock_window.max(1) as u64;
+    if !tick.is_multiple_of(cadence) {
+        return None;
+    }
+    dead_pool_gate(observations, config)
 }
 
 /// The settled window `(T/2, T]` of a per-tick series sampled from tick 1 —
@@ -1230,6 +1279,140 @@ mod tests {
                 "T = {horizon}: with no grace the founder stock is the reference"
             );
         }
+    }
+
+    /// Feed a synthetic per-tick series into a rollout's observations one tick
+    /// at a time, asking the incremental early-stop check after each, and
+    /// report the first `(failure, tick)` it fires on — the trajectory a
+    /// rollout would actually take under the gates (#506). The other series
+    /// are held healthy so only the one under test can fire.
+    fn first_early_stop(
+        free_energy: &[f32],
+        carcass_fraction: &[f32],
+        config: &EvalConfig,
+    ) -> Option<(FailureMode, u64)> {
+        let mut observations = RolloutObservations::default();
+        for (fe, cf) in free_energy.iter().zip(carcass_fraction) {
+            observations.free_energy.push(*fe);
+            observations.carcass_fraction.push(*cf);
+            observations.producer_share.push(1.0);
+            let tick = observations.free_energy.len() as u64;
+            if let Some(failure) = early_stop(30, &observations, config) {
+                return Some((failure, tick));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn early_stop_fires_energy_death_one_window_after_a_sustained_collapse() {
+        // A living stock that holds 100 through tick 300 then collapses to 1
+        // and stays there: the trailing window is entirely post-collapse from
+        // tick 350 on, and the gate — evaluated on the series-so-far at the
+        // window cadence — stops the rollout there, not at the horizon.
+        let config = EvalConfig {
+            grace_ticks: 260,
+            energy_death_window: 50,
+            nutrient_lock_window: 50,
+            ..EvalConfig::default()
+        };
+        let stock: Vec<f32> = (1..=2000)
+            .map(|t| if t <= 300 { 100.0 } else { 1.0 })
+            .collect();
+        let carcass = vec![0.1; 2000];
+        assert_eq!(
+            first_early_stop(&stock, &carcass, &config),
+            Some((FailureMode::EnergyDeath, 350))
+        );
+    }
+
+    #[test]
+    fn early_stop_fires_nutrient_lockup_one_window_after_the_dead_pool_locks() {
+        // The lockup analogue: a healthy stock, but a dead-pool share that
+        // sits at 0.1 through tick 300 then climbs to 0.9 and stays — the
+        // window low first clears the lock threshold and the pre-window low
+        // at tick 350, and the rollout stops there with `NutrientLockup`.
+        let config = EvalConfig {
+            grace_ticks: 260,
+            energy_death_window: 50,
+            nutrient_lock_window: 50,
+            ..EvalConfig::default()
+        };
+        let stock = vec![100.0; 2000];
+        let carcass: Vec<f32> = (1..=2000)
+            .map(|t| if t <= 300 { 0.1 } else { 0.9 })
+            .collect();
+        assert_eq!(
+            first_early_stop(&stock, &carcass, &config),
+            Some((FailureMode::NutrientLockup, 350))
+        );
+    }
+
+    #[test]
+    fn early_stop_holds_off_inside_the_grace_and_between_window_boundaries() {
+        // A stock collapsed from tick 1: the reference starts at the grace, so
+        // there is no peak to collapse against until the post-grace history
+        // holds one — with a flat series it never does, so the gate never
+        // fires; and a collapse at tick 270 (inside the first post-grace
+        // window) is read only at the next window boundary, tick 350, never
+        // at tick 320 between boundaries.
+        let config = EvalConfig {
+            grace_ticks: 260,
+            energy_death_window: 50,
+            nutrient_lock_window: 50,
+            ..EvalConfig::default()
+        };
+        let flat = vec![1.0; 2000];
+        let carcass = vec![0.1; 2000];
+        assert_eq!(first_early_stop(&flat, &carcass, &config), None);
+
+        let stock: Vec<f32> = (1..=2000)
+            .map(|t| if t <= 270 { 100.0 } else { 1.0 })
+            .collect();
+        assert_eq!(
+            first_early_stop(&stock, &carcass, &config),
+            Some((FailureMode::EnergyDeath, 350))
+        );
+    }
+
+    #[test]
+    fn a_collapse_the_world_recovers_from_stops_the_rollout_yet_reads_alive_at_the_horizon() {
+        // The gate as defined is not proven irreversible: a stock that
+        // collapses at tick 6 and recovers at tick 13 trips the incremental
+        // check at tick 12 (collapse + window, at the window cadence), but the
+        // same series carried to T reads alive — the window at T holds the
+        // recovered stock. This is exactly the case the search's carry-to-T
+        // cross-check counts as a disagreement (#506).
+        let params = test_world_params();
+        let dist = test_distribution();
+        let config = EvalConfig {
+            grace_ticks: 0,
+            energy_death_window: 4,
+            nutrient_lock_window: 4,
+            ..EvalConfig::default()
+        };
+        let max_ticks = 20;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let _ = run_collecting_free_energy(&mut world, max_ticks);
+        if world.agents().is_empty() {
+            return; // need a surviving world to reach the gate branch
+        }
+        let n = world.tick() as usize;
+        let recovering: Vec<f32> = (1..=n)
+            .map(|t| if (7..=12).contains(&t) { 1.0 } else { 100.0 })
+            .collect();
+        let carcass = vec![0.1; n];
+        assert_eq!(
+            first_early_stop(&recovering, &carcass, &config),
+            Some((FailureMode::EnergyDeath, 12))
+        );
+        let at_horizon = evaluate_from_log(
+            &world,
+            &obs(&recovering, &carcass, &[], &[]),
+            &config,
+            max_ticks,
+        );
+        assert_ne!(at_horizon.failure, Some(FailureMode::EnergyDeath));
     }
 
     #[test]

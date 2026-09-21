@@ -151,6 +151,9 @@ pub struct ConfigEval {
     /// from the decoded `(WorldParameters, founder mean)`. A **descriptor**, never
     /// summed into fitness nor binned on. 0 on the gated path.
     pub predicted_branching_distance: f32,
+    /// The early-stop cross-check read off this ensemble (#506): carried seeds
+    /// and their disagreements. Surfaced on the atlas, never a cell property.
+    pub early_stop_crosscheck: EarlyStopCrosscheck,
 }
 
 /// One seed lands in the coexisting regime when it is alive (no failure mode) and
@@ -224,6 +227,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
             coexistence_duration: 0.0,
             predicted_oscillation_distance: 0.0,
             predicted_branching_distance: 0.0,
+            early_stop_crosscheck: EarlyStopCrosscheck::default(),
         };
     }
     let rep = &result.run_results[idx[idx.len() / 2]];
@@ -245,6 +249,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
         // cannot compute them. Default 0 until then.
         predicted_oscillation_distance: 0.0,
         predicted_branching_distance: 0.0,
+        early_stop_crosscheck: EarlyStopCrosscheck::default(),
     }
 }
 
@@ -757,6 +762,59 @@ fn bifurcation_crosscheck(eval: &ConfigEval) -> Vec<BifurcationDisagreement> {
 /// three behaviour axes) paired with the dead frontier (keyed by cliff), plus the
 /// coverage / QD-score summary. This is the search's output — a map onto
 /// behaviour, not a ranked list.
+/// A surfaced early-stop cross-check disagreement (#506): a rollout an
+/// incremental dead-pool gate stopped as dead at `stop_tick` that, carried to
+/// the horizon, read alive on the full series — the gate fired on a collapse
+/// the world recovered from.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EarlyStopDisagreement {
+    /// The gate that stopped it (`energy_death` or `nutrient_lockup`).
+    pub gate: String,
+    /// The tick the gate fired on.
+    pub stop_tick: u64,
+    /// Which seed of the ensemble (its index) was carried.
+    pub seed_index: usize,
+    /// The fitness the carried run read at the horizon.
+    pub observed_fitness: f32,
+    /// The unit-cube point that disagreed.
+    pub unit: Vec<f64>,
+}
+
+/// The early-stop cross-check read off one ensemble: how many seeds were
+/// carried, and the disagreements among them.
+#[derive(Clone, Debug, Default)]
+pub struct EarlyStopCrosscheck {
+    pub carried: usize,
+    pub disagreements: Vec<EarlyStopDisagreement>,
+}
+
+/// Read the early-stop cross-check off an ensemble: every seed a dead-pool gate
+/// stopped and the carry took to the horizon counts toward `carried`; those
+/// alive on the full series are the disagreements. Seeds that were stopped but
+/// not carried, or never stopped, have nothing to compare.
+pub fn early_stop_crosscheck(result: &EnsembleResult, unit: &[f64]) -> EarlyStopCrosscheck {
+    let mut check = EarlyStopCrosscheck::default();
+    for (seed_index, run) in result.run_results.iter().enumerate() {
+        let Some(stop) = run.early_stop.as_ref() else {
+            continue;
+        };
+        if stop.horizon.is_none() {
+            continue;
+        }
+        check.carried += 1;
+        if let Some(horizon) = stop.disagreement() {
+            check.disagreements.push(EarlyStopDisagreement {
+                gate: Cliff::from_failure(&stop.failure).label().to_string(),
+                stop_tick: stop.tick,
+                seed_index,
+                observed_fitness: horizon.fitness,
+                unit: unit.to_vec(),
+            });
+        }
+    }
+    check
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct Atlas {
     pub cells: Vec<AtlasCell>,
@@ -784,6 +842,16 @@ pub struct Atlas {
     /// localises to the observable, not F's spectral reading. Reported, never
     /// swallowed; never summed into fitness nor a binning axis.
     pub bifurcation_disagreements: Vec<BifurcationDisagreement>,
+    /// Rollouts an incremental dead-pool gate stopped that were nonetheless
+    /// carried to the horizon for the early-stop cross-check (#506) — the
+    /// sample size behind `early_stop_disagreements`.
+    pub early_stop_crosschecks: usize,
+    /// Early-stop cross-check disagreements surfaced: rollouts the energy-death
+    /// or lockup gate stopped as dead that, carried to the horizon, read *alive*
+    /// on the full series. Each localises a gate that fired on a reversible
+    /// collapse. Reported, never swallowed; the run itself stayed a frontier
+    /// entry.
+    pub early_stop_disagreements: Vec<EarlyStopDisagreement>,
     /// Filled-cell count.
     pub coverage: usize,
     /// Total cells in the binning (`RESOLUTION³`).
@@ -1109,6 +1177,9 @@ pub fn refined_best_recipe(
         run_config: RunConfig {
             max_ticks: config.max_ticks,
             eval_config: EvalConfig::default(),
+            // Selection only: a refinement never surfaces a disagreement, so
+            // it never pays for a carry.
+            early_stop_crosscheck_fraction: 0.0,
         },
     };
     project_with_refinement(
@@ -1158,6 +1229,13 @@ pub struct QdConfig {
     /// gate and is surfaced on the atlas (viability.md, *Place in the validation
     /// triad*). 0 disables the cross-check (every gated config is taken on faith).
     pub prefilter_crosscheck_fraction: f32,
+    /// Fraction of rollouts an incremental dead-pool gate stopped (energy death,
+    /// nutrient lockup) that are carried to the horizon anyway and re-verdicted
+    /// on the full series, in `[0, 1]` — the prefilter cross-check's interlock
+    /// moved along the trajectory (#506; `RunConfig::early_stop_crosscheck_fraction`).
+    /// A stopped-dead / alive-at-`T` disagreement is surfaced on the atlas
+    /// (`early_stop_disagreements`), never swallowed. 0 disables the carry.
+    pub early_stop_crosscheck_fraction: f32,
     /// How many **carcass-directed seeds** ([`carcass_seed_unit`]) to inject at the
     /// head of the bootstrap batch. The nutrient-lockup cliff cannot be
     /// prefiltered, so the atlas's lockup layer is populated only by *running*
@@ -1180,6 +1258,7 @@ impl Default for QdConfig {
             sigma: 0.15,
             archive_learning_rate: 0.5,
             prefilter_crosscheck_fraction: 0.05,
+            early_stop_crosscheck_fraction: 0.05,
             carcass_seed_count: 2,
         }
     }
@@ -1195,6 +1274,7 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
         run_config: RunConfig {
             max_ticks: config.max_ticks,
             eval_config: EvalConfig::default(),
+            early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
         },
     };
 
@@ -1204,6 +1284,8 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
     let mut rollouts_skipped: usize = 0;
     let mut disagreements: Vec<PrefilterDisagreement> = Vec::new();
     let mut bif_disagreements: Vec<BifurcationDisagreement> = Vec::new();
+    let mut early_stop_crosschecks: usize = 0;
+    let mut early_stop_disagreements: Vec<EarlyStopDisagreement> = Vec::new();
 
     // Generation 0: a random bootstrap batch over the cube (the QD analogue of the
     // incumbent's LHS stage), drawn from the emitter's initial wide Gaussian — with
@@ -1257,6 +1339,12 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
                     let (wp, dist) = decode(unit, &config.ranges);
                     let result = run_ensemble(&wp, &dist, &ensemble_config, seed);
                     let mut eval = config_eval_from_ensemble(&result);
+                    // The early-stop cross-check rides on every rolled-out
+                    // ensemble: seeds a dead-pool gate stopped that the carry
+                    // took to the horizon are compared, and a stopped-dead /
+                    // alive-at-T disagreement is surfaced (#506). The verdict
+                    // the archive sees is unchanged by the carry.
+                    eval.early_stop_crosscheck = early_stop_crosscheck(&result, unit);
                     // Predicted bifurcation coordinates — a closed-form reading of
                     // the decoded `(WorldParameters, founder mean)`, negligible vs
                     // the rollout (~5–10 ms vs ~0.85 s). Surfaced only for live
@@ -1274,35 +1362,46 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
             .iter()
             .zip(gates.iter())
             .zip(evals.iter())
-            .map(|((unit, &(cliff, crosscheck)), eval)| match cliff {
-                Some(cliff) => {
-                    // Proven dead a priori: it lands on the dead frontier as an
-                    // a-priori death regardless of whether it was cross-checked.
-                    archive.insert_apriori(cliff);
-                    if crosscheck {
-                        // The cross-check rolled it out: if the rollout shows life,
-                        // the prefilter and the rollout disagree — surface it (a
-                        // mis-drawn gate), never swallow it.
-                        if let Some(ev) = eval {
-                            if let Some(d) = crosscheck_disagreement(cliff, ev, unit) {
-                                disagreements.push(d);
-                            }
-                        }
-                    } else {
-                        rollouts_skipped += 1;
-                    }
-                    // An a-priori death never improves a cell.
-                    0.0
+            .map(|((unit, &(cliff, crosscheck)), eval)| {
+                // Every rolled-out ensemble carries its early-stop cross-check
+                // (#506), whether the config was cleared or a prefilter
+                // cross-check: tally the carried seeds and surface the
+                // stopped-dead / alive-at-T disagreements, never swallowed.
+                if let Some(ev) = eval {
+                    early_stop_crosschecks += ev.early_stop_crosscheck.carried;
+                    early_stop_disagreements
+                        .extend(ev.early_stop_crosscheck.disagreements.iter().cloned());
                 }
-                None => {
-                    // A live config: cross-check its predicted distance-to-
-                    // bifurcation against the observed behaviour-axis boundaries
-                    // before placing it (the check is per-config, independent of
-                    // whether it wins its cell). Disagreements are surfaced with a
-                    // regime tag, never swallowed.
-                    let ev = eval.as_ref().expect("cleared config was rolled out");
-                    bif_disagreements.extend(bifurcation_crosscheck(ev));
-                    archive.insert(unit, ev)
+                match cliff {
+                    Some(cliff) => {
+                        // Proven dead a priori: it lands on the dead frontier as an
+                        // a-priori death regardless of whether it was cross-checked.
+                        archive.insert_apriori(cliff);
+                        if crosscheck {
+                            // The cross-check rolled it out: if the rollout shows life,
+                            // the prefilter and the rollout disagree — surface it (a
+                            // mis-drawn gate), never swallow it.
+                            if let Some(ev) = eval {
+                                if let Some(d) = crosscheck_disagreement(cliff, ev, unit) {
+                                    disagreements.push(d);
+                                }
+                            }
+                        } else {
+                            rollouts_skipped += 1;
+                        }
+                        // An a-priori death never improves a cell.
+                        0.0
+                    }
+                    None => {
+                        // A live config: cross-check its predicted distance-to-
+                        // bifurcation against the observed behaviour-axis boundaries
+                        // before placing it (the check is per-config, independent of
+                        // whether it wins its cell). Disagreements are surfaced with a
+                        // regime tag, never swallowed.
+                        let ev = eval.as_ref().expect("cleared config was rolled out");
+                        bif_disagreements.extend(bifurcation_crosscheck(ev));
+                        archive.insert(unit, ev)
+                    }
                 }
             })
             .collect();
@@ -1361,6 +1460,8 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
         rollouts_skipped,
         prefilter_disagreements: disagreements,
         bifurcation_disagreements: bif_disagreements,
+        early_stop_crosschecks,
+        early_stop_disagreements,
         cells,
     }
 }
@@ -1389,6 +1490,7 @@ mod tests {
             coexistence_duration: 0.0,
             predicted_oscillation_distance: 0.0,
             predicted_branching_distance: 0.0,
+            early_stop_crosscheck: EarlyStopCrosscheck::default(),
         }
     }
 
@@ -1455,6 +1557,8 @@ mod tests {
             rollouts_skipped: 0,
             prefilter_disagreements: Vec::new(),
             bifurcation_disagreements: Vec::new(),
+            early_stop_crosschecks: 0,
+            early_stop_disagreements: Vec::new(),
             cells,
         }
     }
@@ -1985,6 +2089,7 @@ mod tests {
             run_config: RunConfig {
                 max_ticks: 120,
                 eval_config: EvalConfig::default(),
+                early_stop_crosscheck_fraction: 0.0,
             },
         };
         let result = run_ensemble(&wp, &dist, &ensemble_config, 1000);
@@ -2208,6 +2313,7 @@ mod tests {
             failure,
             termination_tick: 0,
             breakdown: breakdown(clustering, coexistence_duration),
+            early_stop: None,
         }
     }
 
@@ -2233,6 +2339,55 @@ mod tests {
         };
         let eval = config_eval_from_ensemble(&result);
         assert_eq!(eval.coexistence_fraction, 3.0 / 8.0);
+    }
+
+    #[test]
+    fn early_stop_crosscheck_surfaces_exactly_the_stopped_dead_but_alive_at_horizon_seeds() {
+        // The carry-to-T cross-check (#506): of an ensemble where the energy-
+        // death gate stopped three seeds, one was carried and recovered by T
+        // (alive on the full series) — the one disagreement; one was carried
+        // and stayed dead — agreement; one was not carried at all — nothing
+        // to compare. Extinct and live seeds are never candidates.
+        use explorers_genesis::{EarlyStop, HorizonVerdict};
+        let stop = |horizon: Option<HorizonVerdict>| {
+            let mut r = run_result(0.0, Some(FailureMode::EnergyDeath), 0.0, 0.0);
+            r.termination_tick = 350;
+            r.early_stop = Some(EarlyStop {
+                failure: FailureMode::EnergyDeath,
+                tick: 350,
+                horizon,
+            });
+            r
+        };
+        let run_results = vec![
+            run_result(0.6, None, 0.4, 8.0),
+            run_result(0.0, Some(FailureMode::Extinction), 0.0, 0.0),
+            stop(Some(HorizonVerdict {
+                failure: None,
+                fitness: 0.42,
+                termination_tick: 2000,
+            })),
+            stop(Some(HorizonVerdict {
+                failure: Some(FailureMode::EnergyDeath),
+                fitness: 0.0,
+                termination_tick: 2000,
+            })),
+            stop(None),
+        ];
+        let result = EnsembleResult {
+            median_fitness: 0.0,
+            run_results,
+        };
+        let unit = vec![0.5; 3];
+        let check = early_stop_crosscheck(&result, &unit);
+        assert_eq!(check.carried, 2, "two seeds were carried to the horizon");
+        assert_eq!(check.disagreements.len(), 1);
+        let d = &check.disagreements[0];
+        assert_eq!(d.gate, "energy_death");
+        assert_eq!(d.stop_tick, 350);
+        assert_eq!(d.seed_index, 2);
+        assert_eq!(d.observed_fitness, 0.42);
+        assert_eq!(d.unit, unit);
     }
 
     #[test]

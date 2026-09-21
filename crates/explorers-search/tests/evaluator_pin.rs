@@ -17,6 +17,13 @@
 //! `clustering_strength`, `turnover_score`, `trophic_balance_score` and
 //! `carcass_locked_fraction` came out bit-identical to the ec79277 capture;
 //! only the two windowed reads and the fitness that sums them moved).
+//!
+//! Re-captured once more under #506, where the dead-pool gates fire
+//! incrementally and stop the rollout where it dies: the one pinned seed
+//! the lockup gate catches (cell 52 / seed 1001) now stops at tick 450 — the
+//! window boundary at which its series-so-far first reads locked — instead
+//! of running to 500. Its mode is unchanged and every seed that reaches the
+//! horizon is bit-identical; only that `ticks_survived` moved.
 
 use explorers_genesis::{EvalConfig, FailureMode, FitnessBreakdown, RunConfig, run_single};
 use explorers_search::search::{decode, default_ranges};
@@ -53,6 +60,7 @@ fn rollout(unit: &[f64], seed: u64) -> FitnessBreakdown {
     let config = RunConfig {
         max_ticks: HORIZON,
         eval_config: EvalConfig::default(),
+        early_stop_crosscheck_fraction: 0.0,
     };
     run_single(&params, &dist, &config, seed).breakdown
 }
@@ -239,7 +247,7 @@ fn golden() -> Vec<Pinned> {
             coexistence_duration: 0x0,
             turnover_score: 0x0,
             trophic_balance_score: 0x0,
-            ticks_survived: 500,
+            ticks_survived: 450,
             carcass_locked_fraction: 0x0,
             has_decomposer_guild: false,
             has_consumer_guild: false,
@@ -349,6 +357,7 @@ fn horizon_ensemble_sample_55() {
         run_config: RunConfig {
             max_ticks: 2000,
             eval_config: EvalConfig::default(),
+            early_stop_crosscheck_fraction: 0.0,
         },
     };
     let start = std::time::Instant::now();
