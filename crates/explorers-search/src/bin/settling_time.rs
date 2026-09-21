@@ -67,8 +67,7 @@
 //!       --horizon 600 --out target/settling-smoke.jsonl
 
 use std::collections::{BTreeMap, HashSet};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -79,17 +78,8 @@ use explorers_genesis_eval::{
 };
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{decode, default_ranges};
+use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
 use explorers_sim::{InitialDistribution, World, WorldParameters};
-
-#[derive(serde::Deserialize)]
-struct AtlasFile {
-    cells: Vec<AtlasCellUnit>,
-}
-
-#[derive(serde::Deserialize)]
-struct AtlasCellUnit {
-    unit: Vec<f64>,
-}
 
 /// First tick at which the living free-energy stock exceeds its tick-0 value.
 /// `free_energy[t]` is the stock at tick `t` (index 0 is the founder
@@ -136,48 +126,6 @@ fn tail_mean(producers: &[usize], band: Band) -> Option<f64> {
     }
     let tail = &producers[producers.len() - band.tail_ticks..];
     Some(tail.iter().sum::<usize>() as f64 / band.tail_ticks as f64)
-}
-
-/// The `(source, config_index)` keys already present in a JSON-lines output
-/// file — the configs a resumed sweep skips. A missing file is an empty set.
-fn done_configs(path: &Path) -> HashSet<(ConfigSource, usize)> {
-    #[derive(serde::Deserialize)]
-    struct Key {
-        source: ConfigSource,
-        config_index: usize,
-    }
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return HashSet::new();
-    };
-    contents
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|line| {
-            let key: Key = serde_json::from_str(line)
-                .unwrap_or_else(|e| panic!("{}: unparseable row {line:?}: {e}", path.display()));
-            (key.source, key.config_index)
-        })
-        .collect()
-}
-
-/// The configs this invocation runs, in the fixed sweep order (atlas cells
-/// first, then the LHS sample, each by index), minus `done`, restricted to
-/// `filter` when one is given, and capped at `limit`.
-fn plan_tasks(
-    atlas_len: usize,
-    sample_len: usize,
-    filter: Option<&HashSet<(ConfigSource, usize)>>,
-    done: &HashSet<(ConfigSource, usize)>,
-    limit: Option<usize>,
-) -> Vec<(ConfigSource, usize)> {
-    let atlas = (0..atlas_len).map(|i| (ConfigSource::Atlas, i));
-    let sample = (0..sample_len).map(|i| (ConfigSource::Sample, i));
-    atlas
-        .chain(sample)
-        .filter(|key| filter.is_none_or(|f| f.contains(key)))
-        .filter(|key| !done.contains(key))
-        .take(limit.unwrap_or(usize::MAX))
-        .collect()
 }
 
 /// The evaluator's terminal failure mode, as a stable label.
@@ -524,35 +472,6 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
     args
 }
 
-fn read_rows(path: &Path) -> Vec<ConfigRow> {
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    contents
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str(line)
-                .unwrap_or_else(|e| panic!("{}: unparseable row {line:?}: {e}", path.display()))
-        })
-        .collect()
-}
-
-fn append_row(path: &Path, row: &ConfigRow) {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).ok();
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
-    let mut line = serde_json::to_string(row).expect("serialise row");
-    line.push('\n');
-    file.write_all(line.as_bytes())
-        .unwrap_or_else(|e| panic!("append {}: {e}", path.display()));
-}
-
 /// One config: the seed ensemble run in parallel (rayon's indexed collect
 /// keeps seed order, so the row is bit-identical to the sequential map).
 fn run_config(
@@ -628,11 +547,7 @@ fn print_summary(summary: &Summary) {
 fn main() {
     let args = parse_args(std::env::args().skip(1));
     if !args.summary_only {
-        let contents = std::fs::read_to_string(&args.atlas)
-            .unwrap_or_else(|e| panic!("read {}: {e}", args.atlas.display()));
-        let atlas: AtlasFile = serde_json::from_str(&contents)
-            .unwrap_or_else(|e| panic!("parse {}: {e}", args.atlas.display()));
-        let atlas_units: Vec<Vec<f64>> = atlas.cells.into_iter().map(|c| c.unit).collect();
+        let atlas_units = read_atlas_units(&args.atlas);
         let sampled = sampled_units(default_ranges().len());
         let done = done_configs(&args.out);
         let tasks = plan_tasks(
@@ -697,7 +612,7 @@ fn main() {
             args.out.display()
         );
     }
-    let rows = read_rows(&args.out);
+    let rows: Vec<ConfigRow> = read_rows(&args.out);
     eprintln!(
         "settling_time: summarising {} rows from {}",
         rows.len(),
@@ -709,6 +624,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use explorers_search::sweep::AtlasFile;
 
     #[test]
     fn args_default_to_the_full_sweep_and_accept_each_flag() {

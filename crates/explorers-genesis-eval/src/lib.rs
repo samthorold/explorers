@@ -99,6 +99,13 @@ impl FitnessBreakdown {
     }
 }
 
+/// The smallest living roster the roster gates (monoculture, generalist
+/// dominance) read: below it a population is too small to carry a trait
+/// distribution worth classifying. Also the population floor of "visibly
+/// alive at the horizon" in the zero-false-positive checks a gate must clear
+/// before promotion (viability.md).
+pub const ROSTER_FLOOR: usize = 20;
+
 #[derive(Clone, Debug)]
 pub struct EvalConfig {
     pub max_population: usize,
@@ -324,7 +331,7 @@ pub fn evaluate_from_log(
         return zero_breakdown(failure);
     }
 
-    if ticks_survived > grace_ticks && trait_vectors.len() >= 20 {
+    if ticks_survived > grace_ticks && trait_vectors.len() >= ROSTER_FLOOR {
         if is_monoculture(&trait_vectors, config.clustering_threshold) {
             return zero_breakdown(FailureMode::Monoculture);
         }
@@ -993,6 +1000,60 @@ pub fn is_free_energy_dead(free_energy_per_tick: &[f32], window: usize) -> bool 
     window_peak < peak * COLLAPSE_FRACTION
 }
 
+/// The fraction of the config's [`sustainable_stock`] below which the
+/// history-free energy-death read ([`is_free_energy_dead_sustainable`]) calls
+/// the living stock dead: an order of magnitude under the reference, the
+/// same tenth the history-peak stand-in reads (`COLLAPSE_FRACTION`).
+pub const SUSTAINABLE_FRACTION: f32 = 0.1;
+
+/// The world's **sustainable stock** — the energy form of viability's solar
+/// ceiling (viability.md, *Bound — sustained population*), a property of the
+/// config alone.
+///
+/// Derivation from the committed rules. Solar flux is the sole external
+/// energy source and is capped per tick at `P_max = F·m²`, one flux per
+/// light-competition tile, `m = ⌊√2·L/r⌋ + 1`; every survivor is charged at
+/// least the base metabolic rate `B` every tick (flow 8). So the long-run
+/// mean survivor count is bounded by `N̄_max = F·m²/B = π_F·m²`. A survivor of
+/// a tick paid `≥ B` from its own stock and ended the tick with reserve still
+/// positive, so a body at the ceiling holds at least one tick of base
+/// metabolism, `ε = B·τ` — the energy unit of the dimensionless groups. The
+/// stock of a population at the ceiling is therefore scaled by body
+/// maintenance as `N̄_max · ε = F·m²·τ`: one tick of the solar cap, in energy
+/// (`τ = 1`). Independent of `B` — a cheaper body means more bodies, each
+/// holding less — and of every searched coefficient but `F`, `L`, `r`.
+/// Requires `r > 0`, which the search box guarantees.
+pub fn sustainable_stock(params: &explorers_sim::WorldParameters) -> f32 {
+    let l = f64::from(params.world_extent);
+    let r = f64::from(params.light_competition_radius);
+    let f = f64::from(params.solar_flux_magnitude);
+    let m = (std::f64::consts::SQRT_2 * l / r).floor() + 1.0;
+    (f * m * m) as f32
+}
+
+/// Energy death read against the sustainable stock (expected-properties.md,
+/// *Energy death — How it is read*): the trailing `window` peak of the living
+/// free-energy stock sits below [`SUSTAINABLE_FRACTION`] of the config's
+/// [`sustainable_stock`]. `post_grace` is the stock series from the grace on
+/// (the founder provisioning is never consulted); the reference is a property
+/// of the config, not of the run's own history, so the read says the same
+/// thing at every horizon and for every bloom shape. Not flagged while the
+/// series is shorter than the window.
+pub fn is_free_energy_dead_sustainable(
+    post_grace: &[f32],
+    window: usize,
+    sustainable_stock: f32,
+) -> bool {
+    if post_grace.len() < window || window == 0 {
+        return false;
+    }
+    let window_peak = post_grace[post_grace.len() - window..]
+        .iter()
+        .copied()
+        .fold(0.0_f32, f32::max);
+    window_peak < sustainable_stock * SUSTAINABLE_FRACTION
+}
+
 /// Whether nutrient is locked irreversibly in the dead pool — the pathology a
 /// world without viable decomposers exhibits (world-rules.md: "a world without
 /// decomposers accumulates resources in the dead pool until the living system
@@ -1557,6 +1618,86 @@ mod tests {
     fn free_energy_not_dead_when_shorter_than_window() {
         let stock = vec![0.0, 0.0];
         assert!(!is_free_energy_dead(&stock, 5));
+    }
+
+    /// The viable baseline of the search box: `F = 10`, `L = 100`, `r = 8`
+    /// (`m = 18`), `B = 0.3`.
+    fn baseline_params() -> explorers_sim::WorldParameters {
+        let mut p = test_world_params();
+        p.solar_flux_magnitude = 10.0;
+        p.world_extent = 100.0;
+        p.light_competition_radius = 8.0;
+        p.base_metabolic_rate = 0.3;
+        p
+    }
+
+    #[test]
+    fn sustainable_stock_is_one_tick_of_base_metabolism_for_the_ceiling_population() {
+        // N̄_max = F·m²/B = 10·324/0.3 bodies; each holds one tick of `B`,
+        // so the stock is F·m² = 3240 E — independent of `B`.
+        let stock = sustainable_stock(&baseline_params());
+        assert!((stock - 3240.0).abs() < 1e-3, "{stock}");
+        let mut cheaper = baseline_params();
+        cheaper.base_metabolic_rate = 0.01;
+        assert_eq!(sustainable_stock(&cheaper), stock);
+        // A radius wider than the world tiles to one cell: F alone.
+        let mut one_cell = baseline_params();
+        one_cell.light_competition_radius = 1000.0;
+        assert!((sustainable_stock(&one_cell) - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sustainable_read_alive_when_trailing_window_holds_the_ceiling_stock() {
+        let ceiling = sustainable_stock(&baseline_params());
+        let stock = vec![ceiling; 8];
+        assert!(!is_free_energy_dead_sustainable(&stock, 4, ceiling));
+    }
+
+    #[test]
+    fn sustainable_read_dead_when_trailing_window_peaks_at_five_percent_of_the_ceiling() {
+        let ceiling = sustainable_stock(&baseline_params());
+        // A bloom to the ceiling earlier in the run does not rescue a window
+        // that peaks at 5 %: the reference is the config's, not the peak's.
+        let mut stock = vec![ceiling; 4];
+        stock.extend([
+            0.05 * ceiling,
+            0.04 * ceiling,
+            0.05 * ceiling,
+            0.03 * ceiling,
+        ]);
+        assert!(is_free_energy_dead_sustainable(&stock, 4, ceiling));
+        // Shorter than the window: not consulted.
+        assert!(!is_free_energy_dead_sustainable(&stock[..3], 4, ceiling));
+    }
+
+    #[test]
+    fn sustainable_read_never_consults_the_founder_stock_inside_the_grace() {
+        // A founder cohort provisioned at 1 % of the ceiling, then a world
+        // that climbs to it: the horizon verdict reads post-grace only, so
+        // the tick-0 stock is not on the series the read sees, and a run
+        // still inside the grace has no read at all.
+        let params = baseline_params();
+        let ceiling = sustainable_stock(&params);
+        let founder = 0.01 * ceiling;
+        let mut series = vec![founder; 20];
+        series.extend(vec![ceiling; 40]);
+        let grace = 20usize;
+        let window = 10usize;
+        assert!(!is_free_energy_dead_sustainable(
+            &series[grace..],
+            window,
+            ceiling
+        ));
+        // Inside the grace the caller hands the read nothing.
+        let inside: &[f32] = series.get(grace..5).unwrap_or(&[]);
+        assert!(!is_free_energy_dead_sustainable(inside, window, ceiling));
+        // And the same founder stock, read with no grace at all, would be
+        // consulted — the grace is what keeps the provisioning out.
+        assert!(is_free_energy_dead_sustainable(
+            &series[..grace],
+            window,
+            ceiling
+        ));
     }
 
     #[test]

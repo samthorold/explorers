@@ -7,3 +7,4 @@ pub mod prefilter;
 pub mod qd;
 pub mod search;
 pub mod sobol;
+pub mod sweep;
