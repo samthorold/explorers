@@ -1,5 +1,6 @@
 //! The resumable JSON-lines sweep shape the research bins share
-//! (`settling_time`, `energy_death_check`): one row per config appended to an
+//! (`settling_time`, `energy_death_check`, `energy_bound_check`,
+//! `permanence_crosscheck`): one row per config appended to an
 //! output file as soon as it is complete, configs already present skipped on
 //! start, a fixed sweep order (atlas cells by index, then the LHS sample by
 //! index) and a `--limit` cap — so a sweep driven as a loop of short
