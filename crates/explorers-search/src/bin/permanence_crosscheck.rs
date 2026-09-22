@@ -50,36 +50,54 @@
 //! decoded via `decode` over `default_ranges`, plus the seed-421 LHS draw of 200
 //! configs `role_emergence.rs` uses, so `sample:i` coincides across instruments.
 //! Seeds are a fixed contiguous block per config. Each (config, seed) run is
-//! independent, so the rayon collect is order-stable and the artifact is
+//! independent, so the rayon collect is order-stable and a row is
 //! byte-identical across runs. `World::new` floors founder traits at zero
 //! (#444), so no run can lose a compartment to a negative-trait cull and the
 //! instrument carries no #444 tag; the tick-1 population it records is the
 //! peak-relative death threshold's doing, not a founder artefact.
 //!
-//! ## Output
+//! The rollout stops only on extinction and explosion and otherwise carries
+//! to the horizon, where the evaluator's full-series classification
+//! (`evaluate_from_log`) is the observed verdict — permanence is a statement
+//! about the state at `T`, so an incremental gate's early stop is not taken
+//! as the verdict here (the carry-to-`T` shape of #506).
 //!
-//! `target/permanence-crosscheck.json` (gitignored; not committed) plus a stdout
-//! summary. Subset selectors: `PERMANENCE_CROSSCHECK_CONFIGS=atlas:0,sample:12`
-//! and `PERMANENCE_CROSSCHECK_SEEDS=2` (same grammar as `role_emergence`).
+//! ## Resumable by construction
 //!
-//! Run with:
-//!   cargo run --release -p explorers-search --bin permanence_crosscheck
-//! (optional first arg: path to the atlas JSON; default `atlas.json`)
+//! One JSON line per config appended to `--out` (default
+//! `target/permanence-crosscheck.jsonl`); configs already present are
+//! skipped; `--limit N` runs at most `N` further configs. Fixed order and
+//! seed block, so a loop of short foreground calls produces a file
+//! byte-identical to one uninterrupted run (`explorers_search::sweep`).
+//! Subset selectors: `--configs atlas:0,sample:12` and `--seeds 2`.
 //!
-//! Full run: 256 configs × 8 seeds × the search horizon (`SearchConfig::max_ticks`,
-//! 2000 ticks since #507) — the `energy_bound_check` workload; the 500-tick run
-//! was ~10 minutes, so budget accordingly.
+//! A (config, seed) rollout has a wall-clock budget (`--run-timeout-secs`,
+//! default 300): a knife-edge world that costs seconds per tick stops where
+//! it is and is recorded as mode `timeout` — neither a collapse nor a
+//! persistence. A config's ensemble verdict is read over its finished seeds;
+//! a config with no finished seed is `unobserved` and enters no confusion
+//! matrix.
+//!
+//! ## Running
+//!
+//!   cargo build --release -p explorers-search --bin permanence_crosscheck
+//!   ./target/release/permanence_crosscheck --limit 5     # repeat until 0 run
+//!   ./target/release/permanence_crosscheck --summary
+//!
+//! Full run: 282 configs × 8 seeds × the search horizon (`SearchConfig::max_ticks`,
+//! 2000 ticks since #507); hours of sim time, hence the chunked shape.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 
 use explorers_genesis::{EvalConfig, FailureMode};
-use explorers_genesis_eval::{RolloutObservations, evaluate_from_log};
+use explorers_genesis_eval::{EVALUATOR_EVENT_KINDS, RolloutObservations, evaluate_from_log};
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{SearchConfig, decode, default_ranges};
+use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 
 /// Reference body mass for the mean-field reduction (as in the prototype).
@@ -141,7 +159,7 @@ fn biomass_conversion(traits: &TraitVector, p: &WorldParameters) -> f64 {
 }
 
 /// A1's lumped coefficients (copied from `permanence_prototype::Map`; `r_p` signed).
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct A1Map {
     /// Producer intrinsic per-tick rate `χ_P·γ·(F − B_P)`, signed (#466: both
     /// of `κ_P`'s branches become biomass; `χ_P` is the conversion).
@@ -203,7 +221,7 @@ impl A1Map {
 }
 
 /// A closed-form verdict on a config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum Prediction {
     Permanent,
@@ -214,7 +232,7 @@ enum Prediction {
 }
 
 /// A1 evaluated at the representative clusters.
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct A1Verdict {
     prediction: Prediction,
     /// Clause (1): `r_P > 0` ⟺ `ρ > 1` — the extinction gate `F ≤ B`, sharpened.
@@ -270,7 +288,7 @@ const REFERENCE_IOTA: f64 = 1.0;
 
 /// A2 evaluated at the representative clusters and the reference lumping
 /// (`ι = 1`, `q = ν = θ_P`, `μ_P = 0.02`, producer carcasses so `e_C = e`).
-#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct A2Verdict {
     /// (i) `min(r_P, α_P/θ_P) > μ_P`: the producer invades the virgin pool.
     producer_invades_virgin: bool,
@@ -398,11 +416,13 @@ fn is_collapse(mode: &str) -> bool {
 }
 
 /// One (config × seed) run.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct SeedOutcome {
     seed: u64,
-    /// The evaluator's terminal classification (`evaluate_from_log`).
-    mode: &'static str,
+    /// The evaluator's terminal classification (`evaluate_from_log`), or
+    /// `"timeout"` when the wall-clock budget ran out (neither a collapse nor
+    /// a persistence: the seed is left out of the ensemble read).
+    mode: String,
     collapsed: bool,
     termination_tick: u64,
     founders: usize,
@@ -421,7 +441,7 @@ struct SeedOutcome {
     first_tick_without_producers: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum Observed {
     /// Every seed collapsed.
@@ -430,18 +450,23 @@ enum Observed {
     Mixed,
     /// No seed collapsed.
     Persist,
+    /// No seed finished (every seed timed out): nothing was observed.
+    Unobserved,
 }
 
 /// The ensemble reduced to one observed outcome, with the facts the fault
 /// hypotheses read. `Collapse` / `Persist` are the unanimous reads
 /// (`scenarios/verdicts.md`; at `n = 8` unanimity bounds the per-seed rate at
 /// `p ≥ 0.63`, #434); anything else is `Mixed`.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Aggregate {
+    /// Seeds that finished (the ensemble the verdict is read over).
     n: usize,
+    /// Seeds stopped by the wall-clock guard, left out of every field below.
+    timed_out: usize,
     collapsed: usize,
     collapse_fraction: f64,
-    modal_mode: &'static str,
+    modal_mode: String,
     modal_count: usize,
     observed: Observed,
     /// Persisting seeds with at least one consumer alive at the horizon.
@@ -463,14 +488,16 @@ fn median_u64(values: &mut [u64]) -> Option<u64> {
     Some(values[values.len() / 2])
 }
 
-fn aggregate(seeds: &[SeedOutcome]) -> Aggregate {
+fn aggregate(all_seeds: &[SeedOutcome]) -> Aggregate {
+    let timed_out = all_seeds.iter().filter(|s| s.mode == "timeout").count();
+    let seeds: Vec<&SeedOutcome> = all_seeds.iter().filter(|s| s.mode != "timeout").collect();
     let n = seeds.len();
     let collapsed = seeds.iter().filter(|s| s.collapsed).count();
-    let mut counts: Vec<(&'static str, usize)> = Vec::new();
-    for s in seeds {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for s in &seeds {
         match counts.iter_mut().find(|(m, _)| *m == s.mode) {
             Some((_, c)) => *c += 1,
-            None => counts.push((s.mode, 1)),
+            None => counts.push((s.mode.as_str(), 1)),
         }
     }
     // Modal mode; ties broken by first appearance (seed order) for stability.
@@ -479,7 +506,9 @@ fn aggregate(seeds: &[SeedOutcome]) -> Aggregate {
             ("none", 0),
             |best, cur| if cur.1 > best.1 { cur } else { best },
         );
-    let observed = if n == 0 || collapsed == n {
+    let observed = if n == 0 {
+        Observed::Unobserved
+    } else if collapsed == n {
         Observed::Collapse
     } else if collapsed == 0 {
         Observed::Persist
@@ -508,13 +537,14 @@ fn aggregate(seeds: &[SeedOutcome]) -> Aggregate {
     let mut founders: Vec<u64> = seeds.iter().map(|s| s.founders as u64).collect();
     Aggregate {
         n,
+        timed_out,
         collapsed,
         collapse_fraction: if n == 0 {
             0.0
         } else {
             collapsed as f64 / n as f64
         },
-        modal_mode,
+        modal_mode: modal_mode.to_string(),
         modal_count,
         observed,
         persisting_seeds_with_consumers,
@@ -527,7 +557,7 @@ fn aggregate(seeds: &[SeedOutcome]) -> Aggregate {
 }
 
 /// How a prediction and an observation relate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum Agreement {
     Agree,
@@ -545,10 +575,13 @@ enum Agreement {
     ProducerOnly,
     /// The prediction was undecided; nothing to agree or disagree with.
     Undecided,
+    /// No seed finished (every seed timed out); nothing was observed.
+    Unobserved,
 }
 
 fn classify(prediction: Prediction, a1: &A1Verdict, agg: &Aggregate) -> Agreement {
     match (prediction, agg.observed) {
+        (_, Observed::Unobserved) => Agreement::Unobserved,
         (Prediction::Undecided, _) => Agreement::Undecided,
         (Prediction::Permanent, Observed::Collapse) => Agreement::FalsePositive,
         (Prediction::Permanent, Observed::Mixed) => Agreement::FalsePositiveMixed,
@@ -579,7 +612,10 @@ fn fault_hypothesis(
     single_centroid: bool,
 ) -> Option<String> {
     match agreement {
-        Agreement::Agree | Agreement::ProducerOnly | Agreement::Undecided => None,
+        Agreement::Agree
+        | Agreement::ProducerOnly
+        | Agreement::Undecided
+        | Agreement::Unobserved => None,
         Agreement::FalsePositive | Agreement::FalsePositiveMixed => Some(
             if agg.median_population_after_tick1_on_collapse == Some(0) {
                 "reduction: every founder dies on tick 1 whatever its trait sign - a first-tick per-body floor (the peak-relative death threshold, endowment, embodiment) the biomass map has no coordinate for".to_string()
@@ -659,12 +695,15 @@ const PREDICTIONS: [Prediction; 3] = [
 const OBSERVATIONS: [Observed; 3] = [Observed::Collapse, Observed::Mixed, Observed::Persist];
 
 /// Confusion matrix, rows = predicted (permanent, not-permanent, undecided),
-/// columns = observed (collapse, mixed, persist).
+/// columns = observed (collapse, mixed, persist). Unobserved cells (every
+/// seed timed out) are not in it.
 fn confusion(cells: &[(Prediction, Observed)]) -> [[usize; 3]; 3] {
     let mut m = [[0usize; 3]; 3];
     for (p, o) in cells {
         let i = PREDICTIONS.iter().position(|x| x == p).unwrap();
-        let j = OBSERVATIONS.iter().position(|x| x == o).unwrap();
+        let Some(j) = OBSERVATIONS.iter().position(|x| x == o) else {
+            continue;
+        };
         m[i][j] += 1;
     }
     m
@@ -687,7 +726,7 @@ fn false_positives(cells: &[(Prediction, Observed)]) -> FalsePositives {
     let rate = |k: usize, n: usize| if n == 0 { 0.0 } else { k as f64 / n as f64 };
     let permanent: Vec<&(Prediction, Observed)> = cells
         .iter()
-        .filter(|(p, _)| *p == Prediction::Permanent)
+        .filter(|(p, o)| *p == Prediction::Permanent && *o != Observed::Unobserved)
         .collect();
     let strict = permanent
         .iter()
@@ -737,9 +776,16 @@ fn run_seed(
     dist: &InitialDistribution,
     seed: u64,
     horizon: u64,
+    run_timeout: Duration,
 ) -> SeedOutcome {
     let eval_config = EvalConfig::default();
+    let started = Instant::now();
+    let mut timed_out = false;
     let mut world = World::new(params.clone(), dist.clone(), seed);
+    // As `run_single`: the log keeps only what the evaluator reads and is
+    // dropped as soon as `observe` has read it, so a dense world at the
+    // settled horizon fits in memory (observer-side — no trajectory changes).
+    world.retain_event_kinds(EVALUATOR_EVENT_KINDS);
     let founders = world.agents().len();
     let mut observations = RolloutObservations::with_capacity(horizon as usize);
     let mut peak_population = founders;
@@ -751,6 +797,7 @@ fn run_seed(
     for _ in 0..horizon {
         world.step();
         observations.observe(&world, eval_config.coexistence_sample_interval);
+        world.compact_event_log_before(observations.consumed_events());
         let (producers, consumers) = compartments(&world);
         if world.tick() == 1 {
             population_after_tick1 = world.agents().len();
@@ -770,14 +817,24 @@ fn run_seed(
         if world.agents().len() > eval_config.max_population {
             break;
         }
+        if started.elapsed() > run_timeout {
+            timed_out = true;
+            break;
+        }
     }
-    let breakdown = evaluate_from_log(&world, &observations, &eval_config, horizon);
-    let mode = mode_label(&breakdown.failure);
+    let (mode, decomposer_guild) = if timed_out {
+        ("timeout", false)
+    } else {
+        let breakdown = evaluate_from_log(&world, &observations, &eval_config, horizon);
+        (
+            mode_label(&breakdown.failure),
+            breakdown.has_decomposer_guild,
+        )
+    };
     let (terminal_producers, terminal_consumers) = compartments(&world);
-    let decomposer_guild = breakdown.has_decomposer_guild;
     SeedOutcome {
         seed,
-        mode,
+        mode: mode.to_string(),
         collapsed: is_collapse(mode),
         termination_tick: world.tick(),
         founders,
@@ -794,10 +851,11 @@ fn run_seed(
 }
 
 /// One config: the closed-form predictions, the ensemble, and how they relate.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ConfigRecord {
     source: ConfigSource,
     config_index: usize,
+    horizon: u64,
     initial_cluster_count: u32,
     initial_population_size: u32,
     /// The prediction was evaluated on distinct producer and consumer
@@ -823,6 +881,7 @@ fn evaluate_config(
     unit: &[f64],
     seeds: u64,
     horizon: u64,
+    run_timeout: Duration,
 ) -> ConfigRecord {
     let ranges = default_ranges();
     let (params, dist) = decode(unit, &ranges);
@@ -837,7 +896,7 @@ fn evaluate_config(
     // the record is bit-identical to the sequential map (the #350 contract).
     let outcomes: Vec<SeedOutcome> = (0..seeds)
         .into_par_iter()
-        .map(|s| run_seed(&params, &dist, SEED_BASE + s, horizon))
+        .map(|s| run_seed(&params, &dist, SEED_BASE + s, horizon, run_timeout))
         .collect();
     let aggregate = aggregate(&outcomes);
     let agreement_a1 = classify(predicted_a1, &a1, &aggregate);
@@ -845,6 +904,7 @@ fn evaluate_config(
     ConfigRecord {
         source,
         config_index,
+        horizon,
         initial_cluster_count: dist.initial_cluster_count,
         initial_population_size: params.initial_population_size,
         has_consumer_compartment,
@@ -882,7 +942,7 @@ struct Disagreement {
     agreement: Agreement,
     collapsed: usize,
     n: usize,
-    modal_mode: &'static str,
+    modal_mode: String,
     rho: f64,
     invasion_ratio: f64,
     lockup_escape_ratio: f64,
@@ -900,6 +960,8 @@ struct Column {
     false_negative: usize,
     false_negative_mixed: usize,
     undecided: usize,
+    /// Configs on which every seed timed out: in no confusion matrix.
+    unobserved: usize,
     disagreements: Vec<Disagreement>,
 }
 
@@ -936,7 +998,7 @@ fn column(records: &[ConfigRecord], a1_only: bool) -> Column {
                 agreement,
                 collapsed: r.aggregate.collapsed,
                 n: r.aggregate.n,
-                modal_mode: r.aggregate.modal_mode,
+                modal_mode: r.aggregate.modal_mode.clone(),
                 rho: r.a1.rho,
                 invasion_ratio: r.a1.invasion_ratio,
                 lockup_escape_ratio: r.a2.lockup_escape_ratio,
@@ -952,136 +1014,194 @@ fn column(records: &[ConfigRecord], a1_only: bool) -> Column {
         false_negative: count(Agreement::FalseNegative),
         false_negative_mixed: count(Agreement::FalseNegativeMixed),
         undecided: count(Agreement::Undecided),
+        unobserved: count(Agreement::Unobserved),
         disagreements,
     }
 }
 
 #[derive(serde::Serialize)]
 struct Summary {
-    horizon: u64,
-    n_seeds: u64,
+    /// The horizon(s) the rows were run at (one, unless files were mixed).
+    horizons: Vec<u64>,
     atlas_configs: usize,
     sampled_configs: usize,
     configs_run: usize,
     total_runs: usize,
     runs_collapsed: usize,
+    /// Runs stopped by the wall-clock guard: neither collapsed nor persisted,
+    /// left out of every ensemble read.
+    runs_timed_out: usize,
     a1: Column,
     a2: Column,
 }
 
-#[derive(serde::Serialize)]
-struct Artifact {
-    summary: Summary,
-    configs: Vec<ConfigRecord>,
-}
-
-#[derive(serde::Deserialize)]
-struct AtlasFile {
-    cells: Vec<AtlasCellUnit>,
-}
-
-#[derive(serde::Deserialize)]
-struct AtlasCellUnit {
-    unit: Vec<f64>,
-}
-
-/// Parse `PERMANENCE_CROSSCHECK_CONFIGS` (`atlas:0,sample:12`); `None` when unset (the full run).
-fn parse_config_filter() -> Option<HashSet<(ConfigSource, usize)>> {
-    std::env::var("PERMANENCE_CROSSCHECK_CONFIGS")
-        .ok()
-        .map(|raw| parse_selector(&raw, "PERMANENCE_CROSSCHECK_CONFIGS", None))
-}
-
-fn main() {
-    let atlas_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "atlas.json".to_string());
-    let ranges = default_ranges();
-    let horizon = SearchConfig::default().max_ticks;
-
-    let atlas_units: Vec<Vec<f64>> = {
-        let contents = std::fs::read_to_string(&atlas_path)
-            .unwrap_or_else(|e| panic!("read {atlas_path}: {e}"));
-        let atlas: AtlasFile =
-            serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {atlas_path}: {e}"));
-        atlas.cells.into_iter().map(|c| c.unit).collect()
-    };
-    let sampled_units = sampled_units(ranges.len());
-
-    let config_filter = parse_config_filter();
-    let seeds = std::env::var("PERMANENCE_CROSSCHECK_SEEDS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .map_or(N_SEEDS, |n| n.clamp(1, N_SEEDS));
-    eprintln!(
-        "permanence_crosscheck: {} atlas + {} sampled configs × {seeds} seeds, horizon {horizon} ticks",
-        atlas_units.len(),
-        sampled_units.len(),
-    );
-    if config_filter.is_some() || seeds != N_SEEDS {
-        eprintln!(
-            "permanence_crosscheck: SUBSET MODE — configs={:?}, seeds={seeds} (summary is partial)",
-            config_filter.as_ref().map(|f| f.len())
-        );
-    }
-    let selected = |source: ConfigSource, idx: usize| -> bool {
-        config_filter
-            .as_ref()
-            .is_none_or(|f| f.contains(&(source, idx)))
-    };
-    let mut tasks: Vec<(ConfigSource, usize, &Vec<f64>)> = Vec::new();
-    for (source, units) in [
-        (ConfigSource::Atlas, &atlas_units),
-        (ConfigSource::Sample, &sampled_units),
-    ] {
-        for (i, unit) in units.iter().enumerate() {
-            if selected(source, i) {
-                tasks.push((source, i, unit));
-            }
-        }
-    }
-
-    let total = tasks.len();
-    let done = AtomicUsize::new(0);
-    let start = Instant::now();
-    let log_step = (total / 20).max(1);
-    // One task per config; both this collect and the per-seed one inside are
-    // order-stable, so the artifact is byte-identical across runs.
-    let records: Vec<ConfigRecord> = tasks
-        .par_iter()
-        .map(|(source, idx, unit)| {
-            let record = evaluate_config(*source, *idx, unit, seeds, horizon);
-            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if n.is_multiple_of(log_step) || n == total {
-                eprintln!(
-                    "  progress: {n}/{total} configs done ({:.0}s elapsed)",
-                    start.elapsed().as_secs_f64()
-                );
-            }
-            record
-        })
-        .collect();
-    eprintln!(
-        "permanence_crosscheck: all {total} configs complete in {:.0}s",
-        start.elapsed().as_secs_f64()
-    );
-
-    let summary = Summary {
-        horizon,
-        n_seeds: seeds,
-        atlas_configs: atlas_units.len(),
-        sampled_configs: sampled_units.len(),
+fn summarise(records: &[ConfigRecord]) -> Summary {
+    let mut horizons: Vec<u64> = records.iter().map(|r| r.horizon).collect();
+    horizons.sort_unstable();
+    horizons.dedup();
+    Summary {
+        horizons,
+        atlas_configs: records
+            .iter()
+            .filter(|r| r.source == ConfigSource::Atlas)
+            .count(),
+        sampled_configs: records
+            .iter()
+            .filter(|r| r.source == ConfigSource::Sample)
+            .count(),
         configs_run: records.len(),
         total_runs: records.iter().map(|r| r.seeds.len()).sum(),
         runs_collapsed: records.iter().map(|r| r.aggregate.collapsed).sum(),
-        a1: column(&records, true),
-        a2: column(&records, false),
+        runs_timed_out: records.iter().map(|r| r.aggregate.timed_out).sum(),
+        a1: column(records, true),
+        a2: column(records, false),
+    }
+}
+
+/// Command line: `--limit N`, `--horizon T`, `--out PATH`, `--atlas PATH`,
+/// `--seeds N` (1..=8), `--configs atlas:0,sample:12`,
+/// `--run-timeout-secs N`, `--summary`.
+#[derive(Clone, Debug, PartialEq)]
+struct Args {
+    limit: Option<usize>,
+    horizon: u64,
+    out: PathBuf,
+    atlas: PathBuf,
+    seeds: u64,
+    configs: Option<HashSet<(ConfigSource, usize)>>,
+    run_timeout: Duration,
+    summary_only: bool,
+}
+
+const DEFAULT_RUN_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_OUT: &str = "target/permanence-crosscheck.jsonl";
+
+fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
+    let mut args = Args {
+        limit: None,
+        horizon: SearchConfig::default().max_ticks,
+        out: PathBuf::from(DEFAULT_OUT),
+        atlas: PathBuf::from("atlas.json"),
+        seeds: N_SEEDS,
+        configs: None,
+        run_timeout: Duration::from_secs(DEFAULT_RUN_TIMEOUT_SECS),
+        summary_only: false,
     };
-    print_summary(&summary);
-    write_artifact(&Artifact {
-        summary,
-        configs: records,
-    });
+    let mut it = argv.into_iter();
+    let value = |flag: &str, it: &mut I::IntoIter| -> String {
+        it.next()
+            .unwrap_or_else(|| panic!("permanence_crosscheck: {flag} needs a value"))
+    };
+    let number = |flag: &str, raw: &str| -> u64 {
+        raw.parse()
+            .unwrap_or_else(|_| panic!("permanence_crosscheck: {flag} {raw:?} is not an integer"))
+    };
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--limit" => args.limit = Some(number("--limit", &value("--limit", &mut it)) as usize),
+            "--horizon" => {
+                args.horizon = number("--horizon", &value("--horizon", &mut it));
+                assert!(
+                    args.horizon > 0,
+                    "permanence_crosscheck: --horizon must be positive"
+                );
+            }
+            "--out" => args.out = PathBuf::from(value("--out", &mut it)),
+            "--atlas" => args.atlas = PathBuf::from(value("--atlas", &mut it)),
+            "--seeds" => {
+                args.seeds = number("--seeds", &value("--seeds", &mut it)).clamp(1, N_SEEDS)
+            }
+            "--configs" => {
+                args.configs = Some(parse_selector(
+                    &value("--configs", &mut it),
+                    "--configs",
+                    None,
+                ))
+            }
+            "--run-timeout-secs" => {
+                args.run_timeout = Duration::from_secs(number(
+                    "--run-timeout-secs",
+                    &value("--run-timeout-secs", &mut it),
+                ))
+            }
+            "--summary" => args.summary_only = true,
+            other => panic!("permanence_crosscheck: unknown argument {other:?}"),
+        }
+    }
+    args
+}
+
+/// Run the configs not yet in `args.out` (in sweep order, up to `args.limit`),
+/// appending one row each as it completes. Returns how many were run.
+fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
+    let done = done_configs(&args.out);
+    let tasks = plan_tasks(
+        atlas_units.len(),
+        sampled.len(),
+        args.configs.as_ref(),
+        &done,
+        args.limit,
+    );
+    eprintln!(
+        "permanence_crosscheck: {} atlas + {} sampled configs × {} seeds, horizon {} ticks; {} done in {}, running {} now",
+        atlas_units.len(),
+        sampled.len(),
+        args.seeds,
+        args.horizon,
+        done.len(),
+        args.out.display(),
+        tasks.len()
+    );
+    let start = Instant::now();
+    let total = tasks.len();
+    for (n, (source, idx)) in tasks.iter().copied().enumerate() {
+        let unit = match source {
+            ConfigSource::Atlas => &atlas_units[idx],
+            ConfigSource::Sample => &sampled[idx],
+        };
+        let record = evaluate_config(
+            source,
+            idx,
+            unit,
+            args.seeds,
+            args.horizon,
+            args.run_timeout,
+        );
+        append_row(&args.out, &record);
+        eprintln!(
+            "  {:?}:{idx} done ({}/{total}, {}/{} collapsed, {} timed out, A1 {:?}, A2 {:?}, {:.0}s elapsed)",
+            source,
+            n + 1,
+            record.aggregate.collapsed,
+            record.aggregate.n,
+            record.aggregate.timed_out,
+            record.agreement_a1,
+            record.agreement_a2,
+            start.elapsed().as_secs_f64()
+        );
+    }
+    eprintln!(
+        "permanence_crosscheck: {total} configs run in {:.0}s; appended to {}",
+        start.elapsed().as_secs_f64(),
+        args.out.display()
+    );
+    total
+}
+
+fn main() {
+    let args = parse_args(std::env::args().skip(1));
+    if !args.summary_only {
+        let atlas_units = read_atlas_units(&args.atlas);
+        let sampled = sampled_units(default_ranges().len());
+        sweep(&args, &atlas_units, &sampled);
+    }
+    let records: Vec<ConfigRecord> = read_rows(&args.out);
+    eprintln!(
+        "permanence_crosscheck: summarising {} rows from {}",
+        records.len(),
+        args.out.display()
+    );
+    print_summary(&summarise(&records));
 }
 
 fn print_column(name: &str, c: &Column) {
@@ -1107,8 +1227,13 @@ fn print_column(name: &str, c: &Column) {
         fp.any_seed_rate
     );
     println!(
-        "  agree {}, producer-only (clause 2 fails, no consumer at horizon) {}, false negative {} (+{} mixed), undecided {}",
-        c.agree, c.producer_only, c.false_negative, c.false_negative_mixed, c.undecided
+        "  agree {}, producer-only (clause 2 fails, no consumer at horizon) {}, false negative {} (+{} mixed), undecided {}, unobserved {}",
+        c.agree,
+        c.producer_only,
+        c.false_negative,
+        c.false_negative_mixed,
+        c.undecided,
+        c.unobserved
     );
     println!("  disagreements: {}", c.disagreements.len());
     for d in &c.disagreements {
@@ -1133,34 +1258,25 @@ fn print_column(name: &str, c: &Column) {
 fn print_summary(s: &Summary) {
     println!("\n# Permanence cross-check (issue #439, against #432 / #437)");
     println!(
-        "# {} configs ({} atlas + {} sampled; {} run) × {} seeds = {} runs, horizon {} ticks",
+        "# {} configs ({} atlas + {} sampled) = {} runs, horizon(s) {:?} ticks",
         s.atlas_configs + s.sampled_configs,
         s.atlas_configs,
         s.sampled_configs,
-        s.configs_run,
-        s.n_seeds,
         s.total_runs,
-        s.horizon
+        s.horizons
     );
     println!(
-        "# runs collapsed (extinction | energy-death | nutrient-lockup): {}\n",
-        s.runs_collapsed
+        "# runs collapsed (extinction | energy-death | nutrient-lockup): {}; timed out (excluded): {}\n",
+        s.runs_collapsed, s.runs_timed_out
     );
     print_column("A1 only (rho > 1 and I > 1 at the seeded centroids)", &s.a1);
     print_column(
         "A2 coupled (clauses i-iii at the reference lumping; a clause failing only there → undecided)",
         &s.a2,
     );
-}
-
-fn write_artifact(artifact: &Artifact) {
-    std::fs::create_dir_all("target").ok();
-    let path = "target/permanence-crosscheck.json";
-    let json = serde_json::to_string_pretty(artifact).expect("serialise artifact");
-    std::fs::write(path, json).unwrap_or_else(|e| panic!("write {path}: {e}"));
-    eprintln!(
-        "permanence_crosscheck: wrote {path} ({} configs)",
-        artifact.configs.len()
+    println!(
+        "{}",
+        serde_json::to_string_pretty(s).expect("serialise summary")
     );
 }
 
@@ -1397,7 +1513,7 @@ mod tests {
     fn outcome(seed: u64, mode: &'static str, consumers: usize) -> SeedOutcome {
         SeedOutcome {
             seed,
-            mode,
+            mode: mode.to_string(),
             collapsed: is_collapse(mode),
             termination_tick: 500,
             founders: 10,
@@ -1422,7 +1538,10 @@ mod tests {
         ];
         let agg = aggregate(&seeds);
         assert_eq!(agg.observed, Observed::Collapse);
-        assert_eq!((agg.modal_mode, agg.modal_count), ("extinction", 2));
+        assert_eq!(
+            (agg.modal_mode.as_str(), agg.modal_count),
+            ("extinction", 2)
+        );
         assert_eq!(agg.collapsed, 3);
 
         let seeds = [
@@ -1575,11 +1694,116 @@ mod tests {
         // Smoke check only: no assertion on the emergent outcome.
         let ranges = default_ranges();
         let unit = vec![0.5; ranges.len()];
-        let record = evaluate_config(ConfigSource::Sample, 0, &unit, 2, 20);
+        let record = evaluate_config(ConfigSource::Sample, 0, &unit, 2, 20, Duration::MAX);
         assert_eq!(record.seeds.len(), 2);
         assert_eq!(record.aggregate.n, 2);
         assert!(record.seeds.iter().all(|s| s.termination_tick <= 20));
         assert!(record.seeds.iter().all(|s| !s.mode.is_empty()));
         let _ = serde_json::to_string(&record).expect("record serialises");
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("permanence-crosscheck-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    #[test]
+    fn args_default_to_the_full_sweep_at_the_search_horizon_and_accept_each_flag() {
+        let args = parse_args(std::iter::empty());
+        assert_eq!(args.limit, None);
+        assert_eq!(args.horizon, SearchConfig::default().max_ticks);
+        assert_eq!(args.out, PathBuf::from(DEFAULT_OUT));
+        assert_eq!(args.seeds, N_SEEDS);
+        assert_eq!(args.configs, None);
+        assert_eq!(args.run_timeout, Duration::from_secs(300));
+        assert!(!args.summary_only);
+        let args = parse_args(
+            "--limit 3 --horizon 600 --out target/x.jsonl --atlas a.json --seeds 2 --configs atlas:0,atlas:1 --run-timeout-secs 7 --summary"
+                .split(' ')
+                .map(String::from),
+        );
+        assert_eq!(args.limit, Some(3));
+        assert_eq!(args.horizon, 600);
+        assert_eq!(args.out, PathBuf::from("target/x.jsonl"));
+        assert_eq!(args.atlas, PathBuf::from("a.json"));
+        assert_eq!(args.seeds, 2);
+        assert_eq!(args.configs.as_ref().map(|c| c.len()), Some(2));
+        assert_eq!(args.run_timeout, Duration::from_secs(7));
+        assert!(args.summary_only);
+    }
+
+    /// The resumable contract: a sweep split into `--limit` calls appends
+    /// the same rows, in the same order, as one uninterrupted call.
+    #[test]
+    fn a_sweep_split_in_two_produces_the_same_file_as_one_run() {
+        let dims = default_ranges().len();
+        let atlas = vec![vec![0.5; dims], vec![0.4; dims]];
+        let sample = vec![vec![0.6; dims]];
+        let base = Args {
+            limit: None,
+            horizon: 20,
+            out: tmp("one-shot.jsonl"),
+            atlas: PathBuf::new(),
+            seeds: 2,
+            configs: None,
+            run_timeout: Duration::MAX,
+            summary_only: false,
+        };
+        assert_eq!(sweep(&base, &atlas, &sample), 3);
+        assert_eq!(sweep(&base, &atlas, &sample), 0, "nothing left to run");
+
+        let split = Args {
+            limit: Some(2),
+            out: tmp("split.jsonl"),
+            ..base.clone()
+        };
+        assert_eq!(sweep(&split, &atlas, &sample), 2);
+        assert_eq!(sweep(&split, &atlas, &sample), 1);
+        assert_eq!(sweep(&split, &atlas, &sample), 0);
+
+        let one = std::fs::read(&base.out).unwrap();
+        let two = std::fs::read(&split.out).unwrap();
+        assert!(!one.is_empty());
+        assert_eq!(one, two);
+        let rows: Vec<ConfigRecord> = read_rows(&base.out);
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.source, r.config_index))
+                .collect::<Vec<_>>(),
+            vec![
+                (ConfigSource::Atlas, 0),
+                (ConfigSource::Atlas, 1),
+                (ConfigSource::Sample, 0)
+            ]
+        );
+        assert!(rows.iter().all(|r| r.seeds.len() == 2 && r.horizon == 20));
+        std::fs::remove_dir_all(base.out.parent().unwrap()).ok();
+    }
+
+    /// A timed-out seed is neither a collapse nor a persistence: the config's
+    /// aggregate is read over the seeds that finished, and a config with no
+    /// finished seed is reported as unobserved rather than judged.
+    #[test]
+    fn a_run_past_its_wall_clock_budget_reads_as_a_timeout_and_is_not_judged() {
+        let dims = default_ranges().len();
+        let unit = vec![0.5; dims];
+        let record = evaluate_config(ConfigSource::Sample, 0, &unit, 1, 20, Duration::ZERO);
+        assert_eq!(record.seeds[0].mode, "timeout");
+        assert!(!record.seeds[0].collapsed);
+        assert_eq!(record.aggregate.n, 0);
+        assert_eq!(record.aggregate.timed_out, 1);
+        assert_eq!(record.agreement_a1, Agreement::Unobserved);
+        assert_eq!(record.agreement_a2, Agreement::Unobserved);
+        let summary = summarise(&[record]);
+        assert_eq!(summary.runs_timed_out, 1);
+        assert_eq!(summary.a1.unobserved, 1);
+        assert_eq!(summary.a1.false_positives.predicted_permanent, 0);
     }
 }

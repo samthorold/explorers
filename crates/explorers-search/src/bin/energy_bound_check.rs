@@ -41,30 +41,41 @@
 //! contiguous block per config. Each (config, seed) run is independent, so the
 //! rayon collect is order-stable and the artifact is byte-identical across runs.
 //!
-//! ## Output
+//! ## Resumable by construction
 //!
-//! `target/energy-bound-check.json` (gitignored; not committed) plus a stdout
-//! summary. Subset selectors for development: `ENERGY_BOUND_CONFIGS=atlas:0,sample:12`
-//! and `ENERGY_BOUND_SEEDS=2` (same grammar as `role_emergence`).
+//! One JSON line per config appended to `--out` (default
+//! `target/energy-bound-check.jsonl`); configs already present are skipped;
+//! `--limit N` runs at most `N` further configs. Fixed order and seed block,
+//! so a loop of short foreground calls produces a file byte-identical to one
+//! uninterrupted run (`explorers_search::sweep`). Subset selectors:
+//! `--configs atlas:0,sample:12` and `--seeds 2`.
 //!
-//! Run with:
-//!   cargo run --release -p explorers-search --bin energy_bound_check
-//! (optional first arg: path to the atlas JSON; default `atlas.json`)
+//! A (config, seed) run has a wall-clock budget (`--run-timeout-secs`,
+//! default 300): a knife-edge world that costs seconds per tick stops where
+//! it is and is recorded as mode `timeout`. Its ticks are not read — the
+//! summary excludes it from the distributions and the violation list and
+//! counts it separately.
 //!
-//! Full run: 256 configs × 8 seeds × the search horizon (`SearchConfig::max_ticks`,
-//! 2000 ticks since #507 — the `role_emergence` workload); the 500-tick run took
-//! tens of minutes, so budget accordingly.
+//! ## Running
+//!
+//!   cargo build --release -p explorers-search --bin energy_bound_check
+//!   ./target/release/energy_bound_check --limit 5     # repeat until 0 run
+//!   ./target/release/energy_bound_check --summary
+//!
+//! Full run: 282 configs × 8 seeds × the search horizon (`SearchConfig::max_ticks`,
+//! 2000 ticks since #507); hours of sim time, hence the chunked shape.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{SearchConfig, decode, default_ranges};
-use explorers_sim::{World, WorldParameters};
+use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
+use explorers_sim::{InitialDistribution, World, WorldParameters};
 
 /// Fixed contiguous seed block per config (the `role_emergence` convention).
 const N_SEEDS: u64 = 8;
@@ -109,7 +120,7 @@ struct TickSample {
 }
 
 /// The per-run results of the three checks.
-#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct RunChecks {
     /// Lemma 1: `max_t P(t) / (F·min(N_P(t), m²))` over ticks with a positive cap.
     lemma1_max_ratio: f64,
@@ -246,28 +257,17 @@ fn distribution(values: &[f64]) -> Option<Distribution> {
     })
 }
 
-/// One (config × seed) run: the config-only bounds, the run's terminal state,
-/// and the three checks.
-#[derive(Clone, Debug, serde::Serialize)]
-struct RunRecord {
-    source: ConfigSource,
-    config_index: usize,
+/// One (config × seed) run: the run's terminal state and the three checks.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct SeedRecord {
     seed: u64,
-    /// Config-only inputs to the bounds (decoded `WorldParameters`).
-    solar_flux_magnitude: f32,
-    world_extent: f32,
-    light_competition_radius: f32,
-    base_metabolic_rate: f32,
-    maintenance_cost_exponent: f32,
-    m: u32,
-    p_max: f64,
-    n_mean_max: f64,
     /// `E_tot(0)`: the endowment booked at world creation.
     e_tot0: f64,
     /// Ticks actually run (`== horizon` unless terminated early).
     ran_ticks: u64,
-    /// `extinction`, `explosion`, or `survived` (mirrors `run_single`'s stops).
-    terminal_mode: &'static str,
+    /// `extinction`, `explosion`, `survived` (mirrors `run_single`'s stops),
+    /// or `timeout` when the wall-clock budget ran out.
+    terminal_mode: String,
     peak_population: usize,
     /// Founders seeded by `World::new`, and how many of them carry a negative
     /// *metabolic* trait (photosynthetic_absorption, heterotrophy, mobility,
@@ -287,6 +287,25 @@ struct RunRecord {
     nan_tick: Option<u64>,
     #[serde(flatten)]
     checks: RunChecks,
+}
+
+/// One config: one JSON line in the output — the config-only bounds and the
+/// seed ensemble.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct ConfigRow {
+    source: ConfigSource,
+    config_index: usize,
+    horizon: u64,
+    /// Config-only inputs to the bounds (decoded `WorldParameters`).
+    solar_flux_magnitude: f32,
+    world_extent: f32,
+    light_competition_radius: f32,
+    base_metabolic_rate: f32,
+    maintenance_cost_exponent: f32,
+    m: u32,
+    p_max: f64,
+    n_mean_max: f64,
+    seeds: Vec<SeedRecord>,
 }
 
 fn living_energy(world: &World) -> (f64, f64) {
@@ -319,23 +338,23 @@ fn negative_metabolic_founders(world: &World) -> usize {
 
 /// Drive one (config, seed) through the genesis step loop to the search horizon
 /// with `run_single`'s early stops, sampling the per-tick facts the checks need.
-fn run(
-    source: ConfigSource,
-    config_index: usize,
-    unit: &[f64],
+/// A run past `run_timeout` of wall clock stops where it is as mode `timeout`.
+fn run_seed(
+    params: &WorldParameters,
+    dist: &InitialDistribution,
     seed: u64,
     horizon: u64,
-) -> RunRecord {
-    let ranges = default_ranges();
-    let (params, dist) = decode(unit, &ranges);
-    let b = bounds(&params);
+    run_timeout: Duration,
+) -> SeedRecord {
+    let b = bounds(params);
     let base_rate = f64::from(params.base_metabolic_rate);
-    let solar_flux_magnitude = params.solar_flux_magnitude;
-    let world_extent = params.world_extent;
-    let light_competition_radius = params.light_competition_radius;
-    let maintenance_cost_exponent = params.maintenance_cost_exponent;
     let max_pop = EvalConfig::default().max_population;
-    let mut world = World::new(params, dist, seed);
+    let started = Instant::now();
+    let mut world = World::new(params.clone(), dist.clone(), seed);
+    // The checks read agents, carcasses and the per-tick ledger, never the
+    // event log; keep none of it, so a dense world at the settled horizon
+    // fits in memory (observer-side — no trajectory changes).
+    world.retain_event_kinds(&[]);
     let founders = world.agents().len();
     let negative_founders = negative_metabolic_founders(&world);
     let (living0, _) = living_energy(&world);
@@ -356,13 +375,18 @@ fn run(
             .count();
         before_ids.clear();
         before_ids.extend(world.agents().iter().map(|a| a.id));
-        let solar_before = world.total_solar_input();
 
         world.step();
         ran_ticks += 1;
         peak_population = peak_population.max(world.agents().len());
 
-        let solar_income = f64::from(world.total_solar_input() - solar_before);
+        // The tick's own `P(t)`: the energy ledger is rebuilt every tick from
+        // that tick's `Photosynthesized` events. (Differencing the world's
+        // cumulative f32 `total_solar_input` instead loses the tick to the
+        // counter's ULP once the counter is large — at the 2000-tick horizon
+        // that read exceeded the cap by 1e-4 on a run the ledger reads at
+        // exactly 1.0; #509.)
+        let solar_income = f64::from(world.energy_ledger().total_solar_input());
         let survivors = world
             .agents()
             .iter()
@@ -391,30 +415,56 @@ fn run(
             terminal_mode = "explosion";
             break;
         }
+        if started.elapsed() > run_timeout {
+            terminal_mode = "timeout";
+            break;
+        }
     }
 
     let checks = check_run(&b, base_rate, e_tot0, &ticks);
-    RunRecord {
-        source,
-        config_index,
+    SeedRecord {
         seed,
-        solar_flux_magnitude,
-        world_extent,
-        light_competition_radius,
-        base_metabolic_rate: base_rate as f32,
-        maintenance_cost_exponent,
-        m: b.m,
-        p_max: b.p_max,
-        n_mean_max: b.n_mean_max,
         e_tot0,
         ran_ticks,
-        terminal_mode,
+        terminal_mode: terminal_mode.to_string(),
         peak_population,
         founders,
         negative_founders,
         negative_founder_traits: negative_founders > 0,
         nan_tick,
         checks,
+    }
+}
+
+/// One config: the seed ensemble run in parallel (rayon's indexed collect
+/// keeps seed order, so the row is bit-identical to the sequential map).
+fn run_config(
+    source: ConfigSource,
+    config_index: usize,
+    unit: &[f64],
+    seeds: u64,
+    horizon: u64,
+    run_timeout: Duration,
+) -> ConfigRow {
+    let (params, dist) = decode(unit, &default_ranges());
+    let b = bounds(&params);
+    let seeds: Vec<SeedRecord> = (0..seeds)
+        .into_par_iter()
+        .map(|s| run_seed(&params, &dist, SEED_BASE + s, horizon, run_timeout))
+        .collect();
+    ConfigRow {
+        source,
+        config_index,
+        horizon,
+        solar_flux_magnitude: params.solar_flux_magnitude,
+        world_extent: params.world_extent,
+        light_competition_radius: params.light_competition_radius,
+        base_metabolic_rate: params.base_metabolic_rate,
+        maintenance_cost_exponent: params.maintenance_cost_exponent,
+        m: b.m,
+        p_max: b.p_max,
+        n_mean_max: b.n_mean_max,
+        seeds,
     }
 }
 
@@ -432,14 +482,17 @@ struct Violation {
 
 #[derive(serde::Serialize)]
 struct Summary {
-    horizon: u64,
-    n_seeds: u64,
+    /// The horizon(s) the rows were run at (one, unless files were mixed).
+    horizons: Vec<u64>,
     atlas_configs: usize,
     sampled_configs: usize,
     total_runs: usize,
     runs_survived: usize,
     runs_extinct: usize,
     runs_exploded: usize,
+    /// Runs stopped by the wall-clock guard: excluded from every distribution
+    /// and from the violation list, whatever their ticks read.
+    runs_timed_out: usize,
     /// Runs that hit a NaN and were excluded from the distributions, and how
     /// many of those had a negative founder trait (#444).
     runs_nan: usize,
@@ -450,7 +503,7 @@ struct Summary {
     runs_with_negative_founders: usize,
     founders_total: usize,
     negative_founders_total: usize,
-    /// Runs the distributions are over: finite, i.e. no NaN.
+    /// Runs the distributions are over: finite (no NaN) and not timed out.
     runs_checked: usize,
     violations: Vec<Violation>,
     /// Check 1 — Lemma 1 tightness: `max_t P(t) / (F·min(N_P, m²))`.
@@ -473,175 +526,233 @@ struct Summary {
     alloc_share_at_peak_survivors: Option<Distribution>,
 }
 
-#[derive(serde::Serialize)]
-struct Artifact {
-    summary: Summary,
-    runs: Vec<RunRecord>,
+/// Command line: `--limit N`, `--horizon T`, `--out PATH`, `--atlas PATH`,
+/// `--seeds N` (1..=8), `--configs atlas:0,sample:12`,
+/// `--run-timeout-secs N`, `--summary`.
+#[derive(Clone, Debug, PartialEq)]
+struct Args {
+    limit: Option<usize>,
+    horizon: u64,
+    out: PathBuf,
+    atlas: PathBuf,
+    seeds: u64,
+    configs: Option<HashSet<(ConfigSource, usize)>>,
+    run_timeout: Duration,
+    summary_only: bool,
 }
 
-#[derive(serde::Deserialize)]
-struct AtlasFile {
-    cells: Vec<AtlasCellUnit>,
+const DEFAULT_RUN_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_OUT: &str = "target/energy-bound-check.jsonl";
+
+fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
+    let mut args = Args {
+        limit: None,
+        horizon: SearchConfig::default().max_ticks,
+        out: PathBuf::from(DEFAULT_OUT),
+        atlas: PathBuf::from("atlas.json"),
+        seeds: N_SEEDS,
+        configs: None,
+        run_timeout: Duration::from_secs(DEFAULT_RUN_TIMEOUT_SECS),
+        summary_only: false,
+    };
+    let mut it = argv.into_iter();
+    let value = |flag: &str, it: &mut I::IntoIter| -> String {
+        it.next()
+            .unwrap_or_else(|| panic!("energy_bound_check: {flag} needs a value"))
+    };
+    let number = |flag: &str, raw: &str| -> u64 {
+        raw.parse()
+            .unwrap_or_else(|_| panic!("energy_bound_check: {flag} {raw:?} is not an integer"))
+    };
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--limit" => args.limit = Some(number("--limit", &value("--limit", &mut it)) as usize),
+            "--horizon" => {
+                args.horizon = number("--horizon", &value("--horizon", &mut it));
+                assert!(
+                    args.horizon > 0,
+                    "energy_bound_check: --horizon must be positive"
+                );
+            }
+            "--out" => args.out = PathBuf::from(value("--out", &mut it)),
+            "--atlas" => args.atlas = PathBuf::from(value("--atlas", &mut it)),
+            "--seeds" => {
+                args.seeds = number("--seeds", &value("--seeds", &mut it)).clamp(1, N_SEEDS)
+            }
+            "--configs" => {
+                args.configs = Some(parse_selector(
+                    &value("--configs", &mut it),
+                    "--configs",
+                    None,
+                ))
+            }
+            "--run-timeout-secs" => {
+                args.run_timeout = Duration::from_secs(number(
+                    "--run-timeout-secs",
+                    &value("--run-timeout-secs", &mut it),
+                ))
+            }
+            "--summary" => args.summary_only = true,
+            other => panic!("energy_bound_check: unknown argument {other:?}"),
+        }
+    }
+    args
 }
 
-#[derive(serde::Deserialize)]
-struct AtlasCellUnit {
-    unit: Vec<f64>,
-}
-
-/// Parse `ENERGY_BOUND_CONFIGS` (`atlas:0,sample:12`); `None` when unset (the full run).
-fn parse_config_filter() -> Option<HashSet<(ConfigSource, usize)>> {
-    std::env::var("ENERGY_BOUND_CONFIGS")
-        .ok()
-        .map(|raw| parse_selector(&raw, "ENERGY_BOUND_CONFIGS", None))
+/// Run the configs not yet in `args.out` (in sweep order, up to `args.limit`),
+/// appending one row each as it completes. Returns how many were run.
+fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
+    let done = done_configs(&args.out);
+    let tasks = plan_tasks(
+        atlas_units.len(),
+        sampled.len(),
+        args.configs.as_ref(),
+        &done,
+        args.limit,
+    );
+    eprintln!(
+        "energy_bound_check: {} atlas + {} sampled configs × {} seeds, horizon {} ticks; {} done in {}, running {} now",
+        atlas_units.len(),
+        sampled.len(),
+        args.seeds,
+        args.horizon,
+        done.len(),
+        args.out.display(),
+        tasks.len()
+    );
+    let start = Instant::now();
+    let total = tasks.len();
+    for (n, (source, idx)) in tasks.iter().copied().enumerate() {
+        let unit = match source {
+            ConfigSource::Atlas => &atlas_units[idx],
+            ConfigSource::Sample => &sampled[idx],
+        };
+        let row = run_config(
+            source,
+            idx,
+            unit,
+            args.seeds,
+            args.horizon,
+            args.run_timeout,
+        );
+        append_row(&args.out, &row);
+        let violating = row
+            .seeds
+            .iter()
+            .filter(|s| s.terminal_mode != "timeout" && s.nan_tick.is_none())
+            .filter(|s| {
+                s.checks.lemma1_violations
+                    + s.checks.theorem_violations
+                    + s.checks.lemma2_violations
+                    > 0
+            })
+            .count();
+        eprintln!(
+            "  {:?}:{idx} done ({}/{total}, {} survived, {} timed out, {} violating, {:.0}s elapsed)",
+            source,
+            n + 1,
+            row.seeds
+                .iter()
+                .filter(|s| s.terminal_mode == "survived")
+                .count(),
+            row.seeds
+                .iter()
+                .filter(|s| s.terminal_mode == "timeout")
+                .count(),
+            violating,
+            start.elapsed().as_secs_f64()
+        );
+    }
+    eprintln!(
+        "energy_bound_check: {total} configs run in {:.0}s; appended to {}",
+        start.elapsed().as_secs_f64(),
+        args.out.display()
+    );
+    total
 }
 
 fn main() {
-    let atlas_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "atlas.json".to_string());
-    let ranges = default_ranges();
-    let horizon = SearchConfig::default().max_ticks;
-
-    let atlas_units: Vec<Vec<f64>> = {
-        let contents = std::fs::read_to_string(&atlas_path)
-            .unwrap_or_else(|e| panic!("read {atlas_path}: {e}"));
-        let atlas: AtlasFile =
-            serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {atlas_path}: {e}"));
-        atlas.cells.into_iter().map(|c| c.unit).collect()
-    };
-    let sampled_units = sampled_units(ranges.len());
-
-    let config_filter = parse_config_filter();
-    let seeds = std::env::var("ENERGY_BOUND_SEEDS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .map_or(N_SEEDS, |n| n.min(N_SEEDS));
-    eprintln!(
-        "energy_bound_check: {} atlas + {} sampled configs × {seeds} seeds, horizon {horizon} ticks",
-        atlas_units.len(),
-        sampled_units.len(),
-    );
-    if config_filter.is_some() || seeds != N_SEEDS {
-        eprintln!(
-            "energy_bound_check: SUBSET MODE — configs={:?}, seeds={seeds} (summary is partial)",
-            config_filter.as_ref().map(|f| f.len())
-        );
+    let args = parse_args(std::env::args().skip(1));
+    if !args.summary_only {
+        let atlas_units = read_atlas_units(&args.atlas);
+        let sampled = sampled_units(default_ranges().len());
+        sweep(&args, &atlas_units, &sampled);
     }
-    let selected = |source: ConfigSource, idx: usize| -> bool {
-        config_filter
-            .as_ref()
-            .is_none_or(|f| f.contains(&(source, idx)))
-    };
-
-    let mut tasks: Vec<(ConfigSource, usize, &Vec<f64>, u64)> = Vec::new();
-    for (source, units) in [
-        (ConfigSource::Atlas, &atlas_units),
-        (ConfigSource::Sample, &sampled_units),
-    ] {
-        for (i, unit) in units.iter().enumerate() {
-            if !selected(source, i) {
-                continue;
-            }
-            for s in 0..seeds {
-                tasks.push((source, i, unit, SEED_BASE + s));
-            }
-        }
-    }
-
-    let total_runs = tasks.len();
-    let done = AtomicUsize::new(0);
-    let start = Instant::now();
-    let log_step = (total_runs / 40).max(1);
-    let runs: Vec<RunRecord> = tasks
-        .par_iter()
-        .map(|(source, idx, unit, seed)| {
-            let record = run(*source, *idx, unit, *seed, horizon);
-            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if n.is_multiple_of(log_step) || n == total_runs {
-                eprintln!(
-                    "  progress: {n}/{total_runs} runs done ({:.0}s elapsed)",
-                    start.elapsed().as_secs_f64()
-                );
-            }
-            record
-        })
-        .collect();
+    let rows: Vec<ConfigRow> = read_rows(&args.out);
     eprintln!(
-        "energy_bound_check: all {total_runs} runs complete in {:.0}s",
-        start.elapsed().as_secs_f64()
+        "energy_bound_check: summarising {} rows from {}",
+        rows.len(),
+        args.out.display()
     );
-
-    let summary = summarise(
-        &runs,
-        horizon,
-        seeds,
-        atlas_units.len(),
-        sampled_units.len(),
-    );
-    print_summary(&summary);
-    write_artifact(&Artifact { summary, runs });
+    print_summary(&summarise(&rows));
 }
 
-fn summarise(
-    runs: &[RunRecord],
-    horizon: u64,
-    n_seeds: u64,
-    atlas_configs: usize,
-    sampled_configs: usize,
-) -> Summary {
-    let checked: Vec<&RunRecord> = runs.iter().filter(|r| r.nan_tick.is_none()).collect();
-    let survivors: Vec<&RunRecord> = checked
+fn summarise(rows: &[ConfigRow]) -> Summary {
+    let mut horizons: Vec<u64> = rows.iter().map(|r| r.horizon).collect();
+    horizons.sort_unstable();
+    horizons.dedup();
+    let runs: Vec<(&ConfigRow, &SeedRecord)> = rows
+        .iter()
+        .flat_map(|r| r.seeds.iter().map(move |s| (r, s)))
+        .collect();
+    let mode = |m: &str| runs.iter().filter(|(_, s)| s.terminal_mode == m).count();
+    let checked: Vec<(&ConfigRow, &SeedRecord)> = runs
         .iter()
         .copied()
-        .filter(|r| r.terminal_mode == "survived")
+        .filter(|(_, s)| s.nan_tick.is_none() && s.terminal_mode != "timeout")
         .collect();
-    let dist = |rs: &[&RunRecord], f: fn(&RunChecks) -> f64| -> Option<Distribution> {
-        let v: Vec<f64> = rs.iter().map(|r| f(&r.checks)).collect();
-        distribution(&v)
-    };
+    let survivors: Vec<(&ConfigRow, &SeedRecord)> = checked
+        .iter()
+        .copied()
+        .filter(|(_, s)| s.terminal_mode == "survived")
+        .collect();
+    let dist =
+        |rs: &[(&ConfigRow, &SeedRecord)], f: fn(&RunChecks) -> f64| -> Option<Distribution> {
+            let v: Vec<f64> = rs.iter().map(|(_, s)| f(&s.checks)).collect();
+            distribution(&v)
+        };
     let violations = checked
         .iter()
-        .filter(|r| {
-            r.checks.lemma1_violations + r.checks.theorem_violations + r.checks.lemma2_violations
+        .filter(|(_, s)| {
+            s.checks.lemma1_violations + s.checks.theorem_violations + s.checks.lemma2_violations
                 > 0
         })
-        .map(|r| Violation {
+        .map(|(r, s)| Violation {
             source: r.source,
             config_index: r.config_index,
-            seed: r.seed,
-            lemma1_violations: r.checks.lemma1_violations,
-            theorem_violations: r.checks.theorem_violations,
-            lemma2_violations: r.checks.lemma2_violations,
-            negative_founder_traits: r.negative_founder_traits,
+            seed: s.seed,
+            lemma1_violations: s.checks.lemma1_violations,
+            theorem_violations: s.checks.theorem_violations,
+            lemma2_violations: s.checks.lemma2_violations,
+            negative_founder_traits: s.negative_founder_traits,
         })
         .collect();
     Summary {
-        horizon,
-        n_seeds,
-        atlas_configs,
-        sampled_configs,
+        horizons,
+        atlas_configs: rows
+            .iter()
+            .filter(|r| r.source == ConfigSource::Atlas)
+            .count(),
+        sampled_configs: rows
+            .iter()
+            .filter(|r| r.source == ConfigSource::Sample)
+            .count(),
         total_runs: runs.len(),
-        runs_survived: runs
-            .iter()
-            .filter(|r| r.terminal_mode == "survived")
-            .count(),
-        runs_extinct: runs
-            .iter()
-            .filter(|r| r.terminal_mode == "extinction")
-            .count(),
-        runs_exploded: runs
-            .iter()
-            .filter(|r| r.terminal_mode == "explosion")
-            .count(),
-        runs_nan: runs.iter().filter(|r| r.nan_tick.is_some()).count(),
+        runs_survived: mode("survived"),
+        runs_extinct: mode("extinction"),
+        runs_exploded: mode("explosion"),
+        runs_timed_out: mode("timeout"),
+        runs_nan: runs.iter().filter(|(_, s)| s.nan_tick.is_some()).count(),
         runs_nan_with_negative_founder: runs
             .iter()
-            .filter(|r| r.nan_tick.is_some() && r.negative_founder_traits)
+            .filter(|(_, s)| s.nan_tick.is_some() && s.negative_founder_traits)
             .count(),
-        runs_with_negative_founders: checked.iter().filter(|r| r.negative_founder_traits).count(),
-        founders_total: runs.iter().map(|r| r.founders).sum(),
-        negative_founders_total: runs.iter().map(|r| r.negative_founders).sum(),
+        runs_with_negative_founders: checked
+            .iter()
+            .filter(|(_, s)| s.negative_founder_traits)
+            .count(),
+        founders_total: runs.iter().map(|(_, s)| s.founders).sum(),
+        negative_founders_total: runs.iter().map(|(_, s)| s.negative_founders).sum(),
         runs_checked: checked.len(),
         violations,
         lemma1_max_ratio: dist(&checked, |c| c.lemma1_max_ratio),
@@ -653,8 +764,8 @@ fn summarise(
         peak_over_endowment: {
             let v: Vec<f64> = checked
                 .iter()
-                .filter(|r| r.e_tot0 > 0.0)
-                .map(|r| r.checks.peak_e_living / r.e_tot0)
+                .filter(|(_, s)| s.e_tot0 > 0.0)
+                .map(|(_, s)| s.checks.peak_e_living / s.e_tot0)
                 .collect();
             distribution(&v)
         },
@@ -676,17 +787,16 @@ fn fmt_dist(d: &Option<Distribution>) -> String {
 fn print_summary(s: &Summary) {
     println!("\n# Energy-bound empirical check (issue #438, against #433)");
     println!(
-        "# {} configs ({} atlas + {} sampled) × {} seeds = {} runs, horizon {} ticks",
+        "# {} configs ({} atlas + {} sampled) = {} runs, horizon(s) {:?} ticks",
         s.atlas_configs + s.sampled_configs,
         s.atlas_configs,
         s.sampled_configs,
-        s.n_seeds,
         s.total_runs,
-        s.horizon
+        s.horizons
     );
     println!(
-        "# terminal: {} survived, {} extinct, {} exploded",
-        s.runs_survived, s.runs_extinct, s.runs_exploded
+        "# terminal: {} survived, {} extinct, {} exploded, {} timed out (excluded)",
+        s.runs_survived, s.runs_extinct, s.runs_exploded, s.runs_timed_out
     );
     println!(
         "# NaN runs excluded: {} ({} with a negative founder trait, #444); {} runs checked",
@@ -734,16 +844,9 @@ fn print_summary(s: &Summary) {
     println!("## Check 3 — max_t E_living / E_tot(0)");
     println!("  {}", fmt_dist(&s.peak_over_endowment));
     println!();
-}
-
-fn write_artifact(artifact: &Artifact) {
-    std::fs::create_dir_all("target").ok();
-    let path = "target/energy-bound-check.json";
-    let json = serde_json::to_string_pretty(artifact).expect("serialise artifact");
-    std::fs::write(path, json).unwrap_or_else(|e| panic!("write {path}: {e}"));
-    eprintln!(
-        "energy_bound_check: wrote {path} ({} runs)",
-        artifact.runs.len()
+    println!(
+        "{}",
+        serde_json::to_string_pretty(s).expect("serialise summary")
     );
 }
 
@@ -877,5 +980,101 @@ mod tests {
         assert_eq!(d.median, 25.0);
         assert_eq!(d.q1, 17.5);
         assert!(distribution(&[]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("energy-bound-check-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
+    }
+
+    #[test]
+    fn args_default_to_the_full_sweep_at_the_search_horizon_and_accept_each_flag() {
+        let args = parse_args(std::iter::empty());
+        assert_eq!(args.limit, None);
+        assert_eq!(args.horizon, SearchConfig::default().max_ticks);
+        assert_eq!(args.out, PathBuf::from(DEFAULT_OUT));
+        assert_eq!(args.seeds, N_SEEDS);
+        assert_eq!(args.configs, None);
+        assert_eq!(args.run_timeout, Duration::from_secs(300));
+        assert!(!args.summary_only);
+        let args = parse_args(
+            "--limit 3 --horizon 600 --out target/x.jsonl --atlas a.json --seeds 2 --configs atlas:0,atlas:1 --run-timeout-secs 7 --summary"
+                .split(' ')
+                .map(String::from),
+        );
+        assert_eq!(args.limit, Some(3));
+        assert_eq!(args.horizon, 600);
+        assert_eq!(args.out, PathBuf::from("target/x.jsonl"));
+        assert_eq!(args.atlas, PathBuf::from("a.json"));
+        assert_eq!(args.seeds, 2);
+        assert_eq!(args.configs.as_ref().map(|c| c.len()), Some(2));
+        assert_eq!(args.run_timeout, Duration::from_secs(7));
+        assert!(args.summary_only);
+    }
+
+    /// The resumable contract: a sweep split into `--limit 1` calls appends
+    /// the same rows, in the same order, as one uninterrupted call.
+    #[test]
+    fn a_sweep_split_in_two_produces_the_same_file_as_one_run() {
+        let dims = default_ranges().len();
+        let atlas = vec![vec![0.5; dims], vec![0.4; dims]];
+        let sample = vec![vec![0.6; dims]];
+        let base = Args {
+            limit: None,
+            horizon: 20,
+            out: tmp("one-shot.jsonl"),
+            atlas: PathBuf::new(),
+            seeds: 2,
+            configs: None,
+            run_timeout: Duration::MAX,
+            summary_only: false,
+        };
+        assert_eq!(sweep(&base, &atlas, &sample), 3);
+        assert_eq!(sweep(&base, &atlas, &sample), 0, "nothing left to run");
+
+        let split = Args {
+            limit: Some(2),
+            out: tmp("split.jsonl"),
+            ..base.clone()
+        };
+        assert_eq!(sweep(&split, &atlas, &sample), 2);
+        assert_eq!(sweep(&split, &atlas, &sample), 1);
+        assert_eq!(sweep(&split, &atlas, &sample), 0);
+
+        let one = std::fs::read(&base.out).unwrap();
+        let two = std::fs::read(&split.out).unwrap();
+        assert!(!one.is_empty());
+        assert_eq!(one, two);
+        let rows: Vec<ConfigRow> = read_rows(&base.out);
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.source, r.config_index))
+                .collect::<Vec<_>>(),
+            vec![
+                (ConfigSource::Atlas, 0),
+                (ConfigSource::Atlas, 1),
+                (ConfigSource::Sample, 0)
+            ]
+        );
+        assert!(rows.iter().all(|r| r.seeds.len() == 2 && r.horizon == 20));
+        std::fs::remove_dir_all(base.out.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn a_run_past_its_wall_clock_budget_reads_as_a_timeout_and_is_not_checked() {
+        let dims = default_ranges().len();
+        let unit = vec![0.5; dims];
+        let row = run_config(ConfigSource::Sample, 0, &unit, 1, 20, Duration::ZERO);
+        assert_eq!(row.seeds[0].terminal_mode, "timeout");
+        let summary = summarise(&[row]);
+        assert_eq!(summary.runs_timed_out, 1);
+        assert_eq!(summary.runs_checked, 0);
+        assert!(summary.violations.is_empty());
     }
 }
