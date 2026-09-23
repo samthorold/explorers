@@ -230,6 +230,17 @@ guild's truth is a *fraction of seeds*. The boundary is enforced mechanically: t
 the evaluator's output as a reported observable, alongside the other non-fitness readings, and is never
 summed into fitness nor binned on.
 
+The same boundary decides what a **terminal gate** zeroes. A gated world has no meaningful behaviour
+*coordinate* (above), so every scored descriptor is zeroed and the world gets no cell — but an
+observable is not a coordinate. A world gated on its **terminal** read ran the whole horizon, so its
+settled window `(T/2, T]` was classified like any other and the guild predicate is as computable, and
+as true, there as on a live world; zeroing it was a measurement artefact that hid real guilds inside
+monoculture and lockup cells (#527, measured in
+[519-guild-read-at-settled-horizon.md](../research/519-guild-read-at-settled-horizon.md)). So the guild
+flags are carried through the horizon gate and the scored descriptors are not. A rollout stopped
+**before** the horizon is the other case: it has no settled window to read, so its flags report `false`
+and "no guild" is indistinguishable from "not read" — accepted rather than made tri-state.
+
 A **further** reported per-seed distribution rides under the *same* boundary: the **coexistence
 fraction** — the share of a cell's seed ensemble that lands in the coexisting regime (alive, and either
 clustering or coexisting; the `||` is the #359 small-N disjunction so clustering's silent zero below

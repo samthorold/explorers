@@ -68,8 +68,9 @@ pub struct FitnessBreakdown {
     /// tick, with at least one birth to a member in that window (#490). A
     /// reported observable — never a behaviour axis, never a fitness term. The
     /// atlas aggregates it across a cell's seed ensemble into a *fraction of
-    /// seeds*, honouring the existence-vs-distributional boundary. False on the
-    /// gated path.
+    /// seeds*, honouring the existence-vs-distributional boundary. Read even on
+    /// a world gated at the horizon, whose settled window is classified all the
+    /// same (#527); false on the early-stop path, which has no such window.
     pub has_decomposer_guild: bool,
     /// The consumer twin of `has_decomposer_guild`: the same guild read for
     /// agents classified `Consumer`. Same authority boundary.
@@ -78,11 +79,19 @@ pub struct FitnessBreakdown {
 
 impl FitnessBreakdown {
     /// The breakdown of a world that hit a terminal gate at `ticks_survived`:
-    /// zero fitness, the mode, and every descriptor zero. A degenerate world
-    /// has no meaningful behaviour coordinate (it is routed to the dead
-    /// frontier by cliff, not binned), so nothing is scored — whether the
-    /// gate fired at the horizon or stopped the rollout where it died.
-    pub fn gated(failure: FailureMode, ticks_survived: u64) -> Self {
+    /// zero fitness, the mode, every *scored* descriptor zero, and the guild
+    /// observables as read. A degenerate world has no meaningful behaviour
+    /// coordinate (it is routed to the dead frontier by cliff, not binned), so
+    /// nothing is scored — whether the gate fired at the horizon or stopped
+    /// the rollout where it died. The guild flags are not coordinates but
+    /// reported observables, so they carry `guilds` instead (#527): a world
+    /// gated on its terminal read has a settled window `(T/2, T]` that was
+    /// classified during observation, and the read over it is as true of a
+    /// monoculture as of a live world. A rollout stopped *before* the horizon
+    /// has no settled window to read and passes [`guild::RoleGuilds::default`],
+    /// so "no guild" and "not read" stay indistinguishable there — accepted
+    /// rather than made tri-state (#527 triage).
+    pub fn gated(failure: FailureMode, ticks_survived: u64, guilds: guild::RoleGuilds) -> Self {
         FitnessBreakdown {
             fitness: 0.0,
             failure: Some(failure),
@@ -93,8 +102,8 @@ impl FitnessBreakdown {
             trophic_balance_score: 0.0,
             ticks_survived,
             carcass_locked_fraction: 0.0,
-            has_decomposer_guild: false,
-            has_consumer_guild: false,
+            has_decomposer_guild: guilds.decomposer,
+            has_consumer_guild: guilds.consumer,
         }
     }
 }
@@ -299,7 +308,17 @@ pub fn evaluate_from_log(
     let agents = world.agents();
     let ticks_survived = world.tick();
 
-    let zero_breakdown = |failure: FailureMode| FitnessBreakdown::gated(failure, ticks_survived);
+    // Heterotroph guilds (#490): a population read over the second-half role
+    // snapshots — sustained size plus recruitment — for both heterotroph roles.
+    // Reported observables, aggregated into per-cell seed fractions by the atlas
+    // — never an axis, never a fitness term (the authority boundary,
+    // genesis-search.md). Read before the gates, because a world gated on its
+    // terminal read still ran the settled window the predicate reads, and the
+    // gate zeroes coordinates, not observables (#527).
+    let guilds = guild::role_guilds_from_samples(role_snapshots, born, max_ticks);
+
+    let zero_breakdown =
+        |failure: FailureMode| FitnessBreakdown::gated(failure, ticks_survived, guilds);
 
     if agents.is_empty() {
         return zero_breakdown(FailureMode::Extinction);
@@ -388,13 +407,6 @@ pub fn evaluate_from_log(
     // window). An additive descriptor — read off, never summed into fitness.
     let carcass_locked_fraction =
         trailing_mean(carcass_fraction_per_tick, config.nutrient_lock_window);
-
-    // Heterotroph guilds (#490): a population read over the second-half role
-    // snapshots — sustained size plus recruitment — for both heterotroph roles.
-    // Reported observables, aggregated into per-cell seed fractions by the atlas
-    // — never an axis, never a fitness term (the authority boundary,
-    // genesis-search.md).
-    let guilds = guild::role_guilds_from_samples(role_snapshots, born, max_ticks);
 
     FitnessBreakdown {
         fitness,
@@ -1803,6 +1815,120 @@ mod tests {
             result.clustering_strength
         );
         assert_eq!(result.fitness, 0.0);
+    }
+
+    /// A monoculture world that reaches the horizon, with fabricated role
+    /// snapshots over the settled window: `count` agents read in `role` on
+    /// every sample, one of them the parent of a birth inside the window.
+    /// The gate fires on the terminal roster, so this is the horizon-verdict
+    /// path, not an early stop.
+    fn gated_at_horizon_with_role(
+        role: explorers_sim::topology::TrophicRole,
+        count: u64,
+    ) -> FitnessBreakdown {
+        let params = explorers_sim::WorldParameters {
+            solar_flux_magnitude: 5.0,
+            base_metabolic_rate: 0.01,
+            reproduction_energy_threshold: 500.0,
+            reproduction_nutrient_threshold: 1.0,
+            contact_range_coefficient: 5.0,
+            world_extent: 20.0,
+            initial_population_size: 30,
+            mutation_rate: 0.0,
+            mutation_magnitude: 0.0,
+            ..test_world_params()
+        };
+        let dist = explorers_sim::InitialDistribution {
+            trait_covariance: 0.0,
+            initial_cluster_count: 1,
+            ..test_distribution()
+        };
+        let config = EvalConfig {
+            grace_ticks: 0,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 10;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let free = run_collecting_free_energy(&mut world, max_ticks);
+        assert!(
+            world.agents().len() >= ROSTER_FLOOR,
+            "the fixture must reach the horizon with a roster the gates read"
+        );
+        let roles: std::collections::HashMap<u64, explorers_sim::topology::TrophicRole> =
+            (900_001..900_001 + count).map(|id| (id, role)).collect();
+        let role_snapshots: Vec<guild::RoleSnapshot> =
+            (6..=max_ticks).map(|t| (t, roles.clone())).collect();
+        let born = vec![guild::Birth {
+            tick: 7,
+            parent: Some(900_001),
+            second_parent: None,
+        }];
+        let observations = RolloutObservations {
+            free_energy: free,
+            role_snapshots,
+            born,
+            ..RolloutObservations::default()
+        };
+        let result = evaluate_from_log(&world, &observations, &config, max_ticks);
+        assert_eq!(
+            result.failure,
+            Some(FailureMode::Monoculture),
+            "the fixture must be gated at the horizon"
+        );
+        result
+    }
+
+    #[test]
+    fn gated_at_horizon_still_reports_the_decomposer_guild() {
+        // A world gated on its terminal read has already had its settled
+        // window classified; the guild is a reported observable, not a scored
+        // coordinate, so it survives the gate (#527).
+        let result = gated_at_horizon_with_role(
+            explorers_sim::topology::TrophicRole::Decomposer,
+            guild::GUILD_MIN_SIZE as u64,
+        );
+        assert!(result.has_decomposer_guild);
+        assert!(!result.has_consumer_guild);
+    }
+
+    #[test]
+    fn gated_at_horizon_still_reports_the_consumer_guild() {
+        let result = gated_at_horizon_with_role(
+            explorers_sim::topology::TrophicRole::Consumer,
+            guild::GUILD_MIN_SIZE as u64,
+        );
+        assert!(result.has_consumer_guild);
+        assert!(!result.has_decomposer_guild);
+    }
+
+    #[test]
+    fn gated_at_horizon_scores_nothing_though_it_reports_the_guild() {
+        // The authority boundary does not move: carrying the observable
+        // through the gate leaves every scored descriptor zero.
+        let result = gated_at_horizon_with_role(
+            explorers_sim::topology::TrophicRole::Decomposer,
+            guild::GUILD_MIN_SIZE as u64,
+        );
+        assert_eq!(result.fitness, 0.0);
+        assert!(result.failure.is_some());
+        assert_eq!(result.oscillation_strength, 0.0);
+        assert_eq!(result.clustering_strength, 0.0);
+        assert_eq!(result.coexistence_duration, 0.0);
+        assert_eq!(result.turnover_score, 0.0);
+        assert_eq!(result.trophic_balance_score, 0.0);
+        assert_eq!(result.carcass_locked_fraction, 0.0);
+    }
+
+    #[test]
+    fn gated_at_horizon_below_the_guild_floor_reports_no_guild() {
+        // Carrying the read is not carrying a `true`: the same predicate
+        // applies, so a window short of `GUILD_MIN_SIZE` still reads false.
+        let result = gated_at_horizon_with_role(
+            explorers_sim::topology::TrophicRole::Decomposer,
+            guild::GUILD_MIN_SIZE as u64 - 1,
+        );
+        assert!(!result.has_decomposer_guild);
+        assert!(!result.has_consumer_guild);
     }
 
     #[test]

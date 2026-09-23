@@ -181,7 +181,13 @@ pub fn run_single(
                     termination_tick: world.tick(),
                 });
             }
-            let breakdown = FitnessBreakdown::gated(stop.failure.clone(), stop.tick);
+            // An early stop has no settled window `(T/2, T]` to read, so the
+            // guild observables are genuinely unread and report false (#527).
+            let breakdown = FitnessBreakdown::gated(
+                stop.failure.clone(),
+                stop.tick,
+                explorers_genesis_eval::guild::RoleGuilds::default(),
+            );
             (breakdown, stop.tick, Some(stop))
         }
         None => (horizon_breakdown(), world.tick(), None),
@@ -610,6 +616,27 @@ mod tests {
         );
         assert_eq!(result.breakdown.ticks_survived, result.termination_tick);
         assert_eq!(result.fitness, 0.0);
+    }
+
+    #[test]
+    fn a_rollout_stopped_before_the_horizon_reports_no_guild() {
+        // A world gated at the horizon carries its guild read through the gate
+        // (#527), but an early stop has no settled window `(T/2, T]` to read,
+        // so both flags stay false — "no guild" and "not read" are
+        // indistinguishable here, which is accepted.
+        let (params, dist) = energy_dying_world();
+        let config = RunConfig {
+            max_ticks: 600,
+            eval_config: EvalConfig {
+                grace_ticks: 0,
+                ..EvalConfig::default()
+            },
+            early_stop_crosscheck_fraction: 0.0,
+        };
+        let result = run_single(&params, &dist, &config, 3);
+        assert!(result.early_stop.is_some(), "the gate stopped it early");
+        assert!(!result.breakdown.has_decomposer_guild);
+        assert!(!result.breakdown.has_consumer_guild);
     }
 
     #[test]
