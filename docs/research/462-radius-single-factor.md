@@ -134,7 +134,7 @@ highest-fitness live cell of the **500-tick** atlas, and #505 showed that 213 of
 656 atlas-cell runs that were live at 500 ticks lock up by 3000. The radius
 sweep simply makes it visible at the config the player would actually be
 dropped into. This is a projection problem (the recipe should be re-drawn from
-a settled-horizon atlas, #494), not a radius result, and it is filed separately.
+a settled-horizon atlas, #494), not a radius result, and it is filed as #522.
 
 ## 4. What the guard does and does not bound
 
@@ -151,15 +151,19 @@ property of these configs, not of scheduling noise.
 
 Two consequences, both for the designer:
 
-- **The 12 timed-out runs are a known gap**, concentrated at `r ≤ 3`, and they
-  bias every small-`r` live fraction *upward*. Resolving them needs a long-guard
-  re-run on a machine that can give it hours: `radius_sweep --baseline recipe
-  --levels 1,2,3 --run-timeout-secs 5400` and the same for `sample:18
-  --levels 1,2,3` and `sample:188 --levels 1`.
+- **The 12 timed-out runs are a known gap, left open as #524**, concentrated at
+  `r ≤ 3`, and they bias every small-`r` live fraction *upward* — the timeouts
+  are the slowest runs, which are the densest, which are the ones most likely on
+  a lockup trajectory. Resolving them needs a long-guard re-run on a machine
+  that can give it hours (`radius_sweep --baseline recipe --levels 1,2,3
+  --run-timeout-secs 5400`, and the same for `sample:18 --levels 1,2,3` and
+  `sample:188 --levels 1`), or a guard that bounds the whole run (#523). The
+  direction of this note's finding does not rest on them — `r ≥ 12` is 44/60
+  live with zero timeouts — but the shape of the small-`r` end does.
 - **The guard's placement is arguably a bug** in every sweep that uses this
   shape (`settling_time`, `energy_death_check`, `permanence_crosscheck` read the
   same way): a `--run-timeout-secs` that does not bound the evaluation cannot
-  bound the run. Worth an issue on its own.
+  bound the run. Filed as #523.
 
 All seven rows dropped when the long-guard re-run was set up have been
 regenerated at the original guard, and each reproduced its first-pass mode
@@ -192,6 +196,7 @@ timeouts). The committed file holds all 32 levels.
 - **Four baselines** cannot separate "the radius interacts with solar flux" from
   "the radius interacts with founder density" — `sample:110` differs from the
   others in both. A two-factor sweep (radius × flux) is the next instrument.
-- **The timed-out small-`r` levels** (§4), which is where the curve is least
-  certain.
+- **The timed-out small-`r` levels** (§4, open as #524), which is where the
+  curve is least certain — whether the small-`r` end is lockup, generalist
+  dominance, or genuinely mixed per baseline is not decided here.
 - **Guilds** appear at 7 level-seeds out of 160, all at `r ≤ 8`, too few to read.
