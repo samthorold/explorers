@@ -289,12 +289,50 @@ impl RolloutObservations {
     }
 }
 
+/// The terminal verdict on a rollout: the gates in order, then the five
+/// fitness components. Unbounded — for callers with no wall-clock budget (the
+/// tests, the genesis rollout driver). A budgeted caller uses
+/// [`evaluate_from_log_within`], which reaches the same verdict when it
+/// finishes.
 pub fn evaluate_from_log(
     world: &explorers_sim::World,
     observations: &RolloutObservations,
     config: &EvalConfig,
     max_ticks: u64,
 ) -> FitnessBreakdown {
+    evaluate(world, observations, config, max_ticks, None)
+        .expect("an evaluation with no deadline always reaches a verdict")
+}
+
+/// [`evaluate_from_log`] under a cooperative wall-clock `deadline` (#523):
+/// `None` — no verdict — when the deadline passes before the verdict is
+/// reached. The deadline is read on entry, before the terminal roster's
+/// clustering, and between the settled-window snapshots whose per-snapshot
+/// DBSCAN is the unit of work on a dense roster, so an abandoned evaluation
+/// returns on the calling thread and leaves nothing running. A verdict that
+/// is reached is bit-identical to [`evaluate_from_log`]'s: the deadline only
+/// compares a clock, and touches nothing the verdict reads.
+pub fn evaluate_from_log_within(
+    world: &explorers_sim::World,
+    observations: &RolloutObservations,
+    config: &EvalConfig,
+    max_ticks: u64,
+    deadline: std::time::Instant,
+) -> Option<FitnessBreakdown> {
+    evaluate(world, observations, config, max_ticks, Some(deadline))
+}
+
+fn evaluate(
+    world: &explorers_sim::World,
+    observations: &RolloutObservations,
+    config: &EvalConfig,
+    max_ticks: u64,
+    deadline: Option<std::time::Instant>,
+) -> Option<FitnessBreakdown> {
+    let within = || deadline.is_none_or(|d| std::time::Instant::now() < d);
+    if !within() {
+        return None;
+    }
     let RolloutObservations {
         carcass_fraction: carcass_fraction_per_tick,
         producer_share: producer_share_per_tick,
@@ -318,7 +356,7 @@ pub fn evaluate_from_log(
     let guilds = guild::role_guilds_from_samples(role_snapshots, born, max_ticks);
 
     let zero_breakdown =
-        |failure: FailureMode| FitnessBreakdown::gated(failure, ticks_survived, guilds);
+        |failure: FailureMode| Some(FitnessBreakdown::gated(failure, ticks_survived, guilds));
 
     if agents.is_empty() {
         return zero_breakdown(FailureMode::Extinction);
@@ -333,6 +371,9 @@ pub fn evaluate_from_log(
     // may have dropped.
     let ts = turnover_score(*total_births, *total_deaths, max_ticks);
 
+    if !within() {
+        return None;
+    }
     let trait_vectors: Vec<_> = agents.iter().map(|a| a.traits).collect();
     let energies: Vec<_> = agents.iter().map(|a| a.energy()).collect();
 
@@ -373,13 +414,17 @@ pub fn evaluate_from_log(
     // settled snapshot here. Each snapshot's tick is stored so the window cutoff
     // stays index/interval-free. Seed-invariant by construction: a pure function of
     // the snapshots and the DBSCAN config, with no `initial_population_size` leak.
+    // The deadline is read before each snapshot's DBSCAN; a spent one
+    // abandons the whole read (`None` through the collect).
     let cluster_counts_per_snapshot: Vec<usize> = cluster_snapshots
         .iter()
         .filter(|(tick, _)| *tick > max_ticks / 2)
         .map(|(_, traits)| {
-            distinct_cluster_count(traits, config.dbscan_eps, config.dbscan_min_points)
+            within().then(|| {
+                distinct_cluster_count(traits, config.dbscan_eps, config.dbscan_min_points)
+            })
         })
-        .collect();
+        .collect::<Option<_>>()?;
 
     // Oscillation: the producer↔consumer rhythm read off the per-tick producer-
     // energy-share series the caller sampled (issue #392), over the settled
@@ -408,7 +453,7 @@ pub fn evaluate_from_log(
     let carcass_locked_fraction =
         trailing_mean(carcass_fraction_per_tick, config.nutrient_lock_window);
 
-    FitnessBreakdown {
+    Some(FitnessBreakdown {
         fitness,
         failure: None,
         oscillation_strength: os,
@@ -420,7 +465,7 @@ pub fn evaluate_from_log(
         carcass_locked_fraction,
         has_decomposer_guild: guilds.decomposer,
         has_consumer_guild: guilds.consumer,
-    }
+    })
 }
 
 /// The two dead-pool gates read on a rollout's series-so-far: energy death
@@ -2142,6 +2187,45 @@ mod tests {
             result.fitness, fitness,
             "fitness should be weighted sum of components"
         );
+    }
+
+    /// The coexistence fixture: a world run to the horizon with a set of
+    /// settled-window cluster snapshots, so the evaluation reaches the
+    /// per-snapshot DBSCAN a deadline is checked between.
+    fn settled_fixture() -> (explorers_sim::World, RolloutObservations, EvalConfig, u64) {
+        let config = EvalConfig {
+            grace_ticks: 0,
+            ..EvalConfig::default()
+        };
+        let max_ticks: u64 = 50;
+        let mut world = explorers_sim::World::new(live_world_params(), test_distribution(), 42);
+        let free = run_collecting_free_energy(&mut world, max_ticks);
+        let snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)> = vec![
+            (30, snapshot_with_clusters(2)),
+            (40, snapshot_with_clusters(1)),
+            (50, snapshot_with_clusters(3)),
+        ];
+        (world, obs(&free, &[], &[], &snapshots), config, max_ticks)
+    }
+
+    #[test]
+    fn an_evaluation_past_its_deadline_abandons_with_no_verdict() {
+        let (world, observations, config, max_ticks) = settled_fixture();
+        let deadline = std::time::Instant::now();
+        assert!(
+            evaluate_from_log_within(&world, &observations, &config, max_ticks, deadline).is_none(),
+            "a spent deadline yields no verdict rather than a sentinel breakdown"
+        );
+    }
+
+    #[test]
+    fn an_evaluation_inside_its_deadline_is_the_unbounded_verdict() {
+        let (world, observations, config, max_ticks) = settled_fixture();
+        let unbounded = evaluate_from_log(&world, &observations, &config, max_ticks);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3600);
+        let bounded = evaluate_from_log_within(&world, &observations, &config, max_ticks, deadline)
+            .expect("a generous deadline reaches a verdict");
+        assert_eq!(format!("{bounded:?}"), format!("{unbounded:?}"));
     }
 
     #[test]

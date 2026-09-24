@@ -71,11 +71,17 @@
 //! byte-identical to one uninterrupted run (`explorers_search::sweep`).
 //! Subset selectors: `--configs atlas:0,sample:12` and `--seeds 2`.
 //!
-//! A (config, seed) rollout has a wall-clock budget (`--run-timeout-secs`,
-//! default 300): a knife-edge world that costs seconds per tick stops where
-//! it is and is recorded as mode `timeout` — neither a collapse nor a
-//! persistence. A config's ensemble verdict is read over its finished seeds;
-//! a config with no finished seed is `unobserved` and enters no confusion
+//! A (config, seed) run carries two wall-clock budgets (#523). The
+//! **simulation budget** (`--run-timeout-secs`, default 300) bounds the step
+//! loop: a knife-edge world that costs seconds per tick stops where it is and
+//! is recorded as mode `timeout`. The **evaluation budget**
+//! (`--eval-timeout-secs`, default 300) bounds the terminal evaluation of a
+//! rollout that reached the horizon: a dense terminal roster whose clustering
+//! overruns it is recorded as mode `eval_timeout`, with every
+//! breakdown-derived field at its not-read value (`decomposer_guild = false`).
+//! Neither is a collapse nor a persistence, and the aggregate counts them
+//! apart. A config's ensemble verdict is read over its finished seeds; a
+//! config with no finished seed is `unobserved` and enters no confusion
 //! matrix.
 //!
 //! ## Running
@@ -94,10 +100,13 @@ use std::time::{Duration, Instant};
 use rayon::prelude::*;
 
 use explorers_genesis::{EvalConfig, FailureMode};
-use explorers_genesis_eval::{EVALUATOR_EVENT_KINDS, RolloutObservations, evaluate_from_log};
+use explorers_genesis_eval::{EVALUATOR_EVENT_KINDS, RolloutObservations};
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{SearchConfig, decode, default_ranges};
-use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
+use explorers_search::sweep::{
+    DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
+    done_configs, evaluate_within_budget, is_unfinished, plan_tasks, read_atlas_units, read_rows,
+};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 
 /// Reference body mass for the mean-field reduction (as in the prototype).
@@ -419,9 +428,10 @@ fn is_collapse(mode: &str) -> bool {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct SeedOutcome {
     seed: u64,
-    /// The evaluator's terminal classification (`evaluate_from_log`), or
-    /// `"timeout"` when the wall-clock budget ran out (neither a collapse nor
-    /// a persistence: the seed is left out of the ensemble read).
+    /// The evaluator's terminal classification (`evaluate_from_log`),
+    /// `"timeout"` when the simulation budget ran out, or `"eval_timeout"`
+    /// when the evaluation budget ran out at the horizon (neither is a
+    /// collapse nor a persistence: the seed is left out of the ensemble read).
     mode: String,
     collapsed: bool,
     termination_tick: u64,
@@ -450,7 +460,7 @@ enum Observed {
     Mixed,
     /// No seed collapsed.
     Persist,
-    /// No seed finished (every seed timed out): nothing was observed.
+    /// No seed finished (every seed exhausted a budget): nothing was observed.
     Unobserved,
 }
 
@@ -462,8 +472,13 @@ enum Observed {
 struct Aggregate {
     /// Seeds that finished (the ensemble the verdict is read over).
     n: usize,
-    /// Seeds stopped by the wall-clock guard, left out of every field below.
+    /// Seeds stopped by the simulation budget, left out of every field below.
     timed_out: usize,
+    /// Seeds whose evaluation exhausted the evaluation budget, left out of
+    /// every field below. Omitted from the row when zero, so a row with none
+    /// serialises as it did before the budget existed (and older rows parse).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    eval_timed_out: usize,
     collapsed: usize,
     collapse_fraction: f64,
     modal_mode: String,
@@ -480,6 +495,10 @@ struct Aggregate {
     median_founders: usize,
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 fn median_u64(values: &mut [u64]) -> Option<u64> {
     if values.is_empty() {
         return None;
@@ -489,8 +508,15 @@ fn median_u64(values: &mut [u64]) -> Option<u64> {
 }
 
 fn aggregate(all_seeds: &[SeedOutcome]) -> Aggregate {
-    let timed_out = all_seeds.iter().filter(|s| s.mode == "timeout").count();
-    let seeds: Vec<&SeedOutcome> = all_seeds.iter().filter(|s| s.mode != "timeout").collect();
+    let timed_out = all_seeds.iter().filter(|s| s.mode == TIMEOUT_MODE).count();
+    let eval_timed_out = all_seeds
+        .iter()
+        .filter(|s| s.mode == EVAL_TIMEOUT_MODE)
+        .count();
+    let seeds: Vec<&SeedOutcome> = all_seeds
+        .iter()
+        .filter(|s| !is_unfinished(&s.mode))
+        .collect();
     let n = seeds.len();
     let collapsed = seeds.iter().filter(|s| s.collapsed).count();
     let mut counts: Vec<(&str, usize)> = Vec::new();
@@ -538,6 +564,7 @@ fn aggregate(all_seeds: &[SeedOutcome]) -> Aggregate {
     Aggregate {
         n,
         timed_out,
+        eval_timed_out,
         collapsed,
         collapse_fraction: if n == 0 {
             0.0
@@ -777,6 +804,7 @@ fn run_seed(
     seed: u64,
     horizon: u64,
     run_timeout: Duration,
+    eval_timeout: Duration,
 ) -> SeedOutcome {
     let eval_config = EvalConfig::default();
     let started = Instant::now();
@@ -822,14 +850,17 @@ fn run_seed(
             break;
         }
     }
+    // An unfinished seed has no breakdown: its guild takes the not-read value.
     let (mode, decomposer_guild) = if timed_out {
-        ("timeout", false)
+        (TIMEOUT_MODE, false)
     } else {
-        let breakdown = evaluate_from_log(&world, &observations, &eval_config, horizon);
-        (
-            mode_label(&breakdown.failure),
-            breakdown.has_decomposer_guild,
-        )
+        match evaluate_within_budget(&world, &observations, &eval_config, horizon, eval_timeout) {
+            Some(breakdown) => (
+                mode_label(&breakdown.failure),
+                breakdown.has_decomposer_guild,
+            ),
+            None => (EVAL_TIMEOUT_MODE, false),
+        }
     };
     let (terminal_producers, terminal_consumers) = compartments(&world);
     SeedOutcome {
@@ -882,6 +913,7 @@ fn evaluate_config(
     seeds: u64,
     horizon: u64,
     run_timeout: Duration,
+    eval_timeout: Duration,
 ) -> ConfigRecord {
     let ranges = default_ranges();
     let (params, dist) = decode(unit, &ranges);
@@ -896,7 +928,16 @@ fn evaluate_config(
     // the record is bit-identical to the sequential map (the #350 contract).
     let outcomes: Vec<SeedOutcome> = (0..seeds)
         .into_par_iter()
-        .map(|s| run_seed(&params, &dist, SEED_BASE + s, horizon, run_timeout))
+        .map(|s| {
+            run_seed(
+                &params,
+                &dist,
+                SEED_BASE + s,
+                horizon,
+                run_timeout,
+                eval_timeout,
+            )
+        })
         .collect();
     let aggregate = aggregate(&outcomes);
     let agreement_a1 = classify(predicted_a1, &a1, &aggregate);
@@ -1028,9 +1069,12 @@ struct Summary {
     configs_run: usize,
     total_runs: usize,
     runs_collapsed: usize,
-    /// Runs stopped by the wall-clock guard: neither collapsed nor persisted,
-    /// left out of every ensemble read.
+    /// Runs stopped by the simulation budget: neither collapsed nor
+    /// persisted, left out of every ensemble read.
     runs_timed_out: usize,
+    /// Runs whose evaluation exhausted the evaluation budget: likewise left
+    /// out, counted apart from the simulation timeouts.
+    runs_eval_timed_out: usize,
     a1: Column,
     a2: Column,
 }
@@ -1053,6 +1097,7 @@ fn summarise(records: &[ConfigRecord]) -> Summary {
         total_runs: records.iter().map(|r| r.seeds.len()).sum(),
         runs_collapsed: records.iter().map(|r| r.aggregate.collapsed).sum(),
         runs_timed_out: records.iter().map(|r| r.aggregate.timed_out).sum(),
+        runs_eval_timed_out: records.iter().map(|r| r.aggregate.eval_timed_out).sum(),
         a1: column(records, true),
         a2: column(records, false),
     }
@@ -1060,7 +1105,8 @@ fn summarise(records: &[ConfigRecord]) -> Summary {
 
 /// Command line: `--limit N`, `--horizon T`, `--out PATH`, `--atlas PATH`,
 /// `--seeds N` (1..=8), `--configs atlas:0,sample:12`,
-/// `--run-timeout-secs N`, `--summary`.
+/// `--run-timeout-secs N` (simulation budget), `--eval-timeout-secs N`
+/// (evaluation budget), `--summary`.
 #[derive(Clone, Debug, PartialEq)]
 struct Args {
     limit: Option<usize>,
@@ -1070,6 +1116,7 @@ struct Args {
     seeds: u64,
     configs: Option<HashSet<(ConfigSource, usize)>>,
     run_timeout: Duration,
+    eval_timeout: Duration,
     summary_only: bool,
 }
 
@@ -1085,6 +1132,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
         seeds: N_SEEDS,
         configs: None,
         run_timeout: Duration::from_secs(DEFAULT_RUN_TIMEOUT_SECS),
+        eval_timeout: Duration::from_secs(DEFAULT_EVAL_TIMEOUT_SECS),
         summary_only: false,
     };
     let mut it = argv.into_iter();
@@ -1122,6 +1170,12 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
                 args.run_timeout = Duration::from_secs(number(
                     "--run-timeout-secs",
                     &value("--run-timeout-secs", &mut it),
+                ))
+            }
+            EVAL_TIMEOUT_FLAG => {
+                args.eval_timeout = Duration::from_secs(number(
+                    EVAL_TIMEOUT_FLAG,
+                    &value(EVAL_TIMEOUT_FLAG, &mut it),
                 ))
             }
             "--summary" => args.summary_only = true,
@@ -1166,15 +1220,17 @@ fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
             args.seeds,
             args.horizon,
             args.run_timeout,
+            args.eval_timeout,
         );
         append_row(&args.out, &record);
         eprintln!(
-            "  {:?}:{idx} done ({}/{total}, {}/{} collapsed, {} timed out, A1 {:?}, A2 {:?}, {:.0}s elapsed)",
+            "  {:?}:{idx} done ({}/{total}, {}/{} collapsed, {} timed out, {} eval timed out, A1 {:?}, A2 {:?}, {:.0}s elapsed)",
             source,
             n + 1,
             record.aggregate.collapsed,
             record.aggregate.n,
             record.aggregate.timed_out,
+            record.aggregate.eval_timed_out,
             record.agreement_a1,
             record.agreement_a2,
             start.elapsed().as_secs_f64()
@@ -1266,8 +1322,8 @@ fn print_summary(s: &Summary) {
         s.horizons
     );
     println!(
-        "# runs collapsed (extinction | energy-death | nutrient-lockup): {}; timed out (excluded): {}\n",
-        s.runs_collapsed, s.runs_timed_out
+        "# runs collapsed (extinction | energy-death | nutrient-lockup): {}; timed out (excluded): {}; eval timed out (excluded): {}\n",
+        s.runs_collapsed, s.runs_timed_out, s.runs_eval_timed_out
     );
     print_column("A1 only (rho > 1 and I > 1 at the seeded centroids)", &s.a1);
     print_column(
@@ -1694,7 +1750,15 @@ mod tests {
         // Smoke check only: no assertion on the emergent outcome.
         let ranges = default_ranges();
         let unit = vec![0.5; ranges.len()];
-        let record = evaluate_config(ConfigSource::Sample, 0, &unit, 2, 20, Duration::MAX);
+        let record = evaluate_config(
+            ConfigSource::Sample,
+            0,
+            &unit,
+            2,
+            20,
+            Duration::MAX,
+            Duration::MAX,
+        );
         assert_eq!(record.seeds.len(), 2);
         assert_eq!(record.aggregate.n, 2);
         assert!(record.seeds.iter().all(|s| s.termination_tick <= 20));
@@ -1723,9 +1787,10 @@ mod resume_tests {
         assert_eq!(args.seeds, N_SEEDS);
         assert_eq!(args.configs, None);
         assert_eq!(args.run_timeout, Duration::from_secs(300));
+        assert_eq!(args.eval_timeout, Duration::from_secs(300));
         assert!(!args.summary_only);
         let args = parse_args(
-            "--limit 3 --horizon 600 --out target/x.jsonl --atlas a.json --seeds 2 --configs atlas:0,atlas:1 --run-timeout-secs 7 --summary"
+            "--limit 3 --horizon 600 --out target/x.jsonl --atlas a.json --seeds 2 --configs atlas:0,atlas:1 --run-timeout-secs 7 --eval-timeout-secs 11 --summary"
                 .split(' ')
                 .map(String::from),
         );
@@ -1736,6 +1801,7 @@ mod resume_tests {
         assert_eq!(args.seeds, 2);
         assert_eq!(args.configs.as_ref().map(|c| c.len()), Some(2));
         assert_eq!(args.run_timeout, Duration::from_secs(7));
+        assert_eq!(args.eval_timeout, Duration::from_secs(11));
         assert!(args.summary_only);
     }
 
@@ -1754,6 +1820,7 @@ mod resume_tests {
             seeds: 2,
             configs: None,
             run_timeout: Duration::MAX,
+            eval_timeout: Duration::MAX,
             summary_only: false,
         };
         assert_eq!(sweep(&base, &atlas, &sample), 3);
@@ -1794,7 +1861,15 @@ mod resume_tests {
     fn a_run_past_its_wall_clock_budget_reads_as_a_timeout_and_is_not_judged() {
         let dims = default_ranges().len();
         let unit = vec![0.5; dims];
-        let record = evaluate_config(ConfigSource::Sample, 0, &unit, 1, 20, Duration::ZERO);
+        let record = evaluate_config(
+            ConfigSource::Sample,
+            0,
+            &unit,
+            1,
+            20,
+            Duration::ZERO,
+            Duration::MAX,
+        );
         assert_eq!(record.seeds[0].mode, "timeout");
         assert!(!record.seeds[0].collapsed);
         assert_eq!(record.aggregate.n, 0);
@@ -1805,5 +1880,64 @@ mod resume_tests {
         assert_eq!(summary.runs_timed_out, 1);
         assert_eq!(summary.a1.unobserved, 1);
         assert_eq!(summary.a1.false_positives.predicted_permanent, 0);
+    }
+
+    /// A seed that simulated to the horizon but whose evaluation overran its
+    /// budget reached no verdict: it is neither a collapse nor a persistence,
+    /// carries no breakdown-derived observable, and is counted apart from
+    /// the simulation timeouts.
+    #[test]
+    fn a_run_whose_evaluation_overruns_its_budget_reads_as_an_eval_timeout_and_is_not_judged() {
+        let dims = default_ranges().len();
+        let unit = vec![0.5; dims];
+        let record = evaluate_config(
+            ConfigSource::Sample,
+            0,
+            &unit,
+            1,
+            20,
+            Duration::MAX,
+            Duration::ZERO,
+        );
+        let seed = &record.seeds[0];
+        assert_eq!(seed.termination_tick, 20, "the rollout reached the horizon");
+        assert_eq!(seed.mode, EVAL_TIMEOUT_MODE);
+        assert!(!seed.collapsed);
+        assert!(
+            !seed.decomposer_guild,
+            "the not-read value, as under timeout"
+        );
+        assert_eq!(record.aggregate.n, 0);
+        assert_eq!(
+            record.aggregate.timed_out, 0,
+            "not folded into the timeouts"
+        );
+        assert_eq!(record.aggregate.eval_timed_out, 1);
+        assert_eq!(record.agreement_a1, Agreement::Unobserved);
+        assert_eq!(record.agreement_a2, Agreement::Unobserved);
+        let summary = summarise(&[record]);
+        assert_eq!(summary.runs_timed_out, 0);
+        assert_eq!(summary.runs_eval_timed_out, 1);
+        assert_eq!(summary.a1.unobserved, 1);
+    }
+
+    /// A row with no evaluation timeout serialises exactly as it did before
+    /// the evaluation budget existed: no new key.
+    #[test]
+    fn a_row_without_an_eval_timeout_carries_no_new_key() {
+        let dims = default_ranges().len();
+        let unit = vec![0.5; dims];
+        let record = evaluate_config(
+            ConfigSource::Sample,
+            0,
+            &unit,
+            1,
+            20,
+            Duration::MAX,
+            Duration::MAX,
+        );
+        assert_ne!(record.seeds[0].mode, EVAL_TIMEOUT_MODE);
+        let line = serde_json::to_string(&record).unwrap();
+        assert!(!line.contains("eval_timed_out"), "{line}");
     }
 }

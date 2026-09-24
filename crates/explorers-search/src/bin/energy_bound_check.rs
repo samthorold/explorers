@@ -50,11 +50,17 @@
 //! uninterrupted run (`explorers_search::sweep`). Subset selectors:
 //! `--configs atlas:0,sample:12` and `--seeds 2`.
 //!
-//! A (config, seed) run has a wall-clock budget (`--run-timeout-secs`,
-//! default 300): a knife-edge world that costs seconds per tick stops where
-//! it is and is recorded as mode `timeout`. Its ticks are not read — the
-//! summary excludes it from the distributions and the violation list and
-//! counts it separately.
+//! A (config, seed) run's step loop has a wall-clock budget, the
+//! **simulation budget** (`--run-timeout-secs`, default 300): a knife-edge
+//! world that costs seconds per tick stops where it is and is recorded as
+//! mode `timeout`. Its ticks are not read — the summary excludes it from the
+//! distributions and the violation list and counts it separately. This bin
+//! takes no terminal evaluation (its checks are per-tick reads), so the
+//! sweeps' **evaluation budget** (`--eval-timeout-secs`, #523) bounds nothing
+//! here: the flag is accepted so every sweep bin shares one command-line
+//! shape, and no run here records `eval_timeout`. The summary still treats
+//! that mode as unfinished and counts it apart, so a row carrying it can
+//! never be read as a checked run.
 //!
 //! ## Running
 //!
@@ -74,7 +80,10 @@ use rayon::prelude::*;
 use explorers_genesis::EvalConfig;
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{SearchConfig, decode, default_ranges};
-use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
+use explorers_search::sweep::{
+    DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
+    done_configs, is_unfinished, plan_tasks, read_atlas_units, read_rows,
+};
 use explorers_sim::{InitialDistribution, World, WorldParameters};
 
 /// Fixed contiguous seed block per config (the `role_emergence` convention).
@@ -266,7 +275,7 @@ struct SeedRecord {
     /// Ticks actually run (`== horizon` unless terminated early).
     ran_ticks: u64,
     /// `extinction`, `explosion`, `survived` (mirrors `run_single`'s stops),
-    /// or `timeout` when the wall-clock budget ran out.
+    /// or `timeout` when the simulation budget ran out.
     terminal_mode: String,
     peak_population: usize,
     /// Founders seeded by `World::new`, and how many of them carry a negative
@@ -416,7 +425,7 @@ fn run_seed(
             break;
         }
         if started.elapsed() > run_timeout {
-            terminal_mode = "timeout";
+            terminal_mode = TIMEOUT_MODE;
             break;
         }
     }
@@ -490,9 +499,12 @@ struct Summary {
     runs_survived: usize,
     runs_extinct: usize,
     runs_exploded: usize,
-    /// Runs stopped by the wall-clock guard: excluded from every distribution
-    /// and from the violation list, whatever their ticks read.
+    /// Runs stopped by the simulation budget: excluded from every
+    /// distribution and from the violation list, whatever their ticks read.
     runs_timed_out: usize,
+    /// Runs recorded under the evaluation budget's mode (`eval_timeout`):
+    /// excluded as the timeouts are, counted apart from them.
+    runs_eval_timed_out: usize,
     /// Runs that hit a NaN and were excluded from the distributions, and how
     /// many of those had a negative founder trait (#444).
     runs_nan: usize,
@@ -528,7 +540,9 @@ struct Summary {
 
 /// Command line: `--limit N`, `--horizon T`, `--out PATH`, `--atlas PATH`,
 /// `--seeds N` (1..=8), `--configs atlas:0,sample:12`,
-/// `--run-timeout-secs N`, `--summary`.
+/// `--run-timeout-secs N` (simulation budget), `--eval-timeout-secs N`
+/// (accepted for the shared sweep shape; this bin takes no evaluation),
+/// `--summary`.
 #[derive(Clone, Debug, PartialEq)]
 struct Args {
     limit: Option<usize>,
@@ -538,6 +552,9 @@ struct Args {
     seeds: u64,
     configs: Option<HashSet<(ConfigSource, usize)>>,
     run_timeout: Duration,
+    /// Parsed for the shared sweep command line; unread, since this bin
+    /// takes no terminal evaluation (see the module doc).
+    eval_timeout: Duration,
     summary_only: bool,
 }
 
@@ -553,6 +570,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
         seeds: N_SEEDS,
         configs: None,
         run_timeout: Duration::from_secs(DEFAULT_RUN_TIMEOUT_SECS),
+        eval_timeout: Duration::from_secs(DEFAULT_EVAL_TIMEOUT_SECS),
         summary_only: false,
     };
     let mut it = argv.into_iter();
@@ -590,6 +608,12 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
                 args.run_timeout = Duration::from_secs(number(
                     "--run-timeout-secs",
                     &value("--run-timeout-secs", &mut it),
+                ))
+            }
+            EVAL_TIMEOUT_FLAG => {
+                args.eval_timeout = Duration::from_secs(number(
+                    EVAL_TIMEOUT_FLAG,
+                    &value(EVAL_TIMEOUT_FLAG, &mut it),
                 ))
             }
             "--summary" => args.summary_only = true,
@@ -639,7 +663,7 @@ fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
         let violating = row
             .seeds
             .iter()
-            .filter(|s| s.terminal_mode != "timeout" && s.nan_tick.is_none())
+            .filter(|s| !is_unfinished(&s.terminal_mode) && s.nan_tick.is_none())
             .filter(|s| {
                 s.checks.lemma1_violations
                     + s.checks.theorem_violations
@@ -657,7 +681,7 @@ fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
                 .count(),
             row.seeds
                 .iter()
-                .filter(|s| s.terminal_mode == "timeout")
+                .filter(|s| s.terminal_mode == TIMEOUT_MODE)
                 .count(),
             violating,
             start.elapsed().as_secs_f64()
@@ -699,7 +723,7 @@ fn summarise(rows: &[ConfigRow]) -> Summary {
     let checked: Vec<(&ConfigRow, &SeedRecord)> = runs
         .iter()
         .copied()
-        .filter(|(_, s)| s.nan_tick.is_none() && s.terminal_mode != "timeout")
+        .filter(|(_, s)| s.nan_tick.is_none() && !is_unfinished(&s.terminal_mode))
         .collect();
     let survivors: Vec<(&ConfigRow, &SeedRecord)> = checked
         .iter()
@@ -741,7 +765,8 @@ fn summarise(rows: &[ConfigRow]) -> Summary {
         runs_survived: mode("survived"),
         runs_extinct: mode("extinction"),
         runs_exploded: mode("explosion"),
-        runs_timed_out: mode("timeout"),
+        runs_timed_out: mode(TIMEOUT_MODE),
+        runs_eval_timed_out: mode(EVAL_TIMEOUT_MODE),
         runs_nan: runs.iter().filter(|(_, s)| s.nan_tick.is_some()).count(),
         runs_nan_with_negative_founder: runs
             .iter()
@@ -795,8 +820,8 @@ fn print_summary(s: &Summary) {
         s.horizons
     );
     println!(
-        "# terminal: {} survived, {} extinct, {} exploded, {} timed out (excluded)",
-        s.runs_survived, s.runs_extinct, s.runs_exploded, s.runs_timed_out
+        "# terminal: {} survived, {} extinct, {} exploded, {} timed out, {} eval timed out (both excluded)",
+        s.runs_survived, s.runs_extinct, s.runs_exploded, s.runs_timed_out, s.runs_eval_timed_out
     );
     println!(
         "# NaN runs excluded: {} ({} with a negative founder trait, #444); {} runs checked",
@@ -1002,9 +1027,10 @@ mod resume_tests {
         assert_eq!(args.seeds, N_SEEDS);
         assert_eq!(args.configs, None);
         assert_eq!(args.run_timeout, Duration::from_secs(300));
+        assert_eq!(args.eval_timeout, Duration::from_secs(300));
         assert!(!args.summary_only);
         let args = parse_args(
-            "--limit 3 --horizon 600 --out target/x.jsonl --atlas a.json --seeds 2 --configs atlas:0,atlas:1 --run-timeout-secs 7 --summary"
+            "--limit 3 --horizon 600 --out target/x.jsonl --atlas a.json --seeds 2 --configs atlas:0,atlas:1 --run-timeout-secs 7 --eval-timeout-secs 11 --summary"
                 .split(' ')
                 .map(String::from),
         );
@@ -1015,6 +1041,7 @@ mod resume_tests {
         assert_eq!(args.seeds, 2);
         assert_eq!(args.configs.as_ref().map(|c| c.len()), Some(2));
         assert_eq!(args.run_timeout, Duration::from_secs(7));
+        assert_eq!(args.eval_timeout, Duration::from_secs(11));
         assert!(args.summary_only);
     }
 
@@ -1033,6 +1060,7 @@ mod resume_tests {
             seeds: 2,
             configs: None,
             run_timeout: Duration::MAX,
+            eval_timeout: Duration::MAX,
             summary_only: false,
         };
         assert_eq!(sweep(&base, &atlas, &sample), 3);
@@ -1074,6 +1102,22 @@ mod resume_tests {
         assert_eq!(row.seeds[0].terminal_mode, "timeout");
         let summary = summarise(&[row]);
         assert_eq!(summary.runs_timed_out, 1);
+        assert_eq!(summary.runs_checked, 0);
+        assert!(summary.violations.is_empty());
+    }
+
+    #[test]
+    fn an_eval_timed_out_run_is_unfinished_counted_apart_and_not_checked() {
+        let dims = default_ranges().len();
+        let unit = vec![0.5; dims];
+        let mut row = run_config(ConfigSource::Sample, 0, &unit, 1, 20, Duration::MAX);
+        // A row recorded under the evaluation budget's mode, carrying a
+        // violation that would be listed were the run read as finished.
+        row.seeds[0].terminal_mode = EVAL_TIMEOUT_MODE.to_string();
+        row.seeds[0].checks.lemma1_violations = 1;
+        let summary = summarise(&[row]);
+        assert_eq!(summary.runs_eval_timed_out, 1);
+        assert_eq!(summary.runs_timed_out, 0, "not folded into the timeouts");
         assert_eq!(summary.runs_checked, 0);
         assert!(summary.violations.is_empty());
     }
