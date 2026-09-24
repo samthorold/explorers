@@ -1264,10 +1264,87 @@ impl Default for QdConfig {
     }
 }
 
+/// What the search reports to its caller as each generation completes (#529).
+/// Reporting only: it is read off the archive after the generation's inserts and
+/// never feeds back into the search.
+#[derive(Clone, Debug)]
+pub struct GenerationReport {
+    /// Index of the generation just completed; 0 is the bootstrap batch.
+    pub generation: usize,
+    /// The last generation index (`QdConfig::generations`): the search runs
+    /// `generations + 1` generations in all.
+    pub generations: usize,
+    /// Live cells filled so far, of `total_cells`.
+    pub coverage: usize,
+    pub total_cells: usize,
+    /// QD-score (Σ elite fitness) of the archive so far.
+    pub qd_score: f32,
+    /// Best elite fitness in the archive so far.
+    pub best_fitness: f32,
+    /// Configs in this generation's batch that were rolled out (cleared, or
+    /// gated but drawn into the prefilter cross-check).
+    pub rolled_out: usize,
+    /// Configs in this generation's batch the a-priori prefilter skipped.
+    pub skipped: usize,
+    /// Wall-clock spent on this generation.
+    pub generation_elapsed: std::time::Duration,
+    /// Wall-clock since the search began.
+    pub elapsed: std::time::Duration,
+}
+
+impl std::fmt::Display for GenerationReport {
+    /// One progress line, read at a glance in a terminal while the search runs —
+    /// not a format to parse.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let width = self.generations.to_string().len();
+        write!(
+            f,
+            "gen {:>width$}/{}  coverage {}/{} ({:.2}%)  qd {:.3}  best {:.4}  \
+             rolled out {}, skipped {}  took {}  elapsed {}",
+            self.generation,
+            self.generations,
+            self.coverage,
+            self.total_cells,
+            100.0 * self.coverage as f64 / self.total_cells.max(1) as f64,
+            self.qd_score,
+            self.best_fitness,
+            self.rolled_out,
+            self.skipped,
+            clock(self.generation_elapsed),
+            clock(self.elapsed),
+        )
+    }
+}
+
+/// A wall-clock span as `42s`, `3m12s` or `3h12m05s`.
+fn clock(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h}h{m:02}m{s:02}s")
+    } else if m > 0 {
+        format!("{m}m{s:02}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
 /// Run the QD outer search and return the illuminated [`Atlas`]. Reuses
 /// [`decode`] and [`run_ensemble`] unchanged — descriptors are read off the
 /// per-seed breakdowns. Deterministic in `(config, base_seed, rng)`.
 pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
+    run_qd_observed(config, base_seed, rng, &mut |_: &GenerationReport| {})
+}
+
+/// [`run_qd`], calling `observer` with a [`GenerationReport`] as each generation
+/// completes (#529). The observer sees the search; it cannot steer it — the atlas
+/// is identical with or without one.
+pub fn run_qd_observed(
+    config: &QdConfig,
+    base_seed: u64,
+    rng: &mut impl Rng,
+    observer: &mut impl FnMut(&GenerationReport),
+) -> Atlas {
     let dims = config.ranges.len();
     let ensemble_config = EnsembleConfig {
         ensemble_size: config.ensemble_size,
@@ -1295,7 +1372,12 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
     let mut batch: Vec<Vec<f64>> = (0..config.batch).map(|_| emitter.sample(rng)).collect();
     inject_carcass_seeds(&mut batch, &config.ranges, config.carcass_seed_count);
 
+    // Wall-clock for the per-generation report only (#529); never read by the search.
+    let started = std::time::Instant::now();
+    let mut elapsed_before = std::time::Duration::ZERO;
+
     for generation in 0..=config.generations {
+        let skipped_before = rollouts_skipped;
         // Distinct per-config ensemble base seeds, derived from a monotonic config
         // counter so evaluation order is immaterial (each config's seed is fixed).
         let seeds: Vec<u64> = (0..batch.len())
@@ -1405,6 +1487,22 @@ pub fn run_qd(config: &QdConfig, base_seed: u64, rng: &mut impl Rng) -> Atlas {
                 }
             })
             .collect();
+
+        let elapsed = started.elapsed();
+        let skipped_this_generation = rollouts_skipped - skipped_before;
+        observer(&GenerationReport {
+            generation,
+            generations: config.generations,
+            coverage: archive.coverage(),
+            total_cells: RESOLUTION.pow(3),
+            qd_score: archive.qd_score(),
+            best_fitness: archive.best_fitness(),
+            rolled_out: evals.iter().filter(|e| e.is_some()).count(),
+            skipped: skipped_this_generation,
+            generation_elapsed: elapsed - elapsed_before,
+            elapsed,
+        });
+        elapsed_before = elapsed;
 
         if generation == config.generations {
             break;
@@ -2151,6 +2249,138 @@ mod tests {
                 "every bifurcation disagreement must carry a regime tag"
             );
         }
+    }
+
+    #[test]
+    fn slow_run_qd_reports_each_generation_as_it_completes() {
+        // #529: the search reports each completed generation to its caller —
+        // the bootstrap plus every adaptation generation, in order.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = QdConfig {
+            ensemble_size: 1,
+            max_ticks: 20,
+            batch: 4,
+            generations: 2,
+            ..QdConfig::default()
+        };
+        let mut reports: Vec<GenerationReport> = Vec::new();
+        let mut rng = ChaCha8Rng::seed_from_u64(42);
+        run_qd_observed(&config, 42, &mut rng, &mut |r: &GenerationReport| {
+            reports.push(r.clone())
+        });
+
+        assert_eq!(reports.len(), config.generations + 1);
+        for (i, r) in reports.iter().enumerate() {
+            assert_eq!(r.generation, i, "generation index must increase by one");
+            assert_eq!(r.generations, config.generations);
+        }
+    }
+
+    #[test]
+    fn slow_generation_reports_track_the_archive_and_the_rollout_budget() {
+        // #529: each report reads the archive as the generation leaves it, so the
+        // last one agrees with the atlas; every config in a batch is either
+        // rolled out or skipped by the prefilter, and the skips add up to the
+        // atlas's tally; wall-clock is cumulative.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = QdConfig {
+            ensemble_size: 1,
+            max_ticks: 20,
+            batch: 6,
+            generations: 2,
+            ..QdConfig::default()
+        };
+        let mut reports: Vec<GenerationReport> = Vec::new();
+        let mut rng = ChaCha8Rng::seed_from_u64(9);
+        let atlas = run_qd_observed(&config, 9, &mut rng, &mut |r: &GenerationReport| {
+            reports.push(r.clone())
+        });
+
+        let last = reports.last().expect("at least one generation");
+        assert_eq!(last.coverage, atlas.coverage);
+        assert_eq!(last.total_cells, atlas.total_cells);
+        assert_eq!(last.qd_score, atlas.qd_score);
+        assert_eq!(last.best_fitness, atlas.best_fitness);
+
+        for r in &reports {
+            assert_eq!(r.rolled_out + r.skipped, config.batch);
+        }
+        let skipped: usize = reports.iter().map(|r| r.skipped).sum();
+        assert_eq!(skipped, atlas.rollouts_skipped);
+
+        let mut previous = std::time::Duration::ZERO;
+        for r in &reports {
+            assert!(r.elapsed >= r.generation_elapsed);
+            assert!(r.elapsed >= previous + r.generation_elapsed);
+            previous = r.elapsed;
+        }
+    }
+
+    #[test]
+    fn slow_observing_the_search_leaves_the_atlas_unchanged() {
+        // #529: reporting only. The same-seed search with an observer installed
+        // writes the identical atlas to the one written without — the observer
+        // draws nothing from the rng and steers nothing.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = QdConfig {
+            ensemble_size: 1,
+            max_ticks: 20,
+            batch: 4,
+            generations: 2,
+            ..QdConfig::default()
+        };
+        // The atlas as written, with the cell list (HashMap order) sorted.
+        let written = |atlas: &Atlas| -> serde_json::Value {
+            let mut v = serde_json::to_value(atlas).unwrap();
+            v["cells"]
+                .as_array_mut()
+                .unwrap()
+                .sort_by_key(|c| c["cell"].to_string());
+            v
+        };
+
+        let mut rng1 = ChaCha8Rng::seed_from_u64(42);
+        let unobserved = run_qd(&config, 42, &mut rng1);
+        let mut rng2 = ChaCha8Rng::seed_from_u64(42);
+        let mut calls = 0;
+        let observed = run_qd_observed(&config, 42, &mut rng2, &mut |_: &GenerationReport| {
+            calls += 1
+        });
+
+        assert_eq!(calls, config.generations + 1);
+        assert_eq!(written(&observed), written(&unobserved));
+        // The rng is left in the same place, too.
+        assert_eq!(rng1.random::<u64>(), rng2.random::<u64>());
+    }
+
+    #[test]
+    fn a_generation_report_reads_as_one_progress_line() {
+        // #529: the CLI prints one line per generation, read at a glance while
+        // waiting — index of total, archive state, rollout budget, wall-clock.
+        use std::time::Duration;
+        let report = GenerationReport {
+            generation: 3,
+            generations: 10,
+            coverage: 41,
+            total_cells: 1000,
+            qd_score: 12.3456,
+            best_fitness: 0.61234,
+            rolled_out: 28,
+            skipped: 4,
+            generation_elapsed: Duration::from_secs(192),
+            elapsed: Duration::from_secs(3 * 3600 + 12 * 60 + 5),
+        };
+        assert_eq!(
+            report.to_string(),
+            "gen  3/10  coverage 41/1000 (4.10%)  qd 12.346  best 0.6123  \
+             rolled out 28, skipped 4  took 3m12s  elapsed 3h12m05s"
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use rand_chacha::ChaCha8Rng;
 use explorers_search::qd::{
     COEXISTENCE_FLOOR, REFINE_ENSEMBLE_SIZE, REFINE_TOP_K, RefinementConfig, refined_best_recipe,
 };
-use explorers_search::search::{SearchConfig, default_ranges, run_search};
+use explorers_search::search::{SearchConfig, default_ranges, run_search_observed};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -91,7 +91,11 @@ fn main() {
     eprintln!("  Max ticks: {max_ticks}");
     eprintln!("  Seed: {seed}");
 
-    let atlas = run_search(&config, seed, &mut rng);
+    // One line per completed generation (#529): a multi-hour regeneration is
+    // otherwise silent between the header above and the summary below.
+    let atlas = run_search_observed(&config, seed, &mut rng, &mut |report| {
+        eprintln!("  {report}");
+    });
 
     let json = serde_json::to_string_pretty(&atlas).unwrap();
     fs::write(&output_path, &json).unwrap();
