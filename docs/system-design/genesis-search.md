@@ -248,6 +248,19 @@ flags are carried through the horizon gate and the scored descriptors are not. A
 **before** the horizon is the other case: it has no settled window to read, so its flags report `false`
 and "no guild" is indistinguishable from "not read" — accepted rather than made tri-state.
 
+Carrying the flags through is not a reason to **let the world through**. The terminal gates stay blind to
+the guild: a `monoculture` or `generalist_dominance` world that holds a decomposer guild is still a
+failed world. Measured at `T = 2000` (#546,
+[546-guild-in-monoculture.md](../research/546-guild-in-monoculture.md)), the guilds inside gated worlds
+are mostly the heterotroph tail of one trait continuum straddling the photo = hetero line. The role
+read's producer / heterotroph cut splits a mixotroph monoculture into a "producer" and a "decomposer"
+population; it is not a second trophic level. Only 2 of 12 monoculture-gated guild seeds read as a
+separate, diet-specialised cluster, both borderline, and none at the generalist gate's own ±0.2 band.
+The gate fires well clear of its threshold on every one (`clustering_strength` 0.00–0.37 against 0.5).
+The clean guild worlds are sharply bimodal and live. So a gated world's guild flag is reported, but
+it is not evidence that the gate misfired, and the atlas's gated-guild count overstates the real
+guilds the gates remove.
+
 A **further** reported per-seed distribution rides under the *same* boundary: the **coexistence
 fraction** — the share of a cell's seed ensemble that lands in the coexisting regime (alive, and either
 clustering or coexisting; the `||` is the #359 small-N disjunction so clustering's silent zero below

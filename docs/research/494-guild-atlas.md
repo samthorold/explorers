@@ -139,6 +139,11 @@ three options is decided on a guild signal that the gates have already mostly re
 trait-space monoculture holding a behavioural guild should count as a failed world is a separate
 question from this issue's three options, and upstream of them.
 
+*Resolved in #546* ([546-guild-in-monoculture.md](546-guild-in-monoculture.md)): those gated
+guilds are mostly a straddle of the producer / heterotroph line inside one mixotroph trait
+continuum, not a separate diet-specialised population. The gate is kept as is, and the gated
+count above overstates the real guilds it removes (genesis-search.md, *Authority boundary*).
+
 ## Reproduce
 
 ```
