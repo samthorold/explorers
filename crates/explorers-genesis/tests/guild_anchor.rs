@@ -23,25 +23,27 @@ fn recipe() -> WorldRecipe {
 /// only fitness, oscillation and coexistence moved, and the guild read still
 /// touches none of them. Re-captured under #486 (trophic balance scored per
 /// agent against the role read, not on cluster means) — only fitness and
-/// trophic balance moved. Re-capture with
+/// trophic balance moved. Re-pinned under #494 on the regenerated
+/// settled-horizon atlas's recipe: `recipe.json` itself was replaced, so every
+/// value is new (a different world, not a changed read). Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 7]); 3] = [
     (
         1,
         [
-            1060910181, 1054493816, 1065301997, 1065353216, 1052535423, 1063416466, 1026108230,
+            1057418803, 1049594728, 1065353216, 0, 1052099215, 1065353216, 1047125560,
         ],
     ),
     (
         2,
         [
-            1061134438, 1054501779, 1065353216, 1065353216, 1057937687, 1061294880, 1040666870,
+            1057277051, 1051129998, 1065353216, 0, 1049146425, 1065353216, 1046411327,
         ],
     ),
     (
         3,
         [
-            1060063743, 1058105126, 1065353216, 1065353216, 1047099605, 1059105949, 1031849468,
+            1057622103, 1053154461, 1065353216, 0, 1050572489, 1065353216, 1047379013,
         ],
     ),
 ];
