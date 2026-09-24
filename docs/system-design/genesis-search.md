@@ -217,10 +217,19 @@ by realised diet — taken on the rollout's roster snapshots (the `coexistence_s
 over the **second half** of the run. The guild holds when the role's count reaches `GUILD_MIN_SIZE = 5`
 on **every** such sample *and* at least one `Born` event in that window names a member as a parent —
 sustained size rules out the lone long-lived individual, recruitment rules out a sterile founder cohort
-sitting at exactly the floor. Both values are starting points, not settled thresholds: regenerating the
-atlas with the read reported, and counting the cells that pass, is what tests them and decides whether
-the observable ever becomes a binning axis or folds into `coexistence_fraction`. Until then it is
-reported only.
+sitting at exactly the floor. Both values are starting points, not settled thresholds.
+
+**Decided (#494): the guild stays reported.** It is not a binning axis and it does not fold into
+`coexistence_fraction`. The settled-horizon atlas was regenerated with the read reported
+([494-guild-atlas.md](../research/494-guild-atlas.md)):
+- No live cell reaches a guild fraction ≥ 0.5.
+- Living worlds hold a decomposer guild at the same 0.9 % per seed whether the search selected them or
+  not, so the objective is not selecting against guilds.
+- Only 1 of 141 live unselected configs is a guild cell. A binning axis would sit on a near-flat
+  signal, and a guild-aware floor would clear none of the refined top-10.
+- The guilds the gates remove are mostly a mixotroph straddle, not a second trophic level (#546).
+
+Revisit if a stepper or threshold change makes live guild cells common enough to climb.
 
 To put the fold option to that decision on one fixed atlas (#494, #538), the projection can read a
 **guild-aware floor**: `explorers-search --coexistence-floor decomposer|consumer|either`, with the full run

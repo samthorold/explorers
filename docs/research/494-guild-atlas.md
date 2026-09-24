@@ -6,7 +6,8 @@ adds the `guild_census` instrument (#544). Re-pins the two goldens that read the
 files — `evaluator_pin` (cells re-chosen from a scan of the new atlas for the same spread of
 verdicts) and `guild_anchor` (the new recipe). Changes no stepper, evaluator or search behaviour.
 The decision this issue asks for — leave the guild reported, make it a binning axis, or fold it
-into the coexistence floor — is set out at the end for a human; it is not taken here.**
+into the coexistence floor — was set out at the end for a human, who chose to **leave it
+reported** (recorded in genesis-search.md, *Authority boundary*).**
 Stepper, evaluator and search at `3465c6d` (after #486's per-agent trophic scoring, #527's
 ungated guild read, #540's starvation fix).
 
