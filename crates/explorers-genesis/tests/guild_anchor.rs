@@ -21,25 +21,27 @@ fn recipe() -> WorldRecipe {
 /// under #503 (the evaluator reads oscillation and coexistence off the
 /// settled window `(T/2, T]`, and the grace became an absolute tick count) —
 /// only fitness, oscillation and coexistence moved, and the guild read still
-/// touches none of them. Re-capture with
+/// touches none of them. Re-captured under #486 (trophic balance scored per
+/// agent against the role read, not on cluster means) — only fitness and
+/// trophic balance moved. Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 7]); 3] = [
     (
         1,
         [
-            1061297531, 1054493816, 1065301997, 1065353216, 1052535423, 1065353216, 1026108230,
+            1060910181, 1054493816, 1065301997, 1065353216, 1052535423, 1063416466, 1026108230,
         ],
     ),
     (
         2,
         [
-            1061946105, 1054501779, 1065353216, 1065353216, 1057937687, 1065353216, 1040666870,
+            1061134438, 1054501779, 1065353216, 1065353216, 1057937687, 1061294880, 1040666870,
         ],
     ),
     (
         3,
         [
-            1061313196, 1058105126, 1065353216, 1065353216, 1047099605, 1065353216, 1031849468,
+            1060063743, 1058105126, 1065353216, 1065353216, 1047099605, 1059105949, 1031849468,
         ],
     ),
 ];

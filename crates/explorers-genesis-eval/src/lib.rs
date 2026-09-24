@@ -2,7 +2,7 @@ pub mod ensemble;
 pub mod guild;
 
 use explorers_sim::event::EventKind;
-use explorers_sim::topology::TopologyProjection;
+use explorers_sim::topology::{TopologyProjection, TrophicRole};
 
 /// The event kinds the evaluator consumes — the retention a rollout applies
 /// with `World::retain_event_kinds` so a settled-community horizon fits in
@@ -383,8 +383,13 @@ fn evaluate(
         0.0
     };
 
-    let labels = dbscan(&trait_vectors, config.dbscan_eps, config.dbscan_min_points);
-    let tb = trophic_balance_score(&trait_vectors, &labels, &energies);
+    // Balance is scored per agent against the topology's trophic-role read
+    // (#486), the same read the guild observables classify with.
+    let roles = observations
+        .topology
+        .trophic_roles_of(agents.iter().map(|a| (a.id, &a.traits)));
+    let agent_roles: Vec<TrophicRole> = agents.iter().map(|a| roles[&a.id]).collect();
+    let tb = trophic_balance_score(&agent_roles, &energies);
 
     let grace_ticks = config.grace_ticks;
     if let Some(failure) = dead_pool_gate(observations, config, sustainable_stock(world.params())) {
@@ -397,7 +402,6 @@ fn evaluate(
         }
         if is_generalist_dominant(
             &trait_vectors,
-            &labels,
             &energies,
             config.generalist_threshold,
             config.generalist_dominance_fraction,
@@ -656,9 +660,13 @@ pub fn trophic_coordinates(traits: &explorers_sim::TraitVector) -> (f32, f32) {
     )
 }
 
+/// Whether generalists hold more than `dominance_fraction` of living energy.
+/// Scored per agent (#486): an agent is a generalist iff *its own* trophic
+/// coordinates both exceed `generalist_threshold`, and every living agent
+/// counts whatever its DBSCAN label — a merged cluster of pure producers and
+/// pure heterotrophs has a generalist-looking mean but no generalists.
 pub fn is_generalist_dominant(
     trait_vectors: &[explorers_sim::TraitVector],
-    labels: &[Option<usize>],
     energies: &[f32],
     generalist_threshold: f32,
     dominance_fraction: f32,
@@ -667,44 +675,15 @@ pub fn is_generalist_dominant(
     if total_energy <= 0.0 {
         return false;
     }
-
-    let max_cluster = labels.iter().filter_map(|l| *l).max();
-    let Some(max_cluster) = max_cluster else {
-        return false;
-    };
-
-    let mut generalist_energy = 0.0_f32;
-    for cluster_id in 0..=max_cluster {
-        let members: Vec<usize> = labels
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| **l == Some(cluster_id))
-            .map(|(i, _)| i)
-            .collect();
-        if members.is_empty() {
-            continue;
-        }
-        let mut avg_photo = 0.0_f32;
-        let mut avg_hetero = 0.0_f32;
-        for &i in &members {
-            let (p, h) = trophic_coordinates(&trait_vectors[i]);
-            avg_photo += p;
-            avg_hetero += h;
-        }
-        let n = members.len() as f32;
-        avg_photo /= n;
-        avg_hetero /= n;
-
-        // A generalist has significant investment in both autotrophy and heterotrophy
-        let is_generalist = avg_photo > generalist_threshold && avg_hetero > generalist_threshold;
-
-        if is_generalist {
-            for &i in &members {
-                generalist_energy += energies[i];
-            }
-        }
-    }
-
+    let generalist_energy: f32 = trait_vectors
+        .iter()
+        .zip(energies)
+        .filter(|(traits, _)| {
+            let (photo, hetero) = trophic_coordinates(traits);
+            photo > generalist_threshold && hetero > generalist_threshold
+        })
+        .map(|(_, &e)| e)
+        .sum();
     generalist_energy / total_energy > dominance_fraction
 }
 
@@ -885,66 +864,36 @@ pub fn has_trophic_pyramid(
     producer_energy > consumer_energy
 }
 
-/// Producer share of living energy: `producer_energy / (producer + consumer)`,
-/// bucketing each cluster as producer or consumer by whether its mean photo-
-/// synthetic coordinate exceeds its mean heterotrophic one. It rewards the
-/// pyramid base — energy concentrated in producers — per the "Trophic structure"
-/// expected property.
+/// Producer share of living energy: `producer_energy / total`, bucketing each
+/// agent by its own trophic role (`roles`, parallel to `energies`). It rewards
+/// the pyramid base — energy concentrated in producers — per the "Trophic
+/// structure" expected property.
+///
+/// Scored per agent against the topology's trophic-role read
+/// ([`TopologyProjection::trophic_roles_of`]), not on DBSCAN cluster means
+/// (#486): a merged cluster of producers and heterotrophs scores its producer
+/// energy share, not a whole-cluster 0 or 1 decided by a count-parity tie.
+/// Every living agent counts, whatever its DBSCAN label; a `Producer` is on
+/// the producer side and every other role on the other.
 ///
 /// It is deliberately **decomposer-blind**: decomposers are heterotrophs, so they
-/// fall in `consumer_energy`, and this score does not — and cannot — reward a
-/// decomposer guild distinctly. Decomposer-ness is not in the trait vector to
+/// fall on the non-producer side, and this score does not — and cannot — reward
+/// a decomposer guild distinctly. Decomposer-ness is not in the trait vector to
 /// score (see `docs/system-design/trait-space.md`, "Decomposer is a behavioural
 /// role, not a heritable trait"), so the detrital pathway is held to account
 /// negatively by the `EnergyDeath` failure gate (a world where it fails locks
 /// matter in carcasses and scores zero fitness), never by this term.
-pub fn trophic_balance_score(
-    trait_vectors: &[explorers_sim::TraitVector],
-    labels: &[Option<usize>],
-    energies: &[f32],
-) -> f32 {
-    let max_cluster = labels.iter().filter_map(|l| *l).max();
-    let Some(max_cluster) = max_cluster else {
-        return 0.0;
-    };
-
-    let mut producer_energy = 0.0_f32;
-    let mut consumer_energy = 0.0_f32;
-
-    for cluster_id in 0..=max_cluster {
-        let members: Vec<usize> = labels
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| **l == Some(cluster_id))
-            .map(|(i, _)| i)
-            .collect();
-        if members.is_empty() {
-            continue;
-        }
-
-        let mut avg_photo = 0.0_f32;
-        let mut avg_hetero = 0.0_f32;
-        for &i in &members {
-            let (p, h) = trophic_coordinates(&trait_vectors[i]);
-            avg_photo += p;
-            avg_hetero += h;
-        }
-        let n = members.len() as f32;
-        avg_photo /= n;
-        avg_hetero /= n;
-
-        let cluster_energy: f32 = members.iter().map(|&i| energies[i]).sum();
-        if avg_photo > avg_hetero {
-            producer_energy += cluster_energy;
-        } else {
-            consumer_energy += cluster_energy;
-        }
-    }
-
-    let total = producer_energy + consumer_energy;
+pub fn trophic_balance_score(roles: &[TrophicRole], energies: &[f32]) -> f32 {
+    let total: f32 = energies.iter().sum();
     if total <= 0.0 {
         return 0.0;
     }
+    let producer_energy: f32 = roles
+        .iter()
+        .zip(energies)
+        .filter(|(role, _)| **role == TrophicRole::Producer)
+        .map(|(_, &e)| e)
+        .sum();
     producer_energy / total
 }
 
@@ -2541,8 +2490,7 @@ mod tests {
         } else {
             0.0
         };
-        let labels = dbscan(&trait_vectors, config.dbscan_eps, config.dbscan_min_points);
-        let expected_tb = trophic_balance_score(&trait_vectors, &labels, &energies);
+        let expected_tb = trophic_balance_score(&roles_of(&trait_vectors), &energies);
 
         assert_eq!(result.clustering_strength, expected_cs);
         assert_eq!(result.trophic_balance_score, expected_tb);
@@ -3001,47 +2949,96 @@ mod tests {
     }
 
     #[test]
-    fn generalist_dominant_when_one_cluster_has_high_all_traits() {
-        // Cluster 0: generalists (high photo, consumption, scavenging)
+    fn generalist_dominant_when_generalist_agents_hold_most_energy() {
+        // Agents individually above the generalist threshold on both axes.
         let mut traits = Vec::new();
-        let mut labels = Vec::new();
         let mut energies = Vec::new();
         for _ in 0..10 {
             traits.push(make_trait_vector([0.8, 0.8, 0.0, 0.0]));
-            labels.push(Some(0));
             energies.push(100.0);
         }
-        // Cluster 1: specialists (only photo)
+        // Specialists (only photo).
         for _ in 0..5 {
             traits.push(make_trait_vector([0.9, 0.0, 0.0, 0.0]));
-            labels.push(Some(1));
             energies.push(50.0);
         }
+        assert!(is_generalist_dominant(&traits, &energies, 0.3, 0.5));
+    }
+
+    #[test]
+    fn noise_labelled_generalists_count_toward_dominance() {
+        // Generalists scattered too thinly for DBSCAN to cluster them (all
+        // noise) still hold the energy majority; the gate reads every agent.
+        let config = EvalConfig::default();
+        let mut traits = Vec::new();
+        let mut energies = Vec::new();
+        for i in 0..4 {
+            let spread = 3.0 * i as f32;
+            traits.push(make_trait_vector([0.8, 0.8, spread, spread]));
+            energies.push(100.0);
+        }
+        for _ in 0..6 {
+            traits.push(make_trait_vector([0.9, 0.0, 20.0, 0.0]));
+            energies.push(10.0);
+        }
+        let labels = dbscan(&traits, config.dbscan_eps, config.dbscan_min_points);
+        assert!(
+            labels[..4].iter().all(Option::is_none),
+            "precondition: the generalists are DBSCAN noise"
+        );
         assert!(is_generalist_dominant(
-            &traits, &labels, &energies, 0.3, 0.5
+            &traits,
+            &energies,
+            config.generalist_threshold,
+            config.generalist_dominance_fraction,
+        ));
+    }
+
+    #[test]
+    fn specialists_merged_into_one_cluster_are_not_generalist_dominant() {
+        // The example13 artefact (#486): pure producers and pure heterotrophs
+        // whose DBSCAN cluster merges at the default eps. The merged cluster's
+        // mean coordinates sit above the generalist threshold on both axes,
+        // but no agent is a generalist.
+        let config = EvalConfig::default();
+        let mut traits = Vec::new();
+        let mut energies = Vec::new();
+        for _ in 0..10 {
+            traits.push(make_trait_vector([0.5, 0.0, 0.0, 0.0]));
+            energies.push(100.0);
+        }
+        for _ in 0..10 {
+            traits.push(make_trait_vector([0.0, 0.5, 0.0, 0.0]));
+            energies.push(100.0);
+        }
+        assert_eq!(
+            distinct_cluster_count(&traits, config.dbscan_eps, config.dbscan_min_points),
+            1,
+            "precondition: DBSCAN merges producers and heterotrophs"
+        );
+        assert!(!is_generalist_dominant(
+            &traits,
+            &energies,
+            config.generalist_threshold,
+            config.generalist_dominance_fraction,
         ));
     }
 
     #[test]
     fn generalist_not_dominant_when_specialists_dominate() {
         let mut traits = Vec::new();
-        let mut labels = Vec::new();
         let mut energies = Vec::new();
-        // Cluster 0: producers (specialist)
+        // Producers (specialist)
         for _ in 0..10 {
             traits.push(make_trait_vector([0.9, 0.0, 0.0, 0.0]));
-            labels.push(Some(0));
             energies.push(100.0);
         }
-        // Cluster 1: consumers (specialist)
+        // Consumers (specialist)
         for _ in 0..5 {
             traits.push(make_trait_vector([0.0, 0.9, 0.0, 0.0]));
-            labels.push(Some(1));
             energies.push(50.0);
         }
-        assert!(!is_generalist_dominant(
-            &traits, &labels, &energies, 0.3, 0.5
-        ));
+        assert!(!is_generalist_dominant(&traits, &energies, 0.3, 0.5));
     }
 
     #[test]
@@ -3111,22 +3108,51 @@ mod tests {
         assert_eq!(score, 1.0);
     }
 
+    /// The topology's per-agent trophic-role read of `traits`, in roster
+    /// order — the read the evaluator scores balance against.
+    fn roles_of(traits: &[explorers_sim::TraitVector]) -> Vec<TrophicRole> {
+        let roles = TopologyProjection::new()
+            .trophic_roles_of(traits.iter().enumerate().map(|(i, t)| (i as u64, t)));
+        (0..traits.len()).map(|i| roles[&(i as u64)]).collect()
+    }
+
+    #[test]
+    fn trophic_balance_on_a_merged_parity_cluster_is_the_producer_energy_share() {
+        // The example12/13 knife edge (#486): equal producer and consumer
+        // counts in one merged DBSCAN cluster. The balance is the producer
+        // energy share, not a whole-cluster 0 or 1.
+        let config = EvalConfig::default();
+        let mut traits = Vec::new();
+        let mut energies = Vec::new();
+        for _ in 0..10 {
+            traits.push(make_trait_vector([0.5, 0.0, 0.0, 0.0]));
+            energies.push(100.0);
+        }
+        for _ in 0..10 {
+            traits.push(make_trait_vector([0.0, 0.5, 0.0, 0.0]));
+            energies.push(100.0);
+        }
+        assert_eq!(
+            distinct_cluster_count(&traits, config.dbscan_eps, config.dbscan_min_points),
+            1,
+            "precondition: DBSCAN merges producers and heterotrophs"
+        );
+        assert_eq!(trophic_balance_score(&roles_of(&traits), &energies), 0.5);
+    }
+
     #[test]
     fn trophic_balance_high_when_producers_dominate() {
         let mut traits = Vec::new();
-        let mut labels = Vec::new();
         let mut energies = Vec::new();
         for _ in 0..10 {
             traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0]));
-            labels.push(Some(0));
             energies.push(100.0);
         }
         for _ in 0..5 {
             traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0]));
-            labels.push(Some(1));
             energies.push(50.0);
         }
-        let score = trophic_balance_score(&traits, &labels, &energies);
+        let score = trophic_balance_score(&roles_of(&traits), &energies);
         assert!(
             score > 0.5,
             "producers dominating should score > 0.5: {score}"
@@ -3136,19 +3162,16 @@ mod tests {
     #[test]
     fn trophic_balance_low_when_consumers_dominate() {
         let mut traits = Vec::new();
-        let mut labels = Vec::new();
         let mut energies = Vec::new();
         for _ in 0..5 {
             traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0]));
-            labels.push(Some(0));
             energies.push(10.0);
         }
         for _ in 0..10 {
             traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0]));
-            labels.push(Some(1));
             energies.push(100.0);
         }
-        let score = trophic_balance_score(&traits, &labels, &energies);
+        let score = trophic_balance_score(&roles_of(&traits), &energies);
         assert!(
             score < 0.5,
             "consumers dominating should score < 0.5: {score}"
@@ -3156,12 +3179,27 @@ mod tests {
     }
 
     #[test]
-    fn trophic_balance_zero_when_no_labelled_clusters() {
-        let traits = vec![make_trait_vector([0.5, 0.5, 0.0, 0.0])];
-        let labels = vec![None];
-        let energies = vec![100.0];
-        let score = trophic_balance_score(&traits, &labels, &energies);
-        assert_eq!(score, 0.0);
+    fn noise_labelled_agents_count_toward_trophic_balance() {
+        // A roster too sparse for DBSCAN to cluster at all: every agent is
+        // noise, yet each is scored by its own role.
+        let config = EvalConfig::default();
+        let traits = vec![
+            make_trait_vector([0.9, 0.1, 0.0, 0.0]),
+            make_trait_vector([0.1, 0.9, 10.0, 0.0]),
+        ];
+        let energies = vec![30.0, 10.0];
+        let labels = dbscan(&traits, config.dbscan_eps, config.dbscan_min_points);
+        assert!(
+            labels.iter().all(Option::is_none),
+            "precondition: all noise"
+        );
+        assert_eq!(trophic_balance_score(&roles_of(&traits), &energies), 0.75);
+    }
+
+    #[test]
+    fn trophic_balance_zero_when_no_living_energy() {
+        let traits = vec![make_trait_vector([0.9, 0.1, 0.0, 0.0])];
+        assert_eq!(trophic_balance_score(&roles_of(&traits), &[0.0]), 0.0);
     }
 
     #[test]

@@ -301,7 +301,7 @@ The half of the **atlas** that records non-viable parameter regions — the **de
 _Avoid_: failure list, dead zone (the frontier is the *boundary* structure keyed by cliff, not an undifferentiated region)
 
 **Degenerate configuration**:
-A simulation outcome that fails to produce a functioning ecology. Six canonical failure modes: extinction (all agents die), monoculture (trait space collapses to a single cluster), energy death (free energy trends irreversibly toward zero), population explosion (unbounded growth), frozen dynamics (no turnover despite agents surviving), generalist dominance (one or more clusters with high values across multiple specification traits outcompete specialists — indicates superlinear maintenance costs are too weak to enforce trade-offs).
+A simulation outcome that fails to produce a functioning ecology. Six canonical failure modes: extinction (all agents die), monoculture (trait space collapses to a single cluster), energy death (free energy trends irreversibly toward zero), population explosion (unbounded growth), frozen dynamics (no turnover despite agents surviving), generalist dominance (generalists — agents each individually invested in both autotrophy and heterotrophy — hold the majority of living energy over specialists; read per agent, not off trait-space cluster means, so a cluster that merely mixes specialists is not a generalist — indicates the anti-generalist forces are too weak to enforce trade-offs).
 _Avoid_: bad run, failed world (too vague)
 
 **Sensible world**:
