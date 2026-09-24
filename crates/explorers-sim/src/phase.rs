@@ -17,6 +17,12 @@ use std::collections::HashSet;
 /// Photosynthesise: agents with nonzero effective photosynthetic absorption
 /// absorb energy from local solar flux into reserve. Light competition splits
 /// flux proportionally among co-located producers via spatial grid query.
+///
+/// Neighbourhood membership is a hard predicate (distance strictly below
+/// `light_competition_radius`), so light income is a step function of
+/// position and can flip on f32 rounding at the radius: an accepted
+/// discontinuity (#548); see `docs/system-design/world-rules.md`, "Hard
+/// distance predicates are an accepted discontinuity in position".
 pub fn photosynthesise(
     agents: &mut [Agent],
     grid: &SpatialGrid,
@@ -640,7 +646,7 @@ pub struct DrainResult {
 /// Callers use the reach as a binary contact predicate, so drain outcomes are a
 /// step function of position and can flip on f32 rounding at the boundary —
 /// an accepted discontinuity (#477); see `docs/system-design/world-rules.md`,
-/// "Feeding reach is a binary contact predicate".
+/// "Hard distance predicates are an accepted discontinuity in position".
 pub fn consumption_reach(eff_heterotrophy: f32, structure: f32, params: &WorldParameters) -> f32 {
     eff_heterotrophy
         * (params.contact_range_coefficient
