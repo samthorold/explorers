@@ -4,10 +4,13 @@ use std::path::PathBuf;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
+use explorers_search::checkpoint::inspect;
 use explorers_search::qd::{
     COEXISTENCE_FLOOR, REFINE_ENSEMBLE_SIZE, REFINE_TOP_K, RefinementConfig, refined_best_recipe,
 };
-use explorers_search::search::{SearchConfig, default_ranges, run_search_observed};
+use explorers_search::search::{
+    SearchConfig, default_ranges, resume_search, run_search_checkpointed, run_search_observed,
+};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -21,6 +24,8 @@ fn main() {
     let mut recipe_output_path = PathBuf::from("recipe.json");
     let mut refine_top_k = REFINE_TOP_K;
     let mut refine_ensemble = REFINE_ENSEMBLE_SIZE;
+    let mut checkpoint_path: Option<PathBuf> = None;
+    let mut resume_path: Option<PathBuf> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -61,6 +66,14 @@ fn main() {
                 i += 1;
                 refine_ensemble = args[i].parse().unwrap();
             }
+            "--checkpoint" => {
+                i += 1;
+                checkpoint_path = Some(PathBuf::from(&args[i]));
+            }
+            "--resume" => {
+                i += 1;
+                resume_path = Some(PathBuf::from(&args[i]));
+            }
             "--help" | "-h" => {
                 print_usage();
                 return;
@@ -92,10 +105,61 @@ fn main() {
     eprintln!("  Seed: {seed}");
 
     // One line per completed generation (#529): a multi-hour regeneration is
-    // otherwise silent between the header above and the summary below.
-    let atlas = run_search_observed(&config, seed, &mut rng, &mut |report| {
+    // otherwise silent between the header above and the summary below. With a
+    // checkpoint (#530), each line also means that generation is on disk.
+    let mut report = |report: &explorers_search::qd::GenerationReport| {
         eprintln!("  {report}");
-    });
+    };
+    let searched = match (checkpoint_path, resume_path) {
+        (Some(_), Some(_)) => {
+            eprintln!(
+                "--checkpoint and --resume are exclusive: --resume PATH keeps checkpointing \
+                 to PATH"
+            );
+            std::process::exit(1);
+        }
+        (None, None) => Ok(run_search_observed(&config, seed, &mut rng, &mut report)),
+        (Some(path), None) => {
+            // Never overwrite a checkpoint silently: it may be hours of search.
+            if path.exists() {
+                eprintln!(
+                    "Checkpoint {} already exists. Resume it with --resume {}, or remove it \
+                     to start a fresh search.",
+                    path.display(),
+                    path.display()
+                );
+                std::process::exit(1);
+            }
+            eprintln!("  Checkpoint: {} (every generation)", path.display());
+            run_search_checkpointed(&config, seed, rng, &path, &mut report)
+        }
+        (None, Some(path)) => match inspect(&path) {
+            Ok(summary) => {
+                if summary.next_generation > generations {
+                    eprintln!(
+                        "  Resuming from {}: its search is finished, reading back its atlas",
+                        path.display()
+                    );
+                } else {
+                    eprintln!(
+                        "  Resuming from {} at generation {} of {}",
+                        path.display(),
+                        summary.next_generation,
+                        generations
+                    );
+                }
+                resume_search(&config, seed, &path, &mut report)
+            }
+            Err(e) => Err(e),
+        },
+    };
+    let atlas = match searched {
+        Ok(atlas) => atlas,
+        Err(e) => {
+            eprintln!("Search stopped: {e}");
+            std::process::exit(1);
+        }
+    };
 
     let json = serde_json::to_string_pretty(&atlas).unwrap();
     fs::write(&output_path, &json).unwrap();
@@ -287,5 +351,12 @@ fn print_usage() {
     eprintln!("  --recipe-output PATH  Recipe JSON path (default: recipe.json)");
     eprintln!("  --refine-top-k N    Top live cells to refine before projecting (default: 10)");
     eprintln!("  --refine-ensemble N Refinement ensemble size, independent seeds (default: 32)");
+    eprintln!("  --checkpoint PATH   Write the search state to PATH at every generation");
+    eprintln!("                      boundary (atomically), so an interrupted search can be");
+    eprintln!("                      resumed. Refuses to overwrite an existing PATH.");
+    eprintln!("  --resume PATH       Resume the search checkpointed at PATH and keep");
+    eprintln!("                      checkpointing there. The resumed atlas is exactly the");
+    eprintln!("                      uninterrupted one. Pass the same search options and");
+    eprintln!("                      --seed as the original run; a mismatch is refused.");
     eprintln!("  --help, -h          Show this help");
 }

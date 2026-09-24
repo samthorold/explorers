@@ -3,6 +3,11 @@ use rand::Rng;
 use explorers_genesis::{InitialDistribution, WorldParameters};
 use explorers_sim::TraitVector;
 
+use std::path::Path;
+
+use rand_chacha::ChaCha8Rng;
+
+use crate::checkpoint::{CheckpointError, resume_qd, run_qd_checkpointed};
 use crate::qd::{Atlas, GenerationReport, QdConfig, run_qd_observed};
 
 /// The genesis search output is the [`Atlas`] (CONTEXT.md) — the live archive of
@@ -360,19 +365,49 @@ pub fn run_search_observed(
     rng: &mut impl Rng,
     observer: &mut impl FnMut(&GenerationReport),
 ) -> SearchResult {
-    let qd_config = QdConfig {
-        ranges: config.ranges.clone(),
-        ensemble_size: config.ensemble_size,
-        max_ticks: config.max_ticks,
-        batch: config.batch,
-        generations: config.generations,
-        sigma: config.sigma,
-        archive_learning_rate: config.archive_learning_rate,
-        prefilter_crosscheck_fraction: config.prefilter_crosscheck_fraction,
-        early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
-        carcass_seed_count: config.carcass_seed_count,
-    };
-    run_qd_observed(&qd_config, base_seed, rng, observer)
+    run_qd_observed(&config.qd(), base_seed, rng, observer)
+}
+
+/// [`run_search_observed`], writing a checkpoint to `checkpoint` at every
+/// generation boundary (#530) — see [`run_qd_checkpointed`]. The atlas is the
+/// uncheckpointed search's.
+pub fn run_search_checkpointed(
+    config: &SearchConfig,
+    base_seed: u64,
+    rng: ChaCha8Rng,
+    checkpoint: &Path,
+    observer: &mut impl FnMut(&GenerationReport),
+) -> Result<SearchResult, CheckpointError> {
+    run_qd_checkpointed(&config.qd(), base_seed, rng, checkpoint, observer)
+}
+
+/// Resume a checkpointed search (#530) — see [`resume_qd`]. Refused unless
+/// `(config, base_seed)` match the ones the checkpoint was written under.
+pub fn resume_search(
+    config: &SearchConfig,
+    base_seed: u64,
+    checkpoint: &Path,
+    observer: &mut impl FnMut(&GenerationReport),
+) -> Result<SearchResult, CheckpointError> {
+    resume_qd(&config.qd(), base_seed, checkpoint, observer)
+}
+
+impl SearchConfig {
+    /// The QD knobs this configuration drives.
+    fn qd(&self) -> QdConfig {
+        QdConfig {
+            ranges: self.ranges.clone(),
+            ensemble_size: self.ensemble_size,
+            max_ticks: self.max_ticks,
+            batch: self.batch,
+            generations: self.generations,
+            sigma: self.sigma,
+            archive_learning_rate: self.archive_learning_rate,
+            prefilter_crosscheck_fraction: self.prefilter_crosscheck_fraction,
+            early_stop_crosscheck_fraction: self.early_stop_crosscheck_fraction,
+            carcass_seed_count: self.carcass_seed_count,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -606,6 +641,58 @@ mod tests {
         assert_eq!(seen, vec![0, 1, 2]);
         assert_eq!(observed.coverage, unobserved.coverage);
         assert_eq!(observed.qd_score, unobserved.qd_score);
+    }
+
+    #[test]
+    fn slow_the_search_entry_checkpoints_and_resumes_to_the_same_atlas() {
+        // #530: the CLI's entry point carries checkpointing through to the QD
+        // loop — a checkpointed search, and a resume from its checkpoint after
+        // the bootstrap, both write the plain search's atlas.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = SearchConfig {
+            ensemble_size: 1,
+            max_ticks: 15,
+            batch: 4,
+            generations: 2,
+            ..Default::default()
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "explorers-search-entry-checkpoint-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("search.checkpoint.json");
+        let after_bootstrap = dir.join("after-bootstrap.json");
+
+        let plain = run_search(&config, 7, &mut ChaCha8Rng::seed_from_u64(42));
+        let checkpointed = run_search_checkpointed(
+            &config,
+            7,
+            ChaCha8Rng::seed_from_u64(42),
+            &live,
+            &mut |r: &GenerationReport| {
+                if r.generation == 0 {
+                    std::fs::copy(&live, &after_bootstrap).unwrap();
+                }
+            },
+        )
+        .unwrap();
+        let resumed =
+            resume_search(&config, 7, &after_bootstrap, &mut |_: &GenerationReport| {}).unwrap();
+
+        let written = |atlas: &SearchResult| {
+            let mut v = serde_json::to_value(atlas).unwrap();
+            v["cells"]
+                .as_array_mut()
+                .unwrap()
+                .sort_by_key(|c| c["cell"].to_string());
+            v
+        };
+        assert_eq!(written(&checkpointed), written(&plain));
+        assert_eq!(written(&resumed), written(&plain));
     }
 
     #[test]
