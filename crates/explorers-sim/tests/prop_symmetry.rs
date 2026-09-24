@@ -215,6 +215,18 @@ fn check_order_permutation_invariance(case: &WorldCase) -> Result<(), TestCaseEr
 /// rounding of one addition per tick: ≤ 1 ulp at magnitude ≤ 15 (~1e-6),
 /// accumulating linearly to ≤ 2e-5 over 20 ticks. 1e-4 is 5× headroom.
 const TRANSLATION_POS_TOLERANCE: f32 = 1e-4;
+/// Half-width of the band around a hard distance threshold inside which a
+/// pair makes the trajectory ill-posed under translation (see
+/// `pair_on_hard_boundary`). A pair's distance can differ between the two
+/// worlds by at most the sum of the two agents' position gaps, ≤ 2 × 2e-5
+/// (the per-agent bound above). For the two worlds to straddle a threshold
+/// one of them must lie within half that difference of it, so a band of
+/// 4e-5 around the threshold, checked in both worlds, has 2× headroom
+/// (the measured worst per-agent gap over 8192 cases was 1.5e-5). It is
+/// tighter than `TRANSLATION_POS_TOLERANCE` on purpose: the rejection rate
+/// scales linearly with the band, and at 1e-4 the three guarded predicates
+/// rejected 2.6% of cases.
+const TRANSLATION_BOUNDARY_TOLERANCE: f32 = 4e-5;
 /// Relative tolerance for stores and totals under a translation. Every
 /// distance-derived flow inherits the ~1e-6 position rounding; 1e-4 (the C1
 /// ledger bound) leaves two orders of magnitude of headroom.
@@ -290,8 +302,8 @@ fn founder_roster(case: &WorldCase) -> Vec<AgentSpec> {
 }
 
 /// Run a roster for the case's ticks, rejecting the case if the trajectory
-/// ever brings a consumer's feeding reach within `TRANSLATION_POS_TOLERANCE`
-/// of a target (see `contact_on_reach_boundary`).
+/// ever brings a pair within `TRANSLATION_BOUNDARY_TOLERANCE` of a hard
+/// distance threshold the next step will apply (see `pair_on_hard_boundary`).
 fn run_roster(case: &WorldCase, roster: Vec<AgentSpec>) -> Result<World, TestCaseError> {
     let recipe = WorldRecipe {
         parameters: case.params.clone(),
@@ -302,10 +314,9 @@ fn run_roster(case: &WorldCase, roster: Vec<AgentSpec>) -> Result<World, TestCas
     };
     let mut world = World::from_recipe(&recipe, case.seed);
     for _ in 0..case.ticks {
-        if let Some((consumer, target)) = contact_on_reach_boundary(&world) {
+        if let Some(pair) = pair_on_hard_boundary(&world) {
             return Err(TestCaseError::reject(format!(
-                "consumer {consumer} sits on its feeding-reach boundary to target {target} \
-                 at tick {}",
+                "{pair} at tick {}",
                 world.tick()
             )));
         }
@@ -314,18 +325,63 @@ fn run_roster(case: &WorldCase, roster: Vec<AgentSpec>) -> Result<World, TestCas
     Ok(world)
 }
 
-/// Feeding reach is a step function of position (binary-reach drain, #380):
-/// a target is drained if it is within reach and untouched if it is an ulp
-/// beyond. A translation perturbs every distance by the position rounding,
-/// so a pair that happens to sit within that rounding of the boundary is
-/// drained in one world and not the other — a measure-zero event (≈ 1e-4 of
-/// cases at the C1 domain) that is sensitive dependence, not an asymmetry,
-/// and that no f32 tolerance can absorb. Such a trajectory is outside the
-/// property's domain and the case is rejected. Scanned between ticks: the
-/// drain phase runs before movement, on the previous tick's positions and
-/// wear, and `body_reach_coefficient = 0` in this domain, so this is exactly
-/// the reach the next drain will apply. Returns the first (consumer, target)
-/// pair on the boundary.
+/// The stepper applies hard (binary) distance predicates, so its outcomes are
+/// step functions of position. A translation perturbs every distance by the
+/// position rounding, so a pair that happens to sit within that rounding of a
+/// threshold falls on one side in one world and the other side in the other:
+/// a measure-zero event that is sensitive dependence, not an asymmetry, and
+/// that no f32 tolerance on the outcome can absorb (world-rules.md, "Hard
+/// distance predicates are an accepted discontinuity in position"). Such a
+/// trajectory is outside the property's domain and the case is rejected.
+///
+/// Scanned between ticks. Movement is the last positional phase and wear is
+/// applied after it, so every predicate below reads exactly the positions,
+/// wear and structure present at the tick start. Audit of the stepper's hard
+/// distance predicates in the translation domain:
+///
+/// - feeding reach (living targets and carcasses): guarded,
+///   `contact_on_reach_boundary`;
+/// - light-competition membership: guarded,
+///   `producers_on_light_competition_boundary`;
+/// - mate-finding reach: guarded, `mate_on_reach_boundary`;
+/// - network contact (`form_connections`, `contact_range_coefficient`):
+///   unreachable, `network_connection_cap = 0` throughout the C1 domain, which
+///   makes formation inert;
+/// - chemotactic sensing radius and its `dist < 1e-6` coincidence test:
+///   unreachable, sensing is off in this domain (`translation_case_from`);
+/// - nutrient-grid cell membership (a hard boundary in position, not a
+///   radius): not guarded. The whole-cell shift maps cells onto cells, and an
+///   agent's uptake depends on its cell only when that cell is supply-limited.
+///   Each cell starts with ≥ 50000 / 9 units against a demand of about one
+///   unit per producer per tick, so exhausting one inside a ≤ 20-tick world
+///   would take hundreds of producers in a single cell; the property compares
+///   world totals, not per-cell pools.
+///
+/// Returns a description of the first pair found on a boundary.
+fn pair_on_hard_boundary(world: &World) -> Option<String> {
+    if let Some((consumer, target)) = contact_on_reach_boundary(world) {
+        return Some(format!(
+            "consumer {consumer} sits on its feeding-reach boundary to target {target}"
+        ));
+    }
+    if let Some((a, b)) = producers_on_light_competition_boundary(world) {
+        return Some(format!(
+            "producers {a} and {b} sit on the light-competition boundary"
+        ));
+    }
+    if let Some((seeker, mate)) = mate_on_reach_boundary(world) {
+        return Some(format!(
+            "agent {seeker} sits on its mate-finding-reach boundary to agent {mate}"
+        ));
+    }
+    None
+}
+
+/// Feeding reach (binary-reach drain, #380, #477): a target is drained if it
+/// is within the consumer's reach and untouched if it is an ulp beyond. The
+/// reach is `phase::consumption_reach` on the tick-start effective
+/// heterotrophy and structure, exactly as the drain phase computes it.
+/// Returns the first (consumer, target-or-carcass) pair on the boundary.
 fn contact_on_reach_boundary(world: &World) -> Option<(u64, u64)> {
     let params = world.params();
     let extent = params.world_extent;
@@ -338,7 +394,7 @@ fn contact_on_reach_boundary(world: &World) -> Option<(u64, u64)> {
         let reach = phase::consumption_reach(eff_heterotrophy, consumer.structure, params);
         let on_boundary = |target_pos: (f32, f32)| {
             (toroidal_distance(consumer.position, target_pos, extent) - reach).abs()
-                <= TRANSLATION_POS_TOLERANCE
+                <= TRANSLATION_BOUNDARY_TOLERANCE
         };
         if let Some(target) = world
             .agents()
@@ -353,6 +409,104 @@ fn contact_on_reach_boundary(world: &World) -> Option<(u64, u64)> {
         }
     }
     None
+}
+
+/// Light-competition membership (#548): `photosynthesise` adds a producer's
+/// shading weight to a neighbour's light share only when their distance is
+/// strictly below `light_competition_radius`. Only pairs where both agents
+/// carry positive photosynthetic weight (effective photosynthesis × structure,
+/// as `photosynthesise` reads it) shade each other. Returns the first
+/// (producer, producer) pair on the boundary.
+fn producers_on_light_competition_boundary(world: &World) -> Option<(u64, u64)> {
+    let params = world.params();
+    let extent = params.world_extent;
+    let k = params.wear_degradation_steepness;
+    let radius = params.light_competition_radius;
+    let producers: Vec<&Agent> = world
+        .agents()
+        .iter()
+        .filter(|a| a.effective_trait_with_steepness(0, k) * a.structure > 0.0)
+        .collect();
+    for (n, a) in producers.iter().enumerate() {
+        for b in &producers[n + 1..] {
+            let d = toroidal_distance(a.position, b.position, extent);
+            if (d - radius).abs() <= TRANSLATION_BOUNDARY_TOLERANCE {
+                return Some((a.id, b.id));
+            }
+        }
+    }
+    None
+}
+
+/// Mate-finding reach (#548 audit): `resolve_reproduction` skips a candidate
+/// whose distance exceeds the seeker's reach (effective mobility × sensing
+/// coefficient + dispersal × dispersal-reach coefficient; the sensing term is
+/// zero in this domain). Only a pair of sexually eligible, trait-compatible
+/// agents can be flipped. Eligibility is decided mid-tick, so the guard
+/// over-approximates it with `could_reach_reproduction_threshold`. Returns the
+/// first (seeker, mate) pair on the seeker's reach boundary.
+fn mate_on_reach_boundary(world: &World) -> Option<(u64, u64)> {
+    let params = world.params();
+    let extent = params.world_extent;
+    let k = params.wear_degradation_steepness;
+    let compat = params.reproductive_compatibility_distance;
+    let candidates: Vec<&Agent> = world
+        .agents()
+        .iter()
+        .filter(|a| could_reach_reproduction_threshold(a, params))
+        .collect();
+    for seeker in &candidates {
+        let reach = seeker.effective_trait_with_steepness(2, k) * params.sensing_range_coefficient
+            + seeker.traits.dispersal * params.dispersal_reach_coefficient;
+        if let Some(mate) = candidates.iter().find(|m| {
+            m.id != seeker.id
+                && (compat <= 0.0 || seeker.traits.distance(&m.traits) <= compat)
+                && (toroidal_distance(seeker.position, m.position, extent) - reach).abs()
+                    <= TRANSLATION_BOUNDARY_TOLERANCE
+        }) {
+            return Some((seeker.id, mate.id));
+        }
+    }
+    None
+}
+
+/// A sound over-approximation of reproductive eligibility this tick: can the
+/// agent's reproductive stores reach both thresholds by the reproduction
+/// phase?
+///
+/// - Energy: before reproduction only `grow` adds to `repro_reserve`, the
+///   `(1 − kappa)` share of `reserve_mobilisation_rate` × the reserve excess
+///   over the retention buffer. The reserve at that point is at most the
+///   tick-start reserve plus this tick's light share (≤ the full solar flux,
+///   for a producer); drains credit reserve only after `grow`.
+/// - Nutrient: `repro_nutrient` gains the `(1 − kappa)` share of every
+///   nutrient credit. A non-heterotroph's only credit is pool uptake, at most
+///   its effective photosynthesis × `AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK`; a
+///   heterotroph's ingested nutrient is not bounded here.
+///
+/// The 1e-3 relative slack covers the stepper's summation rounding.
+fn could_reach_reproduction_threshold(a: &Agent, params: &explorers_sim::WorldParameters) -> bool {
+    let k = params.wear_degradation_steepness;
+    let repro_share = 1.0 - a.traits.kappa.clamp(0.0, 1.0);
+    let eff_photo = a.effective_trait_with_steepness(0, k);
+    let solar = if eff_photo > 0.0 {
+        params.solar_flux_magnitude
+    } else {
+        0.0
+    };
+    let energy_ceiling = a.repro_reserve.max(0.0)
+        + repro_share * params.reserve_mobilisation_rate * (a.reserve.max(0.0) + solar);
+    let nutrient_ceiling = if a.effective_trait_with_steepness(1, k) > 0.0 {
+        f32::INFINITY
+    } else {
+        a.repro_nutrient.max(0.0)
+            + repro_share
+                * eff_photo.max(0.0)
+                * explorers_sim::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK
+    };
+    let slack = 1.0 - 1e-3;
+    energy_ceiling >= params.reproduction_energy_threshold * slack
+        && nutrient_ceiling >= params.reproduction_nutrient_threshold * slack
 }
 
 proptest! {
