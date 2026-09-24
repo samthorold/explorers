@@ -66,8 +66,10 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// example4 (mobility → distance, autotrophy → uptake, heterotrophy → drain,
 /// dispersal → σ), example8 (wear_rate > 0, so kappa → repair is live),
 /// example10 (predator–prey, sexual and asexual placement kernels).
+/// example4 re-pinned for #540: its starving heterotrophs now die the tick
+/// their metabolic charge is capped instead of surviving on feeding residue.
 const GOLDEN: [(&str, u64, u64, u64); 3] = [
-    ("example4.json", 7, 300, 0xe96aa0b808bdf6fb),
+    ("example4.json", 7, 300, 0xad2c51c161dd3c80),
     ("example8.json", 11, 300, 0x366aea7e88b3c291),
     (
         "example10_predator_prey_hopf.json",
