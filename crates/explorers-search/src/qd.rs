@@ -411,8 +411,8 @@ impl Archive {
     /// The dead frontier as a label-keyed tally — the count of configs that died
     /// on each cliff, **a priori and observed combined**. The atlas's
     /// negative-space layer.
-    pub fn dead_frontier(&self) -> std::collections::HashMap<String, usize> {
-        let mut out: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    pub fn dead_frontier(&self) -> std::collections::BTreeMap<String, usize> {
+        let mut out: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
         for (k, &v) in self.frontier.iter().chain(self.apriori_frontier.iter()) {
             *out.entry(k.label().to_string()).or_insert(0) += v;
         }
@@ -423,7 +423,7 @@ impl Archive {
     /// prefilter proved dead in closed form, keyed by cliff label. These spent no
     /// ensemble. The complement (`dead_frontier` minus this) is the observed
     /// deaths.
-    pub fn dead_frontier_apriori(&self) -> std::collections::HashMap<String, usize> {
+    pub fn dead_frontier_apriori(&self) -> std::collections::BTreeMap<String, usize> {
         self.apriori_frontier
             .iter()
             .map(|(k, &v)| (k.label().to_string(), v))
@@ -857,16 +857,20 @@ pub struct Atlas {
     /// `None` on an atlas written before it was recorded.
     #[serde(default)]
     pub provenance: Option<AtlasProvenance>,
+    /// The live cells in cell-index order, so the same search writes the same
+    /// atlas bytes and `atlas:N` in the research sweeps names the same config
+    /// (#536) — not in the archive's `HashMap` order.
     pub cells: Vec<AtlasCell>,
     /// Dead-frontier tally: how many configs died on each cliff (by label),
-    /// **a priori and observed combined**.
-    pub dead_frontier: std::collections::HashMap<String, usize>,
+    /// **a priori and observed combined**. Label-ordered, like `cells`, so the
+    /// written atlas is canonical (#536).
+    pub dead_frontier: std::collections::BTreeMap<String, usize>,
     /// The **a priori** layer of the dead frontier: configs the viability
     /// prefilter (`crate::prefilter`) proved dead in closed form, by cliff label.
     /// These spent no ensemble. The observed deaths are `dead_frontier` minus
     /// this. Genesis-search.md: "the dead frontier is the atlas's most valuable
     /// layer", and the a-priori-vs-observed split is its agreement cross-check.
-    pub dead_frontier_apriori: std::collections::HashMap<String, usize>,
+    pub dead_frontier_apriori: std::collections::BTreeMap<String, usize>,
     /// Ensemble rollouts the prefilter skipped (the budget saved) — one per
     /// a-priori death that was *not* drawn into the agreement cross-check sample.
     pub rollouts_skipped: usize,
@@ -1696,7 +1700,7 @@ impl<R> SearchState<R> {
 
     /// The atlas projection of the archive plus the surfaced tallies.
     fn atlas(&self) -> Atlas {
-        let cells: Vec<AtlasCell> = self
+        let mut cells: Vec<AtlasCell> = self
             .archive
             .cells()
             .map(|(idx, rec)| AtlasCell {
@@ -1714,6 +1718,7 @@ impl<R> SearchState<R> {
                 unit: rec.unit.clone(),
             })
             .collect();
+        cells.sort_by_key(|c| c.cell);
 
         Atlas {
             provenance: None,
@@ -1823,7 +1828,7 @@ mod tests {
     }
 
     fn atlas_with(cells: Vec<AtlasCell>, lockup_deaths: usize) -> Atlas {
-        let mut frontier = std::collections::HashMap::new();
+        let mut frontier = std::collections::BTreeMap::new();
         if lockup_deaths > 0 {
             frontier.insert(Cliff::NutrientLockup.label().to_string(), lockup_deaths);
         }
@@ -1834,7 +1839,7 @@ mod tests {
             qd_score: 0.0,
             best_fitness: 0.0,
             dead_frontier: frontier,
-            dead_frontier_apriori: std::collections::HashMap::new(),
+            dead_frontier_apriori: std::collections::BTreeMap::new(),
             rollouts_skipped: 0,
             prefilter_disagreements: Vec::new(),
             bifurcation_disagreements: Vec::new(),
@@ -2410,10 +2415,8 @@ mod tests {
         // The predicted bifurcation coordinates on live cells are finite and
         // bit-reproducible, and every surfaced bifurcation disagreement carries a
         // regime tag (never an untagged disagreement). (The new #372 fields.)
-        // Cell iteration order is a HashMap order (not stable across runs), so
-        // compare the coords as a sorted set.
-        let sorted_coords = |atlas: &Atlas| -> Vec<(f32, f32)> {
-            let mut v: Vec<(f32, f32)> = atlas
+        let coords = |atlas: &Atlas| -> Vec<(f32, f32)> {
+            atlas
                 .cells
                 .iter()
                 .map(|c| {
@@ -2427,13 +2430,11 @@ mod tests {
                         c.predicted_branching_distance,
                     )
                 })
-                .collect();
-            v.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
-            v
+                .collect()
         };
         assert_eq!(
-            sorted_coords(&atlas1),
-            sorted_coords(&atlas2),
+            coords(&atlas1),
+            coords(&atlas2),
             "predicted coords must be reproducible"
         );
         assert_eq!(
@@ -2536,15 +2537,8 @@ mod tests {
             generations: 2,
             ..QdConfig::default()
         };
-        // The atlas as written, with the cell list (HashMap order) sorted.
-        let written = |atlas: &Atlas| -> serde_json::Value {
-            let mut v = serde_json::to_value(atlas).unwrap();
-            v["cells"]
-                .as_array_mut()
-                .unwrap()
-                .sort_by_key(|c| c["cell"].to_string());
-            v
-        };
+        // The atlas as written — in its canonical order (#536), so compared whole.
+        let written = |atlas: &Atlas| serde_json::to_value(atlas).unwrap();
 
         let mut rng1 = ChaCha8Rng::seed_from_u64(42);
         let unobserved = run_qd(&config, 42, &mut rng1);

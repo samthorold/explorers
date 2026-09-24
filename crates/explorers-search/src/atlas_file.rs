@@ -186,13 +186,77 @@ mod tests {
 
     /// A small hand-built atlas: one live cell, and the provenance given.
     fn one_cell_atlas(provenance: Option<AtlasProvenance>) -> Atlas {
-        let mut atlas = run_qd(&tiny(), 7, &mut ChaCha8Rng::seed_from_u64(7));
-        // Cell order is the archive's HashMap order: pick one deterministically.
-        atlas.cells.sort_by_key(|c| c.cell);
+        let atlas = run_qd(&tiny(), 7, &mut ChaCha8Rng::seed_from_u64(7));
         Atlas {
             provenance,
             cells: atlas.cells.into_iter().take(1).collect(),
             ..atlas
+        }
+    }
+
+    #[test]
+    fn the_same_search_writes_a_byte_identical_atlas_file() {
+        // #536: `atlas:N` in every research sweep is a position in this file,
+        // and notes cite its SHA-1 — so the same search must write the same
+        // bytes, not the same cells in the archive's HashMap order.
+        let config = QdConfig {
+            batch: 8,
+            generations: 2,
+            ..tiny()
+        };
+        let dir = scratch("byte-identical");
+        let (first, second) = (dir.join("first.json"), dir.join("second.json"));
+        let atlas = run_qd(&config, 42, &mut ChaCha8Rng::seed_from_u64(42));
+        assert!(atlas.cells.len() > 1, "order is only visible with >1 cell");
+        write_atlas(&atlas, &first).unwrap();
+        write_atlas(
+            &run_qd(&config, 42, &mut ChaCha8Rng::seed_from_u64(42)),
+            &second,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            std::fs::read(&second).unwrap()
+        );
+        let cells: Vec<[usize; 3]> = atlas.cells.iter().map(|c| c.cell).collect();
+        assert!(cells.is_sorted(), "cells in cell-index order: {cells:?}");
+    }
+
+    #[test]
+    fn the_frontier_tallies_are_written_in_label_order() {
+        // #536: the two dead-frontier tallies are label-keyed maps; their
+        // written key order must not depend on hashing either.
+        let labels = [
+            "population_explosion",
+            "extinction",
+            "nutrient_lockup",
+            "monoculture",
+            "generalist_dominance",
+            "energy_death",
+        ];
+        let tally: std::collections::BTreeMap<String, usize> = labels
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.to_string(), i))
+            .collect();
+        let atlas = Atlas {
+            dead_frontier: tally.clone().into_iter().collect(),
+            dead_frontier_apriori: tally.into_iter().collect(),
+            ..one_cell_atlas(None)
+        };
+        let written = serde_json::to_string(&atlas).unwrap();
+        let mut sorted = labels;
+        sorted.sort();
+        for field in ["dead_frontier", "dead_frontier_apriori"] {
+            let body = &written[written.find(&format!("\"{field}\":{{")).unwrap()..];
+            let body = &body[..body.find('}').unwrap()];
+            let mut positions: Vec<(usize, &str)> = labels
+                .iter()
+                .map(|l| (body.find(&format!("\"{l}\"")).unwrap(), *l))
+                .collect();
+            positions.sort();
+            let written_order: Vec<&str> = positions.into_iter().map(|(_, l)| l).collect();
+            assert_eq!(written_order, sorted, "{field}");
         }
     }
 
