@@ -100,6 +100,26 @@ pub fn run_single(
     run_config: &RunConfig,
     seed: u64,
 ) -> RunResult {
+    rollout(params, distribution, run_config, seed).result
+}
+
+/// A finished rollout: its verdict, and the terminal world and observations
+/// the verdict was read from — for instruments that ask the same terminal
+/// state more than the evaluator reports (#546). Pure observation: the
+/// result is exactly [`run_single`]'s.
+pub struct Rollout {
+    pub result: RunResult,
+    pub world: explorers_sim::World,
+    pub observations: explorers_genesis_eval::RolloutObservations,
+}
+
+/// [`run_single`], keeping the terminal world and observations.
+pub fn rollout(
+    params: &WorldParameters,
+    distribution: &InitialDistribution,
+    run_config: &RunConfig,
+    seed: u64,
+) -> Rollout {
     let mut world = explorers_sim::World::new(params.clone(), distribution.clone(), seed);
     // The log keeps only what the evaluator reads (#502): the retention list
     // and the audit of the reads behind it live with the evaluator
@@ -192,12 +212,16 @@ pub fn run_single(
         }
         None => (horizon_breakdown(), world.tick(), None),
     };
-    RunResult {
-        fitness: breakdown.fitness,
-        failure: breakdown.failure.clone(),
-        termination_tick,
-        breakdown,
-        early_stop,
+    Rollout {
+        result: RunResult {
+            fitness: breakdown.fitness,
+            failure: breakdown.failure.clone(),
+            termination_tick,
+            breakdown,
+            early_stop,
+        },
+        world,
+        observations,
     }
 }
 
