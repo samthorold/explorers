@@ -281,6 +281,14 @@ impl RolloutObservations {
         }
     }
 
+    /// The projection as of the last observed tick — the one the evaluator
+    /// reads the terminal roster's trophic roles off. Read-only, for
+    /// instruments that ask the same projection more than the role (the
+    /// detrital reliance behind a decomposer read, #546).
+    pub fn topology(&self) -> &TopologyProjection {
+        &self.topology
+    }
+
     /// Absolute event-log index below which everything has been read: a
     /// rollout that wants to drop history once read compacts the world's log
     /// before it (`World::compact_event_log_before`) after each `observe`.
@@ -675,6 +683,22 @@ pub fn is_generalist_dominant(
     if total_energy <= 0.0 {
         return false;
     }
+    generalist_energy_share(trait_vectors, energies, generalist_threshold) > dominance_fraction
+}
+
+/// The share of living energy held by generalists — agents whose own
+/// trophic coordinates both exceed `generalist_threshold` — the quantity
+/// [`is_generalist_dominant`] compares against its dominance fraction. 0 when
+/// the roster holds no energy.
+pub fn generalist_energy_share(
+    trait_vectors: &[explorers_sim::TraitVector],
+    energies: &[f32],
+    generalist_threshold: f32,
+) -> f32 {
+    let total_energy: f32 = energies.iter().sum();
+    if total_energy <= 0.0 {
+        return 0.0;
+    }
     let generalist_energy: f32 = trait_vectors
         .iter()
         .zip(energies)
@@ -684,7 +708,7 @@ pub fn is_generalist_dominant(
         })
         .map(|(_, &e)| e)
         .sum();
-    generalist_energy / total_energy > dominance_fraction
+    generalist_energy / total_energy
 }
 
 pub fn autocorrelation(series: &[f32], lag: usize) -> f32 {

@@ -64,7 +64,7 @@ pub enum Cliff {
 }
 
 impl Cliff {
-    fn from_failure(f: &FailureMode) -> Self {
+    pub fn from_failure(f: &FailureMode) -> Self {
         match f {
             FailureMode::Extinction => Cliff::Extinction,
             FailureMode::PopulationExplosion => Cliff::PopulationExplosion,

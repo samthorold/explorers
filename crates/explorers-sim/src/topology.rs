@@ -21,7 +21,7 @@ enum EdgeKind {
 /// (carcass) pathway for the readout to bucket it as a `Decomposer`. This is a
 /// display constant for the debug instrument — the simulation itself has no
 /// such threshold (continuum in the sim, buckets in the readout).
-const DETRITAL_RELIANCE_THRESHOLD: f32 = 0.5;
+pub const DETRITAL_RELIANCE_THRESHOLD: f32 = 0.5;
 
 #[derive(Clone, Debug)]
 pub struct TopologyProjection {
@@ -151,19 +151,27 @@ impl TopologyProjection {
                 continue;
             }
 
-            let predation = self.outgoing_energy(id, EdgeKind::Consumed);
-            let decomposition = self.outgoing_energy(id, EdgeKind::Decomposed);
-            let consumed = predation + decomposition;
-
-            let role = if consumed > 0.0 && decomposition / consumed >= DETRITAL_RELIANCE_THRESHOLD
-            {
-                TrophicRole::Decomposer
-            } else {
-                TrophicRole::Consumer
+            let role = match self.detrital_reliance(id) {
+                Some(reliance) if reliance >= DETRITAL_RELIANCE_THRESHOLD => {
+                    TrophicRole::Decomposer
+                }
+                _ => TrophicRole::Consumer,
             };
             roles.insert(id, role);
         }
         roles
+    }
+
+    /// An agent's detrital reliance: the share of the energy it has drained
+    /// that came from carcasses (decomposed ÷ consumed), as
+    /// [`Self::trophic_roles_of`] reads it to split heterotrophs into
+    /// decomposers and consumers. `None` for an agent that has drained
+    /// nothing.
+    pub fn detrital_reliance(&self, id: u64) -> Option<f32> {
+        let predation = self.outgoing_energy(id, EdgeKind::Consumed);
+        let decomposition = self.outgoing_energy(id, EdgeKind::Decomposed);
+        let consumed = predation + decomposition;
+        (consumed > 0.0).then(|| decomposition / consumed)
     }
 
     /// Total energy an agent drained out via edges of the given kind.
