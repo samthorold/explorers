@@ -346,14 +346,9 @@ mod tests {
         dir
     }
 
-    /// The atlas as written, with the cell list (HashMap order) sorted.
+    /// The atlas as written — in its canonical order (#536), so compared whole.
     fn written(atlas: &Atlas) -> serde_json::Value {
-        let mut v = serde_json::to_value(atlas).unwrap();
-        v["cells"]
-            .as_array_mut()
-            .unwrap()
-            .sort_by_key(|c| c["cell"].to_string());
-        v
+        serde_json::to_value(atlas).unwrap()
     }
 
     fn tiny() -> QdConfig {

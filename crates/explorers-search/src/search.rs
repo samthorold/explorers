@@ -683,14 +683,7 @@ mod tests {
         let resumed =
             resume_search(&config, 7, &after_bootstrap, &mut |_: &GenerationReport| {}).unwrap();
 
-        let written = |atlas: &SearchResult| {
-            let mut v = serde_json::to_value(atlas).unwrap();
-            v["cells"]
-                .as_array_mut()
-                .unwrap()
-                .sort_by_key(|c| c["cell"].to_string());
-            v
-        };
+        let written = |atlas: &SearchResult| serde_json::to_value(atlas).unwrap();
         assert_eq!(written(&checkpointed), written(&plain));
         assert_eq!(written(&resumed), written(&plain));
     }
