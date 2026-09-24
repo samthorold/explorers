@@ -5,12 +5,75 @@
 //! start, a fixed sweep order (atlas cells by index, then the LHS sample by
 //! index) and a `--limit` cap — so a sweep driven as a loop of short
 //! foreground calls produces a file byte-identical to one uninterrupted run.
+//!
+//! A (config, seed) run in these sweeps carries two wall-clock budgets
+//! (#523): the **simulation budget** (`--run-timeout-secs`) bounds the step
+//! loop, and a rollout that exhausts it is recorded as [`TIMEOUT_MODE`]; the
+//! **evaluation budget** ([`EVAL_TIMEOUT_FLAG`]) bounds the terminal
+//! evaluation of a rollout that finished simulating, and one that exhausts it
+//! is recorded as [`EVAL_TIMEOUT_MODE`]. The two stay distinct because a
+//! rollout that reached the horizon but cannot be evaluated in time (a dense
+//! terminal roster) is a different fact about a config from one that could
+//! not be simulated. Neither is a verdict: both are unfinished
+//! ([`is_unfinished`]) and excluded wherever a sweep reads finished runs.
 
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::Path;
+use std::time::{Duration, Instant};
+
+use explorers_genesis::{EvalConfig, FitnessBreakdown};
+use explorers_genesis_eval::{RolloutObservations, evaluate_from_log_within};
 
 use crate::config_source::ConfigSource;
+
+/// The mode a run records when its step loop exhausted the simulation budget
+/// (`--run-timeout-secs`).
+pub const TIMEOUT_MODE: &str = "timeout";
+
+/// The mode a run records when it finished simulating but its terminal
+/// evaluation exhausted the evaluation budget: no verdict was reached, so it
+/// is neither a failure classification nor [`TIMEOUT_MODE`].
+pub const EVAL_TIMEOUT_MODE: &str = "eval_timeout";
+
+/// The command-line flag that sets the evaluation budget, in seconds, in
+/// every bin that has `--run-timeout-secs`.
+pub const EVAL_TIMEOUT_FLAG: &str = "--eval-timeout-secs";
+
+/// The evaluation budget when [`EVAL_TIMEOUT_FLAG`] is not given.
+pub const DEFAULT_EVAL_TIMEOUT_SECS: u64 = 300;
+
+/// A run that reached no verdict — it exhausted either budget — and so is
+/// excluded wherever a sweep reads finished runs.
+pub fn is_unfinished(mode: &str) -> bool {
+    mode == TIMEOUT_MODE || mode == EVAL_TIMEOUT_MODE
+}
+
+/// The evaluator's terminal verdict on a rollout that finished simulating,
+/// under an evaluation `budget` of wall clock starting now: `None` when the
+/// budget is spent first (record [`EVAL_TIMEOUT_MODE`]). The evaluation
+/// abandons cooperatively on the calling thread, so nothing keeps running;
+/// a verdict that is reached is bit-identical to an unbudgeted one. A budget
+/// too large to be a deadline (`Duration::MAX`) is no deadline.
+pub fn evaluate_within_budget(
+    world: &explorers_sim::World,
+    observations: &RolloutObservations,
+    config: &EvalConfig,
+    max_ticks: u64,
+    budget: Duration,
+) -> Option<FitnessBreakdown> {
+    match Instant::now().checked_add(budget) {
+        Some(deadline) => {
+            evaluate_from_log_within(world, observations, config, max_ticks, deadline)
+        }
+        None => Some(explorers_genesis_eval::evaluate_from_log(
+            world,
+            observations,
+            config,
+            max_ticks,
+        )),
+    }
+}
 
 /// The atlas file's shape, as far as the sweeps read it: the unit vector of
 /// each live cell.

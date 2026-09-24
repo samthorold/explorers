@@ -29,12 +29,16 @@
 //! quantiles (50th / 90th / 95th / max, nearest-rank) read **live runs only**
 //! (mode `none` and reached the horizon), split atlas vs sample.
 //!
-//! A (config, seed) rollout has a wall-clock budget (`--run-timeout-secs`,
-//! default 300): a knife-edge world that costs seconds per tick stops where
-//! it is and is recorded as mode `timeout` (not live), so it shows in the
-//! summary's mode breakdown instead of stalling the sweep. The guard reads a
-//! clock between steps and touches nothing else, so runs that finish inside
-//! the budget stay byte-identical.
+//! A (config, seed) run carries two wall-clock budgets (#523). The
+//! **simulation budget** (`--run-timeout-secs`, default 300) bounds the step
+//! loop: a knife-edge world that costs seconds per tick stops where it is and
+//! is recorded as mode `timeout`. The **evaluation budget**
+//! (`--eval-timeout-secs`, default 300) bounds the terminal evaluation of a
+//! rollout that reached the horizon: a dense terminal roster whose clustering
+//! overruns it is recorded as mode `eval_timeout` — no verdict, never a
+//! failure classification. Neither is live; each shows under its own label in
+//! the summary's mode breakdown instead of stalling the sweep. Both guards
+//! only read a clock, so runs that finish inside them stay byte-identical.
 //!
 //! ## Resumable by construction
 //!
@@ -74,11 +78,14 @@ use rayon::prelude::*;
 
 use explorers_genesis::{EvalConfig, FailureMode};
 use explorers_genesis_eval::{
-    EVALUATOR_EVENT_KINDS, RolloutObservations, early_stop, evaluate_from_log, sustainable_stock,
+    EVALUATOR_EVENT_KINDS, RolloutObservations, early_stop, sustainable_stock,
 };
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{decode, default_ranges};
-use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
+use explorers_search::sweep::{
+    DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
+    done_configs, evaluate_within_budget, plan_tasks, read_atlas_units, read_rows,
+};
 use explorers_sim::{InitialDistribution, World, WorldParameters};
 
 /// First tick at which the living free-energy stock exceeds its tick-0 value.
@@ -150,10 +157,12 @@ struct SeedRecord {
     /// dead-pool gate on the series-so-far), or where the wall-clock budget
     /// ran out.
     termination_tick: u64,
-    /// The evaluator's terminal classification (`evaluate_from_log`), or
-    /// `"timeout"` when the rollout exceeded its wall-clock budget
-    /// (`--run-timeout-secs`) — recorded, not evaluated, so the summary's
-    /// mode breakdown shows it rather than silently missing it.
+    /// The evaluator's terminal classification (`evaluate_from_log`),
+    /// `"timeout"` when the step loop exceeded the simulation budget
+    /// (`--run-timeout-secs`), or `"eval_timeout"` when the terminal
+    /// evaluation exceeded the evaluation budget (`--eval-timeout-secs`) —
+    /// recorded, not evaluated, so the summary's mode breakdown shows them
+    /// rather than silently missing them.
     mode: String,
     /// `mode == "none"` and the run reached the horizon: the runs the summary
     /// quantiles read.
@@ -184,9 +193,10 @@ fn producer_count(world: &World) -> usize {
 /// stock and the producer count, both indexed by tick from tick 0.
 ///
 /// A rollout that exceeds `run_timeout` of wall clock stops where it is and
-/// reads as mode `"timeout"` (not live). The guard only compares a clock
-/// against the budget between steps, so a run that does not time out is
-/// byte-identical to one run without a budget.
+/// reads as mode `"timeout"` (not live); one that reaches the horizon but
+/// whose evaluation exceeds `eval_timeout` reads as `"eval_timeout"` (not
+/// live). The guards only compare a clock against the budgets, so a run that
+/// exhausts neither is byte-identical to one run without budgets.
 fn run_seed(
     params: &WorldParameters,
     dist: &InitialDistribution,
@@ -194,6 +204,7 @@ fn run_seed(
     horizon: u64,
     band: Band,
     run_timeout: Duration,
+    eval_timeout: Duration,
 ) -> SeedRecord {
     let eval_config = EvalConfig::default();
     let stock = sustainable_stock(params);
@@ -226,12 +237,14 @@ fn run_seed(
         }
     }
     let mode = if timed_out {
-        "timeout"
+        TIMEOUT_MODE
     } else if let Some(failure) = stopped {
         mode_label(&Some(failure))
     } else {
-        let breakdown = evaluate_from_log(&world, &observations, &eval_config, horizon);
-        mode_label(&breakdown.failure)
+        match evaluate_within_budget(&world, &observations, &eval_config, horizon, eval_timeout) {
+            Some(breakdown) => mode_label(&breakdown.failure),
+            None => EVAL_TIMEOUT_MODE,
+        }
     };
     let termination_tick = world.tick();
     let reached_horizon = !timed_out && termination_tick == horizon;
@@ -382,7 +395,8 @@ fn summarise(rows: &[ConfigRow]) -> Summary {
 
 /// Command line: `--limit N`, `--horizon T`, `--out PATH`, `--atlas PATH`,
 /// `--seeds N` (1..=8), `--configs atlas:0,sample:12`, `--tail-ticks N`,
-/// `--run-timeout-secs N` (per (config, seed) wall-clock budget),
+/// `--run-timeout-secs N` (per (config, seed) simulation budget),
+/// `--eval-timeout-secs N` (per (config, seed) evaluation budget),
 /// `--summary` (no runs; summarise the rows already in `--out`).
 #[derive(Clone, Debug, PartialEq)]
 struct Args {
@@ -394,6 +408,7 @@ struct Args {
     configs: Option<HashSet<(ConfigSource, usize)>>,
     band: Band,
     run_timeout: Duration,
+    eval_timeout: Duration,
     summary_only: bool,
 }
 
@@ -413,6 +428,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
         configs: None,
         band: BAND,
         run_timeout: Duration::from_secs(DEFAULT_RUN_TIMEOUT_SECS),
+        eval_timeout: Duration::from_secs(DEFAULT_EVAL_TIMEOUT_SECS),
         summary_only: false,
     };
     let mut it = argv.into_iter();
@@ -460,6 +476,12 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
                     &value("--run-timeout-secs", &mut it),
                 ))
             }
+            EVAL_TIMEOUT_FLAG => {
+                args.eval_timeout = Duration::from_secs(number(
+                    EVAL_TIMEOUT_FLAG,
+                    &value(EVAL_TIMEOUT_FLAG, &mut it),
+                ))
+            }
             "--summary" => args.summary_only = true,
             other => panic!("settling_time: unknown argument {other:?}"),
         }
@@ -475,19 +497,22 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
 
 /// One config: the seed ensemble run in parallel (rayon's indexed collect
 /// keeps seed order, so the row is bit-identical to the sequential map).
-fn run_config(
-    source: ConfigSource,
-    config_index: usize,
-    unit: &[f64],
-    seeds: u64,
-    horizon: u64,
-    band: Band,
-    run_timeout: Duration,
-) -> ConfigRow {
+fn run_config(source: ConfigSource, config_index: usize, unit: &[f64], args: &Args) -> ConfigRow {
     let (params, dist) = decode(unit, &default_ranges());
-    let seeds: Vec<SeedRecord> = (0..seeds)
+    let (horizon, band) = (args.horizon, args.band);
+    let seeds: Vec<SeedRecord> = (0..args.seeds)
         .into_par_iter()
-        .map(|s| run_seed(&params, &dist, SEED_BASE + s, horizon, band, run_timeout))
+        .map(|s| {
+            run_seed(
+                &params,
+                &dist,
+                SEED_BASE + s,
+                horizon,
+                band,
+                args.run_timeout,
+                args.eval_timeout,
+            )
+        })
         .collect();
     ConfigRow {
         source,
@@ -588,15 +613,7 @@ fn main() {
                 ConfigSource::Atlas => &atlas_units[idx],
                 ConfigSource::Sample => &sampled[idx],
             };
-            let row = run_config(
-                source,
-                idx,
-                unit,
-                args.seeds,
-                args.horizon,
-                args.band,
-                args.run_timeout,
-            );
+            let row = run_config(source, idx, unit, &args);
             append_row(&args.out, &row);
             eprintln!(
                 "  {:?}:{idx} done ({}/{total}, {} live of {}, {:.0}s elapsed)",
@@ -638,9 +655,10 @@ mod tests {
         assert_eq!(args.configs, None);
         assert_eq!(args.band, BAND);
         assert_eq!(args.run_timeout, Duration::from_secs(300));
+        assert_eq!(args.eval_timeout, Duration::from_secs(300));
         assert!(!args.summary_only);
         let args = parse_args(
-            "--limit 3 --horizon 600 --out target/x.jsonl --atlas a.json --seeds 2 --configs atlas:0,atlas:1 --tail-ticks 100 --run-timeout-secs 7 --summary"
+            "--limit 3 --horizon 600 --out target/x.jsonl --atlas a.json --seeds 2 --configs atlas:0,atlas:1 --tail-ticks 100 --run-timeout-secs 7 --eval-timeout-secs 11 --summary"
                 .split(' ')
                 .map(String::from),
         );
@@ -652,6 +670,7 @@ mod tests {
         assert_eq!(args.configs.as_ref().map(|c| c.len()), Some(2));
         assert_eq!(args.band.tail_ticks, 100);
         assert_eq!(args.run_timeout, Duration::from_secs(7));
+        assert_eq!(args.eval_timeout, Duration::from_secs(11));
         assert!(args.summary_only);
     }
 
@@ -764,7 +783,7 @@ mod tests {
             tail_ticks: 10,
             fraction: 0.2,
         };
-        let record = run_seed(&params, &dist, 1000, 40, band, Duration::MAX);
+        let record = run_seed(&params, &dist, 1000, 40, band, Duration::MAX, Duration::MAX);
         assert_eq!(record.seed, 1000);
         assert!(record.termination_tick >= 1 && record.termination_tick <= 40);
         assert!(record.founder_free_energy > 0.0);
@@ -781,7 +800,7 @@ mod tests {
             assert!(record.producer_settling_tick.is_some_and(|t| t <= 40));
         }
         // Determinism: the same seed reproduces the record byte for byte.
-        let again = run_seed(&params, &dist, 1000, 40, band, Duration::MAX);
+        let again = run_seed(&params, &dist, 1000, 40, band, Duration::MAX, Duration::MAX);
         assert_eq!(
             serde_json::to_string(&record).unwrap(),
             serde_json::to_string(&again).unwrap()
@@ -797,7 +816,15 @@ mod tests {
         };
         // A zero budget is exceeded on the first step, so a run that would
         // otherwise continue to the horizon stops early and is not live.
-        let record = run_seed(&params, &dist, 1000, 40, band, Duration::ZERO);
+        let record = run_seed(
+            &params,
+            &dist,
+            1000,
+            40,
+            band,
+            Duration::ZERO,
+            Duration::MAX,
+        );
         assert_eq!(record.mode, "timeout");
         assert!(!record.live);
         assert!(record.termination_tick >= 1 && record.termination_tick < 40);
@@ -814,6 +841,46 @@ mod tests {
         let summary = summarise(&[row]);
         assert_eq!(summary.atlas.live_runs, 0);
         assert_eq!(summary.atlas.modes, vec![("timeout".to_string(), 1)]);
+    }
+
+    #[test]
+    fn a_rollout_that_simulates_but_cannot_be_evaluated_in_budget_reads_as_an_eval_timeout() {
+        let (params, dist) = atlas_cell(0);
+        let band = Band {
+            tail_ticks: 10,
+            fraction: 0.2,
+        };
+        // The simulation is unbounded and reaches the horizon; a zero
+        // evaluation budget is spent before the verdict.
+        let record = run_seed(
+            &params,
+            &dist,
+            1000,
+            40,
+            band,
+            Duration::MAX,
+            Duration::ZERO,
+        );
+        assert_eq!(
+            record.termination_tick, 40,
+            "the rollout reached the horizon"
+        );
+        assert_eq!(record.mode, EVAL_TIMEOUT_MODE);
+        assert!(!record.live, "no verdict, so not live");
+        // Counted under its own mode, not folded into the timeouts.
+        let row = ConfigRow {
+            source: ConfigSource::Atlas,
+            config_index: 0,
+            horizon: 40,
+            band,
+            seeds: vec![record],
+        };
+        let summary = summarise(&[row]);
+        assert_eq!(summary.atlas.live_runs, 0);
+        assert_eq!(
+            summary.atlas.modes,
+            vec![(EVAL_TIMEOUT_MODE.to_string(), 1)]
+        );
     }
 
     #[test]

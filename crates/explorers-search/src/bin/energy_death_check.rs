@@ -42,9 +42,14 @@
 //! *would* have had zero false positives (the smallest ratio over the
 //! visibly-alive, stand-in-alive runs) is readable off the rows.
 //!
-//! A (config, seed) rollout has a wall-clock budget (`--run-timeout-secs`,
-//! default 300): a knife-edge world that costs seconds per tick stops where
-//! it is and is recorded as mode `timeout`, not reaching the horizon.
+//! A (config, seed) run carries two wall-clock budgets (#523). The
+//! **simulation budget** (`--run-timeout-secs`, default 300) bounds the step
+//! loop: a knife-edge world that costs seconds per tick stops where it is and
+//! is recorded as mode `timeout`, not reaching the horizon. The **evaluation
+//! budget** (`--eval-timeout-secs`, default 300) bounds the terminal
+//! evaluation of a rollout that got to `T`: one whose evaluation overruns it
+//! is recorded as mode `eval_timeout` — no verdict, never a failure
+//! classification — and, like a timeout, is not read by the comparison.
 //!
 //! ## Resumable by construction
 //!
@@ -69,11 +74,14 @@ use rayon::prelude::*;
 use explorers_genesis::{EvalConfig, FailureMode};
 use explorers_genesis_eval::{
     EVALUATOR_EVENT_KINDS, ROSTER_FLOOR, RolloutObservations, SUSTAINABLE_FRACTION, early_stop,
-    evaluate_from_log, is_free_energy_dead, is_free_energy_dead_sustainable, sustainable_stock,
+    is_free_energy_dead, is_free_energy_dead_sustainable, sustainable_stock,
 };
 use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
 use explorers_search::search::{decode, default_ranges};
-use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
+use explorers_search::sweep::{
+    DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
+    done_configs, evaluate_within_budget, plan_tasks, read_atlas_units, read_rows,
+};
 use explorers_sim::{InitialDistribution, World, WorldParameters};
 
 /// The evaluator's terminal failure mode, as a stable label.
@@ -94,13 +102,16 @@ fn mode_label(failure: &Option<FailureMode>) -> &'static str {
 struct SeedRecord {
     seed: u64,
     /// The world's tick when the rollout stopped: the horizon, where
-    /// extinction / explosion / lockup stopped it, or where the wall-clock
+    /// extinction / explosion / lockup stopped it, or where the simulation
     /// budget ran out.
     termination_tick: u64,
     /// The evaluator's terminal classification at the horizon
-    /// (`evaluate_from_log`), the early stop's mode, or `"timeout"`.
+    /// (`evaluate_from_log`), the early stop's mode, `"timeout"` (simulation
+    /// budget spent) or `"eval_timeout"` (evaluation budget spent at `T`).
     mode: String,
-    /// The run got to `T`: the only runs the comparison reads.
+    /// The run got to `T` and was verdicted there: the only runs the
+    /// comparison reads. False under `"eval_timeout"` even though the world
+    /// reached `T`, since the run is unfinished.
     reached_horizon: bool,
     /// The stand-in (`is_free_energy_dead`, post-grace history peak) on the
     /// full series at the horizon.
@@ -134,6 +145,7 @@ fn run_seed(
     seed: u64,
     horizon: u64,
     run_timeout: Duration,
+    eval_timeout: Duration,
 ) -> SeedRecord {
     let eval_config = EvalConfig::default();
     let stock = sustainable_stock(params);
@@ -164,15 +176,18 @@ fn run_seed(
         }
     }
     let termination_tick = world.tick();
-    let reached_horizon = !timed_out && stopped.is_none() && termination_tick == horizon;
     let mode = if timed_out {
-        "timeout".to_string()
+        TIMEOUT_MODE.to_string()
     } else if let Some(failure) = &stopped {
         mode_label(&Some(failure.clone())).to_string()
     } else {
-        let breakdown = evaluate_from_log(&world, &observations, &eval_config, horizon);
-        mode_label(&breakdown.failure).to_string()
+        match evaluate_within_budget(&world, &observations, &eval_config, horizon, eval_timeout) {
+            Some(breakdown) => mode_label(&breakdown.failure).to_string(),
+            None => EVAL_TIMEOUT_MODE.to_string(),
+        }
     };
+    let reached_horizon =
+        !timed_out && stopped.is_none() && termination_tick == horizon && mode != EVAL_TIMEOUT_MODE;
     let grace = eval_config.grace_ticks as usize;
     let window = eval_config.energy_death_window;
     let post_grace = observations.free_energy.get(grace..).unwrap_or(&[]);
@@ -251,7 +266,8 @@ struct Counts {
     alive_stock_ratio_p05: Option<f64>,
     alive_stock_ratio_p50: Option<f64>,
     alive_stock_ratio_p95: Option<f64>,
-    /// Runs not reaching the horizon, by mode.
+    /// Runs the comparison does not read (stopped early, or either budget
+    /// spent), by mode — `timeout` and `eval_timeout` counted apart.
     modes: Vec<(String, usize)>,
 }
 
@@ -368,7 +384,8 @@ fn summarise(rows: &[ConfigRow]) -> Summary {
 
 /// Command line: `--limit N`, `--horizon T`, `--out PATH`, `--atlas PATH`,
 /// `--seeds N` (1..=8), `--configs atlas:0,sample:12`,
-/// `--run-timeout-secs N`, `--summary`.
+/// `--run-timeout-secs N` (simulation budget), `--eval-timeout-secs N`
+/// (evaluation budget), `--summary`.
 #[derive(Clone, Debug, PartialEq)]
 struct Args {
     limit: Option<usize>,
@@ -378,6 +395,7 @@ struct Args {
     seeds: u64,
     configs: Option<HashSet<(ConfigSource, usize)>>,
     run_timeout: Duration,
+    eval_timeout: Duration,
     summary_only: bool,
 }
 
@@ -397,6 +415,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
         seeds: N_SEEDS,
         configs: None,
         run_timeout: Duration::from_secs(DEFAULT_RUN_TIMEOUT_SECS),
+        eval_timeout: Duration::from_secs(DEFAULT_EVAL_TIMEOUT_SECS),
         summary_only: false,
     };
     let mut it = argv.into_iter();
@@ -436,6 +455,12 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
                     &value("--run-timeout-secs", &mut it),
                 ))
             }
+            EVAL_TIMEOUT_FLAG => {
+                args.eval_timeout = Duration::from_secs(number(
+                    EVAL_TIMEOUT_FLAG,
+                    &value(EVAL_TIMEOUT_FLAG, &mut it),
+                ))
+            }
             "--summary" => args.summary_only = true,
             other => panic!("energy_death_check: unknown argument {other:?}"),
         }
@@ -452,11 +477,21 @@ fn run_config(
     seeds: u64,
     horizon: u64,
     run_timeout: Duration,
+    eval_timeout: Duration,
 ) -> ConfigRow {
     let (params, dist) = decode(unit, &default_ranges());
     let seeds: Vec<SeedRecord> = (0..seeds)
         .into_par_iter()
-        .map(|s| run_seed(&params, &dist, SEED_BASE + s, horizon, run_timeout))
+        .map(|s| {
+            run_seed(
+                &params,
+                &dist,
+                SEED_BASE + s,
+                horizon,
+                run_timeout,
+                eval_timeout,
+            )
+        })
         .collect();
     ConfigRow {
         source,
@@ -566,6 +601,7 @@ fn main() {
                 args.seeds,
                 args.horizon,
                 args.run_timeout,
+                args.eval_timeout,
             );
             append_row(&args.out, &row);
             eprintln!(
@@ -599,6 +635,7 @@ fn main() {
 mod tests {
     use super::*;
     use explorers_search::sweep::AtlasFile;
+    use explorers_search::sweep::is_unfinished;
     use std::collections::HashSet;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -714,9 +751,10 @@ mod tests {
         assert_eq!(args.seeds, N_SEEDS);
         assert_eq!(args.configs, None);
         assert_eq!(args.run_timeout, Duration::from_secs(300));
+        assert_eq!(args.eval_timeout, Duration::from_secs(300));
         assert!(!args.summary_only);
         let args = parse_args(
-            "--limit 3 --horizon 600 --out target/x.jsonl --atlas a.json --seeds 2 --configs atlas:0,atlas:1 --run-timeout-secs 7 --summary"
+            "--limit 3 --horizon 600 --out target/x.jsonl --atlas a.json --seeds 2 --configs atlas:0,atlas:1 --run-timeout-secs 7 --eval-timeout-secs 11 --summary"
                 .split(' ')
                 .map(String::from),
         );
@@ -727,6 +765,7 @@ mod tests {
         assert_eq!(args.seeds, 2);
         assert_eq!(args.configs.as_ref().map(|c| c.len()), Some(2));
         assert_eq!(args.run_timeout, Duration::from_secs(7));
+        assert_eq!(args.eval_timeout, Duration::from_secs(11));
         assert!(args.summary_only);
     }
 
@@ -740,12 +779,12 @@ mod tests {
     #[test]
     fn a_rollout_yields_both_reads_and_the_visibly_alive_facts_at_the_horizon() {
         let (params, dist) = atlas_cell(0);
-        let record = run_seed(&params, &dist, 1000, 40, Duration::MAX);
+        let record = run_seed(&params, &dist, 1000, 40, Duration::MAX, Duration::MAX);
         assert_eq!(record.seed, 1000);
         assert!(record.termination_tick >= 1 && record.termination_tick <= 40);
         assert_eq!(
             record.reached_horizon,
-            record.termination_tick == 40 && record.mode != "timeout"
+            record.termination_tick == 40 && !is_unfinished(&record.mode)
         );
         assert!(record.sustainable_stock > 0.0);
         assert!(
@@ -760,7 +799,7 @@ mod tests {
                 && record.settled_births > 0
         );
         // Determinism: the same seed reproduces the record byte for byte.
-        let again = run_seed(&params, &dist, 1000, 40, Duration::MAX);
+        let again = run_seed(&params, &dist, 1000, 40, Duration::MAX, Duration::MAX);
         assert_eq!(
             serde_json::to_string(&record).unwrap(),
             serde_json::to_string(&again).unwrap()
@@ -770,7 +809,7 @@ mod tests {
     #[test]
     fn a_rollout_past_its_wall_clock_budget_stops_and_reads_as_a_timeout() {
         let (params, dist) = atlas_cell(0);
-        let record = run_seed(&params, &dist, 1000, 40, Duration::ZERO);
+        let record = run_seed(&params, &dist, 1000, 40, Duration::ZERO, Duration::MAX);
         assert_eq!(record.mode, "timeout");
         assert!(!record.reached_horizon);
         assert!(!record.visibly_alive);
@@ -783,6 +822,32 @@ mod tests {
         let summary = summarise(&[row]);
         assert_eq!(summary.atlas.reached_horizon, 0);
         assert_eq!(summary.atlas.modes, vec![("timeout".to_string(), 1)]);
+    }
+
+    #[test]
+    fn a_rollout_that_simulates_but_cannot_be_evaluated_in_budget_reads_as_an_eval_timeout() {
+        let (params, dist) = atlas_cell(0);
+        let record = run_seed(&params, &dist, 1000, 40, Duration::MAX, Duration::ZERO);
+        assert_eq!(
+            record.termination_tick, 40,
+            "the rollout reached the horizon"
+        );
+        assert_eq!(record.mode, EVAL_TIMEOUT_MODE);
+        // Unfinished, as a timeout is: the comparison does not read it.
+        assert!(!record.reached_horizon);
+        assert!(!record.visibly_alive);
+        let row = ConfigRow {
+            source: ConfigSource::Atlas,
+            config_index: 0,
+            horizon: 40,
+            seeds: vec![record],
+        };
+        let summary = summarise(&[row]);
+        assert_eq!(summary.atlas.reached_horizon, 0);
+        assert_eq!(
+            summary.atlas.modes,
+            vec![(EVAL_TIMEOUT_MODE.to_string(), 1)]
+        );
     }
 
     #[test]
