@@ -12,6 +12,7 @@ use crate::{
 };
 use rand::Rng;
 use rand_distr::{Distribution, Normal, Poisson};
+use std::collections::HashSet;
 
 /// Photosynthesise: agents with nonzero effective photosynthetic absorption
 /// absorb energy from local solar flux into reserve. Light competition splits
@@ -192,6 +193,19 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
         });
     }
     (events, total_dissipated)
+}
+
+/// The agents `metabolise` left with no reserve: their charge was capped at what
+/// they held, so they could not pay this tick's metabolism and have starved.
+/// Read straight after `metabolise` (the cap lands the reserve at exactly zero)
+/// and handed to `check_death_thresholds`, so a later credit to the reserve — a
+/// heterotroph's own feeding in the drain pass — cannot revive them (#540).
+pub fn starved_ids(agents: &[Agent]) -> HashSet<u64> {
+    agents
+        .iter()
+        .filter(|a| a.reserve <= 0.0)
+        .map(|a| a.id)
+        .collect()
 }
 
 /// The reserve an agent holds back to cover near-future metabolism: its per-tick
@@ -988,13 +1002,15 @@ pub fn resolve_drains(
     }
 }
 
-/// Check death thresholds: reserve depletion or structure below
-/// complexity-dependent threshold produces carcass.
+/// Check death thresholds: reserve depletion, starvation this tick (`starved`,
+/// from `starved_ids`) or structure below complexity-dependent threshold
+/// produces carcass.
 /// Returns (events, carcasses, dissipated) — dissipated includes reserve and
 /// repro_reserve energy that doesn't transfer to the carcass.
 pub fn check_death_thresholds(
     agents: &mut [Agent],
     params: &WorldParameters,
+    starved: &HashSet<u64>,
 ) -> (Vec<Event>, Vec<Carcass>, f32) {
     let mut events = Vec::new();
     let mut carcasses = Vec::new();
@@ -1002,7 +1018,9 @@ pub fn check_death_thresholds(
 
     for agent in agents.iter_mut() {
         let threshold = crate::death_threshold(&agent.traits, agent.peak_structure);
-        let dies = agent.reserve <= 0.0 || (agent.structure > 0.0 && agent.structure < threshold);
+        let dies = agent.reserve <= 0.0
+            || starved.contains(&agent.id)
+            || (agent.structure > 0.0 && agent.structure < threshold);
 
         if dies {
             let carcass_energy = agent.structure.max(0.0);
@@ -3465,7 +3483,8 @@ mod tests {
             produced = true;
             let mut offspring = result.offspring;
             let structures: Vec<f32> = offspring.iter().map(|o| o.structure).collect();
-            let (_events, carcasses, _diss) = check_death_thresholds(&mut offspring, &params);
+            let (_events, carcasses, _diss) =
+                check_death_thresholds(&mut offspring, &params, &HashSet::new());
             assert!(
                 carcasses.is_empty(),
                 "decomposer offspring must survive its birth tick (seed {seed}): \
@@ -3821,7 +3840,8 @@ mod tests {
         let params = test_params();
         let mut agents = vec![make_agent(1, (0.0, 0.0), 0.0, zero_traits())];
 
-        let (events, carcasses, _dissipated) = check_death_thresholds(&mut agents, &params);
+        let (events, carcasses, _dissipated) =
+            check_death_thresholds(&mut agents, &params, &HashSet::new());
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::Died);
@@ -3829,12 +3849,59 @@ mod tests {
         assert_eq!(carcasses[0].id, 1);
     }
 
+    /// #540: an agent whose metabolic charge was capped has starved this tick,
+    /// even when a later phase (its own feeding in the drain pass) credits it a
+    /// vanishing amount. The residue must not let it survive as a survivor that
+    /// never paid its base rate.
+    #[test]
+    fn check_death_kills_agent_whose_metabolic_charge_was_capped() {
+        let params = WorldParameters {
+            base_metabolic_rate: 1.0,
+            ..test_params()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 0.25, zero_traits())];
+        metabolise(&mut agents, &params);
+        let starved = starved_ids(&agents);
+        // A later phase credits sub-epsilon residue.
+        agents[0].reserve += 1.6e-10;
+
+        let (events, carcasses, dissipated) =
+            check_death_thresholds(&mut agents, &params, &starved);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, EventKind::Died);
+        assert_eq!(carcasses.len(), 1);
+        assert_eq!(agents[0].reserve, 0.0);
+        assert!((dissipated - 1.6e-10).abs() < 1e-15);
+    }
+
+    /// An agent that paid its full charge is not starved, however little
+    /// reserve it has left.
+    #[test]
+    fn starved_ids_excludes_agents_that_paid_in_full() {
+        let params = WorldParameters {
+            base_metabolic_rate: 1.0,
+            ..test_params()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 0.25, zero_traits()),
+            make_agent(2, (0.0, 0.0), 1.5, zero_traits()),
+        ];
+        metabolise(&mut agents, &params);
+
+        let starved = starved_ids(&agents);
+
+        assert!(starved.contains(&1));
+        assert!(!starved.contains(&2));
+    }
+
     #[test]
     fn check_death_kills_agent_with_negative_reserve() {
         let params = test_params();
         let mut agents = vec![make_agent(1, (0.0, 0.0), -5.0, zero_traits())];
 
-        let (events, carcasses, _dissipated) = check_death_thresholds(&mut agents, &params);
+        let (events, carcasses, _dissipated) =
+            check_death_thresholds(&mut agents, &params, &HashSet::new());
 
         assert_eq!(events.len(), 1);
         assert_eq!(carcasses.len(), 1);
@@ -3863,7 +3930,8 @@ mod tests {
         agents[0].peak_structure = peak;
         agents[0].structure = threshold * 0.5; // below threshold
 
-        let (events, carcasses, _dissipated) = check_death_thresholds(&mut agents, &params);
+        let (events, carcasses, _dissipated) =
+            check_death_thresholds(&mut agents, &params, &HashSet::new());
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::Died);
@@ -3876,7 +3944,8 @@ mod tests {
         let params = test_params();
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, zero_traits())];
 
-        let (events, carcasses, _dissipated) = check_death_thresholds(&mut agents, &params);
+        let (events, carcasses, _dissipated) =
+            check_death_thresholds(&mut agents, &params, &HashSet::new());
 
         assert!(events.is_empty());
         assert!(carcasses.is_empty());
@@ -3894,7 +3963,7 @@ mod tests {
         agents[0].repro_nutrient = 2.0; // earmark
         agents[0].structure = 10.0; // bound = 10.0 * 0.1 = 1.0 (zero traits)
 
-        let (_, carcasses, _) = check_death_thresholds(&mut agents, &params);
+        let (_, carcasses, _) = check_death_thresholds(&mut agents, &params, &HashSet::new());
 
         assert_eq!(carcasses.len(), 1);
         // free(5.0) + earmark(2.0) + bound(1.0) = 8.0
@@ -3920,8 +3989,8 @@ mod tests {
         let mut small = vec![make(2.0)];
         let mut large = vec![make(20.0)];
 
-        let (_, small_carcasses, _) = check_death_thresholds(&mut small, &params);
-        let (_, large_carcasses, _) = check_death_thresholds(&mut large, &params);
+        let (_, small_carcasses, _) = check_death_thresholds(&mut small, &params, &HashSet::new());
+        let (_, large_carcasses, _) = check_death_thresholds(&mut large, &params, &HashSet::new());
 
         assert!(
             large_carcasses[0].nutrient > small_carcasses[0].nutrient,

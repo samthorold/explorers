@@ -27,6 +27,12 @@
 //! window boundary at which its series-so-far first reads locked — instead
 //! of running to 500. Its mode is unchanged and every seed that reaches the
 //! horizon is bit-identical; only that `ticks_survived` moved.
+//!
+//! Re-captured under #540, a stepper change: an agent whose metabolic charge
+//! is capped now dies that tick, instead of surviving on the sub-epsilon
+//! reserve its own feeding credits it in the drain pass. Two trajectories
+//! moved (cell 6 / seed 1000 and cell 52 / seed 1000); every gate verdict,
+//! `ticks_survived` and guild flag is unchanged.
 
 use explorers_genesis::{EvalConfig, FailureMode, FitnessBreakdown, RunConfig, run_single};
 use explorers_search::search::{decode, default_ranges};
@@ -168,15 +174,15 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 6,
             seed: 1000,
-            fitness: 0x3f1b08c4,
+            fitness: 0x3f1c0c38,
             failure: None,
-            oscillation_strength: 0x3e891db3,
+            oscillation_strength: 0x3e76cbdb,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f0f5c29,
-            turnover_score: 0x3ed81062,
-            trophic_balance_score: 0x3f47389f,
+            turnover_score: 0x3ed91687,
+            trophic_balance_score: 0x3f52a2b1,
             ticks_survived: 500,
-            carcass_locked_fraction: 0x3d81bba8,
+            carcass_locked_fraction: 0x3d89b88d,
             has_decomposer_guild: false,
             has_consumer_guild: true,
         },
@@ -228,15 +234,15 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 52,
             seed: 1000,
-            fitness: 0x3f58ba06,
+            fitness: 0x3f595703,
             failure: None,
-            oscillation_strength: 0x3e6e8881,
+            oscillation_strength: 0x3e7acc45,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f800000,
             turnover_score: 0x3f800000,
             trophic_balance_score: 0x3f800000,
             ticks_survived: 500,
-            carcass_locked_fraction: 0x3edf6c8f,
+            carcass_locked_fraction: 0x3edea39b,
             has_decomposer_guild: false,
             has_consumer_guild: false,
         },

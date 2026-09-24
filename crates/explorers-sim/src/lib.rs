@@ -1153,6 +1153,9 @@ impl World {
         let (metab_events, dissipated) = phase::metabolise(&mut self.agents, &self.params);
         self.dissipated_energy += dissipated;
         events.extend(metab_events);
+        // Agents that could not fund this tick's metabolism have starved; they
+        // die at the death check whatever later phases credit them (#540).
+        let starved_ids = phase::starved_ids(&self.agents);
 
         // 4. Grow
         let (grow_events, grow_dissipated) = phase::grow(&mut self.agents, &self.params);
@@ -1331,7 +1334,7 @@ impl World {
 
         // 9. Check death thresholds
         let (death_events, threshold_carcasses, death_dissipated) =
-            phase::check_death_thresholds(&mut self.agents, &self.params);
+            phase::check_death_thresholds(&mut self.agents, &self.params, &starved_ids);
         let threshold_deaths = threshold_carcasses.len();
         self.dissipated_energy += death_dissipated;
         events.extend(death_events);
