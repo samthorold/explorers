@@ -636,6 +636,11 @@ pub struct DrainResult {
 /// carcass reach from its bulk, while a growing heterotroph (a mycelium) does.
 /// Both the living-target and carcass passes call this so they cannot drift
 /// apart (they diverged before — the #303/#293 index/id drain bug).
+///
+/// Callers use the reach as a binary contact predicate, so drain outcomes are a
+/// step function of position and can flip on f32 rounding at the boundary —
+/// an accepted discontinuity (#477); see `docs/system-design/world-rules.md`,
+/// "Feeding reach is a binary contact predicate".
 pub fn consumption_reach(eff_heterotrophy: f32, structure: f32, params: &WorldParameters) -> f32 {
     eff_heterotrophy
         * (params.contact_range_coefficient
