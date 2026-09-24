@@ -3,7 +3,7 @@ use rand::Rng;
 use explorers_genesis::{InitialDistribution, WorldParameters};
 use explorers_sim::TraitVector;
 
-use crate::qd::{Atlas, QdConfig, run_qd};
+use crate::qd::{Atlas, GenerationReport, QdConfig, run_qd_observed};
 
 /// The genesis search output is the [`Atlas`] (CONTEXT.md) — the live archive of
 /// behaviour cells plus the dead frontier. `SearchResult` is kept as the public
@@ -345,10 +345,21 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
 }
 
 /// The genesis outer search: QD (CMA-MAE) illumination over world-parameter
-/// space, returning the [`Atlas`]. Delegates to [`run_qd`], reusing [`decode`]
+/// space, returning the [`Atlas`]. Delegates to [`run_qd`](crate::qd::run_qd), reusing [`decode`]
 /// and `run_ensemble` unchanged (issue #365). The LHS/Sobol/GP-BO path is retired
 /// from production — its modules stay in the crate, dormant.
 pub fn run_search(config: &SearchConfig, base_seed: u64, rng: &mut impl Rng) -> SearchResult {
+    run_search_observed(config, base_seed, rng, &mut |_: &GenerationReport| {})
+}
+
+/// [`run_search`], calling `observer` as each QD generation completes (#529) —
+/// see [`run_qd_observed`]. Reporting only: the atlas is unchanged.
+pub fn run_search_observed(
+    config: &SearchConfig,
+    base_seed: u64,
+    rng: &mut impl Rng,
+    observer: &mut impl FnMut(&GenerationReport),
+) -> SearchResult {
     let qd_config = QdConfig {
         ranges: config.ranges.clone(),
         ensemble_size: config.ensemble_size,
@@ -361,7 +372,7 @@ pub fn run_search(config: &SearchConfig, base_seed: u64, rng: &mut impl Rng) -> 
         early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
         carcass_seed_count: config.carcass_seed_count,
     };
-    run_qd(&qd_config, base_seed, rng)
+    run_qd_observed(&qd_config, base_seed, rng, observer)
 }
 
 #[cfg(test)]
@@ -567,6 +578,34 @@ mod tests {
         assert_eq!(atlas1.dead_frontier, atlas2.dead_frontier);
         assert_eq!(atlas1.best_fitness, atlas2.best_fitness);
         assert_eq!(atlas1.qd_score, atlas2.qd_score);
+    }
+
+    #[test]
+    fn slow_run_search_observed_reports_every_generation_to_the_caller() {
+        // #529: the CLI's entry point carries the per-generation observer
+        // through to the QD loop, and the atlas matches the unobserved search.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = SearchConfig {
+            ensemble_size: 1,
+            max_ticks: 15,
+            batch: 4,
+            generations: 2,
+            ..Default::default()
+        };
+
+        let mut seen: Vec<usize> = Vec::new();
+        let mut rng1 = ChaCha8Rng::seed_from_u64(42);
+        let observed = run_search_observed(&config, 7, &mut rng1, &mut |r: &GenerationReport| {
+            seen.push(r.generation)
+        });
+        let mut rng2 = ChaCha8Rng::seed_from_u64(42);
+        let unobserved = run_search(&config, 7, &mut rng2);
+
+        assert_eq!(seen, vec![0, 1, 2]);
+        assert_eq!(observed.coverage, unobserved.coverage);
+        assert_eq!(observed.qd_score, unobserved.qd_score);
     }
 
     #[test]
