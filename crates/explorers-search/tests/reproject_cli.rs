@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 
 use explorers_search::atlas_file::write_atlas;
 use explorers_search::qd::{
-    AtlasProvenance, QdConfig, RefinementConfig, refined_best_recipe, run_qd,
+    AtlasProvenance, CoexistenceFloor, QdConfig, RefinementConfig, refined_best_recipe, run_qd,
 };
 use explorers_search::search::default_ranges;
 use rand::SeedableRng;
@@ -56,6 +56,7 @@ fn reproject_writes_the_recipe_the_writing_run_projected() {
             top_k: 2,
             ensemble_size: 2,
             max_ticks: config.max_ticks,
+            floor: CoexistenceFloor::Plain,
         },
         SEED,
     );
@@ -110,6 +111,7 @@ fn reproject_keeps_the_fallback_warning_when_no_refined_cell_clears_the_floor() 
             top_k: 1,
             ensemble_size: 1,
             max_ticks: horizon,
+            floor: CoexistenceFloor::Plain,
         },
         SEED,
     );
@@ -130,11 +132,73 @@ fn reproject_keeps_the_fallback_warning_when_no_refined_cell_clears_the_floor() 
     ]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("WARNING: no refined top-1 cell clears the coexistence floor"),
+        stderr(&output)
+            .contains("WARNING: no refined top-1 cell clears the plain coexistence floor"),
         "{}",
         stderr(&output)
     );
     assert!(dir.join("recipe.json").exists());
+}
+
+#[test]
+fn reproject_projects_under_the_coexistence_floor_given() {
+    // #538: --coexistence-floor reaches the re-projection, which writes the
+    // recipe the in-run projection picks under that floor and names the floor.
+    let config = tiny();
+    let atlas = run_qd(&config, SEED, &mut ChaCha8Rng::seed_from_u64(SEED));
+    let in_run = refined_best_recipe(
+        &atlas,
+        &default_ranges(),
+        &RefinementConfig {
+            top_k: 2,
+            ensemble_size: 2,
+            max_ticks: config.max_ticks,
+            floor: CoexistenceFloor::Either,
+        },
+        SEED,
+    );
+    let dir = scratch("floor");
+    let atlas_path = dir.join("atlas.json");
+    let recipe_path = dir.join("recipe.json");
+    write_atlas(&atlas, &atlas_path).unwrap();
+
+    let output = search_cli(&[
+        "--reproject",
+        atlas_path.to_str().unwrap(),
+        "--recipe-output",
+        recipe_path.to_str().unwrap(),
+        "--refine-top-k",
+        "2",
+        "--refine-ensemble",
+        "2",
+        "--coexistence-floor",
+        "either",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("Floor: either"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&recipe_path).unwrap(),
+        serde_json::to_string_pretty(in_run.recipe.as_ref().unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn an_unknown_coexistence_floor_is_refused() {
+    let dir = scratch("bad-floor");
+    let output = search_cli(&[
+        "--reproject",
+        dir.join("atlas.json").to_str().unwrap(),
+        "--coexistence-floor",
+        "guild",
+    ]);
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("--coexistence-floor"), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
 }
 
 #[test]

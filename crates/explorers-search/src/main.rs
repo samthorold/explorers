@@ -7,8 +7,8 @@ use rand_chacha::ChaCha8Rng;
 use explorers_search::atlas_file::{ReprojectSettings, read_atlas, reproject, write_atlas};
 use explorers_search::checkpoint::inspect;
 use explorers_search::qd::{
-    COEXISTENCE_FLOOR, REFINE_ENSEMBLE_SIZE, REFINE_TOP_K, RefinedProjection, RefinementConfig,
-    refined_best_recipe,
+    COEXISTENCE_FLOOR, CoexistenceFloor, REFINE_ENSEMBLE_SIZE, REFINE_TOP_K, RefinedProjection,
+    RefinementConfig, refined_best_recipe,
 };
 use explorers_search::search::{
     SearchConfig, default_ranges, resume_search, run_search_checkpointed, run_search_observed,
@@ -26,6 +26,7 @@ fn main() {
     let mut recipe_output_path = PathBuf::from("recipe.json");
     let mut refine_top_k = REFINE_TOP_K;
     let mut refine_ensemble = REFINE_ENSEMBLE_SIZE;
+    let mut coexistence_floor = CoexistenceFloor::Plain;
     let mut checkpoint_path: Option<PathBuf> = None;
     let mut resume_path: Option<PathBuf> = None;
     let mut reproject_path: Option<PathBuf> = None;
@@ -78,6 +79,17 @@ fn main() {
                 i += 1;
                 refine_ensemble = args[i].parse().unwrap();
             }
+            "--coexistence-floor" => {
+                i += 1;
+                coexistence_floor = CoexistenceFloor::from_label(&args[i]).unwrap_or_else(|| {
+                    eprintln!(
+                        "--coexistence-floor must be plain, decomposer, consumer or either; \
+                         got {:?}",
+                        args[i]
+                    );
+                    std::process::exit(1);
+                });
+            }
             "--checkpoint" => {
                 i += 1;
                 checkpoint_path = Some(PathBuf::from(&args[i]));
@@ -116,6 +128,7 @@ fn main() {
             ensemble_size: refine_ensemble,
             seed,
             max_ticks,
+            floor: coexistence_floor,
         };
         let reprojected = read_atlas(&path).and_then(|atlas| {
             eprintln!(
@@ -223,6 +236,7 @@ fn main() {
         top_k: refine_top_k,
         ensemble_size: refine_ensemble,
         max_ticks: config.max_ticks,
+        floor: coexistence_floor,
     };
     eprintln!(
         "\nRefining top-{} live cells at ensemble n={} (independent seeds)...",
@@ -349,14 +363,26 @@ fn report_projection(
     recipe_output_path: &Path,
 ) {
     if !projection.refined.is_empty() {
-        eprintln!("Refined cells (recorded → refined coexistence fraction):");
+        eprintln!(
+            "Refined cells (coexist recorded → refined; the same seeds under the guild-aware \
+             floors dec/cons/either; guild reads dec/cons). Floor: {} (✓ clears {:.2}):",
+            projection.floor.label(),
+            COEXISTENCE_FLOOR
+        );
         for r in &projection.refined {
+            let f = r.refined_fractions;
             eprintln!(
-                "  cell {:?}: fitness={:.4} coexist {:.2} → {:.2} (n={}) refined_fit={:.4}{}",
+                "  cell {:?}: fitness={:.4} coexist {:.2} → {:.2} | +guild {:.2}/{:.2}/{:.2} | \
+                 guild {:.2}/{:.2} (n={}) refined_fit={:.4}{}",
                 r.cell,
                 r.recorded_fitness,
                 r.recorded_coexistence_fraction,
-                r.refined_coexistence_fraction,
+                f.plain,
+                f.decomposer,
+                f.consumer,
+                f.either,
+                r.refined_decomposer_fraction,
+                r.refined_consumer_fraction,
                 r.refined_sample_count,
                 r.refined_median_fitness,
                 if r.clears_floor { " ✓" } else { "" },
@@ -378,7 +404,8 @@ fn report_projection(
                 std::process::exit(1);
             }
             eprintln!(
-                "Recipe (best refined-robust live cell) written to {}",
+                "Recipe (best refined-robust live cell, {} floor) written to {}",
+                projection.floor.label(),
                 recipe_output_path.display()
             );
             // Warn when the refinement had to fall back below the floor: no top-K
@@ -387,10 +414,12 @@ fn report_projection(
             // (#401, #404).
             if !projection.cleared_floor {
                 eprintln!(
-                    "  WARNING: no refined top-{} cell clears the coexistence floor ({:.2}); the \
-                     recipe is the argmax-fitness straddler (a lucky-draw world). Try a larger \
-                     budget, ensemble, or --refine-top-k.",
-                    refine_top_k, COEXISTENCE_FLOOR
+                    "  WARNING: no refined top-{} cell clears the {} coexistence floor ({:.2}); \
+                     the recipe is the argmax-fitness straddler (a lucky-draw world). Try a \
+                     larger budget, ensemble, or --refine-top-k.",
+                    refine_top_k,
+                    projection.floor.label(),
+                    COEXISTENCE_FLOOR
                 );
             }
         }
@@ -417,6 +446,12 @@ fn print_usage() {
     eprintln!("  --recipe-output PATH  Recipe JSON path (default: recipe.json)");
     eprintln!("  --refine-top-k N    Top live cells to refine before projecting (default: 10)");
     eprintln!("  --refine-ensemble N Refinement ensemble size, independent seeds (default: 32)");
+    eprintln!("  --coexistence-floor plain|decomposer|consumer|either");
+    eprintln!("                      Which coexistence the projection's floor reads (default:");
+    eprintln!("                      plain). The guild-aware floors also require the seed to");
+    eprintln!("                      hold that heterotroph guild (#494 option 3). Selection");
+    eprintln!("                      only: the refined cells and seeds are the same under");
+    eprintln!("                      every floor, and all four fractions are reported.");
     eprintln!("  --checkpoint PATH   Write the search state to PATH at every generation");
     eprintln!("                      boundary (atomically), so an interrupted search can be");
     eprintln!("                      resumed. Refuses to overwrite an existing PATH.");
@@ -426,8 +461,9 @@ fn print_usage() {
     eprintln!("                      --seed as the original run; a mismatch is refused.");
     eprintln!("  --reproject PATH    Skip the search: read the atlas at PATH and run only the");
     eprintln!("                      refinement and recipe projection against it, writing");
-    eprintln!("                      --recipe-output. Takes --refine-top-k and --refine-ensemble");
-    eprintln!("                      (same defaults); the recipe is the one the run that wrote");
+    eprintln!("                      --recipe-output. Takes --refine-top-k, --refine-ensemble");
+    eprintln!("                      and --coexistence-floor (same defaults); the recipe is the");
+    eprintln!("                      one the run that wrote");
     eprintln!("                      the atlas projects under the same settings. The seed and");
     eprintln!("                      horizon come from the atlas: --seed / --max-ticks are");
     eprintln!("                      needed only for an atlas that predates recording them,");

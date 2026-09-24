@@ -13,7 +13,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::qd::{Atlas, AtlasProvenance, RefinedProjection, RefinementConfig, refined_best_recipe};
+use crate::qd::{
+    Atlas, AtlasProvenance, CoexistenceFloor, RefinedProjection, RefinementConfig,
+    refined_best_recipe,
+};
 use crate::search::default_ranges;
 
 /// Why an atlas file could not be written, read, or re-projected.
@@ -94,6 +97,9 @@ pub struct ReprojectSettings {
     pub seed: Option<u64>,
     /// The search horizon, for an atlas that does not record it.
     pub max_ticks: Option<u64>,
+    /// Which coexistence predicate the floor reads ([`RefinementConfig::floor`],
+    /// #538). Every floor's fraction is reported whichever picks.
+    pub floor: CoexistenceFloor,
 }
 
 /// Refine the atlas's top live cells and project the recipe exactly as the run
@@ -108,6 +114,7 @@ pub fn reproject(
         top_k: settings.top_k,
         ensemble_size: settings.ensemble_size,
         max_ticks,
+        floor: settings.floor,
     };
     Ok(refined_best_recipe(
         atlas,
@@ -181,6 +188,7 @@ mod tests {
             ensemble_size,
             seed: None,
             max_ticks: None,
+            floor: CoexistenceFloor::Plain,
         }
     }
 
@@ -346,6 +354,57 @@ mod tests {
     }
 
     #[test]
+    fn every_floor_refines_the_same_cells_on_the_same_seeds() {
+        // #538: the floor is a selection setting. Re-projecting one atlas under
+        // each floor refines the same cells on the same seeds — identical
+        // fractions and guild reads — and differs only in which cells clear and
+        // the pick. Every guild-aware fraction is at most the plain one.
+        let seed = 7;
+        let atlas = run_qd(&tiny(), seed, &mut ChaCha8Rng::seed_from_u64(seed));
+        let projections: Vec<_> = CoexistenceFloor::ALL
+            .into_iter()
+            .map(|floor| {
+                let settings = ReprojectSettings {
+                    floor,
+                    seed: Some(seed),
+                    max_ticks: Some(tiny().max_ticks),
+                    ..settings(3, 4)
+                };
+                reproject(&atlas, &settings).unwrap()
+            })
+            .collect();
+        let audit = |p: &RefinedProjection| {
+            p.refined
+                .iter()
+                .map(|r| {
+                    (
+                        r.cell,
+                        r.refined_fractions,
+                        r.refined_decomposer_fraction,
+                        r.refined_consumer_fraction,
+                        r.refined_median_fitness.to_bits(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let plain = &projections[0];
+        assert!(!plain.refined.is_empty());
+        for (floor, p) in CoexistenceFloor::ALL.into_iter().zip(&projections) {
+            assert_eq!(p.floor, floor);
+            assert_eq!(audit(p), audit(plain), "{floor:?}");
+            for r in &p.refined {
+                let f = r.refined_fractions;
+                assert!(f.decomposer <= f.plain && f.consumer <= f.plain);
+                assert!(f.decomposer.max(f.consumer) <= f.either && f.either <= f.plain);
+                assert_eq!(
+                    r.clears_floor,
+                    f.under(floor) >= crate::qd::COEXISTENCE_FLOOR
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_recipe_reprojected_from_the_atlas_file_is_the_one_the_writing_run_projected() {
         // The whole trust of #531: re-projecting an atlas read back off disk
         // yields exactly the recipe (and refinement audit) the run that wrote it
@@ -361,6 +420,7 @@ mod tests {
             top_k: 2,
             ensemble_size: 2,
             max_ticks: config.max_ticks,
+            floor: CoexistenceFloor::Plain,
         };
         let in_run = refined_best_recipe(&atlas, &default_ranges(), &refinement, seed);
 
