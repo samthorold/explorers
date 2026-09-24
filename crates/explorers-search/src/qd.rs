@@ -169,6 +169,94 @@ fn is_coexisting(r: &RunResult) -> bool {
         && (r.breakdown.clustering_strength > 0.0 || r.breakdown.coexistence_duration > 0.0)
 }
 
+/// Which per-seed predicate the projection's coexistence floor reads (#538).
+/// `Plain` is [`is_coexisting`], the default. The guild-aware variants also
+/// require the seed to hold a heterotroph guild (#490): #494's option 3,
+/// "fold guild presence into coexisting", as a **projection-only** comparison
+/// instrument. Never a fitness term, never a binning axis (genesis-search.md,
+/// *Authority boundary*).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub enum CoexistenceFloor {
+    #[default]
+    Plain,
+    Decomposer,
+    Consumer,
+    Either,
+}
+
+impl CoexistenceFloor {
+    pub const ALL: [CoexistenceFloor; 4] = [
+        CoexistenceFloor::Plain,
+        CoexistenceFloor::Decomposer,
+        CoexistenceFloor::Consumer,
+        CoexistenceFloor::Either,
+    ];
+
+    /// The CLI spelling (`--coexistence-floor`).
+    pub fn label(self) -> &'static str {
+        match self {
+            CoexistenceFloor::Plain => "plain",
+            CoexistenceFloor::Decomposer => "decomposer",
+            CoexistenceFloor::Consumer => "consumer",
+            CoexistenceFloor::Either => "either",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.label() == label)
+    }
+
+    fn holds(self, r: &RunResult) -> bool {
+        let b = &r.breakdown;
+        is_coexisting(r)
+            && match self {
+                CoexistenceFloor::Plain => true,
+                CoexistenceFloor::Decomposer => b.has_decomposer_guild,
+                CoexistenceFloor::Consumer => b.has_consumer_guild,
+                CoexistenceFloor::Either => b.has_decomposer_guild || b.has_consumer_guild,
+            }
+    }
+}
+
+/// An ensemble's coexistence fraction under every [`CoexistenceFloor`], read
+/// off the same seeds — so one refinement lays out every floor, and no
+/// guild-aware fraction can exceed the plain one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct CoexistenceFractions {
+    pub plain: f32,
+    pub decomposer: f32,
+    pub consumer: f32,
+    pub either: f32,
+}
+
+impl CoexistenceFractions {
+    pub fn of_seeds(run_results: &[RunResult]) -> Self {
+        let fraction = |floor: CoexistenceFloor| {
+            if run_results.is_empty() {
+                0.0
+            } else {
+                run_results.iter().filter(|r| floor.holds(r)).count() as f32
+                    / run_results.len() as f32
+            }
+        };
+        CoexistenceFractions {
+            plain: fraction(CoexistenceFloor::Plain),
+            decomposer: fraction(CoexistenceFloor::Decomposer),
+            consumer: fraction(CoexistenceFloor::Consumer),
+            either: fraction(CoexistenceFloor::Either),
+        }
+    }
+
+    pub fn under(&self, floor: CoexistenceFloor) -> f32 {
+        match floor {
+            CoexistenceFloor::Plain => self.plain,
+            CoexistenceFloor::Decomposer => self.decomposer,
+            CoexistenceFloor::Consumer => self.consumer,
+            CoexistenceFloor::Either => self.either,
+        }
+    }
+}
+
 /// Reduce a `run_ensemble` result to a [`ConfigEval`], reading the three axes and
 /// the decomposer signal off the per-seed [`FitnessBreakdown`] — no `run_single`
 /// mirror. The median-fitness seed (lower-middle for an even ensemble) is the
@@ -192,16 +280,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
     // Reported per-seed distribution (never an axis, never fitness): the share of
     // the ensemble that lands in the coexisting regime. The projection's
     // robustness floor reads this; binning and fitness do not.
-    let coexistence_fraction = if sample_count == 0 {
-        0.0
-    } else {
-        result
-            .run_results
-            .iter()
-            .filter(|r| is_coexisting(r))
-            .count() as f32
-            / sample_count as f32
-    };
+    let coexistence_fraction = CoexistenceFractions::of_seeds(&result.run_results).plain;
 
     // Order the seeds by fitness; the lower-middle element is the representative
     // (the median seed). An empty ensemble degenerates to a zero-fitness extinct
@@ -1087,16 +1166,32 @@ pub struct RefinedCell {
     /// The in-run coexistence fraction (the high-variance n=5 estimate the floor
     /// read before #404).
     pub recorded_coexistence_fraction: f32,
-    /// The refined coexistence fraction over the larger independent ensemble — what
-    /// the floor now reads for the pick.
-    pub refined_coexistence_fraction: f32,
+    /// The refined coexistence fraction over the larger independent ensemble,
+    /// under every [`CoexistenceFloor`] — the one the projection's floor selects
+    /// is what the pick reads (#538).
+    pub refined_fractions: CoexistenceFractions,
+    /// Share of the refinement ensemble holding a decomposer guild (#490),
+    /// reported beside the fractions so a guild-aware pick is auditable.
+    pub refined_decomposer_fraction: f32,
+    /// The consumer twin of `refined_decomposer_fraction`.
+    pub refined_consumer_fraction: f32,
     /// The refined median fitness over the larger ensemble (reported for audit;
     /// never the ranking key — that stays the recorded fitness).
     pub refined_median_fitness: f32,
     /// The refinement ensemble size behind the refined fraction.
     pub refined_sample_count: u32,
-    /// Whether the refined fraction clears [`COEXISTENCE_FLOOR`].
+    /// Whether the refined fraction under the projection's floor clears
+    /// [`COEXISTENCE_FLOOR`].
     pub clears_floor: bool,
+}
+
+/// What the refinement reads off one cell's larger ensemble.
+struct RefinedEval {
+    fractions: CoexistenceFractions,
+    median_fitness: f32,
+    sample_count: u32,
+    decomposer_fraction: f32,
+    consumer_fraction: f32,
 }
 
 /// The refined projection: the picked recipe plus the audit trail (#404). The pick
@@ -1111,6 +1206,8 @@ pub struct RefinedProjection {
     /// `true` when the pick cleared the refined floor; `false` on the argmax
     /// fallback (the warning path — no robustly-coexisting cell at this budget).
     pub cleared_floor: bool,
+    /// The floor the pick read (#538); `Plain` unless one was chosen.
+    pub floor: CoexistenceFloor,
     /// The refined top-K, in recorded-fitness-descending (ranking) order.
     pub refined: Vec<RefinedCell>,
     /// Live cells beyond the top-K that were *not* refined — the bounded-cost
@@ -1127,6 +1224,9 @@ pub struct RefinementConfig {
     pub ensemble_size: u32,
     /// Rollout horizon, matching the search's `max_ticks`.
     pub max_ticks: u64,
+    /// Which coexistence predicate the floor reads (#538). A selection setting:
+    /// it never changes which cells are refined, on which seeds.
+    pub floor: CoexistenceFloor,
 }
 
 impl Default for RefinementConfig {
@@ -1135,14 +1235,15 @@ impl Default for RefinementConfig {
             top_k: REFINE_TOP_K,
             ensemble_size: REFINE_ENSEMBLE_SIZE,
             max_ticks: 2000,
+            floor: CoexistenceFloor::Plain,
         }
     }
 }
 
 /// Project a recipe from the atlas after hardening the top-K cells' coexistence
 /// estimate against `evaluate` — the pure selection core (#404). `evaluate(rank,
-/// unit)` returns `(refined_coexistence_fraction, refined_median_fitness,
-/// refined_sample_count)` for the cell at ranking position `rank`; the sim-backed
+/// unit)` returns the [`RefinedEval`] of the cell at ranking position `rank`, and
+/// `floor` picks which of its fractions the floor reads (#538); the sim-backed
 /// wrapper is [`refined_best_recipe`]. Selection only: `atlas` is read, never
 /// mutated, and the **recorded** fitness remains the ranking key.
 fn project_with_refinement(
@@ -1150,7 +1251,8 @@ fn project_with_refinement(
     ranges: &[ParameterRange],
     max_ticks: u64,
     top_k: usize,
-    mut evaluate: impl FnMut(usize, &[f64]) -> (f32, f32, u32),
+    floor: CoexistenceFloor,
+    mut evaluate: impl FnMut(usize, &[f64]) -> RefinedEval,
 ) -> RefinedProjection {
     // Rank live cells by recorded fitness (descending), with a deterministic
     // tiebreak on the cell index so the ranking — and thus the per-rank refinement
@@ -1167,6 +1269,7 @@ fn project_with_refinement(
         return RefinedProjection {
             recipe: None,
             cleared_floor: false,
+            floor,
             refined: Vec::new(),
             unrefined_live_cells: 0,
         };
@@ -1182,15 +1285,17 @@ fn project_with_refinement(
         .iter()
         .enumerate()
         .map(|(rank, c)| {
-            let (frac, median_fitness, sample_count) = evaluate(rank, &c.unit);
+            let eval = evaluate(rank, &c.unit);
             RefinedCell {
                 cell: c.cell,
                 recorded_fitness: c.fitness,
                 recorded_coexistence_fraction: c.coexistence_fraction,
-                refined_coexistence_fraction: frac,
-                refined_median_fitness: median_fitness,
-                refined_sample_count: sample_count,
-                clears_floor: frac >= COEXISTENCE_FLOOR,
+                refined_fractions: eval.fractions,
+                refined_decomposer_fraction: eval.decomposer_fraction,
+                refined_consumer_fraction: eval.consumer_fraction,
+                refined_median_fitness: eval.median_fitness,
+                refined_sample_count: eval.sample_count,
+                clears_floor: eval.fractions.under(floor) >= COEXISTENCE_FLOOR,
             }
         })
         .collect();
@@ -1202,12 +1307,14 @@ fn project_with_refinement(
         Some(pos) => RefinedProjection {
             recipe: Some(recipe_from_unit(&ranked[pos].unit, ranges, max_ticks)),
             cleared_floor: true,
+            floor,
             refined,
             unrefined_live_cells,
         },
         None => RefinedProjection {
             recipe: Some(recipe_from_unit(&ranked[0].unit, ranges, max_ticks)),
             cleared_floor: false,
+            floor,
             refined,
             unrefined_live_cells,
         },
@@ -1242,6 +1349,7 @@ pub fn refined_best_recipe(
         ranges,
         config.max_ticks,
         config.top_k,
+        config.floor,
         |rank, unit| {
             let (wp, dist) = decode(unit, ranges);
             // Disjoint, deterministic refinement seeds: a block per rank, far above
@@ -1251,11 +1359,13 @@ pub fn refined_best_recipe(
                 .wrapping_add(rank as u64 * config.ensemble_size as u64);
             let result = run_ensemble(&wp, &dist, &ensemble_config, refine_seed);
             let eval = config_eval_from_ensemble(&result);
-            (
-                eval.coexistence_fraction,
-                eval.median_fitness,
-                eval.sample_count,
-            )
+            RefinedEval {
+                fractions: CoexistenceFractions::of_seeds(&result.run_results),
+                median_fitness: eval.median_fitness,
+                sample_count: eval.sample_count,
+                decomposer_fraction: eval.decomposer_fraction,
+                consumer_fraction: eval.consumer_fraction,
+            }
         },
     )
 }
@@ -2849,6 +2959,46 @@ mod tests {
     }
 
     #[test]
+    fn guild_aware_floors_count_coexisting_seeds_that_hold_the_guild() {
+        // #538 (#494 option 3): a guild-aware floor counts a seed only when it
+        // coexists *and* holds the guild. All four fractions come from the same
+        // seeds, so no guild-aware fraction can exceed the plain one. A gated
+        // seed that holds a guild (#527 carries it) does not coexist, so it
+        // counts under no floor.
+        let with_guilds = |mut r: RunResult, decomposer: bool, consumer: bool| {
+            r.breakdown.has_decomposer_guild = decomposer;
+            r.breakdown.has_consumer_guild = consumer;
+            r
+        };
+        let run_results = vec![
+            with_guilds(run_result(0.6, None, 0.4, 8.0), false, false),
+            with_guilds(run_result(0.6, None, 0.4, 8.0), true, false),
+            with_guilds(run_result(0.6, None, 0.4, 8.0), false, true),
+            with_guilds(run_result(0.6, None, 0.4, 8.0), true, true),
+            with_guilds(
+                run_result(0.0, Some(FailureMode::Monoculture), 0.0, 0.0),
+                true,
+                true,
+            ),
+        ];
+        let fractions = CoexistenceFractions::of_seeds(&run_results);
+        assert_eq!(fractions.under(CoexistenceFloor::Plain), 4.0 / 5.0);
+        assert_eq!(fractions.under(CoexistenceFloor::Decomposer), 2.0 / 5.0);
+        assert_eq!(fractions.under(CoexistenceFloor::Consumer), 2.0 / 5.0);
+        assert_eq!(fractions.under(CoexistenceFloor::Either), 3.0 / 5.0);
+        // The plain fraction is exactly the in-run `coexistence_fraction`.
+        let result = EnsembleResult {
+            median_fitness: 0.0,
+            run_results,
+        };
+        assert_eq!(
+            fractions.under(CoexistenceFloor::Plain),
+            config_eval_from_ensemble(&result).coexistence_fraction
+        );
+        assert_eq!(CoexistenceFractions::of_seeds(&[]), Default::default());
+    }
+
+    #[test]
     fn early_stop_crosscheck_surfaces_exactly_the_stopped_dead_but_alive_at_horizon_seeds() {
         // The carry-to-T cross-check (#506): of an ensemble where the energy-
         // death gate stopped three seeds, one was carried and recovered by T
@@ -2964,6 +3114,21 @@ mod tests {
         assert_eq!(recipe, expected);
     }
 
+    /// A stub refinement read at n = 32 whose seeds coexist at `plain` and hold
+    /// no guild — all the plain-floor tests need.
+    fn plain_eval(plain: f32, median_fitness: f32) -> RefinedEval {
+        RefinedEval {
+            fractions: CoexistenceFractions {
+                plain,
+                ..Default::default()
+            },
+            median_fitness,
+            sample_count: 32,
+            decomposer_fraction: 0.0,
+            consumer_fraction: 0.0,
+        }
+    }
+
     #[test]
     fn refinement_drops_a_straddler_that_passed_the_in_run_floor() {
         // #404: a higher-fitness cell that clears the floor on its lucky in-run n=5
@@ -2985,13 +3150,20 @@ mod tests {
         let atlas = atlas_with(vec![straddler.clone(), robust.clone()], 0);
         // Stub evaluator: rank 0 is the straddler (top fitness), rank 1 the robust
         // cell. The larger ensemble exposes the straddler's true minority coexistence.
-        let projection = project_with_refinement(&atlas, &ranges, 100, REFINE_TOP_K, |rank, _| {
-            if rank == 0 {
-                (0.2, 0.0, 32)
-            } else {
-                (0.9, 0.40, 32)
-            }
-        });
+        let projection = project_with_refinement(
+            &atlas,
+            &ranges,
+            100,
+            REFINE_TOP_K,
+            CoexistenceFloor::Plain,
+            |rank, _| {
+                if rank == 0 {
+                    plain_eval(0.2, 0.0)
+                } else {
+                    plain_eval(0.9, 0.40)
+                }
+            },
+        );
 
         assert!(
             projection.cleared_floor,
@@ -3019,6 +3191,96 @@ mod tests {
     }
 
     #[test]
+    fn a_guild_aware_floor_rejects_a_cell_that_coexists_without_the_guild() {
+        // #538 (#494 option 3): the top cell coexists robustly but on seeds
+        // without a decomposer guild; the next holds one. The plain floor
+        // projects the top cell, the decomposer floor the second. Changing the
+        // floor changes only `clears_floor` and the pick: the same ranks are
+        // refined, the same units evaluated, and every fraction is reported
+        // under every floor.
+        let ranges = default_ranges();
+        let cells: Vec<AtlasCell> = (0..2)
+            .map(|i| {
+                let mut c = atlas_cell(0.1);
+                c.cell = [i, 0, 0];
+                c.fitness = 0.9 - 0.1 * i as f32;
+                c.unit = vec![0.2 + 0.5 * i as f64; ranges.len()];
+                c
+            })
+            .collect();
+        let atlas = atlas_with(cells.clone(), 0);
+        let evaluate = |calls: &mut Vec<(usize, Vec<f64>)>, rank: usize, unit: &[f64]| {
+            calls.push((rank, unit.to_vec()));
+            let decomposer = if rank == 0 { 0.1 } else { 0.8 };
+            RefinedEval {
+                fractions: CoexistenceFractions {
+                    plain: 0.9,
+                    decomposer,
+                    consumer: 0.0,
+                    either: decomposer,
+                },
+                median_fitness: 0.5,
+                sample_count: 32,
+                decomposer_fraction: decomposer,
+                consumer_fraction: 0.0,
+            }
+        };
+
+        let mut plain_calls = Vec::new();
+        let plain = project_with_refinement(
+            &atlas,
+            &ranges,
+            100,
+            REFINE_TOP_K,
+            CoexistenceFloor::Plain,
+            |rank, unit| evaluate(&mut plain_calls, rank, unit),
+        );
+        let mut guild_calls = Vec::new();
+        let guild = project_with_refinement(
+            &atlas,
+            &ranges,
+            100,
+            REFINE_TOP_K,
+            CoexistenceFloor::Decomposer,
+            |rank, unit| evaluate(&mut guild_calls, rank, unit),
+        );
+
+        assert_eq!(
+            plain.recipe.unwrap(),
+            recipe_from_unit(&cells[0].unit, &ranges, 100)
+        );
+        assert_eq!(
+            guild.recipe.unwrap(),
+            recipe_from_unit(&cells[1].unit, &ranges, 100)
+        );
+        assert!(plain.cleared_floor && guild.cleared_floor);
+        assert_eq!(plain.floor, CoexistenceFloor::Plain);
+        assert_eq!(guild.floor, CoexistenceFloor::Decomposer);
+        assert_eq!(plain_calls, guild_calls, "same ranks, same units");
+        assert_eq!(
+            plain
+                .refined
+                .iter()
+                .map(|r| r.clears_floor)
+                .collect::<Vec<_>>(),
+            vec![true, true]
+        );
+        assert_eq!(
+            guild
+                .refined
+                .iter()
+                .map(|r| r.clears_floor)
+                .collect::<Vec<_>>(),
+            vec![false, true]
+        );
+        // The audit carries every floor's fraction and the guild reads, whichever
+        // floor picked.
+        assert_eq!(plain.refined[0].refined_fractions.decomposer, 0.1);
+        assert_eq!(plain.refined[1].refined_decomposer_fraction, 0.8);
+        assert_eq!(guild.refined[0].refined_fractions.plain, 0.9);
+    }
+
+    #[test]
     fn refinement_falls_back_to_argmax_when_no_refined_cell_clears() {
         // When the larger ensemble drops every top-K cell below the floor, the
         // projection still yields a world (highest recorded fitness) but flags the
@@ -3034,8 +3296,14 @@ mod tests {
         b.unit = vec![0.7; ranges.len()];
 
         let atlas = atlas_with(vec![a.clone(), b.clone()], 0);
-        let projection =
-            project_with_refinement(&atlas, &ranges, 100, REFINE_TOP_K, |_, _| (0.1, 0.0, 32));
+        let projection = project_with_refinement(
+            &atlas,
+            &ranges,
+            100,
+            REFINE_TOP_K,
+            CoexistenceFloor::Plain,
+            |_, _| plain_eval(0.1, 0.0),
+        );
 
         assert!(!projection.cleared_floor);
         assert_eq!(
@@ -3062,10 +3330,17 @@ mod tests {
         let atlas = atlas_with(cells, 0);
 
         let mut refined_ranks = Vec::new();
-        let projection = project_with_refinement(&atlas, &ranges, 100, 2, |rank, _| {
-            refined_ranks.push(rank);
-            (0.9, 0.5, 32)
-        });
+        let projection = project_with_refinement(
+            &atlas,
+            &ranges,
+            100,
+            2,
+            CoexistenceFloor::Plain,
+            |rank, _| {
+                refined_ranks.push(rank);
+                plain_eval(0.9, 0.5)
+            },
+        );
 
         assert_eq!(projection.refined.len(), 2, "only top-2 refined");
         assert_eq!(
@@ -3083,8 +3358,14 @@ mod tests {
     fn refinement_on_empty_atlas_yields_no_recipe() {
         let ranges = default_ranges();
         let atlas = atlas_with(vec![], 0);
-        let projection =
-            project_with_refinement(&atlas, &ranges, 100, REFINE_TOP_K, |_, _| (1.0, 1.0, 32));
+        let projection = project_with_refinement(
+            &atlas,
+            &ranges,
+            100,
+            REFINE_TOP_K,
+            CoexistenceFloor::Plain,
+            |_, _| plain_eval(1.0, 1.0),
+        );
         assert!(projection.recipe.is_none());
         assert!(!projection.cleared_floor);
         assert!(projection.refined.is_empty());
@@ -3111,6 +3392,7 @@ mod tests {
             top_k: 4,
             ensemble_size: 4,
             max_ticks: config.max_ticks,
+            floor: CoexistenceFloor::Plain,
         };
         let p1 = refined_best_recipe(&atlas, &config.ranges, &rconfig, 7);
         let p2 = refined_best_recipe(&atlas, &config.ranges, &rconfig, 7);
@@ -3120,10 +3402,7 @@ mod tests {
         assert_eq!(p1.refined.len(), p2.refined.len());
         for (a, b) in p1.refined.iter().zip(p2.refined.iter()) {
             assert_eq!(a.cell, b.cell);
-            assert_eq!(
-                a.refined_coexistence_fraction,
-                b.refined_coexistence_fraction
-            );
+            assert_eq!(a.refined_fractions, b.refined_fractions);
             assert_eq!(a.refined_median_fitness, b.refined_median_fitness);
         }
     }

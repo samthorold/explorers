@@ -222,6 +222,13 @@ atlas with the read reported, and counting the cells that pass, is what tests th
 the observable ever becomes a binning axis or folds into `coexistence_fraction`. Until then it is
 reported only.
 
+To put the fold option to that decision on one fixed atlas (#494, #538), the projection can read a
+**guild-aware floor**: `explorers-search --coexistence-floor decomposer|consumer|either`, with the full run
+or with `--reproject`, counts a refinement seed as coexisting only if it also holds that guild. It is a
+comparison instrument, not a change to this boundary. The default is `plain`, the refinement always
+reports the refined fraction under all four floors from the same seeds, and the floor changes only which
+cell the recipe is picked from, never the atlas, its binning or its fitness.
+
 This is the same existence-vs-distributional boundary [viability](viability.md) already respects when it
 makes `C*` a *characterisation* rather than a gate: the atlas maps the existence/stability skeleton of
 parameter space (the three axes are all existence/stability quantities), and it may not collapse a
