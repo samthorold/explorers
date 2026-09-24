@@ -1,12 +1,14 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
+use explorers_search::atlas_file::{ReprojectSettings, read_atlas, reproject, write_atlas};
 use explorers_search::checkpoint::inspect;
 use explorers_search::qd::{
-    COEXISTENCE_FLOOR, REFINE_ENSEMBLE_SIZE, REFINE_TOP_K, RefinementConfig, refined_best_recipe,
+    COEXISTENCE_FLOOR, REFINE_ENSEMBLE_SIZE, REFINE_TOP_K, RefinedProjection, RefinementConfig,
+    refined_best_recipe,
 };
 use explorers_search::search::{
     SearchConfig, default_ranges, resume_search, run_search_checkpointed, run_search_observed,
@@ -16,19 +18,29 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let mut ensemble_size = 5;
-    let mut max_ticks = 2000;
+    let mut max_ticks: Option<u64> = None;
     let mut batch = 32;
     let mut generations = 10;
-    let mut seed = 42u64;
+    let mut seed: Option<u64> = None;
     let mut output_path = PathBuf::from("atlas.json");
     let mut recipe_output_path = PathBuf::from("recipe.json");
     let mut refine_top_k = REFINE_TOP_K;
     let mut refine_ensemble = REFINE_ENSEMBLE_SIZE;
     let mut checkpoint_path: Option<PathBuf> = None;
     let mut resume_path: Option<PathBuf> = None;
+    let mut reproject_path: Option<PathBuf> = None;
+    // Flags that configure the search itself, refused on --reproject (which
+    // runs no search) rather than silently ignored.
+    let mut search_flags: Vec<&str> = Vec::new();
 
     let mut i = 1;
     while i < args.len() {
+        if matches!(
+            args[i].as_str(),
+            "--batch" | "--generations" | "--ensemble" | "--output" | "--checkpoint" | "--resume"
+        ) {
+            search_flags.push(args[i].as_str());
+        }
         match args[i].as_str() {
             "--batch" => {
                 i += 1;
@@ -44,11 +56,11 @@ fn main() {
             }
             "--max-ticks" => {
                 i += 1;
-                max_ticks = args[i].parse().unwrap();
+                max_ticks = Some(args[i].parse().unwrap());
             }
             "--seed" => {
                 i += 1;
-                seed = args[i].parse().unwrap();
+                seed = Some(args[i].parse().unwrap());
             }
             "--output" => {
                 i += 1;
@@ -74,6 +86,10 @@ fn main() {
                 i += 1;
                 resume_path = Some(PathBuf::from(&args[i]));
             }
+            "--reproject" => {
+                i += 1;
+                reproject_path = Some(PathBuf::from(&args[i]));
+            }
             "--help" | "-h" => {
                 print_usage();
                 return;
@@ -86,6 +102,39 @@ fn main() {
         }
         i += 1;
     }
+
+    if let Some(path) = reproject_path {
+        if !search_flags.is_empty() {
+            eprintln!(
+                "--reproject runs no search, so {} cannot apply to it",
+                search_flags.join(", ")
+            );
+            std::process::exit(1);
+        }
+        let settings = ReprojectSettings {
+            top_k: refine_top_k,
+            ensemble_size: refine_ensemble,
+            seed,
+            max_ticks,
+        };
+        let reprojected = read_atlas(&path).and_then(|atlas| {
+            eprintln!(
+                "Re-projecting the recipe from atlas {} (no search)...",
+                path.display()
+            );
+            reproject(&atlas, &settings)
+        });
+        match reprojected {
+            Ok(projection) => report_projection(&projection, refine_top_k, &recipe_output_path),
+            Err(e) => {
+                eprintln!("Re-projection stopped: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    let seed = seed.unwrap_or(42);
+    let max_ticks = max_ticks.unwrap_or(2000);
 
     let config = SearchConfig {
         ensemble_size,
@@ -161,8 +210,10 @@ fn main() {
         }
     };
 
-    let json = serde_json::to_string_pretty(&atlas).unwrap();
-    fs::write(&output_path, &json).unwrap();
+    if let Err(e) = write_atlas(&atlas, &output_path) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
 
     // Gated elite refinement (#404): re-evaluate the top-K live cells at a larger,
     // independent-seeded ensemble before projecting, so the high-variance in-run n=5
@@ -179,56 +230,7 @@ fn main() {
     );
     let projection = refined_best_recipe(&atlas, &default_ranges(), &refinement, seed);
 
-    if !projection.refined.is_empty() {
-        eprintln!("Refined cells (recorded → refined coexistence fraction):");
-        for r in &projection.refined {
-            eprintln!(
-                "  cell {:?}: fitness={:.4} coexist {:.2} → {:.2} (n={}) refined_fit={:.4}{}",
-                r.cell,
-                r.recorded_fitness,
-                r.recorded_coexistence_fraction,
-                r.refined_coexistence_fraction,
-                r.refined_sample_count,
-                r.refined_median_fitness,
-                if r.clears_floor { " ✓" } else { "" },
-            );
-        }
-        if projection.unrefined_live_cells > 0 {
-            eprintln!(
-                "  ({} lower-fitness live cell(s) below the top-{} cut were not refined)",
-                projection.unrefined_live_cells, refine_top_k
-            );
-        }
-    }
-
-    match projection.recipe {
-        Some(recipe) => {
-            let recipe_json = serde_json::to_string_pretty(&recipe).unwrap();
-            fs::write(&recipe_output_path, &recipe_json).unwrap();
-            eprintln!(
-                "Recipe (best refined-robust live cell) written to {}",
-                recipe_output_path.display()
-            );
-            // Warn when the refinement had to fall back below the floor: no top-K
-            // cell stays robustly sensible under the larger ensemble, so the recipe
-            // is a bifurcation straddler — most of its ensemble does NOT coexist
-            // (#401, #404).
-            if !projection.cleared_floor {
-                eprintln!(
-                    "  WARNING: no refined top-{} cell clears the coexistence floor ({:.2}); the \
-                     recipe is the argmax-fitness straddler (a lucky-draw world). Try a larger \
-                     budget, ensemble, or --refine-top-k.",
-                    refine_top_k, COEXISTENCE_FLOOR
-                );
-            }
-        }
-        None => {
-            eprintln!(
-                "No live cell found — the atlas is all dead frontier; no recipe written. \
-                 Try a larger budget (more generations / batch)."
-            );
-        }
-    }
+    report_projection(&projection, refine_top_k, &recipe_output_path);
 
     eprintln!("Atlas written to {}", output_path.display());
 
@@ -338,8 +340,72 @@ fn main() {
     }
 }
 
+/// Report the refined top-K, write the projected recipe, and warn when the pick
+/// fell back below the coexistence floor — shared by the full run and
+/// `--reproject`, so the two report a projection identically.
+fn report_projection(
+    projection: &RefinedProjection,
+    refine_top_k: usize,
+    recipe_output_path: &Path,
+) {
+    if !projection.refined.is_empty() {
+        eprintln!("Refined cells (recorded → refined coexistence fraction):");
+        for r in &projection.refined {
+            eprintln!(
+                "  cell {:?}: fitness={:.4} coexist {:.2} → {:.2} (n={}) refined_fit={:.4}{}",
+                r.cell,
+                r.recorded_fitness,
+                r.recorded_coexistence_fraction,
+                r.refined_coexistence_fraction,
+                r.refined_sample_count,
+                r.refined_median_fitness,
+                if r.clears_floor { " ✓" } else { "" },
+            );
+        }
+        if projection.unrefined_live_cells > 0 {
+            eprintln!(
+                "  ({} lower-fitness live cell(s) below the top-{} cut were not refined)",
+                projection.unrefined_live_cells, refine_top_k
+            );
+        }
+    }
+
+    match &projection.recipe {
+        Some(recipe) => {
+            let recipe_json = serde_json::to_string_pretty(recipe).unwrap();
+            if let Err(e) = fs::write(recipe_output_path, &recipe_json) {
+                eprintln!("recipe {}: {e}", recipe_output_path.display());
+                std::process::exit(1);
+            }
+            eprintln!(
+                "Recipe (best refined-robust live cell) written to {}",
+                recipe_output_path.display()
+            );
+            // Warn when the refinement had to fall back below the floor: no top-K
+            // cell stays robustly sensible under the larger ensemble, so the recipe
+            // is a bifurcation straddler — most of its ensemble does NOT coexist
+            // (#401, #404).
+            if !projection.cleared_floor {
+                eprintln!(
+                    "  WARNING: no refined top-{} cell clears the coexistence floor ({:.2}); the \
+                     recipe is the argmax-fitness straddler (a lucky-draw world). Try a larger \
+                     budget, ensemble, or --refine-top-k.",
+                    refine_top_k, COEXISTENCE_FLOOR
+                );
+            }
+        }
+        None => {
+            eprintln!(
+                "No live cell found — the atlas is all dead frontier; no recipe written. \
+                 Try a larger budget (more generations / batch)."
+            );
+        }
+    }
+}
+
 fn print_usage() {
     eprintln!("Usage: explorers-search [OPTIONS]");
+    eprintln!("       explorers-search --reproject ATLAS [PROJECTION OPTIONS]");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --batch N           Solutions evaluated per generation (default: 32)");
@@ -358,5 +424,15 @@ fn print_usage() {
     eprintln!("                      checkpointing there. The resumed atlas is exactly the");
     eprintln!("                      uninterrupted one. Pass the same search options and");
     eprintln!("                      --seed as the original run; a mismatch is refused.");
+    eprintln!("  --reproject PATH    Skip the search: read the atlas at PATH and run only the");
+    eprintln!("                      refinement and recipe projection against it, writing");
+    eprintln!("                      --recipe-output. Takes --refine-top-k and --refine-ensemble");
+    eprintln!("                      (same defaults); the recipe is the one the run that wrote");
+    eprintln!("                      the atlas projects under the same settings. The seed and");
+    eprintln!("                      horizon come from the atlas: --seed / --max-ticks are");
+    eprintln!("                      needed only for an atlas that predates recording them,");
+    eprintln!("                      and a value contradicting the atlas is refused. The");
+    eprintln!("                      search options (--batch, --generations, --ensemble,");
+    eprintln!("                      --output, --checkpoint, --resume) are refused with it.");
     eprintln!("  --help, -h          Show this help");
 }

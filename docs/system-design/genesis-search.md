@@ -367,3 +367,10 @@ refined. The refinement size is a *separator*, not an estimator: at n = 32 the f
 straddler at p ≈ 0.35 from a robust cell at p ≈ 0.65 with ≈ 5 % error either way, but its two-sided
 interval at 16/32 is still [0.32, 0.68], and a sequential (SPRT) alternative was evaluated and not
 adopted — the arithmetic is in [`docs/research/434-ensemble-confidence.md`](../research/434-ensemble-confidence.md).
+
+**The projection re-runs without the search (#531).** Because the pick is a function of `(atlas, seed)`
+and the projection settings alone, the atlas records the search's seed and horizon (`provenance`), and
+`explorers-search --reproject ATLAS` runs refinement and projection against an atlas file with no search.
+It yields exactly the recipe the run that wrote the atlas projected under the same `--refine-top-k` /
+`--refine-ensemble`, so a refinement that dies costs minutes rather than a regeneration, and projection
+settings can be compared on one fixed atlas instead of across two searches' draws.

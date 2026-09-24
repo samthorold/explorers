@@ -1,3 +1,4 @@
+pub mod atlas_file;
 pub mod bayesopt;
 pub mod bifurcation;
 pub mod checkpoint;

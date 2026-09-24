@@ -633,7 +633,7 @@ fn gaussian(rng: &mut impl Rng) -> f64 {
 // ---------------------------------------------------------------------------
 
 /// A single live cell of the atlas, serialised for the search output.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AtlasCell {
     /// The behaviour-axis cell index `(oscillation, clustering, carcass)`.
     pub cell: [usize; 3],
@@ -849,8 +849,14 @@ pub fn early_stop_crosscheck(result: &EnsembleResult, unit: &[f64]) -> EarlyStop
     check
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Atlas {
+    /// The search that drew this atlas: its base seed and horizon (#531). The
+    /// refinement re-evaluates cells at the horizon, seeded off the base seed,
+    /// so this is what lets a recipe be re-projected from the atlas file alone.
+    /// `None` on an atlas written before it was recorded.
+    #[serde(default)]
+    pub provenance: Option<AtlasProvenance>,
     pub cells: Vec<AtlasCell>,
     /// Dead-frontier tally: how many configs died on each cliff (by label),
     /// **a priori and observed combined**.
@@ -894,6 +900,17 @@ pub struct Atlas {
     pub qd_score: f32,
     /// The best elite fitness found (the recipe projection's fitness).
     pub best_fitness: f32,
+}
+
+/// What an [`Atlas`] records of the search that drew it (#531): everything the
+/// projection reads that the cells themselves do not carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AtlasProvenance {
+    /// The search's base seed; refinement seeds are drawn off it.
+    pub seed: u64,
+    /// The search's rollout horizon (`max_ticks`), which the refinement and the
+    /// recipe share.
+    pub max_ticks: u64,
 }
 
 /// The carcass-locked fraction at which the evaluator gates a world as
@@ -1502,7 +1519,12 @@ impl<R: Rng> SearchState<R> {
             elapsed_before = elapsed;
         }
 
-        Ok(self.atlas())
+        let mut atlas = self.atlas();
+        atlas.provenance = Some(AtlasProvenance {
+            seed: base_seed,
+            max_ticks: config.max_ticks,
+        });
+        Ok(atlas)
     }
 
     /// Evaluate the current batch and route every config into the archive, the
@@ -1694,6 +1716,7 @@ impl<R> SearchState<R> {
             .collect();
 
         Atlas {
+            provenance: None,
             coverage: self.archive.coverage(),
             total_cells: RESOLUTION.pow(3),
             qd_score: self.archive.qd_score(),
@@ -1805,6 +1828,7 @@ mod tests {
             frontier.insert(Cliff::NutrientLockup.label().to_string(), lockup_deaths);
         }
         Atlas {
+            provenance: None,
             coverage: cells.len(),
             total_cells: RESOLUTION.pow(3),
             qd_score: 0.0,
