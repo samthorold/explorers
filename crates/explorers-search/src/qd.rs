@@ -51,7 +51,9 @@ pub const RESOLUTION: usize = 20;
 /// The six terminal cliffs a config can die on — the dead-frontier key. A gated
 /// config gets no behaviour cell (its descriptors are degenerate); it is tallied
 /// here instead. This tally is the atlas's dead-frontier layer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum Cliff {
     Extinction,
     PopulationExplosion,
@@ -87,7 +89,7 @@ impl Cliff {
 }
 
 /// The three behaviour-axis coordinates of a config, each in `[0, 1]`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Descriptors {
     /// Frozen ↔ oscillation axis (`FitnessBreakdown::oscillation_strength`).
     pub oscillation: f32,
@@ -255,7 +257,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
 
 /// One filled cell of the soft archive: the current elite plus the rolling
 /// acceptance threshold that makes the cell descriptor-noise tolerant (CMA-MAE).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CellRecord {
     pub fitness: f32,
     pub descriptors: Descriptors,
@@ -280,17 +282,20 @@ pub struct CellRecord {
 /// The soft (CMA-MAE) MAP-Elites archive over the three behaviour axes, plus the
 /// dead frontier. Live configs fill cells under a rolling per-cell acceptance
 /// threshold; gated configs are tallied to the frontier by cliff.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Archive {
+    #[serde(with = "sorted_entries")]
     cells: std::collections::HashMap<(usize, usize, usize), CellRecord>,
     /// Observed deaths: configs that cleared the prefilter (or were never
     /// prefiltered) and died in their seed-ensemble rollout, keyed by cliff.
+    #[serde(with = "sorted_entries")]
     frontier: std::collections::HashMap<Cliff, usize>,
     /// A priori deaths: configs the viability prefilter proved dead in closed
     /// form, routed here without spending an ensemble (`crate::prefilter`). The
     /// two tallies are kept apart so the atlas can distinguish a-priori from
     /// observed deaths (genesis-search.md, "the dead frontier is the atlas's most
     /// valuable layer").
+    #[serde(with = "sorted_entries")]
     apriori_frontier: std::collections::HashMap<Cliff, usize>,
     /// Archive learning rate (CMA-MAE α): how far each accepted solution drags
     /// the cell's acceptance threshold toward its fitness. 0 ⇒ classic hard
@@ -435,6 +440,34 @@ impl Archive {
     }
 }
 
+/// Serialise a `HashMap` as its entries sorted by key, so the written form is
+/// deterministic (a `HashMap` iteration order is not) and needs no string keys.
+mod sorted_entries {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::HashMap;
+    use std::hash::Hash;
+
+    pub fn serialize<K, V, S>(map: &HashMap<K, V>, s: S) -> Result<S::Ok, S::Error>
+    where
+        K: Ord + Serialize,
+        V: Serialize,
+        S: Serializer,
+    {
+        let mut entries: Vec<(&K, &V)> = map.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        entries.serialize(s)
+    }
+
+    pub fn deserialize<'de, K, V, D>(d: D) -> Result<HashMap<K, V>, D::Error>
+    where
+        K: Eq + Hash + Deserialize<'de>,
+        V: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        Ok(Vec::<(K, V)>::deserialize(d)?.into_iter().collect())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Carcass-directed seeding (reaching the nutrient-lockup region)
 // ---------------------------------------------------------------------------
@@ -505,6 +538,7 @@ fn inject_carcass_seeds(batch: &mut [Vec<f64>], ranges: &[ParameterRange], count
 /// prefilter: dimensions whose spread among improvers is wide stay explored,
 /// dimensions that converge shrink — the search learns which axes matter, rather
 /// than fixing the "unimportant" ones once up front.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct CmaEmitter {
     dims: usize,
     mean: Vec<f64>,
@@ -658,7 +692,7 @@ fn crosscheck_disagreement(
 /// showed *alive* (positive fitness, no failure). This localises a mis-drawn gate
 /// — the prefilter says dead, the run shows life (viability.md). Surfaced, never
 /// swallowed.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PrefilterDisagreement {
     /// The cliff the prefilter predicted (the gate that fired).
     pub predicted_cliff: String,
@@ -673,7 +707,7 @@ pub struct PrefilterDisagreement {
 /// regime localises to the genesis *observable* (or its geometry), not to F's
 /// closed-form spectral reading; a [`CrosscheckRegime::Validated`]-regime
 /// disagreement implicates the indicator itself.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CrosscheckRegime {
     /// The observable is trustworthy here (the spike's validated regime), so a
     /// disagreement implicates F's reading.
@@ -689,7 +723,7 @@ pub enum CrosscheckRegime {
 /// boundary on that axis. Modelled on [`PrefilterDisagreement`] — surfaced, never
 /// summed into fitness, never a binning axis. The `regime` tag is what makes the
 /// disagreement actionable (see [`CrosscheckRegime`]).
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BifurcationDisagreement {
     /// Which axis disagreed: `"branching"` (monoculture↔coexistence) or
     /// `"oscillation"` (frozen↔oscillation).
@@ -766,7 +800,7 @@ fn bifurcation_crosscheck(eval: &ConfigEval) -> Vec<BifurcationDisagreement> {
 /// incremental dead-pool gate stopped as dead at `stop_tick` that, carried to
 /// the horizon, read alive on the full series — the gate fired on a collapse
 /// the world recovered from.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EarlyStopDisagreement {
     /// The gate that stopped it (`energy_death` or `nutrient_lockup`).
     pub gate: String,
@@ -1345,45 +1379,148 @@ pub fn run_qd_observed(
     rng: &mut impl Rng,
     observer: &mut impl FnMut(&GenerationReport),
 ) -> Atlas {
-    let dims = config.ranges.len();
-    let ensemble_config = EnsembleConfig {
-        ensemble_size: config.ensemble_size,
-        run_config: RunConfig {
-            max_ticks: config.max_ticks,
-            eval_config: EvalConfig::default(),
-            early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
-        },
-    };
+    let never = &mut |_: &SearchState<_>| Ok::<(), std::convert::Infallible>(());
+    match SearchState::start(config, rng).run(config, base_seed, observer, never) {
+        Ok(atlas) => atlas,
+        Err(infallible) => match infallible {},
+    }
+}
 
-    let mut archive = Archive::new(config.archive_learning_rate);
-    let mut emitter = CmaEmitter::new(dims, config.sigma);
-    let mut config_index: u64 = 0;
-    let mut rollouts_skipped: usize = 0;
-    let mut disagreements: Vec<PrefilterDisagreement> = Vec::new();
-    let mut bif_disagreements: Vec<BifurcationDisagreement> = Vec::new();
-    let mut early_stop_crosschecks: usize = 0;
-    let mut early_stop_disagreements: Vec<EarlyStopDisagreement> = Vec::new();
+/// Everything the search carries from one generation to the next (#530). A
+/// generation boundary is fully described by this: the loop reads nothing else,
+/// so persisting it and running on from it continues the search exactly — the
+/// checkpoint ([`crate::checkpoint`]) is this state, serialised.
+///
+/// The archive is carried whole (its cells with their private acceptance
+/// thresholds, both frontier tallies, its learning rate) rather than its atlas
+/// projection, which drops the thresholds.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct SearchState<R> {
+    /// The generation to run next; `generations + 1` once the search is done.
+    pub(crate) generation: usize,
+    /// Monotonic config counter that derives each config's ensemble base seed.
+    config_index: u64,
+    /// The batch the next generation evaluates — emitted at the end of the
+    /// previous generation, so loop-carried rather than recomputable.
+    batch: Vec<Vec<f64>>,
+    archive: Archive,
+    emitter: CmaEmitter,
+    /// The search's random stream: the prefilter cross-check coin, the emitter's
+    /// samples and the parent selection draw from it, in that order.
+    rng: R,
+    rollouts_skipped: usize,
+    prefilter_disagreements: Vec<PrefilterDisagreement>,
+    bifurcation_disagreements: Vec<BifurcationDisagreement>,
+    early_stop_crosschecks: usize,
+    early_stop_disagreements: Vec<EarlyStopDisagreement>,
+}
 
-    // Generation 0: a random bootstrap batch over the cube (the QD analogue of the
-    // incumbent's LHS stage), drawn from the emitter's initial wide Gaussian — with
-    // the head replaced by carcass-directed seeds so the bootstrap reaches the thin
-    // high-carcass / nutrient-lockup region a random emitter misses (#363; the cliff
-    // cannot be prefiltered, so it must be reached by running).
-    let mut batch: Vec<Vec<f64>> = (0..config.batch).map(|_| emitter.sample(rng)).collect();
-    inject_carcass_seeds(&mut batch, &config.ranges, config.carcass_seed_count);
+impl<R: Rng> SearchState<R> {
+    /// The state before generation 0: an empty archive, a fresh emitter, and the
+    /// bootstrap batch drawn from `rng`.
+    pub(crate) fn start(config: &QdConfig, mut rng: R) -> Self {
+        let emitter = CmaEmitter::new(config.ranges.len(), config.sigma);
+        // Generation 0: a random bootstrap batch over the cube (the QD analogue of
+        // the incumbent's LHS stage), drawn from the emitter's initial wide
+        // Gaussian — with the head replaced by carcass-directed seeds so the
+        // bootstrap reaches the thin high-carcass / nutrient-lockup region a
+        // random emitter misses (#363; the cliff cannot be prefiltered, so it
+        // must be reached by running).
+        let mut batch: Vec<Vec<f64>> = (0..config.batch)
+            .map(|_| emitter.sample(&mut rng))
+            .collect();
+        inject_carcass_seeds(&mut batch, &config.ranges, config.carcass_seed_count);
+        SearchState {
+            generation: 0,
+            config_index: 0,
+            batch,
+            archive: Archive::new(config.archive_learning_rate),
+            emitter,
+            rng,
+            rollouts_skipped: 0,
+            prefilter_disagreements: Vec::new(),
+            bifurcation_disagreements: Vec::new(),
+            early_stop_crosschecks: 0,
+            early_stop_disagreements: Vec::new(),
+        }
+    }
 
-    // Wall-clock for the per-generation report only (#529); never read by the search.
-    let started = std::time::Instant::now();
-    let mut elapsed_before = std::time::Duration::ZERO;
+    /// Run the remaining generations and return the atlas. `boundary` is handed
+    /// the state at every generation boundary — after the generation's inserts
+    /// and the next batch's emission, before its report reaches `observer` — so
+    /// a report on screen means the boundary it describes has been handed off.
+    /// An error from `boundary` stops the search and is returned.
+    pub(crate) fn run<E>(
+        mut self,
+        config: &QdConfig,
+        base_seed: u64,
+        observer: &mut impl FnMut(&GenerationReport),
+        boundary: &mut impl FnMut(&Self) -> Result<(), E>,
+    ) -> Result<Atlas, E> {
+        let ensemble_config = EnsembleConfig {
+            ensemble_size: config.ensemble_size,
+            run_config: RunConfig {
+                max_ticks: config.max_ticks,
+                eval_config: EvalConfig::default(),
+                early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
+            },
+        };
 
-    for generation in 0..=config.generations {
-        let skipped_before = rollouts_skipped;
+        // Wall-clock for the per-generation report only (#529); never read by the
+        // search. A resumed search counts from the resume.
+        let started = std::time::Instant::now();
+        let mut elapsed_before = std::time::Duration::ZERO;
+
+        while self.generation <= config.generations {
+            let generation = self.generation;
+            let (improvements, rolled_out, skipped) =
+                self.evaluate_batch(config, base_seed, &ensemble_config);
+
+            if generation < config.generations {
+                // Adapt the emitter toward the improvers, then emit the next batch.
+                self.emitter.adapt(&self.batch, &improvements);
+                self.emit_next_batch(config);
+            } else {
+                self.batch.clear();
+            }
+            self.generation += 1;
+            boundary(&self)?;
+
+            let elapsed = started.elapsed();
+            observer(&GenerationReport {
+                generation,
+                generations: config.generations,
+                coverage: self.archive.coverage(),
+                total_cells: RESOLUTION.pow(3),
+                qd_score: self.archive.qd_score(),
+                best_fitness: self.archive.best_fitness(),
+                rolled_out,
+                skipped,
+                generation_elapsed: elapsed - elapsed_before,
+                elapsed,
+            });
+            elapsed_before = elapsed;
+        }
+
+        Ok(self.atlas())
+    }
+
+    /// Evaluate the current batch and route every config into the archive, the
+    /// frontier and the cross-check tallies. Returns the emitter's improvement
+    /// signal and `(rolled_out, skipped)` for the generation's report.
+    fn evaluate_batch(
+        &mut self,
+        config: &QdConfig,
+        base_seed: u64,
+        ensemble_config: &EnsembleConfig,
+    ) -> (Vec<f32>, usize, usize) {
+        let skipped_before = self.rollouts_skipped;
         // Distinct per-config ensemble base seeds, derived from a monotonic config
         // counter so evaluation order is immaterial (each config's seed is fixed).
-        let seeds: Vec<u64> = (0..batch.len())
+        let seeds: Vec<u64> = (0..self.batch.len())
             .map(|_| {
-                let s = base_seed.wrapping_add(config_index.wrapping_mul(1000));
-                config_index += 1;
+                let s = base_seed.wrapping_add(self.config_index.wrapping_mul(1000));
+                self.config_index += 1;
                 s
             })
             .collect();
@@ -1395,7 +1532,9 @@ pub fn run_qd_observed(
         // gate. Drawing the cross-check coin here (sequentially, before the
         // rollouts) keeps the search deterministic in `(config, base_seed, rng)`.
         let crosscheck_fraction = config.prefilter_crosscheck_fraction.clamp(0.0, 1.0);
-        let gates: Vec<(Option<Cliff>, bool)> = batch
+        let rng = &mut self.rng;
+        let gates: Vec<(Option<Cliff>, bool)> = self
+            .batch
             .iter()
             .map(|unit| {
                 let (wp, _) = decode(unit, &config.ranges);
@@ -1410,7 +1549,8 @@ pub fn run_qd_observed(
         // Run only the rollouts that are actually needed: cleared configs, and the
         // gated configs sampled for the cross-check. Gated-and-skipped configs run
         // no sim — that is the saved budget.
-        let evals: Vec<Option<ConfigEval>> = batch
+        let evals: Vec<Option<ConfigEval>> = self
+            .batch
             .iter()
             .zip(seeds.iter())
             .zip(gates.iter())
@@ -1419,7 +1559,7 @@ pub fn run_qd_observed(
                     None
                 } else {
                     let (wp, dist) = decode(unit, &config.ranges);
-                    let result = run_ensemble(&wp, &dist, &ensemble_config, seed);
+                    let result = run_ensemble(&wp, &dist, ensemble_config, seed);
                     let mut eval = config_eval_from_ensemble(&result);
                     // The early-stop cross-check rides on every rolled-out
                     // ensemble: seeds a dead-pool gate stopped that the carry
@@ -1440,7 +1580,8 @@ pub fn run_qd_observed(
             .collect();
 
         // Route each config and compute the emitter's improvement signal.
-        let improvements: Vec<f32> = batch
+        let improvements: Vec<f32> = self
+            .batch
             .iter()
             .zip(gates.iter())
             .zip(evals.iter())
@@ -1450,26 +1591,26 @@ pub fn run_qd_observed(
                 // cross-check: tally the carried seeds and surface the
                 // stopped-dead / alive-at-T disagreements, never swallowed.
                 if let Some(ev) = eval {
-                    early_stop_crosschecks += ev.early_stop_crosscheck.carried;
-                    early_stop_disagreements
+                    self.early_stop_crosschecks += ev.early_stop_crosscheck.carried;
+                    self.early_stop_disagreements
                         .extend(ev.early_stop_crosscheck.disagreements.iter().cloned());
                 }
                 match cliff {
                     Some(cliff) => {
                         // Proven dead a priori: it lands on the dead frontier as an
                         // a-priori death regardless of whether it was cross-checked.
-                        archive.insert_apriori(cliff);
+                        self.archive.insert_apriori(cliff);
                         if crosscheck {
                             // The cross-check rolled it out: if the rollout shows life,
                             // the prefilter and the rollout disagree — surface it (a
                             // mis-drawn gate), never swallow it.
                             if let Some(ev) = eval {
                                 if let Some(d) = crosscheck_disagreement(cliff, ev, unit) {
-                                    disagreements.push(d);
+                                    self.prefilter_disagreements.push(d);
                                 }
                             }
                         } else {
-                            rollouts_skipped += 1;
+                            self.rollouts_skipped += 1;
                         }
                         // An a-priori death never improves a cell.
                         0.0
@@ -1481,39 +1622,31 @@ pub fn run_qd_observed(
                         // whether it wins its cell). Disagreements are surfaced with a
                         // regime tag, never swallowed.
                         let ev = eval.as_ref().expect("cleared config was rolled out");
-                        bif_disagreements.extend(bifurcation_crosscheck(ev));
-                        archive.insert(unit, ev)
+                        self.bifurcation_disagreements
+                            .extend(bifurcation_crosscheck(ev));
+                        self.archive.insert(unit, ev)
                     }
                 }
             })
             .collect();
 
-        let elapsed = started.elapsed();
-        let skipped_this_generation = rollouts_skipped - skipped_before;
-        observer(&GenerationReport {
-            generation,
-            generations: config.generations,
-            coverage: archive.coverage(),
-            total_cells: RESOLUTION.pow(3),
-            qd_score: archive.qd_score(),
-            best_fitness: archive.best_fitness(),
-            rolled_out: evals.iter().filter(|e| e.is_some()).count(),
-            skipped: skipped_this_generation,
-            generation_elapsed: elapsed - elapsed_before,
-            elapsed,
-        });
-        elapsed_before = elapsed;
+        let rolled_out = evals.iter().filter(|e| e.is_some()).count();
+        (
+            improvements,
+            rolled_out,
+            self.rollouts_skipped - skipped_before,
+        )
+    }
 
-        if generation == config.generations {
-            break;
-        }
-
-        // Adapt the emitter toward the improvers, then emit the next batch. When
-        // the archive is still empty the emitter has nothing to centre on, so it
-        // keeps sampling its (widening) Gaussian — the bootstrap continues.
-        emitter.adapt(&batch, &improvements);
-        let elites = archive.elite_units();
-        batch = (0..config.batch)
+    /// Emit the next generation's batch. When the archive is still empty the
+    /// emitter has nothing to centre on, so it keeps sampling its (widening)
+    /// Gaussian — the bootstrap continues.
+    fn emit_next_batch(&mut self, config: &QdConfig) {
+        let dims = config.ranges.len();
+        let elites = self.archive.elite_units();
+        let rng = &mut self.rng;
+        let emitter = &self.emitter;
+        self.batch = (0..config.batch)
             .map(|_| {
                 if elites.is_empty() {
                     emitter.sample(rng)
@@ -1529,38 +1662,51 @@ pub fn run_qd_observed(
             })
             .collect();
     }
+}
 
-    let cells: Vec<AtlasCell> = archive
-        .cells()
-        .map(|(idx, rec)| AtlasCell {
-            cell: [idx.0, idx.1, idx.2],
-            fitness: rec.fitness,
-            oscillation: rec.descriptors.oscillation,
-            clustering: rec.descriptors.clustering,
-            carcass: rec.descriptors.carcass,
-            decomposer_fraction: rec.decomposer_fraction,
-            consumer_fraction: rec.consumer_fraction,
-            coexistence_fraction: rec.coexistence_fraction,
-            sample_count: rec.sample_count,
-            predicted_oscillation_distance: rec.predicted_oscillation_distance,
-            predicted_branching_distance: rec.predicted_branching_distance,
-            unit: rec.unit.clone(),
-        })
-        .collect();
+impl<R> SearchState<R> {
+    /// Overwrite one emitter deviation — how tests reach a state the search
+    /// itself should never produce (a non-finite value).
+    #[cfg(test)]
+    pub(crate) fn poison_emitter_for_test(&mut self, sigma: f64) {
+        self.emitter.sigma[0] = sigma;
+    }
 
-    Atlas {
-        coverage: archive.coverage(),
-        total_cells: RESOLUTION.pow(3),
-        qd_score: archive.qd_score(),
-        best_fitness: archive.best_fitness(),
-        dead_frontier: archive.dead_frontier(),
-        dead_frontier_apriori: archive.dead_frontier_apriori(),
-        rollouts_skipped,
-        prefilter_disagreements: disagreements,
-        bifurcation_disagreements: bif_disagreements,
-        early_stop_crosschecks,
-        early_stop_disagreements,
-        cells,
+    /// The atlas projection of the archive plus the surfaced tallies.
+    fn atlas(&self) -> Atlas {
+        let cells: Vec<AtlasCell> = self
+            .archive
+            .cells()
+            .map(|(idx, rec)| AtlasCell {
+                cell: [idx.0, idx.1, idx.2],
+                fitness: rec.fitness,
+                oscillation: rec.descriptors.oscillation,
+                clustering: rec.descriptors.clustering,
+                carcass: rec.descriptors.carcass,
+                decomposer_fraction: rec.decomposer_fraction,
+                consumer_fraction: rec.consumer_fraction,
+                coexistence_fraction: rec.coexistence_fraction,
+                sample_count: rec.sample_count,
+                predicted_oscillation_distance: rec.predicted_oscillation_distance,
+                predicted_branching_distance: rec.predicted_branching_distance,
+                unit: rec.unit.clone(),
+            })
+            .collect();
+
+        Atlas {
+            coverage: self.archive.coverage(),
+            total_cells: RESOLUTION.pow(3),
+            qd_score: self.archive.qd_score(),
+            best_fitness: self.archive.best_fitness(),
+            dead_frontier: self.archive.dead_frontier(),
+            dead_frontier_apriori: self.archive.dead_frontier_apriori(),
+            rollouts_skipped: self.rollouts_skipped,
+            prefilter_disagreements: self.prefilter_disagreements.clone(),
+            bifurcation_disagreements: self.bifurcation_disagreements.clone(),
+            early_stop_crosschecks: self.early_stop_crosschecks,
+            early_stop_disagreements: self.early_stop_disagreements.clone(),
+            cells,
+        }
     }
 }
 
@@ -1856,6 +2002,37 @@ mod tests {
         );
         // The elite is unchanged (0.65 < 0.8) — the threshold moved, the elite did not.
         assert!((archive.best_fitness() - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_restored_archive_keeps_each_cells_lagging_acceptance_threshold() {
+        // #530: the rolling threshold is invisible in the atlas, so a checkpoint
+        // that dropped it (resetting it to the elite, or to zero) would change
+        // acceptance silently from the resume on. Restore the archive from its
+        // serialised form and a near-miss is judged exactly as before.
+        let mut archive = Archive::new(0.5);
+        let cell = descr(0.5, 0.5, 0.5);
+        archive.insert(&[0.5; 3], &live(0.4, cell));
+        archive.insert(&[0.6; 3], &live(0.8, cell));
+        // Threshold 0.6, elite 0.8: the threshold lags.
+
+        let json = serde_json::to_string(&archive).unwrap();
+        let mut restored: Archive = serde_json::from_str(&json).unwrap();
+
+        let near_miss = live(0.65, cell);
+        let original = archive.insert(&[0.55; 3], &near_miss);
+        let resumed = restored.insert(&[0.55; 3], &near_miss);
+        assert!(original > 0.0, "the near-miss clears the lagging threshold");
+        assert_eq!(
+            resumed, original,
+            "the restored threshold must be the original"
+        );
+        // And the thresholds moved identically, so the next insert agrees too.
+        let next = live(0.7, cell);
+        assert_eq!(
+            restored.insert(&[0.52; 3], &next),
+            archive.insert(&[0.52; 3], &next)
+        );
     }
 
     #[test]
