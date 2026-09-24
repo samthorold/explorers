@@ -33,6 +33,14 @@
 //! reserve its own feeding credits it in the drain pass. Two trajectories
 //! moved (cell 6 / seed 1000 and cell 52 / seed 1000); every gate verdict,
 //! `ticks_survived` and guild flag is unchanged.
+//!
+//! Re-captured under #486, an evaluator read changed by design:
+//! `trophic_balance_score` buckets each living agent by the topology's
+//! trophic-role read instead of each DBSCAN cluster by its mean, and counts
+//! noise-labelled agents. Only `trophic_balance_score` and the fitness that
+//! sums it moved (the all-noise seeds cell 54 / seed 1001 and cell 64 / seed
+//! 1001 went from 0 to 1); every gate verdict, `ticks_survived` and guild
+//! flag is unchanged.
 
 use explorers_genesis::{EvalConfig, FailureMode, FitnessBreakdown, RunConfig, run_single};
 use explorers_search::search::{decode, default_ranges};
@@ -144,13 +152,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 0,
             seed: 1000,
-            fitness: 0x3ef148ee,
+            fitness: 0x3ec78c62,
             failure: None,
             oscillation_strength: 0x3e98ba78,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x0,
             turnover_score: 0x3d6d9168,
-            trophic_balance_score: 0x3f800000,
+            trophic_balance_score: 0x3f17a8a3,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3bef15ac,
             has_decomposer_guild: false,
@@ -159,13 +167,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 0,
             seed: 1001,
-            fitness: 0x3f3125c6,
+            fitness: 0x3f305e00,
             failure: None,
             oscillation_strength: 0x3e95759d,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f800000,
             turnover_score: 0x3e2c0831,
-            trophic_balance_score: 0x3f800000,
+            trophic_balance_score: 0x3f7c1922,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3d0b6893,
             has_decomposer_guild: false,
@@ -174,13 +182,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 6,
             seed: 1000,
-            fitness: 0x3f1c0c38,
+            fitness: 0x3f0bed39,
             failure: None,
             oscillation_strength: 0x3e76cbdb,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f0f5c29,
             turnover_score: 0x3ed91687,
-            trophic_balance_score: 0x3f52a2b1,
+            trophic_balance_score: 0x3f0207b8,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3d89b88d,
             has_decomposer_guild: false,
@@ -189,13 +197,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 6,
             seed: 1001,
-            fitness: 0x3f091b91,
+            fitness: 0x3eec0509,
             failure: None,
             oscillation_strength: 0x3ea8e69f,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x0,
             turnover_score: 0x3eb22d0e,
-            trophic_balance_score: 0x3f800000,
+            trophic_balance_score: 0x3f2082c0,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3cf4c52e,
             has_decomposer_guild: false,
@@ -204,13 +212,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 9,
             seed: 1000,
-            fitness: 0x3f543afe,
+            fitness: 0x3f4ca492,
             failure: None,
             oscillation_strength: 0x3eb1ba75,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f800000,
             turnover_score: 0x3f4c49ba,
-            trophic_balance_score: 0x3f800000,
+            trophic_balance_score: 0x3f5a0fe4,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3e77f7f2,
             has_decomposer_guild: false,
@@ -219,13 +227,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 9,
             seed: 1001,
-            fitness: 0x3f60e5cc,
+            fitness: 0x3f574d4c,
             failure: None,
             oscillation_strength: 0x3ec8f9f8,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f800000,
             turnover_score: 0x3f800000,
-            trophic_balance_score: 0x3f800000,
+            trophic_balance_score: 0x3f500581,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3e6b834d,
             has_decomposer_guild: false,
@@ -234,13 +242,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 52,
             seed: 1000,
-            fitness: 0x3f595703,
+            fitness: 0x3f54f5da,
             failure: None,
             oscillation_strength: 0x3e7acc45,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f800000,
             turnover_score: 0x3f800000,
-            trophic_balance_score: 0x3f800000,
+            trophic_balance_score: 0x3f6a1a34,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3edea39b,
             has_decomposer_guild: false,
@@ -279,13 +287,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 54,
             seed: 1001,
-            fitness: 0x3db3afb9,
+            fitness: 0x3e935255,
             failure: None,
             oscillation_strength: 0x3eb07ae3,
             clustering_strength: 0x0,
             coexistence_duration: 0x0,
             turnover_score: 0x3dc08312,
-            trophic_balance_score: 0x0,
+            trophic_balance_score: 0x3f800000,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3d05d3d6,
             has_decomposer_guild: false,
@@ -309,13 +317,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 64,
             seed: 1001,
-            fitness: 0x3d03126f,
+            fitness: 0x3e6d9169,
             failure: None,
             oscillation_strength: 0x0,
             clustering_strength: 0x0,
             coexistence_duration: 0x0,
             turnover_score: 0x3e23d70a,
-            trophic_balance_score: 0x0,
+            trophic_balance_score: 0x3f800000,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3d3cc3c0,
             has_decomposer_guild: false,
