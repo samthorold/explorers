@@ -43,7 +43,7 @@ use explorers_sim::WorldRecipe;
 
 use crate::bifurcation::{branching_distance, oscillation_distance};
 use crate::prefilter::prefilter_cliff;
-use crate::search::{ParameterRange, decode, default_ranges};
+use crate::search::{ParameterRange, SearchBoxMismatch, check_search_box, decode, default_ranges};
 
 /// Bins per behaviour axis. Coarse, per the spike (20×20×20).
 pub const RESOLUTION: usize = 20;
@@ -936,6 +936,13 @@ pub struct Atlas {
     /// `None` on an atlas written before it was recorded.
     #[serde(default)]
     pub provenance: Option<AtlasProvenance>,
+    /// The search box the atlas was drawn under (#559): the ranges a cell's
+    /// `unit` decodes over. A unit vector names a world only together with its
+    /// box, so every reader decodes the cells over this one — read it through
+    /// [`Atlas::search_box`]. `None` on an atlas written before it was
+    /// recorded, which was searched under the full box, `default_ranges()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_box: Option<Vec<ParameterRange>>,
     /// The live cells in cell-index order, so the same search writes the same
     /// atlas bytes and `atlas:N` in the research sweeps names the same config
     /// (#536) — not in the archive's `HashMap` order.
@@ -1047,6 +1054,27 @@ impl LockupCrosscheck {
 }
 
 impl Atlas {
+    /// The search box this atlas's cells decode over (#559): the one it
+    /// records, or the full box `default_ranges()` for an atlas from before the
+    /// box was recorded (the box every such atlas was searched under).
+    pub fn search_box(&self) -> Vec<ParameterRange> {
+        self.search_box.clone().unwrap_or_else(default_ranges)
+    }
+
+    /// Check that `ranges`, the box a reader would decode this atlas's cells
+    /// over, is the atlas's own [`Atlas::search_box`] (#559).
+    pub fn check_search_box(&self, ranges: &[ParameterRange]) -> Result<(), SearchBoxMismatch> {
+        check_search_box(&self.search_box(), ranges)
+    }
+
+    /// [`Atlas::check_search_box`], stopping loudly on a mismatch: the recipe
+    /// readers below cannot report one, and must not decode the wrong worlds.
+    fn assert_search_box(&self, ranges: &[ParameterRange]) {
+        if let Err(e) = self.check_search_box(ranges) {
+            panic!("{e}");
+        }
+    }
+
     /// Run the lockup boundary cross-check over this atlas (see
     /// [`LockupCrosscheck`]). Counts live cells either side of the
     /// [`LOCK_FRACTION`] gate and reads the `NutrientLockup` frontier tally.
@@ -1084,7 +1112,10 @@ impl Atlas {
     /// app always gets a world). Selection only: binning, fitness, and the straddler
     /// cell itself are untouched (genesis-search.md, "the recipe is a projection";
     /// #401). `None` if no cell is live (every config died — all frontier).
+    ///
+    /// Panics if `ranges` is not the atlas's own [`Atlas::search_box`] (#559).
     pub fn best_recipe(&self, ranges: &[ParameterRange], max_ticks: u64) -> Option<WorldRecipe> {
+        self.assert_search_box(ranges);
         let pick = self
             .cells
             .iter()
@@ -1100,13 +1131,15 @@ impl Atlas {
 
     /// The world recipe for a specific live cell index, if that cell is filled —
     /// the atlas's honest stance that *any* viable cell yields a recipe, not only
-    /// the best one.
+    /// the best one. Panics if `ranges` is not the atlas's own
+    /// [`Atlas::search_box`] (#559).
     pub fn recipe_for_cell(
         &self,
         cell: [usize; 3],
         ranges: &[ParameterRange],
         max_ticks: u64,
     ) -> Option<WorldRecipe> {
+        self.assert_search_box(ranges);
         let c = self.cells.iter().find(|c| c.cell == cell)?;
         Some(recipe_from_unit(&c.unit, ranges, max_ticks))
     }
@@ -1327,13 +1360,15 @@ fn project_with_refinement(
 /// both fitness and the floor depend on, using deterministic seeds disjoint from
 /// the search's (see [`REFINEMENT_SEED_OFFSET`]). Selection only — never rewrites
 /// the atlas map's binning or per-cell fitness (genesis-search.md, the authority
-/// boundary). Deterministic in `(atlas, config, base_seed)`.
+/// boundary). Deterministic in `(atlas, config, base_seed)`. Panics if `ranges`
+/// is not the atlas's own [`Atlas::search_box`] (#559).
 pub fn refined_best_recipe(
     atlas: &Atlas,
     ranges: &[ParameterRange],
     config: &RefinementConfig,
     base_seed: u64,
 ) -> RefinedProjection {
+    atlas.assert_search_box(ranges);
     let ensemble_config = EnsembleConfig {
         ensemble_size: config.ensemble_size,
         run_config: RunConfig {
@@ -1638,6 +1673,7 @@ impl<R: Rng> SearchState<R> {
             seed: base_seed,
             max_ticks: config.max_ticks,
         });
+        atlas.search_box = Some(config.ranges.clone());
         Ok(atlas)
     }
 
@@ -1832,6 +1868,7 @@ impl<R> SearchState<R> {
 
         Atlas {
             provenance: None,
+            search_box: None,
             coverage: self.archive.coverage(),
             total_cells: RESOLUTION.pow(3),
             qd_score: self.archive.qd_score(),
@@ -1944,6 +1981,7 @@ mod tests {
         }
         Atlas {
             provenance: None,
+            search_box: None,
             coverage: cells.len(),
             total_cells: RESOLUTION.pow(3),
             qd_score: 0.0,

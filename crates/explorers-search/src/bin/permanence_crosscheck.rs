@@ -47,8 +47,9 @@
 //! ## Determinism and sourcing
 //!
 //! Same sourcing as `energy_bound_check.rs`: the atlas live-cell `unit` vectors
-//! decoded via `decode` over `default_ranges`, plus the seed-421 LHS draw of 200
-//! configs `role_emergence.rs` uses, so `sample:i` coincides across instruments.
+//! decoded over the atlas's own search box (#559; `default_ranges` for an atlas
+//! that records none), plus the seed-421 LHS draw of 200 configs
+//! `role_emergence.rs` uses, so `sample:i` coincides across instruments.
 //! `sample@S:i` names the `i`-th config of the seed-`S` draw instead (#553);
 //! its row's `source` is `"sample@S"`, a label no seed-421 row can have.
 //! Seeds are a fixed contiguous block per config. Each (config, seed) run is
@@ -115,11 +116,14 @@ use rayon::prelude::*;
 
 use explorers_genesis::{EvalConfig, FailureMode};
 use explorers_genesis_eval::{EVALUATOR_EVENT_KINDS, RolloutObservations};
-use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
-use explorers_search::search::{SearchConfig, decode, default_ranges};
+use explorers_search::config_source::{
+    ConfigSource, parse_selector, resolve_config, sampled_units,
+};
+use explorers_search::search::{SearchConfig, default_ranges};
 use explorers_search::sweep::{
-    DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
-    done_configs, evaluate_within_budget, is_unfinished, plan_tasks, read_atlas_units, read_rows,
+    AtlasUnits, DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE,
+    append_row, done_configs, evaluate_within_budget, is_unfinished, plan_tasks, read_atlas_units,
+    read_rows,
 };
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 
@@ -934,19 +938,17 @@ struct ConfigRecord {
 fn evaluate_config(
     source: ConfigSource,
     config_index: usize,
-    unit: &[f64],
+    (params, dist): &(WorldParameters, InitialDistribution),
     seeds: u64,
     horizon: u64,
     run_timeout: Duration,
     eval_timeout: Duration,
 ) -> ConfigRecord {
-    let ranges = default_ranges();
-    let (params, dist) = decode(unit, &ranges);
-    let (producer, consumer) = representative_clusters(&dist);
+    let (producer, consumer) = representative_clusters(dist);
     let has_consumer_compartment = producer != consumer;
-    let map = A1Map::derive(&producer, &consumer, &params);
+    let map = A1Map::derive(&producer, &consumer, params);
     let a1 = a1_verdict(map, &producer, &consumer);
-    let a2 = a2_verdict(&map, &producer, &consumer, &params);
+    let a2 = a2_verdict(&map, &producer, &consumer, params);
     let predicted_a1 = a1.prediction;
     let predicted_a2 = a2_prediction(&a1, &a2);
     // Seeds are independent; rayon's indexed collect preserves seed order, so
@@ -955,8 +957,8 @@ fn evaluate_config(
         .into_par_iter()
         .map(|s| {
             run_seed(
-                &params,
-                &dist,
+                params,
+                dist,
                 SEED_BASE + s,
                 horizon,
                 run_timeout,
@@ -1212,7 +1214,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
 
 /// Run the configs not yet in `args.out` (in sweep order, up to `args.limit`),
 /// appending one row each as it completes. Returns how many were run.
-fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
+fn sweep(args: &Args, atlas_units: &AtlasUnits, sampled: &[Vec<f64>]) -> usize {
     let done = done_configs(&args.out);
     let tasks = plan_tasks(
         atlas_units.len(),
@@ -1234,11 +1236,11 @@ fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
     let start = Instant::now();
     let total = tasks.len();
     for (n, (source, idx)) in tasks.iter().copied().enumerate() {
-        let unit = resolve_unit(source, idx, atlas_units, sampled);
+        let world = resolve_config(source, idx, atlas_units, sampled);
         let record = evaluate_config(
             source,
             idx,
-            &unit,
+            &world,
             args.seeds,
             args.horizon,
             args.run_timeout,
@@ -1361,6 +1363,7 @@ fn print_summary(s: &Summary) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use explorers_search::search::decode;
     use explorers_sim::WorldRecipe;
 
     fn example10() -> (TraitVector, TraitVector, WorldParameters) {
@@ -1776,7 +1779,7 @@ mod tests {
         let record = evaluate_config(
             ConfigSource::SAMPLE,
             0,
-            &unit,
+            &decode(&unit, &default_ranges()),
             2,
             20,
             Duration::MAX,
@@ -1794,6 +1797,7 @@ mod tests {
 mod resume_tests {
     use super::*;
     use explorers_search::config_source::sample_draw;
+    use explorers_search::search::decode;
 
     fn tmp(name: &str) -> PathBuf {
         let dir =
@@ -1858,8 +1862,12 @@ mod resume_tests {
             summary_only: false,
         };
         let seed_421 = vec![vec![0.6; dims]; 5];
-        assert_eq!(sweep(&args, &[], &seed_421), 1);
-        assert_eq!(sweep(&args, &[], &seed_421), 0, "resumed: already done");
+        assert_eq!(sweep(&args, &AtlasUnits::default(), &seed_421), 1);
+        assert_eq!(
+            sweep(&args, &AtlasUnits::default(), &seed_421),
+            0,
+            "resumed: already done"
+        );
         let line = std::fs::read_to_string(&args.out).unwrap();
         assert!(
             line.starts_with(r#"{"source":"sample@9421","config_index":4,"#),
@@ -1868,7 +1876,7 @@ mod resume_tests {
         let expected = evaluate_config(
             ConfigSource::Sample(9421),
             4,
-            &sample_draw(9421, dims)[4],
+            &decode(&sample_draw(9421, dims)[4], &default_ranges()),
             1,
             20,
             Duration::MAX,
@@ -1883,7 +1891,7 @@ mod resume_tests {
     #[test]
     fn a_sweep_split_in_two_produces_the_same_file_as_one_run() {
         let dims = default_ranges().len();
-        let atlas = vec![vec![0.5; dims], vec![0.4; dims]];
+        let atlas = AtlasUnits::new(default_ranges(), vec![vec![0.5; dims], vec![0.4; dims]]);
         let sample = vec![vec![0.6; dims]];
         let base = Args {
             limit: None,
@@ -1937,7 +1945,7 @@ mod resume_tests {
         let record = evaluate_config(
             ConfigSource::SAMPLE,
             0,
-            &unit,
+            &decode(&unit, &default_ranges()),
             1,
             20,
             Duration::ZERO,
@@ -1966,7 +1974,7 @@ mod resume_tests {
         let record = evaluate_config(
             ConfigSource::SAMPLE,
             0,
-            &unit,
+            &decode(&unit, &default_ranges()),
             1,
             20,
             Duration::MAX,
@@ -2067,7 +2075,7 @@ mod resume_tests {
         let record = evaluate_config(
             ConfigSource::SAMPLE,
             0,
-            &unit,
+            &decode(&unit, &default_ranges()),
             1,
             20,
             Duration::MAX,

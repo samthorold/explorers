@@ -34,8 +34,8 @@
 //!
 //! ## Determinism and sourcing
 //!
-//! Configs: the atlas live-cell `unit` vectors (decoded via `decode` over
-//! `default_ranges`, exactly as the search replays them) plus the same fixed-seed
+//! Configs: the atlas live-cell `unit` vectors (decoded over the atlas's own
+//! search box, exactly as the search evaluated them — #559) plus the same fixed-seed
 //! LHS draw `role_emergence.rs` uses (`SAMPLE_SEED = 421`, 200 points), so
 //! `sample:i` here is the same config as `sample:i` there. Seeds are a fixed
 //! contiguous block per config. Each (config, seed) run is independent, so the
@@ -79,11 +79,13 @@ use std::time::{Duration, Instant};
 use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
-use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
-use explorers_search::search::{SearchConfig, decode, default_ranges};
+use explorers_search::config_source::{
+    ConfigSource, parse_selector, resolve_config, sampled_units,
+};
+use explorers_search::search::{SearchConfig, default_ranges};
 use explorers_search::sweep::{
-    DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
-    done_configs, is_unfinished, plan_tasks, read_atlas_units, read_rows,
+    AtlasUnits, DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE,
+    append_row, done_configs, is_unfinished, plan_tasks, read_atlas_units, read_rows,
 };
 use explorers_sim::{InitialDistribution, World, WorldParameters};
 
@@ -451,16 +453,15 @@ fn run_seed(
 fn run_config(
     source: ConfigSource,
     config_index: usize,
-    unit: &[f64],
+    (params, dist): &(WorldParameters, InitialDistribution),
     seeds: u64,
     horizon: u64,
     run_timeout: Duration,
 ) -> ConfigRow {
-    let (params, dist) = decode(unit, &default_ranges());
-    let b = bounds(&params);
+    let b = bounds(params);
     let seeds: Vec<SeedRecord> = (0..seeds)
         .into_par_iter()
-        .map(|s| run_seed(&params, &dist, SEED_BASE + s, horizon, run_timeout))
+        .map(|s| run_seed(params, dist, SEED_BASE + s, horizon, run_timeout))
         .collect();
     ConfigRow {
         source,
@@ -626,7 +627,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
 
 /// Run the configs not yet in `args.out` (in sweep order, up to `args.limit`),
 /// appending one row each as it completes. Returns how many were run.
-fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
+fn sweep(args: &Args, atlas_units: &AtlasUnits, sampled: &[Vec<f64>]) -> usize {
     let done = done_configs(&args.out);
     let tasks = plan_tasks(
         atlas_units.len(),
@@ -648,11 +649,11 @@ fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
     let start = Instant::now();
     let total = tasks.len();
     for (n, (source, idx)) in tasks.iter().copied().enumerate() {
-        let unit = resolve_unit(source, idx, atlas_units, sampled);
+        let world = resolve_config(source, idx, atlas_units, sampled);
         let row = run_config(
             source,
             idx,
-            &unit,
+            &world,
             args.seeds,
             args.horizon,
             args.run_timeout,
@@ -1006,6 +1007,7 @@ mod tests {
 #[cfg(test)]
 mod resume_tests {
     use super::*;
+    use explorers_search::search::decode;
 
     fn tmp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("energy-bound-check-{}", std::process::id()));
@@ -1045,7 +1047,7 @@ mod resume_tests {
     #[test]
     fn a_sweep_split_in_two_produces_the_same_file_as_one_run() {
         let dims = default_ranges().len();
-        let atlas = vec![vec![0.5; dims], vec![0.4; dims]];
+        let atlas = AtlasUnits::new(default_ranges(), vec![vec![0.5; dims], vec![0.4; dims]]);
         let sample = vec![vec![0.6; dims]];
         let base = Args {
             limit: None,
@@ -1093,7 +1095,14 @@ mod resume_tests {
     fn a_run_past_its_wall_clock_budget_reads_as_a_timeout_and_is_not_checked() {
         let dims = default_ranges().len();
         let unit = vec![0.5; dims];
-        let row = run_config(ConfigSource::SAMPLE, 0, &unit, 1, 20, Duration::ZERO);
+        let row = run_config(
+            ConfigSource::SAMPLE,
+            0,
+            &decode(&unit, &default_ranges()),
+            1,
+            20,
+            Duration::ZERO,
+        );
         assert_eq!(row.seeds[0].terminal_mode, "timeout");
         let summary = summarise(&[row]);
         assert_eq!(summary.runs_timed_out, 1);
@@ -1105,7 +1114,14 @@ mod resume_tests {
     fn an_eval_timed_out_run_is_unfinished_counted_apart_and_not_checked() {
         let dims = default_ranges().len();
         let unit = vec![0.5; dims];
-        let mut row = run_config(ConfigSource::SAMPLE, 0, &unit, 1, 20, Duration::MAX);
+        let mut row = run_config(
+            ConfigSource::SAMPLE,
+            0,
+            &decode(&unit, &default_ranges()),
+            1,
+            20,
+            Duration::MAX,
+        );
         // A row recorded under the evaluation budget's mode, carrying a
         // violation that would be listed were the run read as finished.
         row.seeds[0].terminal_mode = EVAL_TIMEOUT_MODE.to_string();

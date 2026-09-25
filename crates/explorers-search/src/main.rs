@@ -11,7 +11,7 @@ use explorers_search::qd::{
     RefinementConfig, refined_best_recipe,
 };
 use explorers_search::search::{
-    SearchConfig, default_ranges, resume_search, run_search_checkpointed, run_search_observed,
+    SearchConfig, resume_search, run_search_checkpointed, run_search_observed,
 };
 
 fn main() {
@@ -242,7 +242,7 @@ fn main() {
         "\nRefining top-{} live cells at ensemble n={} (independent seeds)...",
         refine_top_k, refine_ensemble
     );
-    let projection = refined_best_recipe(&atlas, &default_ranges(), &refinement, seed);
+    let projection = refined_best_recipe(&atlas, &config.ranges, &refinement, seed);
 
     report_projection(&projection, refine_top_k, &recipe_output_path);
 

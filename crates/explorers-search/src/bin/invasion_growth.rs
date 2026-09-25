@@ -86,8 +86,9 @@
 //!
 //! ## Determinism, sourcing, output
 //!
-//! Atlas live cells decoded via `decode` over `default_ranges`, plus on
-//! request the seed-421 LHS draw `role_emergence` / `energy_bound_check` /
+//! Atlas live cells decoded over the atlas's own search box (#559;
+//! `default_ranges` for an atlas that records none), plus on request the
+//! seed-421 LHS draw `role_emergence` / `energy_bound_check` /
 //! `permanence_crosscheck` share (`config_source`), so `sample:i` names the
 //! same config everywhere; seeds a fixed contiguous block; cohort positions
 //! from a stream keyed on (seed, role); one rayon task per cell with an
@@ -108,7 +109,6 @@
 //! ticks) at the #507 horizon; the 500-tick run was ~15 minutes in release,
 //! so budget hours, or subset it (`INVASION_GROWTH_CELLS`, `_SEEDS`).
 
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -119,13 +119,15 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_genesis_eval::guild::{RoleGuilds, RosterSnapshot, role_guilds};
-use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
+use explorers_search::config_source::{
+    ConfigSource, parse_selector, resolve_config, sampled_units,
+};
 use explorers_search::qd::COEXISTENCE_FLOOR;
-use explorers_search::search::{SearchConfig, decode, default_ranges};
-use explorers_search::sweep::plan_tasks;
+use explorers_search::search::{SearchConfig, default_ranges};
+use explorers_search::sweep::{plan_tasks, read_atlas_units};
 use explorers_sim::event::{Event, EventKind};
 use explorers_sim::topology::{TopologyProjection, TrophicRole};
-use explorers_sim::{Agent, TraitVector, World};
+use explorers_sim::{Agent, InitialDistribution, TraitVector, World, WorldParameters};
 
 /// Fixed contiguous seed block per cell (the `permanence_crosscheck` convention).
 const N_SEEDS: u64 = 8;
@@ -482,11 +484,15 @@ fn run_window(
 
 /// Run one (cell, seed): the resident to `t_inj`, then the control and each
 /// (role × arm) injection as forks of that one resident.
-fn run_cell_seed(unit: &[f64], seed: u64, t_inj: u64, window: u64, arms: &[Arm]) -> SeedRecord {
-    let ranges = default_ranges();
-    let (params, dist) = decode(unit, &ranges);
+fn run_cell_seed(
+    (params, dist): &(WorldParameters, InitialDistribution),
+    seed: u64,
+    t_inj: u64,
+    window: u64,
+    arms: &[Arm],
+) -> SeedRecord {
     let max_population = EvalConfig::default().max_population;
-    let mut world = World::new(params, dist.clone(), seed);
+    let mut world = World::new(params.clone(), dist.clone(), seed);
     // Everything this instrument reads off the log — the projection's roles
     // (Consumed / Reproduced / Died), the guild read and lineage (Born,
     // Consumed, Died) — is in these kinds; the per-agent-per-tick
@@ -1226,20 +1232,19 @@ fn median_f64(values: &mut [f64]) -> f64 {
 fn evaluate_cell(
     source: ConfigSource,
     index: usize,
-    unit: &[f64],
+    config: &(WorldParameters, InitialDistribution),
     atlas: Option<AtlasMeta>,
     seeds: u64,
     t_inj: u64,
     window: u64,
     arms: &[Arm],
 ) -> CellRecord {
-    let ranges = default_ranges();
-    let (params, dist) = decode(unit, &ranges);
+    let (params, dist) = config;
     // Seeds are independent; rayon's indexed collect preserves seed order, so
     // the record is bit-identical to the sequential map.
     let records: Vec<SeedRecord> = (0..seeds)
         .into_par_iter()
-        .map(|s| run_cell_seed(unit, SEED_BASE + s, t_inj, window, arms))
+        .map(|s| run_cell_seed(config, SEED_BASE + s, t_inj, window, arms))
         .collect();
     let reached: Vec<&SeedRecord> = records
         .iter()
@@ -1527,7 +1532,6 @@ struct AtlasCellIn {
     coexistence_fraction: f32,
     sample_count: u32,
     decomposer_fraction: f32,
-    unit: Vec<f64>,
 }
 
 impl AtlasCellIn {
@@ -1594,6 +1598,8 @@ fn main() {
         std::fs::read_to_string(&atlas_path).unwrap_or_else(|e| panic!("read {atlas_path}: {e}"));
     let atlas: AtlasFile =
         serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {atlas_path}: {e}"));
+    // The cells' worlds, decoded over the atlas's own search box (#559).
+    let atlas_units = read_atlas_units(std::path::Path::new(&atlas_path));
     let sampled = sampled_units(default_ranges().len());
     let cell_filter = parse_cell_filter();
     let seeds = std::env::var("INVASION_GROWTH_SEEDS")
@@ -1624,14 +1630,9 @@ fn main() {
     let records: Vec<CellRecord> = tasks
         .par_iter()
         .map(|&(source, i)| {
-            let (unit, meta) = match source {
-                ConfigSource::Atlas => (
-                    Cow::Borrowed(atlas.cells[i].unit.as_slice()),
-                    Some(atlas.cells[i].meta()),
-                ),
-                source @ ConfigSource::Sample(_) => (resolve_unit(source, i, &[], &sampled), None),
-            };
-            let record = evaluate_cell(source, i, &unit, meta, seeds, t_inj, window, &arms);
+            let config = resolve_config(source, i, &atlas_units, &sampled);
+            let meta = (source == ConfigSource::Atlas).then(|| atlas.cells[i].meta());
+            let record = evaluate_cell(source, i, &config, meta, seeds, t_inj, window, &arms);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n.is_multiple_of(log_step) || n == total {
                 eprintln!(
@@ -1734,6 +1735,7 @@ fn write_artifact(artifact: &Artifact) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use explorers_search::search::decode;
     use explorers_sim::TraitVector;
 
     fn born(seq: u64, child: u64, parent: u64, mate: Option<u64>) -> Event {
@@ -1795,7 +1797,15 @@ mod tests {
     fn run_cell_seed_injects_every_role_on_every_arm_and_is_deterministic() {
         let ranges = default_ranges();
         let unit = vec![0.5; ranges.len()];
-        let run = || run_cell_seed(&unit, SEED_BASE, 30, 30, &[Arm::Intact, Arm::Removed]);
+        let run = || {
+            run_cell_seed(
+                &decode(&unit, &ranges),
+                SEED_BASE,
+                30,
+                30,
+                &[Arm::Intact, Arm::Removed],
+            )
+        };
         let record = run();
         assert_eq!(record.seed, SEED_BASE);
         assert_eq!(record.resident.termination, "alive");
@@ -2051,12 +2061,11 @@ mod tests {
             coexistence_fraction: 0.8,
             sample_count: 5,
             decomposer_fraction: 0.0,
-            unit: vec![0.5; ranges.len()],
         };
         let record = evaluate_cell(
             ConfigSource::Atlas,
             0,
-            &cell.unit,
+            &decode(&vec![0.5; ranges.len()], &ranges),
             Some(cell.meta()),
             2,
             20,
@@ -2189,7 +2198,13 @@ mod tests {
         let unit = vec![0.5; ranges.len()];
         // At t_inj = 1 no heterotroph has eaten a carcass, so the decomposer
         // role is absent by construction.
-        let record = run_cell_seed(&unit, SEED_BASE, 1, 10, &[Arm::Intact, Arm::Removed]);
+        let record = run_cell_seed(
+            &decode(&unit, &ranges),
+            SEED_BASE,
+            1,
+            10,
+            &[Arm::Intact, Arm::Removed],
+        );
         assert_eq!(record.resident.termination, "alive");
         assert_eq!(record.resident.roles.decomposers, 0);
         let absent: Vec<Role> = record
@@ -2231,7 +2246,13 @@ mod tests {
     fn tagged_role_without_a_guild_is_not_testable_no_guild() {
         let ranges = default_ranges();
         let unit = vec![0.5; ranges.len()];
-        let record = run_cell_seed(&unit, SEED_BASE, 1, 10, &[Arm::Intact, Arm::Removed]);
+        let record = run_cell_seed(
+            &decode(&unit, &ranges),
+            SEED_BASE,
+            1,
+            10,
+            &[Arm::Intact, Arm::Removed],
+        );
         assert_eq!(record.resident.termination, "alive");
         assert!(record.resident.roles.producers > 0);
         assert!(!record.resident.guilds.producer);

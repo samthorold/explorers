@@ -76,8 +76,10 @@ use explorers_genesis_eval::{
     EVALUATOR_EVENT_KINDS, ROSTER_FLOOR, RolloutObservations, SUSTAINABLE_FRACTION, early_stop,
     is_free_energy_dead, is_free_energy_dead_sustainable, sustainable_stock,
 };
-use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
-use explorers_search::search::{decode, default_ranges};
+use explorers_search::config_source::{
+    ConfigSource, parse_selector, resolve_config, sampled_units,
+};
+use explorers_search::search::default_ranges;
 use explorers_search::sweep::{
     DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
     done_configs, evaluate_within_budget, plan_tasks, read_atlas_units, read_rows,
@@ -476,19 +478,18 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
 fn run_config(
     source: ConfigSource,
     config_index: usize,
-    unit: &[f64],
+    (params, dist): &(WorldParameters, InitialDistribution),
     seeds: u64,
     horizon: u64,
     run_timeout: Duration,
     eval_timeout: Duration,
 ) -> ConfigRow {
-    let (params, dist) = decode(unit, &default_ranges());
     let seeds: Vec<SeedRecord> = (0..seeds)
         .into_par_iter()
         .map(|s| {
             run_seed(
-                &params,
-                &dist,
+                params,
+                dist,
                 SEED_BASE + s,
                 horizon,
                 run_timeout,
@@ -593,11 +594,11 @@ fn main() {
         let start = Instant::now();
         let total = tasks.len();
         for (n, (source, idx)) in tasks.into_iter().enumerate() {
-            let unit = resolve_unit(source, idx, &atlas_units, &sampled);
+            let world = resolve_config(source, idx, &atlas_units, &sampled);
             let row = run_config(
                 source,
                 idx,
-                &unit,
+                &world,
                 args.seeds,
                 args.horizon,
                 args.run_timeout,
@@ -634,14 +635,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use explorers_search::sweep::AtlasFile;
     use explorers_search::sweep::is_unfinished;
+    use explorers_search::sweep::read_atlas_units;
     use std::collections::HashSet;
     use std::path::PathBuf;
     use std::time::Duration;
 
     use explorers_search::config_source::ConfigSource;
-    use explorers_search::search::{decode, default_ranges};
     use explorers_sim::{InitialDistribution, WorldParameters};
 
     fn seed(
@@ -771,9 +771,7 @@ mod tests {
 
     fn atlas_cell(index: usize) -> (WorldParameters, InitialDistribution) {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
-        let atlas: AtlasFile =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        decode(&atlas.cells[index].unit, &default_ranges())
+        read_atlas_units(std::path::Path::new(path)).decode(index)
     }
 
     #[test]

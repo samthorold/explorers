@@ -47,8 +47,14 @@
 //! committed `atlas.json` was replaced, so the cell indices and every golden
 //! below are new, chosen afresh for the same spread of verdicts (see `CELLS`).
 
-use explorers_genesis::{EvalConfig, FailureMode, FitnessBreakdown, RunConfig, run_single};
+use std::path::Path;
+
+use explorers_genesis::{
+    EvalConfig, FailureMode, FitnessBreakdown, InitialDistribution, RunConfig, WorldParameters,
+    run_single,
+};
 use explorers_search::search::{decode, default_ranges};
+use explorers_search::sweep::{AtlasUnits, read_atlas_units};
 
 const HORIZON: u64 = 500;
 /// A handful of committed atlas live cells (indices into `atlas.json`'s
@@ -60,33 +66,22 @@ const HORIZON: u64 = 500;
 const CELLS: [usize; 7] = [11, 27, 39, 59, 66, 71, 76];
 const SEEDS: [u64; 2] = [1000, 1001];
 
-fn atlas_units() -> Vec<Vec<f64>> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
-    let text = std::fs::read_to_string(path).expect("committed atlas.json at the repo root");
-    let atlas: serde_json::Value = serde_json::from_str(&text).expect("atlas.json parses");
-    atlas["cells"]
-        .as_array()
-        .expect("atlas has a `cells` array")
-        .iter()
-        .map(|cell| {
-            cell["unit"]
-                .as_array()
-                .expect("cell has a `unit` vector")
-                .iter()
-                .map(|v| v.as_f64().expect("unit coordinate is a number"))
-                .collect()
-        })
-        .collect()
+/// The committed atlas's live cells, each decoded over the atlas's own search
+/// box (#559) — the full box for this atlas, which records none.
+fn atlas_units() -> AtlasUnits {
+    read_atlas_units(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../atlas.json"
+    )))
 }
 
-fn rollout(unit: &[f64], seed: u64) -> FitnessBreakdown {
-    let (params, dist) = decode(unit, &default_ranges());
+fn rollout((params, dist): &(WorldParameters, InitialDistribution), seed: u64) -> FitnessBreakdown {
     let config = RunConfig {
         max_ticks: HORIZON,
         eval_config: EvalConfig::default(),
         early_stop_crosscheck_fraction: 0.0,
     };
-    run_single(&params, &dist, &config, seed).breakdown
+    run_single(params, dist, &config, seed).breakdown
 }
 
 /// One pinned read, with every `f32` held as its bit pattern.
@@ -133,7 +128,7 @@ fn print_golden() {
     let units = atlas_units();
     for &cell in &CELLS {
         for &seed in &SEEDS {
-            let p = pin(cell, seed, &rollout(&units[cell], seed));
+            let p = pin(cell, seed, &rollout(&units.decode(cell), seed));
             println!(
                 "    Pinned {{ cell: {}, seed: {}, fitness: {:#x}, failure: {:?}, oscillation_strength: {:#x}, clustering_strength: {:#x}, coexistence_duration: {:#x}, turnover_score: {:#x}, trophic_balance_score: {:#x}, ticks_survived: {}, carcass_locked_fraction: {:#x}, has_decomposer_guild: {}, has_consumer_guild: {} }},",
                 p.cell,
@@ -378,7 +373,7 @@ fn fitness_breakdown_is_byte_identical_on_atlas_live_cells_at_the_500_tick_horiz
         let actual = pin(
             expected.cell,
             expected.seed,
-            &rollout(&units[expected.cell], expected.seed),
+            &rollout(&units.decode(expected.cell), expected.seed),
         );
         assert_eq!(
             &actual, expected,

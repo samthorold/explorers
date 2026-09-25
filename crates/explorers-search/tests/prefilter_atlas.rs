@@ -13,37 +13,16 @@
 use explorers_genesis::WorldParameters;
 use explorers_search::prefilter::{fails_energy_death_gate, prefilter_cliff};
 use explorers_search::search::{decode, default_ranges};
+use explorers_search::sweep::read_atlas_units;
+use std::path::Path;
 
-/// Decode every live cell's unit vector from the committed `atlas.json` at the
-/// repo root, through the same decoder the search uses.
-fn atlas_live_cells() -> Vec<(Vec<usize>, WorldParameters)> {
+/// Decode every live cell of the committed `atlas.json` at the repo root over
+/// the atlas's own search box (#559), through the reader the research bins use.
+fn atlas_live_cells() -> Vec<(usize, WorldParameters)> {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
-    let text = std::fs::read_to_string(path).expect("committed atlas.json at the repo root");
-    let atlas: serde_json::Value = serde_json::from_str(&text).expect("atlas.json parses");
-    let ranges = default_ranges();
-    let cells = atlas["cells"]
-        .as_array()
-        .expect("atlas has a `cells` array");
-    assert!(!cells.is_empty(), "the committed atlas has live cells");
-    cells
-        .iter()
-        .map(|cell| {
-            let unit: Vec<f64> = cell["unit"]
-                .as_array()
-                .expect("cell has a `unit` vector")
-                .iter()
-                .map(|v| v.as_f64().expect("unit coordinate is a number"))
-                .collect();
-            assert_eq!(unit.len(), ranges.len(), "unit vector spans the search box");
-            let idx: Vec<usize> = cell["cell"]
-                .as_array()
-                .expect("cell has an index")
-                .iter()
-                .map(|v| v.as_u64().expect("cell index is an integer") as usize)
-                .collect();
-            (idx, decode(&unit, &ranges).0)
-        })
-        .collect()
+    let atlas = read_atlas_units(Path::new(path));
+    assert!(!atlas.is_empty(), "the committed atlas has live cells");
+    (0..atlas.len()).map(|i| (i, atlas.decode(i).0)).collect()
 }
 
 #[test]
@@ -51,7 +30,7 @@ fn every_committed_atlas_live_cell_clears_the_energy_death_gate() {
     for (idx, params) in atlas_live_cells() {
         assert!(
             !fails_energy_death_gate(&params),
-            "atlas live cell {idx:?} would be gated energy-dead: pool {} vs base_nutrient_ratio {} and N_r {}",
+            "atlas:{idx} would be gated energy-dead: pool {} vs base_nutrient_ratio {} and N_r {}",
             params.initial_nutrient_pool,
             params.base_nutrient_ratio,
             params.reproduction_nutrient_threshold
@@ -59,7 +38,7 @@ fn every_committed_atlas_live_cell_clears_the_energy_death_gate() {
         assert_eq!(
             prefilter_cliff(&params),
             None,
-            "atlas live cell {idx:?} must not be prefiltered dead"
+            "atlas:{idx} must not be prefiltered dead"
         );
     }
 }

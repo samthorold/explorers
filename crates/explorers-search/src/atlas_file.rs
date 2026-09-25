@@ -9,7 +9,8 @@
 //!
 //! The re-projection is exactly the in-run one: the cells carry the `unit`
 //! vectors the refinement re-evaluates, and the atlas records the search's
-//! seed and horizon ([`AtlasProvenance`]), which is everything else it reads.
+//! seed and horizon ([`AtlasProvenance`]) and the search box the units decode
+//! over ([`Atlas::search_box`], #559), which is everything else it reads.
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +18,6 @@ use crate::qd::{
     Atlas, AtlasProvenance, CoexistenceFloor, RefinedProjection, RefinementConfig,
     refined_best_recipe,
 };
-use crate::search::default_ranges;
 
 /// Why an atlas file could not be written, read, or re-projected.
 #[derive(Debug)]
@@ -104,7 +104,8 @@ pub struct ReprojectSettings {
 
 /// Refine the atlas's top live cells and project the recipe exactly as the run
 /// that drew the atlas does ([`refined_best_recipe`]), under the search seed and
-/// horizon it records (or, for an atlas that records none, the ones given).
+/// horizon it records (or, for an atlas that records none, the ones given),
+/// its cells decoded over the search box it records ([`Atlas::search_box`]).
 pub fn reproject(
     atlas: &Atlas,
     settings: &ReprojectSettings,
@@ -118,7 +119,7 @@ pub fn reproject(
     };
     Ok(refined_best_recipe(
         atlas,
-        &default_ranges(),
+        &atlas.search_box(),
         &refinement,
         seed,
     ))
@@ -157,7 +158,7 @@ fn provenance(
 mod tests {
     use super::*;
     use crate::qd::{QdConfig, RefinementConfig, refined_best_recipe, run_qd};
-    use crate::search::default_ranges;
+    use crate::search::{ParameterRange, default_ranges};
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
     use std::path::PathBuf;
@@ -317,6 +318,101 @@ mod tests {
         assert_eq!(mismatches.len(), 2, "{err}");
         assert!(err.to_string().contains("seed"), "{err}");
         assert!(err.to_string().contains("max_ticks"), "{err}");
+    }
+
+    /// #559: an atlas written by a search records the box it was searched
+    /// under, so reading it back names the same box; an atlas from before
+    /// the box was recorded reads as the full box, which it was searched under.
+    #[test]
+    fn an_atlas_records_the_search_box_it_was_drawn_under() {
+        let config = QdConfig {
+            ranges: crate::search::narrowed_ranges(),
+            ..tiny()
+        };
+        let atlas = run_qd(&config, 7, &mut ChaCha8Rng::seed_from_u64(7));
+        let path = scratch("search-box").join("atlas.json");
+        write_atlas(&atlas, &path).unwrap();
+        let bounds = |rs: &[ParameterRange]| {
+            rs.iter()
+                .map(|r| (r.name.clone(), r.min, r.max))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            bounds(&read_atlas(&path).unwrap().search_box()),
+            bounds(&config.ranges)
+        );
+
+        let mut legacy: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("search_box");
+        std::fs::write(&path, legacy.to_string()).unwrap();
+        assert_eq!(
+            bounds(&read_atlas(&path).unwrap().search_box()),
+            bounds(&default_ranges())
+        );
+    }
+
+    /// #559: an atlas drawn under the narrowed box re-projects to the recipe
+    /// the writing run projected — its cells decoded over its own box, not the
+    /// full one.
+    #[test]
+    fn a_narrowed_atlas_reprojects_over_its_own_box() {
+        let seed = 7;
+        let config = QdConfig {
+            ranges: crate::search::narrowed_ranges(),
+            ..tiny()
+        };
+        let atlas = run_qd(&config, seed, &mut ChaCha8Rng::seed_from_u64(seed));
+        assert!(!atlas.cells.is_empty());
+        let refinement = RefinementConfig {
+            top_k: 1,
+            ensemble_size: 1,
+            max_ticks: config.max_ticks,
+            floor: CoexistenceFloor::Plain,
+        };
+        let in_run = refined_best_recipe(&atlas, &config.ranges, &refinement, seed);
+        let path = scratch("narrowed-reproject").join("atlas.json");
+        write_atlas(&atlas, &path).unwrap();
+        let reprojected = reproject(&read_atlas(&path).unwrap(), &settings(1, 1)).unwrap();
+        assert_eq!(
+            serde_json::to_string(&reprojected.recipe).unwrap(),
+            serde_json::to_string(&in_run.recipe).unwrap()
+        );
+    }
+
+    /// #559: a reader decoding an atlas's cells over a box other than the one
+    /// the atlas records is refused with an error naming a differing dim —
+    /// never a silent decode of the wrong worlds.
+    #[test]
+    fn decoding_an_atlas_over_another_box_is_refused() {
+        let narrowed = QdConfig {
+            ranges: crate::search::narrowed_ranges(),
+            ..tiny()
+        };
+        let atlas = run_qd(&narrowed, 7, &mut ChaCha8Rng::seed_from_u64(7));
+        assert!(atlas.check_search_box(&narrowed.ranges).is_ok());
+        let err = atlas.check_search_box(&default_ranges()).unwrap_err();
+        assert!(err.to_string().contains("base_trophic_efficiency"), "{err}");
+
+        let legacy = Atlas {
+            search_box: None,
+            ..atlas
+        };
+        assert!(legacy.check_search_box(&default_ranges()).is_ok());
+        assert!(legacy.check_search_box(&narrowed.ranges).is_err());
+    }
+
+    /// #559: the recipe projection is such a reader — handed the wrong box it
+    /// stops, loudly.
+    #[test]
+    #[should_panic(expected = "search box")]
+    fn projecting_an_atlas_over_another_box_panics() {
+        let narrowed = QdConfig {
+            ranges: crate::search::narrowed_ranges(),
+            ..tiny()
+        };
+        let atlas = run_qd(&narrowed, 7, &mut ChaCha8Rng::seed_from_u64(7));
+        atlas.best_recipe(&default_ranges(), 20);
     }
 
     #[test]

@@ -15,7 +15,7 @@ use crate::qd::{Atlas, GenerationReport, QdConfig, run_qd_observed};
 /// alias the consumers name; `best_recipe` / `recipe_for_cell` live on `Atlas`.
 pub type SearchResult = Atlas;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ParameterRange {
     pub name: String,
     pub min: f64,
@@ -28,6 +28,8 @@ pub struct ParameterRange {
 /// is earmarked for a later refinement role, brief E / #349.)
 #[derive(Clone, Debug)]
 pub struct SearchConfig {
+    /// The search box. Defaults to the narrowed box ([`narrowed_ranges`], #559);
+    /// [`default_ranges`] is the full one.
     pub ranges: Vec<ParameterRange>,
     pub ensemble_size: u32,
     pub max_ticks: u64,
@@ -55,7 +57,7 @@ pub struct SearchConfig {
 impl Default for SearchConfig {
     fn default() -> Self {
         SearchConfig {
-            ranges: default_ranges(),
+            ranges: narrowed_ranges(),
             ensemble_size: 5,
             max_ticks: 2000,
             batch: 32,
@@ -239,6 +241,173 @@ pub fn default_ranges() -> Vec<ParameterRange> {
     ]
 }
 
+/// The dims the narrowed search box keeps at their full [`default_ranges`]
+/// width (#559). The first eight are the raw core both LHS draws select on
+/// their own (`docs/research/462-held-out-check.md`); `trait_covariance` and
+/// `mean_heterotrophy` stay wide for the bloom-onset margin.
+pub const FULL_WIDTH_DIMS: [&str; 10] = [
+    "light_competition_radius",
+    "world_extent",
+    "solar_flux_magnitude",
+    "initial_population_size",
+    "contact_range_coefficient",
+    "mean_kappa",
+    "mean_mobility",
+    "reproduction_energy_threshold",
+    "trait_covariance",
+    "mean_heterotrophy",
+];
+
+/// The fraction of a dim's full [`default_ranges`] span the narrowed search
+/// box keeps for every dim outside [`FULL_WIDTH_DIMS`] (#559). A judgement
+/// call the held-out data does not settle — undetectable at n ≈ 200 is not
+/// zero, so the band keeps some width — and so it lives here, in one place.
+pub const NARROWED_BAND_FRACTION: f64 = 0.25;
+
+/// The search box the genesis search runs over by default (#559): the
+/// [`default_ranges`] dims, in the same order, with every dim outside
+/// [`FULL_WIDTH_DIMS`] shrunk to a band of [`NARROWED_BAND_FRACTION`] of its
+/// full span around its [`band_centre`]. A band that would cross a full-range
+/// bound is slid back inside it, so every band keeps its full width, lies
+/// within the full range, and contains its centre.
+///
+/// The raw32 `decode` coordinates are kept (the held-out check rejects a
+/// reduced decode); only the box they span changes. A unit vector therefore
+/// names a world only together with the box it is decoded over — which is why
+/// the atlas records its box ([`crate::qd::Atlas::search_box`]).
+pub fn narrowed_ranges() -> Vec<ParameterRange> {
+    default_ranges()
+        .into_iter()
+        .map(|r| {
+            if FULL_WIDTH_DIMS.contains(&r.name.as_str()) {
+                return r;
+            }
+            let width = NARROWED_BAND_FRACTION * (r.max - r.min);
+            let lo = (band_centre(&r) - width / 2.0).clamp(r.min, r.max - width);
+            ParameterRange {
+                min: lo,
+                max: lo + width,
+                ..r
+            }
+        })
+        .collect()
+}
+
+/// The centre of a shrunk dim's band in [`narrowed_ranges`] (#559): the value
+/// `decode` inherits for that field from the known-viable baseline — the
+/// "obvious centre" of `462-held-out-check.md`:
+///
+/// | dim | centre |
+/// |---|---|
+/// | `base_trophic_efficiency` | 0.8 |
+/// | `trophic_distance_decay` | 1.0 |
+/// | `reproduction_efficiency` | 0.7 |
+/// | `base_metabolic_rate` | 0.3 |
+/// | `movement_cost_coefficient` | 0.05 |
+/// | `sensing_range_coefficient` | 10.0 |
+/// | `mutation_rate` | 0.1 |
+/// | `mutation_magnitude` | 0.05 |
+/// | `photo_maintenance_cost` | 0.01 |
+/// | `heterotrophy_maintenance_cost` | 0.01 |
+/// | `reproductive_compatibility_distance` | 2.0 |
+/// | `base_nutrient_ratio` | 0.1 |
+/// | `specification_nutrient_coefficient` | 0.2 |
+/// | `maintenance_cost_exponent` | 2.0 |
+/// | `growth_retention_multiplier` | 2.0 |
+/// | `offspring_structure_fraction` | 0.2 |
+/// | `reserve_mobilisation_rate` | 1.0 (the full range's top, so the band is its top quarter) |
+///
+/// The founder-distribution dims have no inherited value — `decode` sets the
+/// whole `InitialDistribution` from the unit vector — so their centre is the
+/// midpoint of the full range: `mean_photosynthetic_absorption` 0.5,
+/// `initial_cluster_count` 3, `initial_energy_per_agent` 25.5,
+/// `mean_asexual_propensity` 0.5, `mean_dispersal` 1.0. (Any other dim,
+/// including the full-width core, also reads as its midpoint; the core is
+/// never banded.)
+pub fn band_centre(range: &ParameterRange) -> f64 {
+    let b = viable_baseline();
+    let inherited = match range.name.as_str() {
+        "base_trophic_efficiency" => b.base_trophic_efficiency,
+        "trophic_distance_decay" => b.trophic_distance_decay,
+        "reproduction_efficiency" => b.reproduction_efficiency,
+        "base_metabolic_rate" => b.base_metabolic_rate,
+        "movement_cost_coefficient" => b.movement_cost_coefficient,
+        "sensing_range_coefficient" => b.sensing_range_coefficient,
+        "mutation_rate" => b.mutation_rate,
+        "mutation_magnitude" => b.mutation_magnitude,
+        "photo_maintenance_cost" => b.photo_maintenance_cost,
+        "heterotrophy_maintenance_cost" => b.heterotrophy_maintenance_cost,
+        "reproductive_compatibility_distance" => b.reproductive_compatibility_distance,
+        "base_nutrient_ratio" => b.base_nutrient_ratio,
+        "specification_nutrient_coefficient" => b.specification_nutrient_coefficient,
+        "maintenance_cost_exponent" => b.maintenance_cost_exponent,
+        "growth_retention_multiplier" => b.growth_retention_multiplier,
+        "offspring_structure_fraction" => b.offspring_structure_fraction,
+        "reserve_mobilisation_rate" => b.reserve_mobilisation_rate,
+        _ => return (range.min + range.max) / 2.0,
+    };
+    // The baseline holds f32; read it back at the decimal it was written as,
+    // so a centre of 0.1 is 0.1 and not 0.10000000149.
+    format!("{inherited}")
+        .parse()
+        .expect("an f32 prints as an f64")
+}
+
+/// A reader asked to decode unit vectors over a box other than the one they
+/// were drawn under (#559). Under a different box the same unit names a
+/// different world, so this is refused rather than decoded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchBoxMismatch {
+    /// Each dim that differs, as `name: recorded [min, max] vs reader [min, max]`,
+    /// or the two dimension counts when they differ.
+    pub differences: Vec<String>,
+}
+
+impl std::fmt::Display for SearchBoxMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the unit vectors were drawn under a different search box than the one \
+             they would be decoded over, refusing to decode them: {}",
+            self.differences.join("; ")
+        )
+    }
+}
+
+impl std::error::Error for SearchBoxMismatch {}
+
+/// Check that `reader`, the box a reader would decode over, is exactly the
+/// box `recorded` the unit vectors were drawn under (#559).
+pub fn check_search_box(
+    recorded: &[ParameterRange],
+    reader: &[ParameterRange],
+) -> Result<(), SearchBoxMismatch> {
+    let differences: Vec<String> = if recorded.len() != reader.len() {
+        vec![format!(
+            "recorded box has {} dims, reader's {}",
+            recorded.len(),
+            reader.len()
+        )]
+    } else {
+        recorded
+            .iter()
+            .zip(reader)
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| {
+                format!(
+                    "{}: recorded [{}, {}] vs reader {} [{}, {}]",
+                    a.name, a.min, a.max, b.name, b.min, b.max
+                )
+            })
+            .collect()
+    };
+    if differences.is_empty() {
+        Ok(())
+    } else {
+        Err(SearchBoxMismatch { differences })
+    }
+}
+
 /// A single named known-viable baseline `WorldParameters`, taken verbatim from
 /// the committed example4/example9 scenario template (the fully-specified,
 /// post-#309 set). Every field is given a sane non-zero value where the template
@@ -413,6 +582,156 @@ impl SearchConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #559: the narrowed box names the same 32 dims in the same order (so a
+    /// unit vector has the same length and axis meaning under either box), and
+    /// keeps the ten core dims at exactly their full-box bounds.
+    #[test]
+    fn the_narrowed_box_keeps_the_core_at_full_width() {
+        let full = default_ranges();
+        let narrowed = narrowed_ranges();
+        let names = |rs: &[ParameterRange]| rs.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&narrowed), names(&full));
+        let core = [
+            "light_competition_radius",
+            "world_extent",
+            "solar_flux_magnitude",
+            "initial_population_size",
+            "contact_range_coefficient",
+            "mean_kappa",
+            "mean_mobility",
+            "reproduction_energy_threshold",
+            "trait_covariance",
+            "mean_heterotrophy",
+        ];
+        assert_eq!(FULL_WIDTH_DIMS, core);
+        for (n, f) in narrowed.iter().zip(&full) {
+            if core.contains(&f.name.as_str()) {
+                assert_eq!((n.min, n.max), (f.min, f.max), "{}", f.name);
+            }
+        }
+    }
+
+    /// #559: the search runs over the narrowed box by default; the full box
+    /// stays available as `default_ranges()`.
+    #[test]
+    fn the_search_defaults_to_the_narrowed_box() {
+        let ranges = SearchConfig::default().ranges;
+        let bounds = |rs: &[ParameterRange]| rs.iter().map(|r| (r.min, r.max)).collect::<Vec<_>>();
+        assert_eq!(bounds(&ranges), bounds(&narrowed_ranges()));
+        assert_ne!(bounds(&ranges), bounds(&default_ranges()));
+    }
+
+    /// #559: every other dim is a band of `NARROWED_BAND_FRACTION` of its
+    /// full span, inside its full bounds, containing its centre.
+    #[test]
+    fn every_other_dim_is_a_band_around_its_centre() {
+        let full = default_ranges();
+        let narrowed = narrowed_ranges();
+        let shrunk: Vec<_> = narrowed
+            .iter()
+            .zip(&full)
+            .filter(|(n, _)| !FULL_WIDTH_DIMS.contains(&n.name.as_str()))
+            .collect();
+        assert_eq!(shrunk.len(), 22);
+        for (n, f) in shrunk {
+            let centre = band_centre(f);
+            assert!(f.min <= n.min && n.max <= f.max, "{} outside", f.name);
+            assert!(
+                n.min <= centre && centre <= n.max,
+                "{} misses its centre",
+                f.name
+            );
+            let width = NARROWED_BAND_FRACTION * (f.max - f.min);
+            assert!(
+                ((n.max - n.min) - width).abs() < 1e-12,
+                "{}: width {} not {width}",
+                f.name,
+                n.max - n.min
+            );
+        }
+    }
+
+    /// #559: a shrunk dim's centre is the value `decode` inherits from the
+    /// known-viable baseline for that field — decoding every dim at its centre
+    /// gives back the baseline for every searched `WorldParameters` field the
+    /// box shrinks. The founder-distribution dims have no inherited value, so
+    /// their centre is the midpoint of the full range.
+    #[test]
+    fn a_band_centre_is_the_value_decode_inherits() {
+        let full = default_ranges();
+        let unit: Vec<f64> = full
+            .iter()
+            .map(|r| (band_centre(r) - r.min) / (r.max - r.min))
+            .collect();
+        let (p, d) = decode(&unit, &full);
+        let b = viable_baseline();
+        let close = |got: f32, want: f32, name: &str| {
+            assert!(
+                (got - want).abs() <= 1e-6 * want.abs().max(1.0),
+                "{name}: {got} vs {want}"
+            )
+        };
+        close(p.base_trophic_efficiency, b.base_trophic_efficiency, "bte");
+        close(p.trophic_distance_decay, b.trophic_distance_decay, "tdd");
+        close(p.reproduction_efficiency, b.reproduction_efficiency, "re");
+        close(p.base_metabolic_rate, b.base_metabolic_rate, "bmr");
+        close(
+            p.movement_cost_coefficient,
+            b.movement_cost_coefficient,
+            "mcc",
+        );
+        close(
+            p.sensing_range_coefficient,
+            b.sensing_range_coefficient,
+            "src",
+        );
+        close(p.mutation_rate, b.mutation_rate, "mr");
+        close(p.mutation_magnitude, b.mutation_magnitude, "mm");
+        close(p.photo_maintenance_cost, b.photo_maintenance_cost, "pmc");
+        close(
+            p.heterotrophy_maintenance_cost,
+            b.heterotrophy_maintenance_cost,
+            "hmc",
+        );
+        close(
+            p.reproductive_compatibility_distance,
+            b.reproductive_compatibility_distance,
+            "rcd",
+        );
+        close(p.base_nutrient_ratio, b.base_nutrient_ratio, "bnr");
+        close(
+            p.specification_nutrient_coefficient,
+            b.specification_nutrient_coefficient,
+            "snc",
+        );
+        close(
+            p.maintenance_cost_exponent,
+            b.maintenance_cost_exponent,
+            "mce",
+        );
+        close(
+            p.growth_retention_multiplier,
+            b.growth_retention_multiplier,
+            "grm",
+        );
+        close(
+            p.offspring_structure_fraction,
+            b.offspring_structure_fraction,
+            "osf",
+        );
+        close(
+            p.reserve_mobilisation_rate,
+            b.reserve_mobilisation_rate,
+            "rmr",
+        );
+        // No inherited value: the midpoint of the full range.
+        close(d.mean_traits.photosynthetic_absorption, 0.5, "mpa");
+        close(d.mean_traits.asexual_propensity, 0.5, "map");
+        close(d.mean_traits.dispersal, 1.0, "md");
+        close(d.initial_energy_per_agent, 25.5, "iepa");
+        assert_eq!(d.initial_cluster_count, 3);
+    }
 
     #[test]
     fn decode_maps_unit_interval_to_parameter_ranges() {

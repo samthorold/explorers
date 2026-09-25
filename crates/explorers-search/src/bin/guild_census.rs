@@ -4,7 +4,8 @@
 //! the atlas's live cells and the 200-point LHS sample of the search box, so
 //! the two populations can be compared directly.
 //!
-//! Each config is decoded (`search::decode` over `default_ranges`), rolled out
+//! Each config is decoded (`config_source::resolve_config`: an atlas cell
+//! over its atlas's search box, an LHS draw over `default_ranges`), rolled out
 //! with `explorers_genesis::run_ensemble` exactly as the QD search rolls out a
 //! batch config (`--ensemble` seeds, default 5; horizon `--max-ticks`, default
 //! 2000; `EvalConfig::default()`), and reduced with
@@ -49,11 +50,14 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use explorers_genesis::{
-    EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, RunConfig, run_ensemble,
+    EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, InitialDistribution, RunConfig,
+    WorldParameters, run_ensemble,
 };
-use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
+use explorers_search::config_source::{
+    ConfigSource, parse_selector, resolve_config, sampled_units,
+};
 use explorers_search::qd::{CoexistenceFractions, config_eval_from_ensemble};
-use explorers_search::search::{decode, default_ranges};
+use explorers_search::search::default_ranges;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
 
 /// A guild fraction counts as "held" at or above this share of the ensemble.
@@ -316,8 +320,12 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
     args
 }
 
-fn run_config(source: ConfigSource, config_index: usize, unit: &[f64], args: &Args) -> CensusRow {
-    let (params, dist) = decode(unit, &default_ranges());
+fn run_config(
+    source: ConfigSource,
+    config_index: usize,
+    (params, dist): &(WorldParameters, InitialDistribution),
+    args: &Args,
+) -> CensusRow {
     let ensemble_config = EnsembleConfig {
         ensemble_size: args.ensemble,
         run_config: RunConfig {
@@ -326,7 +334,7 @@ fn run_config(source: ConfigSource, config_index: usize, unit: &[f64], args: &Ar
             early_stop_crosscheck_fraction: 0.0,
         },
     };
-    let result = run_ensemble(&params, &dist, &ensemble_config, args.seed);
+    let result = run_ensemble(params, dist, &ensemble_config, args.seed);
     census_row(source, config_index, args.horizon, args.seed, &result)
 }
 
@@ -402,9 +410,9 @@ fn main() {
         let start = Instant::now();
         let total = tasks.len();
         for (n, (source, idx)) in tasks.into_iter().enumerate() {
-            let unit = resolve_unit(source, idx, &atlas_units, &sampled);
+            let world = resolve_config(source, idx, &atlas_units, &sampled);
             let config_start = Instant::now();
-            let row = run_config(source, idx, &unit, &args);
+            let row = run_config(source, idx, &world, &args);
             append_row(&args.out, &row);
             eprintln!(
                 "  {}:{idx} done ({}/{total}): decomposer {:.2} consumer {:.2} coexistence {:.2} cliff {} ({:.1}s; {:.0}s elapsed)",

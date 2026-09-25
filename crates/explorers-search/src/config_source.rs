@@ -9,15 +9,18 @@
 //! meaning seed 421 byte-for-byte, and the label a row records
 //! ([`ConfigSource`]'s `source` field) carries the seed wherever it is not
 //! 421, so rows of two draws can never collide in one file or be joined by
-//! mistake. [`resolve_unit`] turns any key into its unit vector.
+//! mistake. [`resolve_config`] turns any key into the world it names.
 
-use std::borrow::Cow;
 use std::collections::HashSet;
+
+use explorers_genesis::{InitialDistribution, WorldParameters};
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use crate::lhs;
+use crate::search::{decode, default_ranges};
+use crate::sweep::AtlasUnits;
 
 /// Low-discrepancy configs drawn in addition to the atlas cells — same count
 /// and seed in every bin.
@@ -97,23 +100,22 @@ pub fn sample_draw(seed: u64, dims: usize) -> Vec<Vec<f64>> {
     lhs::sample(dims, SAMPLE_CONFIGS, &mut rng)
 }
 
-/// The unit vector a `(source, index)` key names: an atlas cell of `atlas`,
-/// a config of the seed-421 draw from `sampled` (the caller's copy of it), or
-/// a config of any other draw, drawn over the search box (`default_ranges`)
-/// every bin decodes with.
-pub fn resolve_unit<'a>(
+/// The world a `(source, index)` key names (#559): an atlas cell decoded over
+/// the atlas's own search box, or a config of an LHS draw — the caller's
+/// seed-421 copy `sampled`, or a fresh draw of any other seed — decoded over
+/// the full box (`default_ranges`). The LHS draws are instruments over the
+/// whole box, not the search's, whatever box the atlas was drawn under.
+pub fn resolve_config(
     source: ConfigSource,
     index: usize,
-    atlas: &'a [Vec<f64>],
-    sampled: &'a [Vec<f64>],
-) -> Cow<'a, [f64]> {
+    atlas: &AtlasUnits,
+    sampled: &[Vec<f64>],
+) -> (WorldParameters, InitialDistribution) {
+    let full = default_ranges();
     match source {
-        ConfigSource::Atlas => Cow::Borrowed(&atlas[index]),
-        ConfigSource::SAMPLE => Cow::Borrowed(&sampled[index]),
-        ConfigSource::Sample(seed) => {
-            let dims = crate::search::default_ranges().len();
-            Cow::Owned(sample_draw(seed, dims).swap_remove(index))
-        }
+        ConfigSource::Atlas => atlas.decode(index),
+        ConfigSource::SAMPLE => decode(&sampled[index], &full),
+        ConfigSource::Sample(seed) => decode(&sample_draw(seed, full.len())[index], &full),
     }
 }
 
@@ -196,19 +198,29 @@ mod tests {
         assert_eq!(ConfigSource::Sample(9421).to_string(), "sample@9421");
     }
 
-    /// A key resolves to its own draw's vector: the caller's seed-421 copy
-    /// for `sample:i`, a fresh draw for `sample@S:i`, the atlas for `atlas:i`.
+    /// A sample key resolves to its own draw's world, over the full box: the
+    /// caller's seed-421 copy for `sample:i`, a fresh draw for `sample@S:i`.
+    /// An atlas key resolves over the atlas's own box.
     #[test]
-    fn a_key_resolves_to_the_vector_of_its_own_draw() {
-        let dims = crate::search::default_ranges().len();
-        let atlas = vec![vec![0.25; dims]];
-        let sampled = sampled_units(dims);
-        let other = sample_draw(9421, dims);
+    fn a_key_resolves_to_the_world_of_its_own_draw_and_box() {
+        let full = crate::search::default_ranges();
+        let sampled = sampled_units(full.len());
+        let other = sample_draw(9421, full.len());
         assert_ne!(other[12], sampled[12], "an independent draw");
-        let unit = |source, i| resolve_unit(source, i, &atlas, &sampled).into_owned();
-        assert_eq!(unit(ConfigSource::Sample(9421), 12), other[12]);
-        assert_eq!(unit(ConfigSource::SAMPLE, 12), sampled[12]);
-        assert_eq!(unit(ConfigSource::Atlas, 0), atlas[0]);
+        let world = |source, i| resolve_config(source, i, &AtlasUnits::default(), &sampled);
+        assert_eq!(
+            world(ConfigSource::Sample(9421), 12),
+            decode(&other[12], &full)
+        );
+        assert_eq!(world(ConfigSource::SAMPLE, 12), decode(&sampled[12], &full));
+        let narrowed = crate::search::narrowed_ranges();
+        let atlas = AtlasUnits::new(narrowed.clone(), vec![vec![0.25; full.len()]]);
+        let cell = resolve_config(ConfigSource::Atlas, 0, &atlas, &sampled);
+        assert_eq!(
+            cell,
+            decode(&[0.25; 32], &narrowed),
+            "atlas cells: their own box"
+        );
     }
 
     /// The seed-421 draw is the one every row on disk names as `sample:i`:
