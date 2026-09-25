@@ -90,8 +90,9 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_genesis_eval::guild::{RosterSnapshot, heterotroph_guilds};
-use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
+use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
 use explorers_search::search::{decode, default_ranges};
+use explorers_search::sweep::plan_tasks;
 use explorers_sim::World;
 use explorers_sim::event::EventKind;
 use explorers_sim::topology::{TopologyProjection, TrophicRole};
@@ -527,7 +528,8 @@ struct Artifact {
     runs: Vec<RunRecord>,
 }
 
-/// Parse `ROLE_EMERGENCE_CONFIGS` (`atlas:0,sample:12`); `None` when unset (the full run).
+/// Parse `ROLE_EMERGENCE_CONFIGS` (`atlas:0,sample:12`; `sample@S:i` names a
+/// config of the seed-`S` LHS draw); `None` when unset (the full run).
 fn parse_config_filter() -> Option<HashSet<(ConfigSource, usize)>> {
     std::env::var("ROLE_EMERGENCE_CONFIGS")
         .ok()
@@ -581,28 +583,37 @@ fn main() {
             config_filter.as_ref().map(|f| f.len())
         );
     }
-    let selected = |source: ConfigSource, idx: usize| -> bool {
-        config_filter
-            .as_ref()
-            .is_none_or(|f| f.contains(&(source, idx)))
-    };
+    // Every config the run covers, in the shared sweep order: the atlas and
+    // the seed-421 draw (the whole-space summary), then any config of another
+    // LHS draw the filter names (`sample@S:i`).
+    let all_configs = plan_tasks(
+        atlas_units.len(),
+        sampled_units.len(),
+        None,
+        &HashSet::new(),
+        None,
+    );
+    let other_draws: Vec<(ConfigSource, usize)> = config_filter
+        .as_ref()
+        .map(|f| plan_tasks(0, sampled_units.len(), Some(f), &HashSet::new(), None))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|&(source, _)| source != ConfigSource::SAMPLE)
+        .collect();
+    let covered: Vec<(ConfigSource, usize)> = all_configs.into_iter().chain(other_draws).collect();
 
     // Build the flat task list: every (config, seed) is an independent run.
     let mut tasks: Vec<(ConfigSource, usize, Vec<f64>, u64)> = Vec::new();
-    for (i, unit) in atlas_units.iter().enumerate() {
-        if !selected(ConfigSource::Atlas, i) {
+    for &(source, i) in &covered {
+        if config_filter
+            .as_ref()
+            .is_some_and(|f| !f.contains(&(source, i)))
+        {
             continue;
         }
+        let unit = resolve_unit(source, i, &atlas_units, &sampled_units);
         for s in 0..seeds {
-            tasks.push((ConfigSource::Atlas, i, unit.clone(), SEED_BASE + s));
-        }
-    }
-    for (i, unit) in sampled_units.iter().enumerate() {
-        if !selected(ConfigSource::Sample, i) {
-            continue;
-        }
-        for s in 0..seeds {
-            tasks.push((ConfigSource::Sample, i, unit.clone(), SEED_BASE + s));
+            tasks.push((source, i, unit.to_vec(), SEED_BASE + s));
         }
     }
 
@@ -637,34 +648,29 @@ fn main() {
 
     // --- Per-config aggregation ---
     let total_configs = atlas_units.len() + sampled_units.len();
-    let mut configs: Vec<ConfigSummary> = Vec::with_capacity(total_configs);
-    for (source, count) in [
-        (ConfigSource::Atlas, atlas_units.len()),
-        (ConfigSource::Sample, sampled_units.len()),
-    ] {
-        for idx in 0..count {
-            let cfg_runs: Vec<&RunRecord> = runs
-                .iter()
-                .filter(|r| r.source == source && r.config_index == idx)
-                .collect();
-            let seeds_surviving = cfg_runs.iter().filter(|r| r.survived).count();
-            let seeds_reaching = cfg_runs
-                .iter()
-                .filter(|r| r.t_first_all_three.is_some())
-                .count();
-            let config_first_all_three = cfg_runs.iter().filter_map(|r| r.t_first_all_three).min();
-            let config_first_persistent_guild =
-                cfg_runs.iter().filter_map(|r| r.t_persistent_guild).min();
-            configs.push(ConfigSummary {
-                source,
-                config_index: idx,
-                seeds_total: cfg_runs.len(),
-                seeds_surviving,
-                seeds_reaching_all_three: seeds_reaching,
-                config_first_all_three,
-                config_first_persistent_guild,
-            });
-        }
+    let mut configs: Vec<ConfigSummary> = Vec::with_capacity(covered.len());
+    for &(source, idx) in &covered {
+        let cfg_runs: Vec<&RunRecord> = runs
+            .iter()
+            .filter(|r| r.source == source && r.config_index == idx)
+            .collect();
+        let seeds_surviving = cfg_runs.iter().filter(|r| r.survived).count();
+        let seeds_reaching = cfg_runs
+            .iter()
+            .filter(|r| r.t_first_all_three.is_some())
+            .count();
+        let config_first_all_three = cfg_runs.iter().filter_map(|r| r.t_first_all_three).min();
+        let config_first_persistent_guild =
+            cfg_runs.iter().filter_map(|r| r.t_persistent_guild).min();
+        configs.push(ConfigSummary {
+            source,
+            config_index: idx,
+            seeds_total: cfg_runs.len(),
+            seeds_surviving,
+            seeds_reaching_all_three: seeds_reaching,
+            config_first_all_three,
+            config_first_persistent_guild,
+        });
     }
 
     // --- Run-level distribution ---
@@ -801,10 +807,7 @@ fn write_artifacts(artifact: &Artifact) {
     );
     let cell = |v: Option<u64>| v.map_or_else(String::new, |x| x.to_string());
     for r in &artifact.runs {
-        let source = match r.source {
-            ConfigSource::Atlas => "atlas",
-            ConfigSource::Sample => "sample",
-        };
+        let source = r.source.to_string();
         csv.push_str(&format!(
             "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             source,
@@ -855,7 +858,7 @@ mod tests {
     fn run_produces_a_record() {
         let ranges = default_ranges();
         let unit = vec![0.5f64; ranges.len()];
-        let rec = run(ConfigSource::Sample, 0, &unit, SEED_BASE);
+        let rec = run(ConfigSource::SAMPLE, 0, &unit, SEED_BASE);
         assert!(rec.ran_ticks > 0, "the run must advance at least one tick");
         assert!(
             rec.ran_ticks <= EXTENDED_HORIZON,
@@ -881,7 +884,7 @@ mod tests {
     fn run_records_role_series_consistent_with_terminal_counts_and_guild_read() {
         let ranges = default_ranges();
         let unit = vec![0.5f64; ranges.len()];
-        let rec = run(ConfigSource::Sample, 0, &unit, SEED_BASE);
+        let rec = run(ConfigSource::SAMPLE, 0, &unit, SEED_BASE);
         assert!(!rec.role_series.is_empty());
         for w in rec.role_series.windows(2) {
             assert!(w[0].tick < w[1].tick, "series ticks strictly increase");
@@ -942,8 +945,8 @@ mod tests {
         let f = parse_config_filter().expect("set var → Some");
         assert!(f.contains(&(ConfigSource::Atlas, 0)));
         assert!(f.contains(&(ConfigSource::Atlas, 3)));
-        assert!(f.contains(&(ConfigSource::Sample, 12)));
-        assert!(!f.contains(&(ConfigSource::Sample, 0)));
+        assert!(f.contains(&(ConfigSource::SAMPLE, 12)));
+        assert!(!f.contains(&(ConfigSource::SAMPLE, 0)));
         assert_eq!(f.len(), 3);
         unsafe { std::env::remove_var("ROLE_EMERGENCE_CONFIGS") };
         assert!(parse_config_filter().is_none(), "unset → None (full run)");

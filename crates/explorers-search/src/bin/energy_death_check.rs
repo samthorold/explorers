@@ -76,7 +76,7 @@ use explorers_genesis_eval::{
     EVALUATOR_EVENT_KINDS, ROSTER_FLOOR, RolloutObservations, SUSTAINABLE_FRACTION, early_stop,
     is_free_energy_dead, is_free_energy_dead_sustainable, sustainable_stock,
 };
-use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
+use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
 use explorers_search::search::{decode, default_ranges};
 use explorers_search::sweep::{
     DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
@@ -349,7 +349,9 @@ fn summarise(rows: &[ConfigRow]) -> Summary {
     horizons.sort_unstable();
     horizons.dedup();
     let of = |source: ConfigSource| -> Vec<&ConfigRow> {
-        rows.iter().filter(|r| r.source == source).collect()
+        rows.iter()
+            .filter(|r| r.source.is_sample() == source.is_sample())
+            .collect()
     };
     let all: Vec<&ConfigRow> = rows.iter().collect();
     let false_positive_cells: Vec<FalsePositive> = rows
@@ -375,7 +377,7 @@ fn summarise(rows: &[ConfigRow]) -> Summary {
         horizons,
         sustainable_fraction: SUSTAINABLE_FRACTION,
         atlas: count(&of(ConfigSource::Atlas)),
-        sample: count(&of(ConfigSource::Sample)),
+        sample: count(&of(ConfigSource::SAMPLE)),
         pooled: count(&all),
         passes: false_positive_cells.is_empty(),
         false_positive_cells,
@@ -383,7 +385,8 @@ fn summarise(rows: &[ConfigRow]) -> Summary {
 }
 
 /// Command line: `--limit N`, `--horizon T`, `--out PATH`, `--atlas PATH`,
-/// `--seeds N` (1..=8), `--configs atlas:0,sample:12`,
+/// `--seeds N` (1..=8), `--configs atlas:0,sample:12` (`sample@S:i`: the
+/// seed-`S` LHS draw),
 /// `--run-timeout-secs N` (simulation budget), `--eval-timeout-secs N`
 /// (evaluation budget), `--summary`.
 #[derive(Clone, Debug, PartialEq)]
@@ -590,14 +593,11 @@ fn main() {
         let start = Instant::now();
         let total = tasks.len();
         for (n, (source, idx)) in tasks.into_iter().enumerate() {
-            let unit = match source {
-                ConfigSource::Atlas => &atlas_units[idx],
-                ConfigSource::Sample => &sampled[idx],
-            };
+            let unit = resolve_unit(source, idx, &atlas_units, &sampled);
             let row = run_config(
                 source,
                 idx,
-                unit,
+                &unit,
                 args.seeds,
                 args.horizon,
                 args.run_timeout,
@@ -605,7 +605,7 @@ fn main() {
             );
             append_row(&args.out, &row);
             eprintln!(
-                "  {:?}:{idx} done ({}/{total}, {} at T, {} FP, {:.0}s elapsed)",
+                "  {}:{idx} done ({}/{total}, {} at T, {} FP, {:.0}s elapsed)",
                 source,
                 n + 1,
                 row.seeds.iter().filter(|s| s.reached_horizon).count(),
@@ -697,7 +697,7 @@ mod tests {
                 ],
             },
             ConfigRow {
-                source: ConfigSource::Sample,
+                source: ConfigSource::SAMPLE,
                 config_index: 7,
                 horizon: 100,
                 seeds: vec![
@@ -865,16 +865,16 @@ mod tests {
         assert_eq!(done.len(), 2);
         assert_eq!(
             plan_tasks(2, 2, None, &done, None),
-            vec![(ConfigSource::Atlas, 1), (ConfigSource::Sample, 1)]
+            vec![(ConfigSource::Atlas, 1), (ConfigSource::SAMPLE, 1)]
         );
         assert_eq!(
             plan_tasks(2, 2, None, &done, Some(1)),
             vec![(ConfigSource::Atlas, 1)]
         );
-        let filter: HashSet<_> = [(ConfigSource::Sample, 1)].into_iter().collect();
+        let filter: HashSet<_> = [(ConfigSource::SAMPLE, 1)].into_iter().collect();
         assert_eq!(
             plan_tasks(2, 2, Some(&filter), &done, None),
-            vec![(ConfigSource::Sample, 1)]
+            vec![(ConfigSource::SAMPLE, 1)]
         );
         std::fs::remove_dir_all(&dir).ok();
     }
