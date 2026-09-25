@@ -90,12 +90,14 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_genesis_eval::guild::{RosterSnapshot, heterotroph_guilds};
-use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
-use explorers_search::search::{decode, default_ranges};
-use explorers_search::sweep::plan_tasks;
-use explorers_sim::World;
+use explorers_search::config_source::{
+    ConfigSource, parse_selector, resolve_config, sampled_units,
+};
+use explorers_search::search::default_ranges;
+use explorers_search::sweep::{plan_tasks, read_atlas_units};
 use explorers_sim::event::EventKind;
 use explorers_sim::topology::{TopologyProjection, TrophicRole};
+use explorers_sim::{InitialDistribution, World, WorldParameters};
 
 /// The extended horizon — 4× the `SearchConfig::max_ticks = 500` search horizon, so
 /// a late emerger (tick 800) is distinguished from a monostable regime that never
@@ -222,9 +224,12 @@ struct RunRecord {
 /// (step, early-stop on empty / explosion), threading a `TopologyProjection` so
 /// realised diets can be read out, plus a predator set (agents that have drained
 /// living biomass) read straight from the event log.
-fn run(source: ConfigSource, config_index: usize, unit: &[f64], seed: u64) -> RunRecord {
-    let ranges = default_ranges();
-    let (params, dist) = decode(unit, &ranges);
+fn run(
+    source: ConfigSource,
+    config_index: usize,
+    (params, dist): (WorldParameters, InitialDistribution),
+    seed: u64,
+) -> RunRecord {
     // Capture the decoded radius / extent params before `params` is moved into the
     // world — these are the #423 H1 columns (cost vs query radius / small world).
     let sensing_range_coefficient = params.sensing_range_coefficient;
@@ -464,18 +469,6 @@ fn quartiles(values: &[u64]) -> (Option<f64>, Option<f64>, Option<f64>) {
     )
 }
 
-/// Minimal config-list deserialisation: we only need each live cell's `unit` vector
-/// (the atlas type is `Serialize`-only, and `unit` is all we replay).
-#[derive(serde::Deserialize)]
-struct AtlasFile {
-    cells: Vec<AtlasCellUnit>,
-}
-
-#[derive(serde::Deserialize)]
-struct AtlasCellUnit {
-    unit: Vec<f64>,
-}
-
 /// Per-config aggregation, keyed by (source, index). `config_first_all_three` is the
 /// earliest tick across the config's seeds at which all three roles appear — the
 /// regime's demonstrated capability. `seeds_reaching` exposes the per-seed
@@ -543,17 +536,12 @@ fn main() {
     let ranges = default_ranges();
     let dims = ranges.len();
 
-    // Source 1: the atlas live-cell unit vectors (the known coexisting regimes).
-    let atlas_units: Vec<Vec<f64>> = {
-        let contents = std::fs::read_to_string(&atlas_path)
-            .unwrap_or_else(|e| panic!("read {atlas_path}: {e}"));
-        let atlas: AtlasFile =
-            serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {atlas_path}: {e}"));
-        atlas.cells.into_iter().map(|c| c.unit).collect()
-    };
+    // Source 1: the atlas live cells (the known coexisting regimes), decoded
+    // over the atlas's own search box (#559).
+    let atlas_units = read_atlas_units(std::path::Path::new(&atlas_path));
 
     // Source 2: a deterministic low-discrepancy (LHS) sample of the unit cube,
-    // decoded via the same `decode` over `default_ranges`. Naturally includes
+    // decoded via `decode` over the full box, `default_ranges`. Naturally includes
     // monoculture / extinction regimes the atlas dead frontier cannot replay.
     let sampled_units = sampled_units(dims);
 
@@ -603,7 +591,12 @@ fn main() {
     let covered: Vec<(ConfigSource, usize)> = all_configs.into_iter().chain(other_draws).collect();
 
     // Build the flat task list: every (config, seed) is an independent run.
-    let mut tasks: Vec<(ConfigSource, usize, Vec<f64>, u64)> = Vec::new();
+    let mut tasks: Vec<(
+        ConfigSource,
+        usize,
+        (WorldParameters, InitialDistribution),
+        u64,
+    )> = Vec::new();
     for &(source, i) in &covered {
         if config_filter
             .as_ref()
@@ -611,9 +604,9 @@ fn main() {
         {
             continue;
         }
-        let unit = resolve_unit(source, i, &atlas_units, &sampled_units);
+        let world = resolve_config(source, i, &atlas_units, &sampled_units);
         for s in 0..seeds {
-            tasks.push((source, i, unit.to_vec(), SEED_BASE + s));
+            tasks.push((source, i, world.clone(), SEED_BASE + s));
         }
     }
 
@@ -629,8 +622,8 @@ fn main() {
     let log_step = (total_runs / 40).max(1);
     let runs: Vec<RunRecord> = tasks
         .par_iter()
-        .map(|(source, idx, unit, seed)| {
-            let record = run(*source, *idx, unit, *seed);
+        .map(|(source, idx, world, seed)| {
+            let record = run(*source, *idx, world.clone(), *seed);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n % log_step == 0 || n == total_runs {
                 eprintln!(
@@ -851,6 +844,7 @@ fn write_artifacts(artifact: &Artifact) {
 mod tests {
     use super::*;
     use explorers_genesis_eval::guild::GUILD_MIN_SIZE;
+    use explorers_search::search::decode;
 
     /// Coarse smoke check: the instrument runs a config and produces a record with
     /// the milestone fields populated (no brittle assertion on emergent *timings*).
@@ -858,7 +852,7 @@ mod tests {
     fn run_produces_a_record() {
         let ranges = default_ranges();
         let unit = vec![0.5f64; ranges.len()];
-        let rec = run(ConfigSource::SAMPLE, 0, &unit, SEED_BASE);
+        let rec = run(ConfigSource::SAMPLE, 0, decode(&unit, &ranges), SEED_BASE);
         assert!(rec.ran_ticks > 0, "the run must advance at least one tick");
         assert!(
             rec.ran_ticks <= EXTENDED_HORIZON,
@@ -884,7 +878,7 @@ mod tests {
     fn run_records_role_series_consistent_with_terminal_counts_and_guild_read() {
         let ranges = default_ranges();
         let unit = vec![0.5f64; ranges.len()];
-        let rec = run(ConfigSource::SAMPLE, 0, &unit, SEED_BASE);
+        let rec = run(ConfigSource::SAMPLE, 0, decode(&unit, &ranges), SEED_BASE);
         assert!(!rec.role_series.is_empty());
         for w in rec.role_series.windows(2) {
             assert!(w[0].tick < w[1].tick, "series ticks strictly increase");

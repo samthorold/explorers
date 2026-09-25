@@ -26,7 +26,10 @@ use std::time::{Duration, Instant};
 use explorers_genesis::{EvalConfig, FitnessBreakdown};
 use explorers_genesis_eval::{RolloutObservations, evaluate_from_log_within};
 
+use explorers_genesis::{InitialDistribution, WorldParameters};
+
 use crate::config_source::ConfigSource;
+use crate::search::{ParameterRange, SearchBoxMismatch, check_search_box, decode, default_ranges};
 
 /// The mode a run records when its step loop exhausted the simulation budget
 /// (`--run-timeout-secs`).
@@ -76,10 +79,13 @@ pub fn evaluate_within_budget(
     }
 }
 
-/// The atlas file's shape, as far as the sweeps read it: the unit vector of
-/// each live cell.
+/// The atlas file's shape, as far as the sweeps read it: the search box it
+/// was drawn under (absent on an atlas from before #559) and the unit vector
+/// of each live cell.
 #[derive(serde::Deserialize)]
 pub struct AtlasFile {
+    #[serde(default)]
+    pub search_box: Option<Vec<ParameterRange>>,
     pub cells: Vec<AtlasCellUnit>,
 }
 
@@ -88,13 +94,81 @@ pub struct AtlasCellUnit {
     pub unit: Vec<f64>,
 }
 
-/// The atlas's live-cell unit vectors, in file order.
-pub fn read_atlas_units(path: &Path) -> Vec<Vec<f64>> {
+/// An atlas's live cells as the research sweeps read them (#559): each
+/// cell's unit vector together with the search box it decodes over. A unit
+/// names a world only with its box, so the cells are decoded here, over the
+/// atlas's own box, and nowhere else.
+#[derive(Clone, Debug)]
+pub struct AtlasUnits {
+    search_box: Vec<ParameterRange>,
+    units: Vec<Vec<f64>>,
+}
+
+impl Default for AtlasUnits {
+    /// No atlas: no cells, over the full box.
+    fn default() -> Self {
+        AtlasUnits {
+            search_box: default_ranges(),
+            units: Vec::new(),
+        }
+    }
+}
+
+impl AtlasUnits {
+    /// Cells `units` drawn under `search_box`. Panics if a unit vector does
+    /// not span the box.
+    pub fn new(search_box: Vec<ParameterRange>, units: Vec<Vec<f64>>) -> Self {
+        for (i, unit) in units.iter().enumerate() {
+            assert_eq!(
+                unit.len(),
+                search_box.len(),
+                "atlas:{i} has a {}-dim unit vector but the atlas's search box has {} dims",
+                unit.len(),
+                search_box.len()
+            );
+        }
+        AtlasUnits { search_box, units }
+    }
+
+    /// The number of live cells.
+    pub fn len(&self) -> usize {
+        self.units.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.units.is_empty()
+    }
+
+    /// The search box the cells decode over: the one the atlas records, or
+    /// the full box `default_ranges()` for an atlas from before #559.
+    pub fn search_box(&self) -> &[ParameterRange] {
+        &self.search_box
+    }
+
+    /// The world live cell `index` names, decoded over the atlas's own box.
+    pub fn decode(&self, index: usize) -> (WorldParameters, InitialDistribution) {
+        decode(&self.units[index], &self.search_box)
+    }
+
+    /// Check that `ranges`, the box a reader would decode the cells over, is
+    /// the atlas's own (#559).
+    pub fn check_search_box(&self, ranges: &[ParameterRange]) -> Result<(), SearchBoxMismatch> {
+        check_search_box(&self.search_box, ranges)
+    }
+}
+
+/// The atlas's live cells, in file order, with the search box they decode
+/// over (legacy atlas: the full box). Panics if it cannot be read or parsed,
+/// or if a cell's unit vector does not span the box.
+pub fn read_atlas_units(path: &Path) -> AtlasUnits {
     let contents =
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let atlas: AtlasFile =
         serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
-    atlas.cells.into_iter().map(|c| c.unit).collect()
+    AtlasUnits::new(
+        atlas.search_box.unwrap_or_else(default_ranges),
+        atlas.cells.into_iter().map(|c| c.unit).collect(),
+    )
 }
 
 /// The `(source, config_index)` keys already present in a JSON-lines output

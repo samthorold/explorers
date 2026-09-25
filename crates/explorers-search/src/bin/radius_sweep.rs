@@ -97,7 +97,7 @@ impl Baseline {
                 });
                 (recipe.parameters, dist)
             }
-            Baseline::Atlas(i) => decode(&read_atlas_units(atlas)[*i], &default_ranges()),
+            Baseline::Atlas(i) => read_atlas_units(atlas).decode(*i),
             Baseline::Sample(i) => {
                 let ranges = default_ranges();
                 decode(&sampled_units(ranges.len())[*i], &ranges)

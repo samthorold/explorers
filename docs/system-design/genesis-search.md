@@ -39,6 +39,44 @@ native output *is* the atlas. And a covariance-adapting emitter learns the relev
 moves, retiring the manual dimension-fixing prefilter the surrogate optimiser needed. The specific
 emitter and archive are implementation; the illumination contract is the design.
 
+## The search box: a full-width core in raw coordinates, the rest narrowed
+
+A config is a point of the unit cube, and `decode` maps it onto 32 raw fields — 23 world parameters
+and 9 founder-distribution fields — each linearly over a range. The set of ranges is the **search
+box**. The full box, `default_ranges()`, spans every field's plausible range. The search runs by
+default over a **narrowed box** (`narrowed_ranges()`), which keeps the same 32 raw coordinates and
+narrows only the box.
+
+- **The core stays at full width.** `light_competition_radius`, `world_extent`,
+  `solar_flux_magnitude`, `initial_population_size`, `contact_range_coefficient`, `mean_kappa`,
+  `mean_mobility` and `reproduction_energy_threshold` hold the signal. On a held-out LHS draw an
+  eight-dim raw set matches the full 32 on every target, and greedy selection on either draw picks the
+  same eight on its own. Raw32 loses 0.13 R² on the live fraction between draws, and the core does not.
+  `trait_covariance` and `mean_heterotrophy` also stay wide, for the bloom-onset margin.
+- **The other 22 fields are narrowed, not frozen.** Each one's range is cut to a band of
+  `NARROWED_BAND_FRACTION` (0.25) of its full span. The band is centred on the value `decode` inherits
+  for that field from the known-viable baseline. The five founder-distribution fields inherit no value,
+  so their band is centred on the midpoint of the full range. A band that would cross a full-range
+  bound is slid back inside it, keeping its width. An effect that cannot be detected at n ≈ 200 is not
+  proven to be zero, so the band keeps some width and a weak effect stays findable. Carrying these
+  fields at full width would spend a covariance-adapting emitter's evaluations on directions with no
+  detectable effect. The width is a judgement call that the data does not settle, so it is set in one
+  constant.
+- **The coordinates stay raw.** A reduced `decode` over composite groups is rejected. The composites
+  do not beat their own ingredients held out, and a search over them would need an inverse map back to
+  raw fields.
+
+The evidence is [`462-held-out-check.md`](../research/462-held-out-check.md).
+
+**A unit vector names a world only together with its box.** The same `unit` decodes to different
+worlds under the full and the narrowed box. So the atlas records the box it was searched under
+(`search_box`), and every reader of atlas cells decodes them over that box: the recipe projection, the
+re-projection, and the research instruments (`atlas:i`). A reader that brings a box of its own is
+refused with an error when that box differs from the atlas's. It never silently decodes the wrong
+worlds. An atlas written before the box was recorded reads as the full box, which is the box it was
+searched under. The instruments' LHS draws (`sample:i`, `sample@S:i`) sample the whole full box, not
+the search's box, so they always decode over `default_ranges()`.
+
 ## The three behaviour axes are the failure-mode coordinates
 
 The atlas bins each surviving world on three **[behaviour axes](../../CONTEXT.md)**, each in `[0, 1]`.

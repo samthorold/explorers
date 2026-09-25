@@ -81,8 +81,10 @@ use explorers_genesis::{EvalConfig, FailureMode};
 use explorers_genesis_eval::{
     EVALUATOR_EVENT_KINDS, RolloutObservations, early_stop, sustainable_stock,
 };
-use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
-use explorers_search::search::{decode, default_ranges};
+use explorers_search::config_source::{
+    ConfigSource, parse_selector, resolve_config, sampled_units,
+};
+use explorers_search::search::default_ranges;
 use explorers_search::sweep::{
     DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
     done_configs, evaluate_within_budget, plan_tasks, read_atlas_units, read_rows,
@@ -501,15 +503,19 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
 
 /// One config: the seed ensemble run in parallel (rayon's indexed collect
 /// keeps seed order, so the row is bit-identical to the sequential map).
-fn run_config(source: ConfigSource, config_index: usize, unit: &[f64], args: &Args) -> ConfigRow {
-    let (params, dist) = decode(unit, &default_ranges());
+fn run_config(
+    source: ConfigSource,
+    config_index: usize,
+    (params, dist): &(WorldParameters, InitialDistribution),
+    args: &Args,
+) -> ConfigRow {
     let (horizon, band) = (args.horizon, args.band);
     let seeds: Vec<SeedRecord> = (0..args.seeds)
         .into_par_iter()
         .map(|s| {
             run_seed(
-                &params,
-                &dist,
+                params,
+                dist,
                 SEED_BASE + s,
                 horizon,
                 band,
@@ -613,8 +619,8 @@ fn main() {
         // so each row is appended as soon as it is complete and a killed
         // sweep loses at most one config.
         for (n, (source, idx)) in tasks.into_iter().enumerate() {
-            let unit = resolve_unit(source, idx, &atlas_units, &sampled);
-            let row = run_config(source, idx, &unit, &args);
+            let world = resolve_config(source, idx, &atlas_units, &sampled);
+            let row = run_config(source, idx, &world, &args);
             append_row(&args.out, &row);
             eprintln!(
                 "  {}:{idx} done ({}/{total}, {} live of {}, {:.0}s elapsed)",
@@ -643,7 +649,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use explorers_search::sweep::AtlasFile;
+    use explorers_search::sweep::read_atlas_units;
 
     #[test]
     fn args_default_to_the_full_sweep_and_accept_each_flag() {
@@ -772,9 +778,7 @@ mod tests {
 
     fn atlas_cell(index: usize) -> (WorldParameters, InitialDistribution) {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
-        let atlas: AtlasFile =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        decode(&atlas.cells[index].unit, &default_ranges())
+        read_atlas_units(std::path::Path::new(path)).decode(index)
     }
 
     #[test]
