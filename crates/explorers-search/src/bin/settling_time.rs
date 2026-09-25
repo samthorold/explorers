@@ -45,7 +45,8 @@
 //! Results are appended one JSON line per config to `--out` (default
 //! `target/settling-time.jsonl`). On start, configs already present in the file
 //! are skipped; `--limit N` runs at most `N` further configs and exits. Config
-//! order (atlas cells by index, then the seed-421 LHS sample by index) and the
+//! order (atlas cells by index, then the seed-421 LHS sample by index, then any
+//! other draw's `sample@S:i` a `--configs` selector names) and the
 //! seed block (`SEED_BASE + 0..8`) are fixed, and configs run sequentially with
 //! the seeds as the parallel unit, so a sweep driven as a loop of short calls
 //! produces a file byte-identical to a single uninterrupted run. Every row
@@ -80,7 +81,7 @@ use explorers_genesis::{EvalConfig, FailureMode};
 use explorers_genesis_eval::{
     EVALUATOR_EVENT_KINDS, RolloutObservations, early_stop, sustainable_stock,
 };
-use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
+use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
 use explorers_search::search::{decode, default_ranges};
 use explorers_search::sweep::{
     DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
@@ -347,7 +348,10 @@ null if the run did not reach the horizon or the tail mean is zero. Quantiles ar
 runs (mode none, reached the horizon), split by source.";
 
 fn summarise_source(rows: &[ConfigRow], source: ConfigSource) -> SourceSummary {
-    let rows: Vec<&ConfigRow> = rows.iter().filter(|r| r.source == source).collect();
+    let rows: Vec<&ConfigRow> = rows
+        .iter()
+        .filter(|r| r.source.is_sample() == source.is_sample())
+        .collect();
     let runs: Vec<&SeedRecord> = rows.iter().flat_map(|r| r.seeds.iter()).collect();
     let live: Vec<&SeedRecord> = runs.iter().copied().filter(|s| s.live).collect();
     let mut modes: BTreeMap<String, usize> = BTreeMap::new();
@@ -389,7 +393,7 @@ fn summarise(rows: &[ConfigRow]) -> Summary {
         horizons,
         bands,
         atlas: summarise_source(rows, ConfigSource::Atlas),
-        sample: summarise_source(rows, ConfigSource::Sample),
+        sample: summarise_source(rows, ConfigSource::SAMPLE),
     }
 }
 
@@ -609,14 +613,11 @@ fn main() {
         // so each row is appended as soon as it is complete and a killed
         // sweep loses at most one config.
         for (n, (source, idx)) in tasks.into_iter().enumerate() {
-            let unit = match source {
-                ConfigSource::Atlas => &atlas_units[idx],
-                ConfigSource::Sample => &sampled[idx],
-            };
-            let row = run_config(source, idx, unit, &args);
+            let unit = resolve_unit(source, idx, &atlas_units, &sampled);
+            let row = run_config(source, idx, &unit, &args);
             append_row(&args.out, &row);
             eprintln!(
-                "  {:?}:{idx} done ({}/{total}, {} live of {}, {:.0}s elapsed)",
+                "  {}:{idx} done ({}/{total}, {} live of {}, {:.0}s elapsed)",
                 source,
                 n + 1,
                 row.seeds.iter().filter(|s| s.live).count(),
@@ -722,7 +723,7 @@ mod tests {
                 ],
             },
             ConfigRow {
-                source: ConfigSource::Sample,
+                source: ConfigSource::SAMPLE,
                 config_index: 0,
                 horizon: 100,
                 band,
@@ -902,19 +903,19 @@ mod tests {
         let plan = plan_tasks(3, 2, None, &done, None);
         assert_eq!(
             plan,
-            vec![(ConfigSource::Atlas, 2), (ConfigSource::Sample, 1)],
+            vec![(ConfigSource::Atlas, 2), (ConfigSource::SAMPLE, 1)],
             "sweep order is atlas then sample, done configs skipped"
         );
         assert_eq!(
             plan_tasks(3, 2, None, &done, Some(1)),
             vec![(ConfigSource::Atlas, 2)]
         );
-        let filter: HashSet<_> = [(ConfigSource::Sample, 1), (ConfigSource::Atlas, 0)]
+        let filter: HashSet<_> = [(ConfigSource::SAMPLE, 1), (ConfigSource::Atlas, 0)]
             .into_iter()
             .collect();
         assert_eq!(
             plan_tasks(3, 2, Some(&filter), &done, None),
-            vec![(ConfigSource::Sample, 1)]
+            vec![(ConfigSource::SAMPLE, 1)]
         );
         std::fs::remove_dir_all(&dir).ok();
     }

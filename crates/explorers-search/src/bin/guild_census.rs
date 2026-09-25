@@ -51,7 +51,7 @@ use std::time::Instant;
 use explorers_genesis::{
     EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, RunConfig, run_ensemble,
 };
-use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
+use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
 use explorers_search::qd::{CoexistenceFractions, config_eval_from_ensemble};
 use explorers_search::search::{decode, default_ranges};
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
@@ -226,7 +226,10 @@ fn tally<'a>(rows: impl Iterator<Item = &'a CensusRow>) -> Tally {
 
 fn summarise(rows: &[CensusRow]) -> Summary {
     let source = |source: ConfigSource| {
-        let of = || rows.iter().filter(move |r| r.source == source);
+        let of = || {
+            rows.iter()
+                .filter(move |r| r.source.is_sample() == source.is_sample())
+        };
         SourceSummary {
             all: tally(of()),
             live: tally(of().filter(|r| r.cliff.is_none())),
@@ -234,13 +237,14 @@ fn summarise(rows: &[CensusRow]) -> Summary {
     };
     Summary {
         atlas: source(ConfigSource::Atlas),
-        sample: source(ConfigSource::Sample),
+        sample: source(ConfigSource::SAMPLE),
     }
 }
 
 /// Command line: `--limit N`, `--max-ticks T` (alias `--horizon`),
 /// `--ensemble N`, `--seed S`, `--output PATH` (alias `--out`), `--atlas
-/// PATH`, `--configs atlas:0,sample:12`, `--summary`.
+/// PATH`, `--configs atlas:0,sample:12` (`sample@S:i`: the seed-`S` LHS
+/// draw), `--summary`.
 #[derive(Clone, Debug, PartialEq)]
 struct Args {
     limit: Option<usize>,
@@ -398,15 +402,12 @@ fn main() {
         let start = Instant::now();
         let total = tasks.len();
         for (n, (source, idx)) in tasks.into_iter().enumerate() {
-            let unit = match source {
-                ConfigSource::Atlas => &atlas_units[idx],
-                ConfigSource::Sample => &sampled[idx],
-            };
+            let unit = resolve_unit(source, idx, &atlas_units, &sampled);
             let config_start = Instant::now();
-            let row = run_config(source, idx, unit, &args);
+            let row = run_config(source, idx, &unit, &args);
             append_row(&args.out, &row);
             eprintln!(
-                "  {:?}:{idx} done ({}/{total}): decomposer {:.2} consumer {:.2} coexistence {:.2} cliff {} ({:.1}s; {:.0}s elapsed)",
+                "  {}:{idx} done ({}/{total}): decomposer {:.2} consumer {:.2} coexistence {:.2} cliff {} ({:.1}s; {:.0}s elapsed)",
                 source,
                 n + 1,
                 row.decomposer_fraction,
@@ -505,9 +506,9 @@ mod tests {
                 run(0.7, None, 0.0, true, false),
             ],
         };
-        let r = census_row(ConfigSource::Sample, 7, 2000, 1000, &result);
+        let r = census_row(ConfigSource::SAMPLE, 7, 2000, 1000, &result);
         let eval = config_eval_from_ensemble(&result);
-        assert_eq!(r.source, ConfigSource::Sample);
+        assert_eq!(r.source, ConfigSource::SAMPLE);
         assert_eq!(r.config_index, 7);
         assert_eq!(r.sample_count, 4);
         assert_eq!(r.decomposer_fraction, eval.decomposer_fraction);
@@ -580,8 +581,8 @@ mod tests {
             row(Atlas, 2, 0.4, 0.4, 0.6, Some("monoculture")),
             // decomposer at 1.0, coexisting, dead
             row(Atlas, 3, 1.0, 0.2, 0.5, Some("energy_death")),
-            // a sample row: consumer only, coexisting, live
-            row(Sample, 0, 0.0, 0.6, 1.0, None),
+            // a sample row (of any draw): consumer only, coexisting, live
+            row(Sample(9421), 0, 0.0, 0.6, 1.0, None),
         ];
         let s = summarise(&rows);
 

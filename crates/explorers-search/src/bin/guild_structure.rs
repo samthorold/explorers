@@ -495,7 +495,7 @@ fn main() {
     if !args.summary_only {
         let listed: HashSet<(ConfigSource, usize)> = GUILD_SEEDS
             .iter()
-            .map(|s| (ConfigSource::Sample, s.config))
+            .map(|s| (ConfigSource::SAMPLE, s.config))
             .filter(|key| args.configs.as_ref().is_none_or(|f| f.contains(key)))
             .collect();
         let sampled = sampled_units(default_ranges().len());

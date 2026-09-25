@@ -48,7 +48,8 @@
 //! `--limit N` runs at most `N` further configs. Fixed order and seed block,
 //! so a loop of short foreground calls produces a file byte-identical to one
 //! uninterrupted run (`explorers_search::sweep`). Subset selectors:
-//! `--configs atlas:0,sample:12` and `--seeds 2`.
+//! `--configs atlas:0,sample:12` and `--seeds 2`; `sample@S:i` names a config
+//! of the seed-`S` LHS draw (`config_source`).
 //!
 //! A (config, seed) run's step loop has a wall-clock budget, the
 //! **simulation budget** (`--run-timeout-secs`, default 300): a knife-edge
@@ -78,7 +79,7 @@ use std::time::{Duration, Instant};
 use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
-use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
+use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
 use explorers_search::search::{SearchConfig, decode, default_ranges};
 use explorers_search::sweep::{
     DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
@@ -647,14 +648,11 @@ fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
     let start = Instant::now();
     let total = tasks.len();
     for (n, (source, idx)) in tasks.iter().copied().enumerate() {
-        let unit = match source {
-            ConfigSource::Atlas => &atlas_units[idx],
-            ConfigSource::Sample => &sampled[idx],
-        };
+        let unit = resolve_unit(source, idx, atlas_units, sampled);
         let row = run_config(
             source,
             idx,
-            unit,
+            &unit,
             args.seeds,
             args.horizon,
             args.run_timeout,
@@ -672,7 +670,7 @@ fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
             })
             .count();
         eprintln!(
-            "  {:?}:{idx} done ({}/{total}, {} survived, {} timed out, {} violating, {:.0}s elapsed)",
+            "  {}:{idx} done ({}/{total}, {} survived, {} timed out, {} violating, {:.0}s elapsed)",
             source,
             n + 1,
             row.seeds
@@ -757,10 +755,7 @@ fn summarise(rows: &[ConfigRow]) -> Summary {
             .iter()
             .filter(|r| r.source == ConfigSource::Atlas)
             .count(),
-        sampled_configs: rows
-            .iter()
-            .filter(|r| r.source == ConfigSource::Sample)
-            .count(),
+        sampled_configs: rows.iter().filter(|r| r.source.is_sample()).count(),
         total_runs: runs.len(),
         runs_survived: mode("survived"),
         runs_extinct: mode("extinction"),
@@ -1087,7 +1082,7 @@ mod resume_tests {
             vec![
                 (ConfigSource::Atlas, 0),
                 (ConfigSource::Atlas, 1),
-                (ConfigSource::Sample, 0)
+                (ConfigSource::SAMPLE, 0)
             ]
         );
         assert!(rows.iter().all(|r| r.seeds.len() == 2 && r.horizon == 20));
@@ -1098,7 +1093,7 @@ mod resume_tests {
     fn a_run_past_its_wall_clock_budget_reads_as_a_timeout_and_is_not_checked() {
         let dims = default_ranges().len();
         let unit = vec![0.5; dims];
-        let row = run_config(ConfigSource::Sample, 0, &unit, 1, 20, Duration::ZERO);
+        let row = run_config(ConfigSource::SAMPLE, 0, &unit, 1, 20, Duration::ZERO);
         assert_eq!(row.seeds[0].terminal_mode, "timeout");
         let summary = summarise(&[row]);
         assert_eq!(summary.runs_timed_out, 1);
@@ -1110,7 +1105,7 @@ mod resume_tests {
     fn an_eval_timed_out_run_is_unfinished_counted_apart_and_not_checked() {
         let dims = default_ranges().len();
         let unit = vec![0.5; dims];
-        let mut row = run_config(ConfigSource::Sample, 0, &unit, 1, 20, Duration::MAX);
+        let mut row = run_config(ConfigSource::SAMPLE, 0, &unit, 1, 20, Duration::MAX);
         // A row recorded under the evaluation budget's mode, carrying a
         // violation that would be listed were the run read as finished.
         row.seeds[0].terminal_mode = EVAL_TIMEOUT_MODE.to_string();

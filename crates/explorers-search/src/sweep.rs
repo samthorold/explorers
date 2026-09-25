@@ -2,8 +2,9 @@
 //! (`settling_time`, `energy_death_check`, `energy_bound_check`,
 //! `permanence_crosscheck`): one row per config appended to an
 //! output file as soon as it is complete, configs already present skipped on
-//! start, a fixed sweep order (atlas cells by index, then the LHS sample by
-//! index) and a `--limit` cap — so a sweep driven as a loop of short
+//! start, a fixed sweep order (atlas cells by index, then the seed-421 LHS
+//! sample by index, then any config of another draw a `sample@S:i` selector
+//! names, by seed and index) and a `--limit` cap — so a sweep driven as a loop of short
 //! foreground calls produces a file byte-identical to one uninterrupted run.
 //!
 //! A (config, seed) run in these sweeps carries two wall-clock budgets
@@ -119,8 +120,10 @@ pub fn done_configs(path: &Path) -> HashSet<(ConfigSource, usize)> {
 }
 
 /// The configs an invocation runs, in the fixed sweep order (atlas cells
-/// first, then the LHS sample, each by index), minus `done`, restricted to
-/// `filter` when one is given, and capped at `limit`.
+/// first, then the seed-421 LHS sample, each by index, then any config of
+/// another draw that `filter` names, by draw seed and index), minus `done`,
+/// restricted to `filter` when one is given, and capped at `limit`. Every
+/// draw has `sample_len` configs; an index past it is never planned.
 pub fn plan_tasks(
     atlas_len: usize,
     sample_len: usize,
@@ -129,10 +132,25 @@ pub fn plan_tasks(
     limit: Option<usize>,
 ) -> Vec<(ConfigSource, usize)> {
     let atlas = (0..atlas_len).map(|i| (ConfigSource::Atlas, i));
-    let sample = (0..sample_len).map(|i| (ConfigSource::Sample, i));
+    let sample = (0..sample_len).map(|i| (ConfigSource::SAMPLE, i));
+    let mut other_draws: Vec<(u64, usize)> = filter
+        .into_iter()
+        .flatten()
+        .filter_map(|&(source, i)| match source {
+            ConfigSource::Sample(seed) if source != ConfigSource::SAMPLE && i < sample_len => {
+                Some((seed, i))
+            }
+            _ => None,
+        })
+        .collect();
+    other_draws.sort_unstable();
+    let other_draws = other_draws
+        .into_iter()
+        .map(|(seed, i)| (ConfigSource::Sample(seed), i));
     atlas
         .chain(sample)
         .filter(|key| filter.is_none_or(|f| f.contains(key)))
+        .chain(other_draws)
         .filter(|key| !done.contains(key))
         .take(limit.unwrap_or(usize::MAX))
         .collect()
@@ -167,4 +185,48 @@ pub fn append_row<R: serde::Serialize>(path: &Path, row: &R) {
     line.push('\n');
     file.write_all(line.as_bytes())
         .unwrap_or_else(|e| panic!("append {}: {e}", path.display()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A filter may name configs of another LHS draw (`sample@S:i`): they
+    /// are planned after the default order, by draw and index, and are
+    /// skipped once done like any other config.
+    #[test]
+    fn a_filter_naming_another_draw_plans_its_configs_after_the_default_order() {
+        use ConfigSource::{Atlas, Sample};
+        let filter: HashSet<_> = [
+            (Sample(9421), 3),
+            (Sample(9421), 0),
+            (Sample(77), 1),
+            (ConfigSource::SAMPLE, 1),
+            (Atlas, 0),
+            (Sample(9421), 5), // past the draw's length: dropped, as for sample:5
+        ]
+        .into_iter()
+        .collect();
+        let none = HashSet::new();
+        assert_eq!(
+            plan_tasks(2, 4, Some(&filter), &none, None),
+            vec![
+                (Atlas, 0),
+                (ConfigSource::SAMPLE, 1),
+                (Sample(77), 1),
+                (Sample(9421), 0),
+                (Sample(9421), 3),
+            ]
+        );
+        let done: HashSet<_> = [(Sample(9421), 0)].into_iter().collect();
+        assert_eq!(
+            plan_tasks(2, 4, Some(&filter), &done, Some(4)),
+            vec![
+                (Atlas, 0),
+                (ConfigSource::SAMPLE, 1),
+                (Sample(77), 1),
+                (Sample(9421), 3),
+            ]
+        );
+    }
 }

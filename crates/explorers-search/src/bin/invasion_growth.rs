@@ -94,7 +94,8 @@
 //! order-stable per-seed collect, so the artifact is byte-identical across
 //! runs. `target/invasion-growth.json` (gitignored) plus a stdout summary.
 //! Subset selectors: `INVASION_GROWTH_CELLS=atlas:3,sample:55` (a bare
-//! integer is an atlas index; the unfiltered run is the atlas only),
+//! integer is an atlas index; `sample@S:i` is a config of the seed-`S` LHS
+//! draw; the unfiltered run is the atlas only),
 //! `INVASION_GROWTH_SEEDS=2`, `INVASION_GROWTH_ARMS=intact|removed|both`,
 //! `INVASION_GROWTH_T_INJ=2000` (resident phase; the window follows it
 //! unless `INVASION_GROWTH_WINDOW` is set), `INVASION_GROWTH_OUT=<path>`.
@@ -107,6 +108,7 @@
 //! ticks) at the #507 horizon; the 500-tick run was ~15 minutes in release,
 //! so budget hours, or subset it (`INVASION_GROWTH_CELLS`, `_SEEDS`).
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -117,9 +119,10 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_genesis_eval::guild::{RoleGuilds, RosterSnapshot, role_guilds};
-use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
+use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
 use explorers_search::qd::COEXISTENCE_FLOOR;
 use explorers_search::search::{SearchConfig, decode, default_ranges};
+use explorers_search::sweep::plan_tasks;
 use explorers_sim::event::{Event, EventKind};
 use explorers_sim::topology::{TopologyProjection, TrophicRole};
 use explorers_sim::{Agent, TraitVector, World};
@@ -1552,20 +1555,17 @@ fn parse_cell_filter_from(raw: &str) -> HashSet<(ConfigSource, usize)> {
     parse_selector(raw, "INVASION_GROWTH_CELLS", Some(ConfigSource::Atlas))
 }
 
-/// The configs to run, in a fixed order (atlas, then the LHS draw). Unset
-/// filter means the full atlas run; `sample:` configs run only when named.
+/// The configs to run, in a fixed order (atlas, then the seed-421 LHS draw,
+/// then any other draw a `sample@S:i` names — the shared sweep order). Unset
+/// filter means the full atlas run; `sample` configs run only when named.
 fn select_tasks(
     atlas_len: usize,
     sample_len: usize,
     filter: Option<&HashSet<(ConfigSource, usize)>>,
 ) -> Vec<(ConfigSource, usize)> {
-    let atlas = (0..atlas_len).map(|i| (ConfigSource::Atlas, i));
     match filter {
-        None => atlas.collect(),
-        Some(f) => atlas
-            .chain((0..sample_len).map(|i| (ConfigSource::Sample, i)))
-            .filter(|t| f.contains(t))
-            .collect(),
+        None => (0..atlas_len).map(|i| (ConfigSource::Atlas, i)).collect(),
+        Some(f) => plan_tasks(atlas_len, sample_len, Some(f), &HashSet::new(), None),
     }
 }
 
@@ -1625,10 +1625,13 @@ fn main() {
         .par_iter()
         .map(|&(source, i)| {
             let (unit, meta) = match source {
-                ConfigSource::Atlas => (&atlas.cells[i].unit, Some(atlas.cells[i].meta())),
-                ConfigSource::Sample => (&sampled[i], None),
+                ConfigSource::Atlas => (
+                    Cow::Borrowed(atlas.cells[i].unit.as_slice()),
+                    Some(atlas.cells[i].meta()),
+                ),
+                source @ ConfigSource::Sample(_) => (resolve_unit(source, i, &[], &sampled), None),
             };
-            let record = evaluate_cell(source, i, unit, meta, seeds, t_inj, window, &arms);
+            let record = evaluate_cell(source, i, &unit, meta, seeds, t_inj, window, &arms);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n.is_multiple_of(log_step) || n == total {
                 eprintln!(
@@ -2107,18 +2110,20 @@ mod tests {
         }
     }
 
-    /// `INVASION_GROWTH_CELLS` selects from both sources; unset runs the
+    /// `INVASION_GROWTH_CELLS` selects from both sources (and any LHS draw,
+    /// `sample@S:i`); unset runs the
     /// atlas (the full run) and never the LHS draw.
     #[test]
     fn selector_picks_atlas_and_sample_configs_and_defaults_to_the_atlas() {
-        let filter = parse_cell_filter_from("atlas:1,sample:55,0");
+        let filter = parse_cell_filter_from("atlas:1,sample@9421:2,sample:55,0");
         let tasks = select_tasks(3, 60, Some(&filter));
         assert_eq!(
             tasks,
             vec![
                 (ConfigSource::Atlas, 0),
                 (ConfigSource::Atlas, 1),
-                (ConfigSource::Sample, 55)
+                (ConfigSource::SAMPLE, 55),
+                (ConfigSource::Sample(9421), 2)
             ]
         );
         let all = select_tasks(3, 60, None);

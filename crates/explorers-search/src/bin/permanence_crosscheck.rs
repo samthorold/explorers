@@ -49,6 +49,8 @@
 //! Same sourcing as `energy_bound_check.rs`: the atlas live-cell `unit` vectors
 //! decoded via `decode` over `default_ranges`, plus the seed-421 LHS draw of 200
 //! configs `role_emergence.rs` uses, so `sample:i` coincides across instruments.
+//! `sample@S:i` names the `i`-th config of the seed-`S` draw instead (#553);
+//! its row's `source` is `"sample@S"`, a label no seed-421 row can have.
 //! Seeds are a fixed contiguous block per config. Each (config, seed) run is
 //! independent, so the rayon collect is order-stable and a row is
 //! byte-identical across runs. `World::new` floors founder traits at zero
@@ -69,7 +71,13 @@
 //! skipped; `--limit N` runs at most `N` further configs. Fixed order and
 //! seed block, so a loop of short foreground calls produces a file
 //! byte-identical to one uninterrupted run (`explorers_search::sweep`).
-//! Subset selectors: `--configs atlas:0,sample:12` and `--seeds 2`.
+//! Subset selectors: `--configs atlas:0,sample:12,sample@9421:3` and
+//! `--seeds 2`.
+//!
+//! Each seed's row records `peak_population` and `peak_tick`, the first tick
+//! at which the population reached that peak (0 when the founders are the
+//! peak). `peak_tick` is absent on unfinished seeds, and on rows written
+//! before it existed.
 //!
 //! A (config, seed) run carries two wall-clock budgets (#523). The
 //! **simulation budget** (`--run-timeout-secs`, default 300) bounds the step
@@ -92,6 +100,12 @@
 //!
 //! Full run: 282 configs × 8 seeds × the search horizon (`SearchConfig::max_ticks`,
 //! 2000 ticks since #507); hours of sim time, hence the chunked shape.
+//!
+//! An independent draw (#553, the held-out check of #462) is the same sweep
+//! over the 200 configs of another seed, into its own file:
+//!
+//!   ./target/release/permanence_crosscheck --out target/permanence-crosscheck-9421.jsonl \
+//!     --eval-timeout-secs 600 --configs "$(seq -s, -f 'sample@9421:%g' 0 199)"
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -101,7 +115,7 @@ use rayon::prelude::*;
 
 use explorers_genesis::{EvalConfig, FailureMode};
 use explorers_genesis_eval::{EVALUATOR_EVENT_KINDS, RolloutObservations};
-use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
+use explorers_search::config_source::{ConfigSource, parse_selector, resolve_unit, sampled_units};
 use explorers_search::search::{SearchConfig, decode, default_ranges};
 use explorers_search::sweep::{
     DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
@@ -446,6 +460,12 @@ struct SeedOutcome {
     /// pile route, read off the same log the failure mode is.
     decomposer_guild: bool,
     peak_population: usize,
+    /// The first tick at which the population reached `peak_population`
+    /// (0 when the founders are the peak). Absent on an unfinished seed
+    /// (`timeout` / `eval_timeout`), like the breakdown-derived fields, and
+    /// on rows written before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peak_tick: Option<u64>,
     /// First tick with no consumer alive while producers still stood, if any.
     first_tick_without_consumers: Option<u64>,
     first_tick_without_producers: Option<u64>,
@@ -817,6 +837,7 @@ fn run_seed(
     let founders = world.agents().len();
     let mut observations = RolloutObservations::with_capacity(horizon as usize);
     let mut peak_population = founders;
+    let mut peak_tick = 0;
     let mut population_after_tick1 = 0;
     let mut producers_after_tick1 = 0;
     let mut consumers_after_tick1 = 0;
@@ -838,7 +859,10 @@ fn run_seed(
         if producers == 0 && consumers > 0 && first_tick_without_producers.is_none() {
             first_tick_without_producers = Some(world.tick());
         }
-        peak_population = peak_population.max(world.agents().len());
+        if world.agents().len() > peak_population {
+            peak_population = world.agents().len();
+            peak_tick = world.tick();
+        }
         if world.agents().is_empty() {
             break;
         }
@@ -876,6 +900,7 @@ fn run_seed(
         terminal_consumers,
         decomposer_guild,
         peak_population,
+        peak_tick: (!is_unfinished(mode)).then_some(peak_tick),
         first_tick_without_consumers,
         first_tick_without_producers,
     }
@@ -1091,7 +1116,7 @@ fn summarise(records: &[ConfigRecord]) -> Summary {
             .count(),
         sampled_configs: records
             .iter()
-            .filter(|r| r.source == ConfigSource::Sample)
+            .filter(|r| matches!(r.source, ConfigSource::Sample(_)))
             .count(),
         configs_run: records.len(),
         total_runs: records.iter().map(|r| r.seeds.len()).sum(),
@@ -1104,7 +1129,7 @@ fn summarise(records: &[ConfigRecord]) -> Summary {
 }
 
 /// Command line: `--limit N`, `--horizon T`, `--out PATH`, `--atlas PATH`,
-/// `--seeds N` (1..=8), `--configs atlas:0,sample:12`,
+/// `--seeds N` (1..=8), `--configs atlas:0,sample:12,sample@9421:3`,
 /// `--run-timeout-secs N` (simulation budget), `--eval-timeout-secs N`
 /// (evaluation budget), `--summary`.
 #[derive(Clone, Debug, PartialEq)]
@@ -1209,14 +1234,11 @@ fn sweep(args: &Args, atlas_units: &[Vec<f64>], sampled: &[Vec<f64>]) -> usize {
     let start = Instant::now();
     let total = tasks.len();
     for (n, (source, idx)) in tasks.iter().copied().enumerate() {
-        let unit = match source {
-            ConfigSource::Atlas => &atlas_units[idx],
-            ConfigSource::Sample => &sampled[idx],
-        };
+        let unit = resolve_unit(source, idx, atlas_units, sampled);
         let record = evaluate_config(
             source,
             idx,
-            unit,
+            &unit,
             args.seeds,
             args.horizon,
             args.run_timeout,
@@ -1580,6 +1602,7 @@ mod tests {
             terminal_consumers: consumers,
             decomposer_guild: false,
             peak_population: 40,
+            peak_tick: Some(12),
             first_tick_without_consumers: None,
             first_tick_without_producers: None,
         }
@@ -1751,7 +1774,7 @@ mod tests {
         let ranges = default_ranges();
         let unit = vec![0.5; ranges.len()];
         let record = evaluate_config(
-            ConfigSource::Sample,
+            ConfigSource::SAMPLE,
             0,
             &unit,
             2,
@@ -1770,6 +1793,7 @@ mod tests {
 #[cfg(test)]
 mod resume_tests {
     use super::*;
+    use explorers_search::config_source::sample_draw;
 
     fn tmp(name: &str) -> PathBuf {
         let dir =
@@ -1803,6 +1827,55 @@ mod resume_tests {
         assert_eq!(args.run_timeout, Duration::from_secs(7));
         assert_eq!(args.eval_timeout, Duration::from_secs(11));
         assert!(args.summary_only);
+    }
+
+    /// `--configs` names a config of any LHS draw: `sample:i` is the
+    /// seed-421 draw every row on disk means, `sample@S:i` the seed-`S` one.
+    #[test]
+    fn configs_name_a_config_of_another_draw() {
+        let args = parse_args(["--configs", "sample:3,sample@9421:12"].map(String::from));
+        let expect: HashSet<_> = [(ConfigSource::SAMPLE, 3), (ConfigSource::Sample(9421), 12)]
+            .into_iter()
+            .collect();
+        assert_eq!(args.configs, Some(expect));
+    }
+
+    /// A config of another draw runs that draw's vector, and its row is
+    /// labelled with the seed, so it can never be read as a seed-421 row —
+    /// on resume, or when rows are joined across files.
+    #[test]
+    fn a_config_of_another_draw_runs_its_own_vector_under_a_seeded_label() {
+        let dims = default_ranges().len();
+        let args = Args {
+            limit: None,
+            horizon: 20,
+            out: tmp("other-draw.jsonl"),
+            atlas: PathBuf::new(),
+            seeds: 1,
+            configs: Some([(ConfigSource::Sample(9421), 4)].into_iter().collect()),
+            run_timeout: Duration::MAX,
+            eval_timeout: Duration::MAX,
+            summary_only: false,
+        };
+        let seed_421 = vec![vec![0.6; dims]; 5];
+        assert_eq!(sweep(&args, &[], &seed_421), 1);
+        assert_eq!(sweep(&args, &[], &seed_421), 0, "resumed: already done");
+        let line = std::fs::read_to_string(&args.out).unwrap();
+        assert!(
+            line.starts_with(r#"{"source":"sample@9421","config_index":4,"#),
+            "{line}"
+        );
+        let expected = evaluate_config(
+            ConfigSource::Sample(9421),
+            4,
+            &sample_draw(9421, dims)[4],
+            1,
+            20,
+            Duration::MAX,
+            Duration::MAX,
+        );
+        assert_eq!(line.trim_end(), serde_json::to_string(&expected).unwrap());
+        std::fs::remove_file(&args.out).ok();
     }
 
     /// The resumable contract: a sweep split into `--limit` calls appends
@@ -1847,7 +1920,7 @@ mod resume_tests {
             vec![
                 (ConfigSource::Atlas, 0),
                 (ConfigSource::Atlas, 1),
-                (ConfigSource::Sample, 0)
+                (ConfigSource::SAMPLE, 0)
             ]
         );
         assert!(rows.iter().all(|r| r.seeds.len() == 2 && r.horizon == 20));
@@ -1862,7 +1935,7 @@ mod resume_tests {
         let dims = default_ranges().len();
         let unit = vec![0.5; dims];
         let record = evaluate_config(
-            ConfigSource::Sample,
+            ConfigSource::SAMPLE,
             0,
             &unit,
             1,
@@ -1891,7 +1964,7 @@ mod resume_tests {
         let dims = default_ranges().len();
         let unit = vec![0.5; dims];
         let record = evaluate_config(
-            ConfigSource::Sample,
+            ConfigSource::SAMPLE,
             0,
             &unit,
             1,
@@ -1921,6 +1994,70 @@ mod resume_tests {
         assert_eq!(summary.a1.unobserved, 1);
     }
 
+    /// `peak_tick` is the first tick at which the population reaches its
+    /// peak (tick 0 is the founders), pinned against a replay of the same
+    /// world. `sample:14` over 40 ticks reaches its peak of 27 at tick 12 and
+    /// again at tick 16: the tie resolves to the first.
+    #[test]
+    fn peak_tick_is_the_first_tick_reaching_the_peak_population() {
+        let ranges = default_ranges();
+        let (params, dist) = decode(&sampled_units(ranges.len())[14], &ranges);
+        let horizon = 40;
+        let outcome = run_seed(
+            &params,
+            &dist,
+            SEED_BASE,
+            horizon,
+            Duration::MAX,
+            Duration::MAX,
+        );
+        assert_eq!(outcome.termination_tick, horizon);
+        let mut world = World::new(params.clone(), dist.clone(), SEED_BASE);
+        let mut series = vec![world.agents().len()];
+        while world.tick() < horizon {
+            world.step();
+            series.push(world.agents().len());
+        }
+        let ticks_at_peak: Vec<usize> = (0..series.len())
+            .filter(|&t| series[t] == outcome.peak_population)
+            .collect();
+        assert_eq!(outcome.peak_population, *series.iter().max().unwrap());
+        assert_eq!(
+            (outcome.peak_population, &ticks_at_peak[..]),
+            (27, &[12, 16][..])
+        );
+        assert_eq!(outcome.peak_tick, Some(12));
+        let line = serde_json::to_string(&outcome).unwrap();
+        assert!(
+            line.contains(r#""peak_population":27,"peak_tick":12,"#),
+            "{line}"
+        );
+    }
+
+    /// An unfinished seed has no breakdown, so its `peak_tick` is absent —
+    /// not zero — like the other breakdown-derived fields; rows written
+    /// before `peak_tick` existed still parse.
+    #[test]
+    fn peak_tick_is_absent_on_unfinished_seeds_and_old_rows_parse() {
+        let ranges = default_ranges();
+        let (params, dist) = decode(&vec![0.5; ranges.len()], &ranges);
+        for (run, eval) in [
+            (Duration::ZERO, Duration::MAX),
+            (Duration::MAX, Duration::ZERO),
+        ] {
+            let outcome = run_seed(&params, &dist, SEED_BASE, 20, run, eval);
+            assert!(is_unfinished(&outcome.mode), "{}", outcome.mode);
+            assert_eq!(outcome.peak_tick, None);
+            let line = serde_json::to_string(&outcome).unwrap();
+            assert!(!line.contains("peak_tick"), "{line}");
+        }
+        let finished = run_seed(&params, &dist, SEED_BASE, 20, Duration::MAX, Duration::MAX);
+        let mut old: serde_json::Value = serde_json::to_value(&finished).unwrap();
+        old.as_object_mut().unwrap().remove("peak_tick");
+        let parsed: SeedOutcome = serde_json::from_value(old).unwrap();
+        assert_eq!(parsed.peak_tick, None);
+    }
+
     /// A row with no evaluation timeout serialises exactly as it did before
     /// the evaluation budget existed: no new key.
     #[test]
@@ -1928,7 +2065,7 @@ mod resume_tests {
         let dims = default_ranges().len();
         let unit = vec![0.5; dims];
         let record = evaluate_config(
-            ConfigSource::Sample,
+            ConfigSource::SAMPLE,
             0,
             &unit,
             1,
