@@ -1,6 +1,6 @@
 use rand::Rng;
 
-use explorers_genesis::{InitialDistribution, WorldParameters};
+use explorers_genesis::{InitialDistribution, RolloutBudget, WorldParameters};
 use explorers_sim::TraitVector;
 
 use std::path::Path;
@@ -8,7 +8,7 @@ use std::path::Path;
 use rand_chacha::ChaCha8Rng;
 
 use crate::checkpoint::{CheckpointError, resume_qd, run_qd_checkpointed};
-use crate::qd::{Atlas, GenerationReport, QdConfig, run_qd_observed};
+use crate::qd::{Atlas, GenerationReport, QdConfig, SEARCH_ROLLOUT_BUDGET, run_qd_observed};
 
 /// The genesis search output is the [`Atlas`] (CONTEXT.md) — the live archive of
 /// behaviour cells plus the dead frontier. `SearchResult` is kept as the public
@@ -52,6 +52,9 @@ pub struct SearchConfig {
     /// how many guaranteed high-carcass starting points to inject so the atlas's
     /// nutrient-lockup layer is reached by running (it cannot be prefiltered).
     pub carcass_seed_count: usize,
+    /// Wall-clock budget on each seed rollout (`rollout_budget` in
+    /// [`QdConfig`], #562).
+    pub rollout_budget: RolloutBudget,
 }
 
 impl Default for SearchConfig {
@@ -67,6 +70,7 @@ impl Default for SearchConfig {
             prefilter_crosscheck_fraction: 0.05,
             early_stop_crosscheck_fraction: 0.05,
             carcass_seed_count: 2,
+            rollout_budget: SEARCH_ROLLOUT_BUDGET,
         }
     }
 }
@@ -575,6 +579,7 @@ impl SearchConfig {
             prefilter_crosscheck_fraction: self.prefilter_crosscheck_fraction,
             early_stop_crosscheck_fraction: self.early_stop_crosscheck_fraction,
             carcass_seed_count: self.carcass_seed_count,
+            rollout_budget: self.rollout_budget,
         }
     }
 }

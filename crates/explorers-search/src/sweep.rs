@@ -40,8 +40,12 @@ pub const TIMEOUT_MODE: &str = "timeout";
 /// is neither a failure classification nor [`TIMEOUT_MODE`].
 pub const EVAL_TIMEOUT_MODE: &str = "eval_timeout";
 
+/// The command-line flag that sets the simulation budget, in seconds — in
+/// the research sweeps and, per rollout, in the genesis search (#562).
+pub const RUN_TIMEOUT_FLAG: &str = "--run-timeout-secs";
+
 /// The command-line flag that sets the evaluation budget, in seconds, in
-/// every bin that has `--run-timeout-secs`.
+/// every bin that has [`RUN_TIMEOUT_FLAG`].
 pub const EVAL_TIMEOUT_FLAG: &str = "--eval-timeout-secs";
 
 /// The evaluation budget when [`EVAL_TIMEOUT_FLAG`] is not given.

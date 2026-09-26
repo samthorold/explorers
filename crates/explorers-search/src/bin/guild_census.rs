@@ -513,6 +513,7 @@ mod tests {
                 run(0.5, None, 3.0, false, true),
                 run(0.7, None, 0.0, true, false),
             ],
+            unfinished: 0,
         };
         let r = census_row(ConfigSource::SAMPLE, 7, 2000, 1000, &result);
         let eval = config_eval_from_ensemble(&result);

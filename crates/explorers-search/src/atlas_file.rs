@@ -14,6 +14,8 @@
 
 use std::path::{Path, PathBuf};
 
+use explorers_genesis::RolloutBudget;
+
 use crate::qd::{
     Atlas, AtlasProvenance, CoexistenceFloor, RefinedProjection, RefinementConfig,
     refined_best_recipe,
@@ -100,6 +102,9 @@ pub struct ReprojectSettings {
     /// Which coexistence predicate the floor reads ([`RefinementConfig::floor`],
     /// #538). Every floor's fraction is reported whichever picks.
     pub floor: CoexistenceFloor,
+    /// Wall-clock budget on each refinement rollout
+    /// ([`RefinementConfig::rollout_budget`], #562).
+    pub rollout_budget: RolloutBudget,
 }
 
 /// Refine the atlas's top live cells and project the recipe exactly as the run
@@ -116,6 +121,7 @@ pub fn reproject(
         ensemble_size: settings.ensemble_size,
         max_ticks,
         floor: settings.floor,
+        rollout_budget: settings.rollout_budget,
     };
     Ok(refined_best_recipe(
         atlas,
@@ -190,6 +196,7 @@ mod tests {
             seed: None,
             max_ticks: None,
             floor: CoexistenceFloor::Plain,
+            rollout_budget: RolloutBudget::UNBOUNDED,
         }
     }
 
@@ -369,6 +376,7 @@ mod tests {
             ensemble_size: 1,
             max_ticks: config.max_ticks,
             floor: CoexistenceFloor::Plain,
+            ..RefinementConfig::default()
         };
         let in_run = refined_best_recipe(&atlas, &config.ranges, &refinement, seed);
         let path = scratch("narrowed-reproject").join("atlas.json");
@@ -517,6 +525,7 @@ mod tests {
             ensemble_size: 2,
             max_ticks: config.max_ticks,
             floor: CoexistenceFloor::Plain,
+            ..RefinementConfig::default()
         };
         let in_run = refined_best_recipe(&atlas, &default_ranges(), &refinement, seed);
 
