@@ -14,7 +14,19 @@
 //! - [`explorers_genesis::run_ensemble`] — the unchanged seed-ensemble rollout.
 //!   The three behaviour axes and the decomposer-guild signal now ride on the
 //!   per-seed [`FitnessBreakdown`] (issue #365), so the descriptors are read off
-//!   `run_ensemble`'s output — no `run_single` mirror.
+//!   `run_ensemble`'s output — no `run_single` mirror. The search calls it
+//!   under a per-rollout wall-clock budget (`run_ensemble_within`, #562).
+//!
+//! ## Rollout budgets and reproducibility
+//!
+//! Every seed rollout, in the search and in refinement, runs under a
+//! [`RolloutBudget`] with the research sweeps' semantics
+//! (`--run-timeout-secs` / `--eval-timeout-secs`). A seed that exhausts it is
+//! unfinished: it enters neither the archive nor the dead frontier and is only
+//! counted. The search is deterministic in `(config, base_seed, rng)` exactly
+//! while no budget fires; wall clock decides which seeds are unfinished, so a
+//! budget that fires breaks bit-reproducibility, and a resumed search makes
+//! the same decisions only when budgets are unhit.
 //!
 //! ## Soft archive (CMA-MAE)
 //!
@@ -36,8 +48,8 @@
 use rand::Rng;
 
 use explorers_genesis::{
-    EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, FitnessBreakdown, RunConfig,
-    RunResult, run_ensemble,
+    EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, FitnessBreakdown, RolloutBudget,
+    RunConfig, RunResult, run_ensemble_within,
 };
 use explorers_sim::WorldRecipe;
 
@@ -960,6 +972,12 @@ pub struct Atlas {
     /// Ensemble rollouts the prefilter skipped (the budget saved) — one per
     /// a-priori death that was *not* drawn into the agreement cross-check sample.
     pub rollouts_skipped: usize,
+    /// Seed rollouts that exhausted a wall-clock budget (#562): no verdict, so
+    /// in neither the archive nor the dead frontier. A config is read off its
+    /// finished seeds, and placed nowhere if none finished. Written only when
+    /// non-zero, so an atlas no budget touched keeps its pre-#562 bytes.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rollouts_unfinished: usize,
     /// Prefilter disagreements surfaced: configs the prefilter proved dead that a
     /// cross-check rollout nonetheless showed alive. A non-empty list localises a
     /// mis-drawn gate (viability.md, *Place in the validation triad*); it is
@@ -1211,8 +1229,12 @@ pub struct RefinedCell {
     /// The refined median fitness over the larger ensemble (reported for audit;
     /// never the ranking key — that stays the recorded fitness).
     pub refined_median_fitness: f32,
-    /// The refinement ensemble size behind the refined fraction.
+    /// The finished refinement seeds behind the refined fraction.
     pub refined_sample_count: u32,
+    /// Refinement seeds that exhausted a wall-clock budget (#562), excluded
+    /// from the refined fraction's denominator.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub refined_unfinished: usize,
     /// Whether the refined fraction under the projection's floor clears
     /// [`COEXISTENCE_FLOOR`].
     pub clears_floor: bool,
@@ -1223,6 +1245,7 @@ struct RefinedEval {
     fractions: CoexistenceFractions,
     median_fitness: f32,
     sample_count: u32,
+    unfinished: usize,
     decomposer_fraction: f32,
     consumer_fraction: f32,
 }
@@ -1260,6 +1283,8 @@ pub struct RefinementConfig {
     /// Which coexistence predicate the floor reads (#538). A selection setting:
     /// it never changes which cells are refined, on which seeds.
     pub floor: CoexistenceFloor,
+    /// Wall-clock budget on each refinement rollout (#562).
+    pub rollout_budget: RolloutBudget,
 }
 
 impl Default for RefinementConfig {
@@ -1269,6 +1294,7 @@ impl Default for RefinementConfig {
             ensemble_size: REFINE_ENSEMBLE_SIZE,
             max_ticks: 2000,
             floor: CoexistenceFloor::Plain,
+            rollout_budget: SEARCH_ROLLOUT_BUDGET,
         }
     }
 }
@@ -1328,6 +1354,7 @@ fn project_with_refinement(
                 refined_consumer_fraction: eval.consumer_fraction,
                 refined_median_fitness: eval.median_fitness,
                 refined_sample_count: eval.sample_count,
+                refined_unfinished: eval.unfinished,
                 clears_floor: eval.fractions.under(floor) >= COEXISTENCE_FLOOR,
             }
         })
@@ -1392,12 +1419,19 @@ pub fn refined_best_recipe(
             let refine_seed = base_seed
                 .wrapping_add(REFINEMENT_SEED_OFFSET)
                 .wrapping_add(rank as u64 * config.ensemble_size as u64);
-            let result = run_ensemble(&wp, &dist, &ensemble_config, refine_seed);
+            let result = run_ensemble_within(
+                &wp,
+                &dist,
+                &ensemble_config,
+                refine_seed,
+                config.rollout_budget,
+            );
             let eval = config_eval_from_ensemble(&result);
             RefinedEval {
                 fractions: CoexistenceFractions::of_seeds(&result.run_results),
                 median_fitness: eval.median_fitness,
                 sample_count: eval.sample_count,
+                unfinished: result.unfinished,
                 decomposer_fraction: eval.decomposer_fraction,
                 consumer_fraction: eval.consumer_fraction,
             }
@@ -1445,6 +1479,25 @@ pub struct QdConfig {
     /// carcass axis to breed toward the cliff. 0 disables carcass direction (the
     /// historical random-bootstrap behaviour).
     pub carcass_seed_count: usize,
+    /// Wall-clock budget on each seed rollout (#562). Not part of what a
+    /// checkpoint must match: it changes the atlas only when it fires.
+    pub rollout_budget: RolloutBudget,
+}
+
+/// The search's and the refinement's default [`RolloutBudget`] (#562):
+/// generous against the seconds a `T = 2000` rollout usually takes, so only a
+/// stalled one — a dense world — ever reaches it, and the committed atlas
+/// reproduces unbudgeted.
+pub const SEARCH_ROLLOUT_BUDGET: RolloutBudget = RolloutBudget {
+    simulation: std::time::Duration::from_secs(DEFAULT_SEARCH_TIMEOUT_SECS),
+    evaluation: std::time::Duration::from_secs(DEFAULT_SEARCH_TIMEOUT_SECS),
+};
+
+/// Both halves of [`SEARCH_ROLLOUT_BUDGET`], in seconds.
+pub const DEFAULT_SEARCH_TIMEOUT_SECS: u64 = 600;
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 impl Default for QdConfig {
@@ -1460,6 +1513,7 @@ impl Default for QdConfig {
             prefilter_crosscheck_fraction: 0.05,
             early_stop_crosscheck_fraction: 0.05,
             carcass_seed_count: 2,
+            rollout_budget: SEARCH_ROLLOUT_BUDGET,
         }
     }
 }
@@ -1486,6 +1540,8 @@ pub struct GenerationReport {
     pub rolled_out: usize,
     /// Configs in this generation's batch the a-priori prefilter skipped.
     pub skipped: usize,
+    /// Seed rollouts in this generation that exhausted their budget (#562).
+    pub unfinished: usize,
     /// Wall-clock spent on this generation.
     pub generation_elapsed: std::time::Duration,
     /// Wall-clock since the search began.
@@ -1512,7 +1568,11 @@ impl std::fmt::Display for GenerationReport {
             self.skipped,
             clock(self.generation_elapsed),
             clock(self.elapsed),
-        )
+        )?;
+        if self.unfinished > 0 {
+            write!(f, "  unfinished {}", self.unfinished)?;
+        }
+        Ok(())
     }
 }
 
@@ -1575,6 +1635,8 @@ pub(crate) struct SearchState<R> {
     /// samples and the parent selection draw from it, in that order.
     rng: R,
     rollouts_skipped: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    rollouts_unfinished: usize,
     prefilter_disagreements: Vec<PrefilterDisagreement>,
     bifurcation_disagreements: Vec<BifurcationDisagreement>,
     early_stop_crosschecks: usize,
@@ -1604,6 +1666,7 @@ impl<R: Rng> SearchState<R> {
             emitter,
             rng,
             rollouts_skipped: 0,
+            rollouts_unfinished: 0,
             prefilter_disagreements: Vec::new(),
             bifurcation_disagreements: Vec::new(),
             early_stop_crosschecks: 0,
@@ -1639,6 +1702,7 @@ impl<R: Rng> SearchState<R> {
 
         while self.generation <= config.generations {
             let generation = self.generation;
+            let unfinished_before = self.rollouts_unfinished;
             let (improvements, rolled_out, skipped) =
                 self.evaluate_batch(config, base_seed, &ensemble_config);
 
@@ -1662,6 +1726,7 @@ impl<R: Rng> SearchState<R> {
                 best_fitness: self.archive.best_fitness(),
                 rolled_out,
                 skipped,
+                unfinished: self.rollouts_unfinished - unfinished_before,
                 generation_elapsed: elapsed - elapsed_before,
                 elapsed,
             });
@@ -1721,17 +1786,28 @@ impl<R: Rng> SearchState<R> {
         // Run only the rollouts that are actually needed: cleared configs, and the
         // gated configs sampled for the cross-check. Gated-and-skipped configs run
         // no sim — that is the saved budget.
-        let evals: Vec<Option<ConfigEval>> = self
+        let evals: Vec<(Option<ConfigEval>, usize)> = self
             .batch
             .iter()
             .zip(seeds.iter())
             .zip(gates.iter())
             .map(|((unit, &seed), &(cliff, crosscheck))| {
                 if cliff.is_some() && !crosscheck {
-                    None
+                    (None, 0)
                 } else {
                     let (wp, dist) = decode(unit, &config.ranges);
-                    let result = run_ensemble(&wp, &dist, ensemble_config, seed);
+                    let result = run_ensemble_within(
+                        &wp,
+                        &dist,
+                        ensemble_config,
+                        seed,
+                        config.rollout_budget,
+                    );
+                    // A config no seed finished has no verdict (#562): it is
+                    // placed nowhere, and only its unfinished seeds count.
+                    if result.run_results.is_empty() {
+                        return (None, result.unfinished);
+                    }
                     let mut eval = config_eval_from_ensemble(&result);
                     // The early-stop cross-check rides on every rolled-out
                     // ensemble: seeds a dead-pool gate stopped that the carry
@@ -1746,10 +1822,12 @@ impl<R: Rng> SearchState<R> {
                     eval.predicted_oscillation_distance =
                         oscillation_distance(&wp, &dist.mean_traits);
                     eval.predicted_branching_distance = branching_distance(&wp, &dist.mean_traits);
-                    Some(eval)
+                    (Some(eval), result.unfinished)
                 }
             })
             .collect();
+        self.rollouts_unfinished += evals.iter().map(|&(_, n)| n).sum::<usize>();
+        let evals: Vec<Option<ConfigEval>> = evals.into_iter().map(|(e, _)| e).collect();
 
         // Route each config and compute the emitter's improvement signal.
         let improvements: Vec<f32> = self
@@ -1793,7 +1871,10 @@ impl<R: Rng> SearchState<R> {
                         // before placing it (the check is per-config, independent of
                         // whether it wins its cell). Disagreements are surfaced with a
                         // regime tag, never swallowed.
-                        let ev = eval.as_ref().expect("cleared config was rolled out");
+                        // An unfinished config never improves a cell.
+                        let Some(ev) = eval.as_ref() else {
+                            return 0.0;
+                        };
                         self.bifurcation_disagreements
                             .extend(bifurcation_crosscheck(ev));
                         self.archive.insert(unit, ev)
@@ -1802,7 +1883,10 @@ impl<R: Rng> SearchState<R> {
             })
             .collect();
 
-        let rolled_out = evals.iter().filter(|e| e.is_some()).count();
+        let rolled_out = gates
+            .iter()
+            .filter(|&&(cliff, crosscheck)| cliff.is_none() || crosscheck)
+            .count();
         (
             improvements,
             rolled_out,
@@ -1876,6 +1960,7 @@ impl<R> SearchState<R> {
             dead_frontier: self.archive.dead_frontier(),
             dead_frontier_apriori: self.archive.dead_frontier_apriori(),
             rollouts_skipped: self.rollouts_skipped,
+            rollouts_unfinished: self.rollouts_unfinished,
             prefilter_disagreements: self.prefilter_disagreements.clone(),
             bifurcation_disagreements: self.bifurcation_disagreements.clone(),
             early_stop_crosschecks: self.early_stop_crosschecks,
@@ -1989,6 +2074,7 @@ mod tests {
             dead_frontier: frontier,
             dead_frontier_apriori: std::collections::BTreeMap::new(),
             rollouts_skipped: 0,
+            rollouts_unfinished: 0,
             prefilter_disagreements: Vec::new(),
             bifurcation_disagreements: Vec::new(),
             early_stop_crosschecks: 0,
@@ -2718,6 +2804,7 @@ mod tests {
             skipped: 4,
             generation_elapsed: Duration::from_secs(192),
             elapsed: Duration::from_secs(3 * 3600 + 12 * 60 + 5),
+            unfinished: 0,
         };
         assert_eq!(
             report.to_string(),
@@ -2991,6 +3078,7 @@ mod tests {
         let result = EnsembleResult {
             median_fitness: 0.0,
             run_results,
+            unfinished: 0,
         };
         let eval = config_eval_from_ensemble(&result);
         assert_eq!(eval.coexistence_fraction, 3.0 / 8.0);
@@ -3028,6 +3116,7 @@ mod tests {
         let result = EnsembleResult {
             median_fitness: 0.0,
             run_results,
+            unfinished: 0,
         };
         assert_eq!(
             fractions.under(CoexistenceFloor::Plain),
@@ -3072,6 +3161,7 @@ mod tests {
         let result = EnsembleResult {
             median_fitness: 0.0,
             run_results,
+            unfinished: 0,
         };
         let unit = vec![0.5; 3];
         let check = early_stop_crosscheck(&result, &unit);
@@ -3099,6 +3189,7 @@ mod tests {
         let result = EnsembleResult {
             median_fitness: 0.5,
             run_results,
+            unfinished: 0,
         };
         let eval = config_eval_from_ensemble(&result);
         assert_eq!(eval.consumer_fraction, 3.0 / 4.0);
@@ -3162,6 +3253,7 @@ mod tests {
             },
             median_fitness,
             sample_count: 32,
+            unfinished: 0,
             decomposer_fraction: 0.0,
             consumer_fraction: 0.0,
         }
@@ -3259,6 +3351,7 @@ mod tests {
                 },
                 median_fitness: 0.5,
                 sample_count: 32,
+                unfinished: 0,
                 decomposer_fraction: decomposer,
                 consumer_fraction: 0.0,
             }
@@ -3409,6 +3502,102 @@ mod tests {
         assert!(projection.refined.is_empty());
     }
 
+    fn no_simulation_budget() -> RolloutBudget {
+        RolloutBudget {
+            simulation: std::time::Duration::ZERO,
+            ..RolloutBudget::UNBOUNDED
+        }
+    }
+
+    #[test]
+    fn slow_an_unfinished_rollout_enters_neither_the_archive_nor_the_frontier() {
+        // #562: a rollout past its budget is no verdict — not a cell, not a
+        // death — only a count.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = QdConfig {
+            ensemble_size: 2,
+            max_ticks: 20,
+            batch: 4,
+            generations: 1,
+            prefilter_crosscheck_fraction: 0.0,
+            rollout_budget: no_simulation_budget(),
+            ..QdConfig::default()
+        };
+        let atlas = run_qd(&config, 42, &mut ChaCha8Rng::seed_from_u64(42));
+
+        let total = config.batch * (config.generations + 1);
+        let rolled_out = total - atlas.rollouts_skipped;
+        assert!(rolled_out > 0, "some config must clear the prefilter");
+        assert_eq!(atlas.coverage, 0);
+        assert_eq!(atlas.dead_frontier, atlas.dead_frontier_apriori);
+        assert_eq!(
+            atlas.rollouts_unfinished,
+            rolled_out * config.ensemble_size as usize
+        );
+    }
+
+    #[test]
+    fn slow_an_unhit_budget_leaves_the_atlas_byte_identical() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let budgeted = QdConfig {
+            ensemble_size: 2,
+            max_ticks: 20,
+            batch: 4,
+            generations: 1,
+            ..QdConfig::default()
+        };
+        let unbudgeted = QdConfig {
+            rollout_budget: RolloutBudget::UNBOUNDED,
+            ..budgeted.clone()
+        };
+        let a = run_qd(&budgeted, 42, &mut ChaCha8Rng::seed_from_u64(42));
+        let b = run_qd(&unbudgeted, 42, &mut ChaCha8Rng::seed_from_u64(42));
+        let (a, b) = (
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap(),
+        );
+        assert_eq!(a, b);
+        // No budget fired, so the atlas carries no trace of one: the same
+        // bytes an atlas from before #562 has.
+        assert!(!a.contains("rollouts_unfinished"));
+    }
+
+    #[test]
+    fn slow_refinement_reports_unfinished_seeds_per_cell() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = crate::search::SearchConfig {
+            ensemble_size: 2,
+            max_ticks: 15,
+            batch: 6,
+            generations: 1,
+            ..Default::default()
+        };
+        let atlas = crate::search::run_search(&config, 7, &mut ChaCha8Rng::seed_from_u64(42));
+        assert!(!atlas.cells.is_empty(), "need a live cell to refine");
+
+        let rconfig = RefinementConfig {
+            top_k: 2,
+            ensemble_size: 3,
+            max_ticks: config.max_ticks,
+            rollout_budget: no_simulation_budget(),
+            ..RefinementConfig::default()
+        };
+        let projection = refined_best_recipe(&atlas, &config.ranges, &rconfig, 7);
+        assert!(!projection.refined.is_empty());
+        for cell in &projection.refined {
+            assert_eq!(cell.refined_unfinished, 3);
+            // Excluded from the denominator: nothing finished, nothing counted.
+            assert_eq!(cell.refined_sample_count, 0);
+            assert!(!cell.clears_floor);
+        }
+    }
+
     #[test]
     fn slow_refined_best_recipe_is_deterministic_in_seed() {
         // #404 determinism: a fixed (atlas, config, base_seed) yields a
@@ -3431,6 +3620,7 @@ mod tests {
             ensemble_size: 4,
             max_ticks: config.max_ticks,
             floor: CoexistenceFloor::Plain,
+            ..RefinementConfig::default()
         };
         let p1 = refined_best_recipe(&atlas, &config.ranges, &rconfig, 7);
         let p2 = refined_best_recipe(&atlas, &config.ranges, &rconfig, 7);

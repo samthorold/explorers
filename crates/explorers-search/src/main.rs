@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -7,12 +8,13 @@ use rand_chacha::ChaCha8Rng;
 use explorers_search::atlas_file::{ReprojectSettings, read_atlas, reproject, write_atlas};
 use explorers_search::checkpoint::inspect;
 use explorers_search::qd::{
-    COEXISTENCE_FLOOR, CoexistenceFloor, REFINE_ENSEMBLE_SIZE, REFINE_TOP_K, RefinedProjection,
-    RefinementConfig, refined_best_recipe,
+    COEXISTENCE_FLOOR, CoexistenceFloor, DEFAULT_SEARCH_TIMEOUT_SECS, REFINE_ENSEMBLE_SIZE,
+    REFINE_TOP_K, RefinedProjection, RefinementConfig, SEARCH_ROLLOUT_BUDGET, refined_best_recipe,
 };
 use explorers_search::search::{
     SearchConfig, resume_search, run_search_checkpointed, run_search_observed,
 };
+use explorers_search::sweep::{EVAL_TIMEOUT_FLAG, RUN_TIMEOUT_FLAG};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -30,6 +32,7 @@ fn main() {
     let mut checkpoint_path: Option<PathBuf> = None;
     let mut resume_path: Option<PathBuf> = None;
     let mut reproject_path: Option<PathBuf> = None;
+    let mut rollout_budget = SEARCH_ROLLOUT_BUDGET;
     // Flags that configure the search itself, refused on --reproject (which
     // runs no search) rather than silently ignored.
     let mut search_flags: Vec<&str> = Vec::new();
@@ -102,6 +105,14 @@ fn main() {
                 i += 1;
                 reproject_path = Some(PathBuf::from(&args[i]));
             }
+            flag if flag == RUN_TIMEOUT_FLAG => {
+                i += 1;
+                rollout_budget.simulation = Duration::from_secs(args[i].parse().unwrap());
+            }
+            flag if flag == EVAL_TIMEOUT_FLAG => {
+                i += 1;
+                rollout_budget.evaluation = Duration::from_secs(args[i].parse().unwrap());
+            }
             "--help" | "-h" => {
                 print_usage();
                 return;
@@ -129,6 +140,7 @@ fn main() {
             seed,
             max_ticks,
             floor: coexistence_floor,
+            rollout_budget,
         };
         let reprojected = read_atlas(&path).and_then(|atlas| {
             eprintln!(
@@ -154,6 +166,7 @@ fn main() {
         max_ticks,
         batch,
         generations,
+        rollout_budget,
         ..Default::default()
     };
 
@@ -165,6 +178,11 @@ fn main() {
     eprintln!("  Ensemble size: {ensemble_size}");
     eprintln!("  Max ticks: {max_ticks}");
     eprintln!("  Seed: {seed}");
+    eprintln!(
+        "  Rollout budget: {}s simulation, {}s evaluation",
+        rollout_budget.simulation.as_secs(),
+        rollout_budget.evaluation.as_secs()
+    );
 
     // One line per completed generation (#529): a multi-hour regeneration is
     // otherwise silent between the header above and the summary below. With a
@@ -223,10 +241,13 @@ fn main() {
         }
     };
 
+    // Written before refinement, so a stopped or failed refinement leaves the
+    // search intact for `--reproject` (#562).
     if let Err(e) = write_atlas(&atlas, &output_path) {
         eprintln!("{e}");
         std::process::exit(1);
     }
+    eprintln!("Atlas written to {}", output_path.display());
 
     // Gated elite refinement (#404): re-evaluate the top-K live cells at a larger,
     // independent-seeded ensemble before projecting, so the high-variance in-run n=5
@@ -237,6 +258,7 @@ fn main() {
         ensemble_size: refine_ensemble,
         max_ticks: config.max_ticks,
         floor: coexistence_floor,
+        rollout_budget,
     };
     eprintln!(
         "\nRefining top-{} live cells at ensemble n={} (independent seeds)...",
@@ -245,8 +267,6 @@ fn main() {
     let projection = refined_best_recipe(&atlas, &config.ranges, &refinement, seed);
 
     report_projection(&projection, refine_top_k, &recipe_output_path);
-
-    eprintln!("Atlas written to {}", output_path.display());
 
     // Atlas summary: coverage / QD-score, the top live cells, and the dead
     // frontier (the failure tally) — the search's output is a map, not a ranked
@@ -293,6 +313,13 @@ fn main() {
         eprintln!("  {cliff:<22} {n}");
     }
     eprintln!("  {:<22} {dead_total}", "(total dead configs)");
+    if atlas.rollouts_unfinished > 0 {
+        eprintln!(
+            "  ({} seed rollout(s) exhausted the rollout budget: no verdict, in neither the \
+             cells nor the frontier)",
+            atlas.rollouts_unfinished
+        );
+    }
 
     // Predicted bifurcation coordinates (#372): the closed-form distance-to-
     // bifurcation readings F validated (#358 Hopf, #359 branching), wired in as
@@ -373,7 +400,7 @@ fn report_projection(
             let f = r.refined_fractions;
             eprintln!(
                 "  cell {:?}: fitness={:.4} coexist {:.2} → {:.2} | +guild {:.2}/{:.2}/{:.2} | \
-                 guild {:.2}/{:.2} (n={}) refined_fit={:.4}{}",
+                 guild {:.2}/{:.2} (n={}{}) refined_fit={:.4}{}",
                 r.cell,
                 r.recorded_fitness,
                 r.recorded_coexistence_fraction,
@@ -384,6 +411,11 @@ fn report_projection(
                 r.refined_decomposer_fraction,
                 r.refined_consumer_fraction,
                 r.refined_sample_count,
+                if r.refined_unfinished > 0 {
+                    format!(", {} unfinished", r.refined_unfinished)
+                } else {
+                    String::new()
+                },
                 r.refined_median_fitness,
                 if r.clears_floor { " ✓" } else { "" },
             );
@@ -452,6 +484,13 @@ fn print_usage() {
     eprintln!("                      hold that heterotroph guild (#494 option 3). Selection");
     eprintln!("                      only: the refined cells and seeds are the same under");
     eprintln!("                      every floor, and all four fractions are reported.");
+    eprintln!("  {RUN_TIMEOUT_FLAG} N  Wall-clock budget on each rollout's simulation, search and");
+    eprintln!("                      refinement alike (default: {DEFAULT_SEARCH_TIMEOUT_SECS}). A");
+    eprintln!("                      rollout past it is unfinished: no verdict, counted apart,");
+    eprintln!("                      in neither the cells nor the frontier. Reproducibility");
+    eprintln!("                      holds only while no budget fires.");
+    eprintln!("  {EVAL_TIMEOUT_FLAG} N Wall-clock budget on each rollout's terminal evaluation");
+    eprintln!("                      (default: {DEFAULT_SEARCH_TIMEOUT_SECS}); as above.");
     eprintln!("  --checkpoint PATH   Write the search state to PATH at every generation");
     eprintln!("                      boundary (atomically), so an interrupted search can be");
     eprintln!("                      resumed. Refuses to overwrite an existing PATH.");

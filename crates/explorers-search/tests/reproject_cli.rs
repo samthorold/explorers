@@ -57,6 +57,7 @@ fn reproject_writes_the_recipe_the_writing_run_projected() {
             ensemble_size: 2,
             max_ticks: config.max_ticks,
             floor: CoexistenceFloor::Plain,
+            ..RefinementConfig::default()
         },
         SEED,
     );
@@ -112,6 +113,7 @@ fn reproject_keeps_the_fallback_warning_when_no_refined_cell_clears_the_floor() 
             ensemble_size: 1,
             max_ticks: horizon,
             floor: CoexistenceFloor::Plain,
+            ..RefinementConfig::default()
         },
         SEED,
     );
@@ -154,6 +156,7 @@ fn reproject_projects_under_the_coexistence_floor_given() {
             ensemble_size: 2,
             max_ticks: config.max_ticks,
             floor: CoexistenceFloor::Either,
+            ..RefinementConfig::default()
         },
         SEED,
     );

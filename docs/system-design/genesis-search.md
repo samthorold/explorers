@@ -144,6 +144,18 @@ populated only by *running* worlds that survive yet strand their nutrient. Reach
 high-carcass region is the emitter's job (directed exploration along the carcass axis), not the
 prefilter's. The atlas maps the lockup cliff by running, because the physics forbids gating it.
 
+**An unfinished rollout is no verdict (#562).** Every seed rollout in the search and in refinement runs
+under the research sweeps' two wall-clock budgets (`--run-timeout-secs` on the step loop,
+`--eval-timeout-secs` on the terminal evaluation; 600 s each by default). A seed that exhausts either is
+*unfinished*. It is not a death, so it never reaches the frontier. It is not live, so it never reaches a
+cell. It is counted (`rollouts_unfinished` on the atlas, per cell in refinement). A config is read off its
+finished seeds, and a config none of whose seeds finished is placed nowhere. Dense worlds are the
+tall-bloom region the search must still visit, which is why the budget excludes them rather than
+failing them, and why the defaults sit far above a normal rollout's cost. The search is deterministic in
+`(config, seed)` only while no budget fires: wall clock decides which seeds are unfinished, so an atlas
+with a non-zero `rollouts_unfinished` is not guaranteed to reproduce. One no budget touched is
+byte-identical to an unbudgeted search.
+
 ## The atlas maps the settled community, not the founder bloom
 
 Every rollout the search scores starts from a founder cohort and passes through a **pioneer bloom** —

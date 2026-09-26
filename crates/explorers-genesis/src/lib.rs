@@ -91,7 +91,38 @@ pub struct EnsembleConfig {
 
 pub struct EnsembleResult {
     pub median_fitness: f32,
+    /// The finished seeds' results, in seed order; an unfinished seed has none.
     pub run_results: Vec<RunResult>,
+    /// Seeds that exhausted a [`RolloutBudget`] and so reached no verdict
+    /// (#562). Always 0 from [`run_ensemble`].
+    pub unfinished: usize,
+}
+
+/// Wall-clock budgets on one rollout (#562), with the research sweeps'
+/// semantics (`--run-timeout-secs` / `--eval-timeout-secs`): `simulation`
+/// bounds the step loop, `evaluation` the terminal evaluation. A rollout that
+/// exhausts either is [`Unfinished`] — no verdict, neither a failure mode nor
+/// live. Wall clock breaks bit-reproducibility exactly when a budget fires; a
+/// rollout that finishes within it is bit-identical to an unbudgeted one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RolloutBudget {
+    pub simulation: std::time::Duration,
+    pub evaluation: std::time::Duration,
+}
+
+impl RolloutBudget {
+    /// No budget: never fires.
+    pub const UNBOUNDED: RolloutBudget = RolloutBudget {
+        simulation: std::time::Duration::MAX,
+        evaluation: std::time::Duration::MAX,
+    };
+}
+
+/// Which [`RolloutBudget`] a rollout exhausted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unfinished {
+    Simulation,
+    Evaluation,
 }
 
 pub fn run_single(
@@ -101,6 +132,17 @@ pub fn run_single(
     seed: u64,
 ) -> RunResult {
     rollout(params, distribution, run_config, seed).result
+}
+
+/// [`run_single`] under `budget`: `Err` names the budget the rollout exhausted.
+pub fn run_single_within(
+    params: &WorldParameters,
+    distribution: &InitialDistribution,
+    run_config: &RunConfig,
+    seed: u64,
+    budget: RolloutBudget,
+) -> Result<RunResult, Unfinished> {
+    rollout_within(params, distribution, run_config, seed, budget).map(|r| r.result)
 }
 
 /// A finished rollout: its verdict, and the terminal world and observations
@@ -120,6 +162,29 @@ pub fn rollout(
     run_config: &RunConfig,
     seed: u64,
 ) -> Rollout {
+    match rollout_within(
+        params,
+        distribution,
+        run_config,
+        seed,
+        RolloutBudget::UNBOUNDED,
+    ) {
+        Ok(rollout) => rollout,
+        Err(unfinished) => unreachable!("an unbounded rollout ran out of {unfinished:?} budget"),
+    }
+}
+
+/// [`rollout`] under `budget`. A carried rollout (the early-stop
+/// cross-check) is budgeted to the horizon like any other: one that overruns
+/// is unfinished, its gate verdict included.
+pub fn rollout_within(
+    params: &WorldParameters,
+    distribution: &InitialDistribution,
+    run_config: &RunConfig,
+    seed: u64,
+    budget: RolloutBudget,
+) -> Result<Rollout, Unfinished> {
+    let started = std::time::Instant::now();
     let mut world = explorers_sim::World::new(params.clone(), distribution.clone(), seed);
     // The log keeps only what the evaluator reads (#502): the retention list
     // and the audit of the reads behind it live with the evaluator
@@ -158,6 +223,9 @@ pub fn rollout(
     let mut stopped: Option<EarlyStop> = None;
     for _ in 0..run_config.max_ticks {
         world.step();
+        if started.elapsed() > budget.simulation {
+            return Err(Unfinished::Simulation);
+        }
         observations.observe(&world, interval);
         world.compact_event_log_before(observations.consumed_events());
         match explorers_genesis_eval::early_stop(
@@ -183,18 +251,27 @@ pub fn rollout(
         }
     }
 
-    let horizon_breakdown = || {
-        explorers_genesis_eval::evaluate_from_log(
+    // The evaluation budget starts when the simulation ends.
+    let horizon_breakdown = || match std::time::Instant::now().checked_add(budget.evaluation) {
+        Some(deadline) => explorers_genesis_eval::evaluate_from_log_within(
             &world,
             &observations,
             eval_config,
             run_config.max_ticks,
+            deadline,
         )
+        .ok_or(Unfinished::Evaluation),
+        None => Ok(explorers_genesis_eval::evaluate_from_log(
+            &world,
+            &observations,
+            eval_config,
+            run_config.max_ticks,
+        )),
     };
     let (breakdown, termination_tick, early_stop) = match stopped {
         Some(mut stop) => {
             if carry {
-                let full = horizon_breakdown();
+                let full = horizon_breakdown()?;
                 stop.horizon = Some(HorizonVerdict {
                     failure: full.failure,
                     fitness: full.fitness,
@@ -210,9 +287,9 @@ pub fn rollout(
             );
             (breakdown, stop.tick, Some(stop))
         }
-        None => (horizon_breakdown(), world.tick(), None),
+        None => (horizon_breakdown()?, world.tick(), None),
     };
-    Rollout {
+    Ok(Rollout {
         result: RunResult {
             fitness: breakdown.fitness,
             failure: breakdown.failure.clone(),
@@ -222,7 +299,7 @@ pub fn rollout(
         },
         world,
         observations,
-    }
+    })
 }
 
 pub fn run_ensemble(
@@ -231,25 +308,47 @@ pub fn run_ensemble(
     config: &EnsembleConfig,
     base_seed: u64,
 ) -> EnsembleResult {
+    run_ensemble_within(
+        params,
+        distribution,
+        config,
+        base_seed,
+        RolloutBudget::UNBOUNDED,
+    )
+}
+
+/// [`run_ensemble`] under a per-rollout `budget` (#562): an unfinished seed is
+/// dropped from the results and counted, and the median is read over the
+/// finished seeds only.
+pub fn run_ensemble_within(
+    params: &WorldParameters,
+    distribution: &InitialDistribution,
+    config: &EnsembleConfig,
+    base_seed: u64,
+    budget: RolloutBudget,
+) -> EnsembleResult {
     // The seed loop is embarrassingly parallel: each seed builds its own
     // `World::new(…, seed)` with an independent RNG stream, so rollouts never
     // interact (issue #350). `into_par_iter().collect()` over the contiguous
     // seed range is order-stable — results land in seed order, bit-identical to
     // the sequential map — because rayon's IndexedParallelIterator preserves
     // index order on collect (no racy push).
-    let run_results: Vec<RunResult> = (0..config.ensemble_size)
+    let outcomes: Vec<Result<RunResult, Unfinished>> = (0..config.ensemble_size)
         .into_par_iter()
         .map(|i| {
             let seed = base_seed.wrapping_add(i as u64);
-            run_single(params, distribution, &config.run_config, seed)
+            run_single_within(params, distribution, &config.run_config, seed, budget)
         })
         .collect();
+    let unfinished = outcomes.iter().filter(|o| o.is_err()).count();
+    let run_results: Vec<RunResult> = outcomes.into_iter().filter_map(Result::ok).collect();
 
     let median_fitness = median(&run_results.iter().map(|r| r.fitness).collect::<Vec<_>>());
 
     EnsembleResult {
         median_fitness,
         run_results,
+        unfinished,
     }
 }
 
@@ -702,6 +801,88 @@ mod tests {
         assert_eq!(carried.failure, stopped.failure);
         assert_eq!(carried.termination_tick, stopped.termination_tick);
         assert_eq!(carried.fitness, 0.0);
+    }
+
+    fn completing_world() -> (WorldParameters, InitialDistribution, RunConfig) {
+        let params = WorldParameters {
+            reproduction_energy_threshold: 500.0,
+            contact_range_coefficient: 5.0,
+            solar_flux_magnitude: 10.0,
+            base_metabolic_rate: 0.01,
+            growth_efficiency: 0.5,
+            ..test_params()
+        };
+        let distribution = InitialDistribution {
+            initial_energy_per_agent: 50.0,
+            trait_covariance: 0.5,
+            ..test_distribution()
+        };
+        let config = RunConfig {
+            max_ticks: 20,
+            eval_config: EvalConfig {
+                grace_ticks: u64::MAX,
+                ..EvalConfig::default()
+            },
+            early_stop_crosscheck_fraction: 0.0,
+        };
+        (params, distribution, config)
+    }
+
+    #[test]
+    fn a_rollout_past_either_budget_is_unfinished_not_a_verdict() {
+        // #562: a budget that fires names which one, and gives no verdict.
+        let (params, dist, config) = completing_world();
+        let no_simulation = RolloutBudget {
+            simulation: std::time::Duration::ZERO,
+            ..RolloutBudget::UNBOUNDED
+        };
+        let no_evaluation = RolloutBudget {
+            evaluation: std::time::Duration::ZERO,
+            ..RolloutBudget::UNBOUNDED
+        };
+        assert_eq!(
+            run_single_within(&params, &dist, &config, 42, no_simulation).err(),
+            Some(Unfinished::Simulation)
+        );
+        assert_eq!(
+            run_single_within(&params, &dist, &config, 42, no_evaluation).err(),
+            Some(Unfinished::Evaluation)
+        );
+    }
+
+    #[test]
+    fn an_unhit_budget_changes_nothing() {
+        let (params, dist, config) = completing_world();
+        let unbudgeted = run_single(&params, &dist, &config, 42);
+        let budgeted = run_single_within(&params, &dist, &config, 42, RolloutBudget::UNBOUNDED)
+            .expect("an unbounded budget never fires");
+        assert_eq!(budgeted.fitness.to_bits(), unbudgeted.fitness.to_bits());
+        assert_eq!(budgeted.failure, unbudgeted.failure);
+        assert_eq!(budgeted.termination_tick, unbudgeted.termination_tick);
+    }
+
+    #[test]
+    fn an_ensemble_drops_its_unfinished_seeds_and_counts_them() {
+        // The median is read over the finished seeds only; an ensemble with
+        // none finished has no run results and a zero median.
+        let (params, dist, run_config) = completing_world();
+        let config = EnsembleConfig {
+            ensemble_size: 3,
+            run_config,
+        };
+        let none = RolloutBudget {
+            simulation: std::time::Duration::ZERO,
+            ..RolloutBudget::UNBOUNDED
+        };
+        let result = run_ensemble_within(&params, &dist, &config, 7, none);
+        assert!(result.run_results.is_empty());
+        assert_eq!(result.unfinished, 3);
+
+        let all = run_ensemble_within(&params, &dist, &config, 7, RolloutBudget::UNBOUNDED);
+        let plain = run_ensemble(&params, &dist, &config, 7);
+        assert_eq!(all.unfinished, 0);
+        assert_eq!(all.run_results.len(), 3);
+        assert_eq!(all.median_fitness.to_bits(), plain.median_fitness.to_bits());
     }
 
     #[test]
