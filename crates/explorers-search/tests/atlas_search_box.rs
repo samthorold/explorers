@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use explorers_search::atlas_file::write_atlas;
 use explorers_search::config_source::{ConfigSource, resolve_config, sample_draw, sampled_units};
-use explorers_search::search::{SearchConfig, decode, default_ranges, run_search};
+use explorers_search::search::{SearchConfig, decode, default_ranges, narrowed_ranges, run_search};
 use explorers_search::sweep::read_atlas_units;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -31,6 +31,7 @@ fn tiny_search() -> SearchConfig {
         max_ticks: 20,
         batch: 4,
         generations: 1,
+        ranges: narrowed_ranges(),
         ..SearchConfig::default()
     }
 }

@@ -39,13 +39,13 @@ native output *is* the atlas. And a covariance-adapting emitter learns the relev
 moves, retiring the manual dimension-fixing prefilter the surrogate optimiser needed. The specific
 emitter and archive are implementation; the illumination contract is the design.
 
-## The search box: a full-width core in raw coordinates, the rest narrowed
+## The search box: the full box by default, a narrowed box held in reserve
 
 A config is a point of the unit cube, and `decode` maps it onto 32 raw fields — 23 world parameters
 and 9 founder-distribution fields — each linearly over a range. The set of ranges is the **search
-box**. The full box, `default_ranges()`, spans every field's plausible range. The search runs by
-default over a **narrowed box** (`narrowed_ranges()`), which keeps the same 32 raw coordinates and
-narrows only the box.
+box**. The full box, `default_ranges()`, spans every field's plausible range, and the search runs over
+it by default. A **narrowed box** (`narrowed_ranges()`) keeps the same 32 raw coordinates and narrows
+only the box. It is opt-in: it keeps outcome prediction but costs the illumination (below).
 
 - **The core stays at full width.** `light_competition_radius`, `world_extent`,
   `solar_flux_magnitude`, `initial_population_size`, `contact_range_coefficient`, `mean_kappa`,
@@ -66,7 +66,26 @@ narrows only the box.
   do not beat their own ingredients held out, and a search over them would need an inverse map back to
   raw fields.
 
-The evidence is [`462-held-out-check.md`](../research/462-held-out-check.md).
+The evidence for the core is [`462-held-out-check.md`](../research/462-held-out-check.md).
+
+**Why the narrowed box is not the default.** The held-out check selected the core on outcome
+prediction (live, lockup, bloom, onset), not on the behaviour axes the archive is binned on. Run as the
+default (#559), the narrowed box illuminated less than the full box on both search seeds tried (batch
+32, 10 generations, ensemble 5, `T = 2000`):
+
+| box, seed | cells | QD-score | best / median fitness | clustering bins | dead: nutrient-lockup |
+|---|---|---|---|---|---|
+| full, 42 | 95 | 36.4 | 0.572 / 0.424 | 5 | 52 |
+| full, 43 | 93 | 36.6 | 0.606 / 0.416 | 7 | 48 |
+| narrowed, 42 | 78 | 28.3 | 0.497 / 0.390 | 2 | 88 |
+| narrowed, 43 | 84 | 33.8 | 0.713 / 0.434 | 4 | 85 |
+
+The full box is stable across seeds. The narrowed box loses 10–18 % of coverage, fills fewer bins of
+the clustering axis, and records about 1.7× as many nutrient-lockup dead configs on both seeds. That
+last one is the steadiest signal: the band centres sit in a lockup-prone part of the box, so the loss
+is about *where* the bands sit, not only how narrow they are. The one gain, a higher best elite on seed
+43, is the concentration a smaller box buys. A narrowing that is to become the default has to be chosen
+against the behaviour axes as well as the outcomes (#561).
 
 **A unit vector names a world only together with its box.** The same `unit` decodes to different
 worlds under the full and the narrowed box. So the atlas records the box it was searched under

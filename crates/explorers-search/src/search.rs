@@ -28,8 +28,8 @@ pub struct ParameterRange {
 /// is earmarked for a later refinement role, brief E / #349.)
 #[derive(Clone, Debug)]
 pub struct SearchConfig {
-    /// The search box. Defaults to the narrowed box ([`narrowed_ranges`], #559);
-    /// [`default_ranges`] is the full one.
+    /// The search box. Defaults to the full box ([`default_ranges`]); the
+    /// narrowed box ([`narrowed_ranges`], #559) is opt-in.
     pub ranges: Vec<ParameterRange>,
     pub ensemble_size: u32,
     pub max_ticks: u64,
@@ -57,7 +57,7 @@ pub struct SearchConfig {
 impl Default for SearchConfig {
     fn default() -> Self {
         SearchConfig {
-            ranges: narrowed_ranges(),
+            ranges: default_ranges(),
             ensemble_size: 5,
             max_ticks: 2000,
             batch: 32,
@@ -264,7 +264,7 @@ pub const FULL_WIDTH_DIMS: [&str; 10] = [
 /// zero, so the band keeps some width — and so it lives here, in one place.
 pub const NARROWED_BAND_FRACTION: f64 = 0.25;
 
-/// The search box the genesis search runs over by default (#559): the
+/// An opt-in narrowed search box (#559): the
 /// [`default_ranges`] dims, in the same order, with every dim outside
 /// [`FULL_WIDTH_DIMS`] shrunk to a band of [`NARROWED_BAND_FRACTION`] of its
 /// full span around its [`band_centre`]. A band that would cross a full-range
@@ -612,14 +612,15 @@ mod tests {
         }
     }
 
-    /// #559: the search runs over the narrowed box by default; the full box
-    /// stays available as `default_ranges()`.
+    /// The search runs over the full box by default. The narrowed box (#559)
+    /// lost QD coverage and clustering-axis diversity against the full box on
+    /// two search seeds, so it is opt-in via `ranges: narrowed_ranges()`.
     #[test]
-    fn the_search_defaults_to_the_narrowed_box() {
+    fn the_search_defaults_to_the_full_box() {
         let ranges = SearchConfig::default().ranges;
         let bounds = |rs: &[ParameterRange]| rs.iter().map(|r| (r.min, r.max)).collect::<Vec<_>>();
-        assert_eq!(bounds(&ranges), bounds(&narrowed_ranges()));
-        assert_ne!(bounds(&ranges), bounds(&default_ranges()));
+        assert_eq!(bounds(&ranges), bounds(&default_ranges()));
+        assert_ne!(bounds(&ranges), bounds(&narrowed_ranges()));
     }
 
     /// #559: every other dim is a band of `NARROWED_BAND_FRACTION` of its
