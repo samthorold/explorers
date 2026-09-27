@@ -80,7 +80,11 @@
 //! peak). `peak_tick` is absent on unfinished seeds, and on rows written
 //! before it existed. It also records `cutoffs`: the population and running
 //! peak at each of a fixed set of ticks the run reached (#554), the signal an
-//! early stop at that tick could have read.
+//! early stop at that tick could have read. And it records `early_stop_tick`
+//! and `early_stop_mode`: the first tick at which the search's incremental
+//! stop (`early_stop`) would have fired, read on the same observations
+//! without stopping the rollout (#569). Both are absent when the gate never
+//! fired.
 //!
 //! A (config, seed) run carries two wall-clock budgets (#523). The
 //! **simulation budget** (`--run-timeout-secs`, default 300) bounds the step
@@ -117,7 +121,9 @@ use std::time::{Duration, Instant};
 use rayon::prelude::*;
 
 use explorers_genesis::{EvalConfig, FailureMode};
-use explorers_genesis_eval::{EVALUATOR_EVENT_KINDS, RolloutObservations};
+use explorers_genesis_eval::{
+    EVALUATOR_EVENT_KINDS, RolloutObservations, early_stop, sustainable_stock,
+};
 use explorers_search::config_source::{
     ConfigSource, parse_selector, resolve_config, sampled_units,
 };
@@ -482,6 +488,15 @@ struct SeedOutcome {
     /// existed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     cutoffs: Vec<Cutoff>,
+    /// The first tick at which the search's incremental stop
+    /// (`explorers_genesis_eval::early_stop`) would have fired, and its mode
+    /// (#569). Read on the same observations without stopping the rollout,
+    /// so the verdict is still the horizon's. Absent when the gate never
+    /// fired, and on rows written before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    early_stop_tick: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    early_stop_mode: Option<String>,
 }
 
 /// The ticks at which a seed records a [`Cutoff`] (#554): early-stop
@@ -854,6 +869,7 @@ fn run_seed(
     eval_timeout: Duration,
 ) -> SeedOutcome {
     let eval_config = EvalConfig::default();
+    let stock = sustainable_stock(params);
     let started = Instant::now();
     let mut timed_out = false;
     let mut world = World::new(params.clone(), dist.clone(), seed);
@@ -866,6 +882,7 @@ fn run_seed(
     let mut peak_population = founders;
     let mut peak_tick = 0;
     let mut cutoffs = Vec::new();
+    let mut early_stopped: Option<(u64, &'static str)> = None;
     let mut population_after_tick1 = 0;
     let mut producers_after_tick1 = 0;
     let mut consumers_after_tick1 = 0;
@@ -897,6 +914,10 @@ fn run_seed(
                 population: world.agents().len(),
                 running_peak: peak_population,
             });
+        }
+        if early_stopped.is_none() {
+            early_stopped = early_stop(world.agents().len(), &observations, &eval_config, stock)
+                .map(|mode| (world.tick(), mode_label(&Some(mode))));
         }
         if world.agents().is_empty() {
             break;
@@ -939,6 +960,8 @@ fn run_seed(
         first_tick_without_consumers,
         first_tick_without_producers,
         cutoffs,
+        early_stop_tick: early_stopped.map(|(tick, _)| tick),
+        early_stop_mode: early_stopped.map(|(_, mode)| mode.to_string()),
     }
 }
 
@@ -1641,6 +1664,8 @@ mod tests {
             first_tick_without_consumers: None,
             first_tick_without_producers: None,
             cutoffs: Vec::new(),
+            early_stop_tick: None,
+            early_stop_mode: None,
         }
     }
 
@@ -2145,6 +2170,54 @@ mod resume_tests {
         assert!(!line.contains("cutoffs"), "{line}");
         let parsed: SeedOutcome = serde_json::from_str(&line).unwrap();
         assert!(parsed.cutoffs.is_empty());
+    }
+
+    /// The first tick at which the search's incremental stop (`early_stop`)
+    /// would have fired, and its mode, pinned against an independent replay
+    /// that asks `early_stop` after every tick — without the rollout being
+    /// stopped there. `sample@9421:110` seed 1002 dies to a few agents by
+    /// tick 200 and is verdicted energy death at the horizon.
+    #[test]
+    fn early_stop_records_where_the_search_would_have_stopped_without_stopping() {
+        let ranges = default_ranges();
+        let (params, dist) = decode(&sample_draw(9421, ranges.len())[110], &ranges);
+        let seed = 1002;
+        let horizon = 400;
+        let outcome = run_seed(&params, &dist, seed, horizon, Duration::MAX, Duration::MAX);
+        let eval_config = EvalConfig::default();
+        let stock = sustainable_stock(&params);
+        let mut world = World::new(params.clone(), dist.clone(), seed);
+        world.retain_event_kinds(EVALUATOR_EVENT_KINDS);
+        let mut observations = RolloutObservations::with_capacity(horizon as usize);
+        let mut first = None;
+        while world.tick() < horizon && first.is_none() {
+            world.step();
+            observations.observe(&world, eval_config.coexistence_sample_interval);
+            world.compact_event_log_before(observations.consumed_events());
+            first = early_stop(world.agents().len(), &observations, &eval_config, stock)
+                .map(|mode| (world.tick(), mode_label(&Some(mode))));
+        }
+        let (tick, mode) = first.expect("the gate fires within the horizon");
+        assert_eq!(outcome.early_stop_tick, Some(tick));
+        assert_eq!(outcome.early_stop_mode.as_deref(), Some(mode));
+        assert_eq!((tick, mode), (350, "energy-death"));
+        assert_eq!(outcome.termination_tick, horizon, "not stopped at the gate");
+        assert_eq!(outcome.mode, "energy-death");
+    }
+
+    /// A seed on which the gate never fires carries neither key, so a row
+    /// from before they existed still parses.
+    #[test]
+    fn a_seed_the_gate_never_stops_carries_no_early_stop_keys_and_old_rows_parse() {
+        let ranges = default_ranges();
+        let (params, dist) = decode(&vec![0.5; ranges.len()], &ranges);
+        let outcome = run_seed(&params, &dist, SEED_BASE, 20, Duration::MAX, Duration::MAX);
+        assert_eq!(outcome.early_stop_tick, None);
+        assert_eq!(outcome.early_stop_mode, None);
+        let line = serde_json::to_string(&outcome).unwrap();
+        assert!(!line.contains("early_stop"), "{line}");
+        let parsed: SeedOutcome = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed.early_stop_tick, None);
     }
 
     /// A row with no evaluation timeout serialises exactly as it did before
