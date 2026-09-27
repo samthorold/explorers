@@ -538,7 +538,9 @@ proptest! {
     /// survives the `1/|dir|` amplification that keeps chemotaxis out of the
     /// trajectory check (see `translation_case_from`). Run as a single
     /// movement phase over the founding roster, with sensing on and drawn
-    /// from the full search range.
+    /// from the full search range. The sensing radius is a hard distance
+    /// predicate, so a roster with a pair on a sensor's boundary is rejected
+    /// (`founder_on_sensing_boundary`, #564).
     #[test]
     fn chemotaxis_neighbour_counts_are_invariant_under_toroidal_translation(
         tc in translation_case_from(world_case()),
@@ -554,6 +556,10 @@ proptest! {
         for a in &mut shifted {
             a.position = wrap_position((a.position.0 + sx, a.position.1 + sy), extent);
         }
+        prop_assume!(
+            founder_on_sensing_boundary(&agents, &case.params).is_none()
+                && founder_on_sensing_boundary(&shifted, &case.params).is_none()
+        );
         let counts = sensed_neighbour_counts(&mut agents, &case.params, case.seed);
         let shifted_counts = sensed_neighbour_counts(&mut shifted, &case.params, case.seed);
         prop_assert_eq!(
@@ -563,6 +569,39 @@ proptest! {
             tc.shift
         );
     }
+}
+
+/// Chemotactic sensing radius (#564): `move_agents` counts a neighbour when
+/// its toroidal distance is within the sensor's effective mobility ×
+/// `sensing_range_coefficient`, and not an ulp beyond. Wrapping the shifted
+/// positions rounds each coordinate by up to an ulp — even a whole-extent
+/// shift is not bit-exact — so a pair within that rounding of the radius is
+/// counted in one world and not the other: the same measure-zero sensitivity
+/// `pair_on_hard_boundary` rejects, with the same band. Sessile agents do not
+/// sense. The `dist < 1e-6` coincidence test counts the neighbour on both
+/// branches, so it cannot change a count. Returns the first (sensor,
+/// neighbour) pair on the boundary.
+fn founder_on_sensing_boundary(
+    agents: &[Agent],
+    params: &explorers_sim::WorldParameters,
+) -> Option<(u64, u64)> {
+    let extent = params.world_extent;
+    let k = params.wear_degradation_steepness;
+    for sensor in agents {
+        let eff_mobility = sensor.effective_trait_with_steepness(2, k);
+        if eff_mobility <= 0.0 {
+            continue;
+        }
+        let radius = eff_mobility * params.sensing_range_coefficient;
+        if let Some(neighbour) = agents.iter().find(|n| {
+            n.id != sensor.id
+                && (toroidal_distance(sensor.position, n.position, extent) - radius).abs()
+                    <= TRANSLATION_BOUNDARY_TOLERANCE
+        }) {
+            return Some((sensor.id, neighbour.id));
+        }
+    }
+    None
 }
 
 /// One movement phase over `agents` exactly as `World::step` runs it (grid
