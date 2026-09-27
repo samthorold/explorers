@@ -1,6 +1,6 @@
 use rand::Rng;
 
-use explorers_genesis::{InitialDistribution, RolloutBudget, WorldParameters};
+use explorers_genesis::{BloomStop, InitialDistribution, RolloutBudget, WorldParameters};
 use explorers_sim::TraitVector;
 
 use std::path::Path;
@@ -55,6 +55,9 @@ pub struct SearchConfig {
     /// Wall-clock budget on each seed rollout (`rollout_budget` in
     /// [`QdConfig`], #562).
     pub rollout_budget: RolloutBudget,
+    /// The predictive bloom stop (`bloom_stop` in [`QdConfig`], #573). Off
+    /// by default.
+    pub bloom_stop: Option<BloomStop>,
 }
 
 impl Default for SearchConfig {
@@ -71,8 +74,25 @@ impl Default for SearchConfig {
             early_stop_crosscheck_fraction: 0.05,
             carcass_seed_count: 2,
             rollout_budget: SEARCH_ROLLOUT_BUDGET,
+            bloom_stop: None,
         }
     }
+}
+
+/// The search's flag for the predictive bloom stop (#573), `TICK:FACTOR`.
+pub const BLOOM_STOP_FLAG: &str = "--bloom-stop";
+
+/// Parse a [`BLOOM_STOP_FLAG`] value: `300:5` stops, at tick 300, a rollout
+/// whose running peak is at least 5 × founders.
+pub fn parse_bloom_stop(value: &str) -> Result<BloomStop, String> {
+    let err = || format!("{BLOOM_STOP_FLAG} takes TICK:FACTOR (e.g. 300:5), not {value:?}");
+    let (tick, factor) = value.split_once(':').ok_or_else(err)?;
+    let tick: u64 = tick.parse().map_err(|_| err())?;
+    let factor: f32 = factor.parse().map_err(|_| err())?;
+    if tick == 0 || !factor.is_finite() || factor < 0.0 {
+        return Err(err());
+    }
+    Ok(BloomStop { tick, factor })
 }
 
 pub fn default_ranges() -> Vec<ParameterRange> {
@@ -580,6 +600,7 @@ impl SearchConfig {
             early_stop_crosscheck_fraction: self.early_stop_crosscheck_fraction,
             carcass_seed_count: self.carcass_seed_count,
             rollout_budget: self.rollout_budget,
+            bloom_stop: self.bloom_stop,
         }
     }
 }
@@ -587,6 +608,23 @@ impl SearchConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bloom_stop_flag_reads_tick_colon_factor_and_refuses_anything_else() {
+        assert_eq!(
+            parse_bloom_stop("300:5"),
+            Ok(BloomStop {
+                tick: 300,
+                factor: 5.0
+            })
+        );
+        assert_eq!(parse_bloom_stop("500:2.5").map(|b| b.factor), Ok(2.5));
+        for bad in [
+            "300", "300:", ":5", "x:5", "300:y", "0:5", "300:-1", "300:inf",
+        ] {
+            assert!(parse_bloom_stop(bad).is_err(), "{bad}");
+        }
+    }
 
     /// #559: the narrowed box names the same 32 dims in the same order (so a
     /// unit vector has the same length and axis meaning under either box), and

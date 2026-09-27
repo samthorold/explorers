@@ -1,4 +1,4 @@
-pub use explorers_genesis_eval::{EvalConfig, FailureMode, FitnessBreakdown};
+pub use explorers_genesis_eval::{BloomStop, EvalConfig, FailureMode, FitnessBreakdown};
 pub use explorers_sim::{InitialDistribution, WorldParameters};
 use rayon::prelude::*;
 
@@ -34,7 +34,8 @@ pub struct RunResult {
 /// A rollout stopped where a dead-pool gate fired (#506).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EarlyStop {
-    /// The gate that fired: `EnergyDeath` or `NutrientLockup`.
+    /// The gate that fired: `EnergyDeath` or `NutrientLockup`, or the
+    /// predictive `BloomStop` when the config sets one (#573).
     pub failure: FailureMode,
     /// The tick it fired on — the run's termination tick and the frontier
     /// entry's `ticks_survived`.
@@ -220,6 +221,10 @@ pub fn rollout_within(
     // The energy-death reference is a property of the config (#508),
     // computed once per rollout.
     let sustainable_stock = explorers_genesis_eval::sustainable_stock(params);
+    // The predictive bloom stop (#573), off unless the config sets one: read
+    // after the gates, so a gate that fires on the same tick keeps its verdict.
+    let founders = world.agents().len();
+    let mut running_peak = founders;
     let mut stopped: Option<EarlyStop> = None;
     for _ in 0..run_config.max_ticks {
         world.step();
@@ -228,12 +233,21 @@ pub fn rollout_within(
         }
         observations.observe(&world, interval);
         world.compact_event_log_before(observations.consumed_events());
+        running_peak = running_peak.max(world.agents().len());
+        let bloom_stopped = || {
+            eval_config
+                .bloom_stop
+                .filter(|rule| rule.fires(world.tick(), founders, running_peak))
+                .map(|_| FailureMode::BloomStop)
+        };
         match explorers_genesis_eval::early_stop(
             world.agents().len(),
             &observations,
             eval_config,
             sustainable_stock,
-        ) {
+        )
+        .or_else(bloom_stopped)
+        {
             None => {}
             Some(FailureMode::Extinction) | Some(FailureMode::PopulationExplosion) => break,
             Some(failure) => {
@@ -801,6 +815,71 @@ mod tests {
         assert_eq!(carried.failure, stopped.failure);
         assert_eq!(carried.termination_tick, stopped.termination_tick);
         assert_eq!(carried.fitness, 0.0);
+    }
+
+    fn with_bloom_stop(config: &RunConfig, tick: u64, factor: f32) -> RunConfig {
+        RunConfig {
+            max_ticks: config.max_ticks,
+            eval_config: EvalConfig {
+                bloom_stop: Some(explorers_genesis_eval::BloomStop { tick, factor }),
+                ..config.eval_config.clone()
+            },
+            early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
+        }
+    }
+
+    #[test]
+    fn a_bloom_stop_stops_the_rollout_at_its_tick_as_a_bloom_stop() {
+        // Factor 0: every world has bloomed to 0× founders, so the rule fires.
+        let (params, dist, config) = completing_world();
+        let result = run_single(&params, &dist, &with_bloom_stop(&config, 10, 0.0), 1);
+        assert_eq!(result.failure, Some(FailureMode::BloomStop));
+        assert_eq!(result.termination_tick, 10);
+        assert_eq!(result.fitness, 0.0);
+        let stop = result.early_stop.expect("recorded as an early stop");
+        assert_eq!((stop.failure, stop.tick), (FailureMode::BloomStop, 10));
+    }
+
+    #[test]
+    fn a_bloom_stop_below_its_factor_leaves_the_rollout_untouched() {
+        let (params, dist, config) = completing_world();
+        let plain = run_single(&params, &dist, &config, 1);
+        let ruled = run_single(&params, &dist, &with_bloom_stop(&config, 10, 1e6), 1);
+        assert!(ruled.early_stop.is_none());
+        assert_eq!(ruled.failure, plain.failure);
+        assert_eq!(ruled.termination_tick, plain.termination_tick);
+        assert_eq!(ruled.fitness, plain.fitness);
+    }
+
+    #[test]
+    fn a_gate_that_fires_first_keeps_its_verdict_over_a_later_bloom_stop() {
+        let (params, dist) = energy_dying_world();
+        let config = RunConfig {
+            max_ticks: 600,
+            eval_config: EvalConfig {
+                grace_ticks: 0,
+                ..EvalConfig::default()
+            },
+            early_stop_crosscheck_fraction: 0.0,
+        };
+        let gated = run_single(&params, &dist, &config, 3);
+        let gate_tick = gated.termination_tick;
+        assert!(gate_tick < 590);
+        let ruled = run_single(&params, &dist, &with_bloom_stop(&config, 590, 0.0), 3);
+        assert_eq!(ruled.failure, Some(FailureMode::EnergyDeath));
+        assert_eq!(ruled.termination_tick, gate_tick);
+    }
+
+    #[test]
+    fn the_crosscheck_carries_a_bloom_stop_to_the_horizon() {
+        let (params, dist, mut config) = completing_world();
+        config.early_stop_crosscheck_fraction = 1.0;
+        let result = run_single(&params, &dist, &with_bloom_stop(&config, 10, 0.0), 1);
+        assert_eq!(result.failure, Some(FailureMode::BloomStop));
+        assert_eq!(result.termination_tick, 10, "the verdict stays the stop's");
+        let stop = result.early_stop.expect("stopped");
+        let horizon = stop.horizon.expect("carried");
+        assert_eq!(horizon.termination_tick, config.max_ticks);
     }
 
     fn completing_world() -> (WorldParameters, InitialDistribution, RunConfig) {
