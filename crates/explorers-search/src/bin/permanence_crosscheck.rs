@@ -78,7 +78,9 @@
 //! Each seed's row records `peak_population` and `peak_tick`, the first tick
 //! at which the population reached that peak (0 when the founders are the
 //! peak). `peak_tick` is absent on unfinished seeds, and on rows written
-//! before it existed.
+//! before it existed. It also records `cutoffs`: the population and running
+//! peak at each of a fixed set of ticks the run reached (#554), the signal an
+//! early stop at that tick could have read.
 //!
 //! A (config, seed) run carries two wall-clock budgets (#523). The
 //! **simulation budget** (`--run-timeout-secs`, default 300) bounds the step
@@ -473,6 +475,27 @@ struct SeedOutcome {
     /// First tick with no consumer alive while producers still stood, if any.
     first_tick_without_consumers: Option<u64>,
     first_tick_without_producers: Option<u64>,
+    /// The population and running peak at each of [`CUTOFF_TICKS`] the run
+    /// reached (#554): what an early stop at that tick could have read.
+    /// Recorded on unfinished seeds too, since a budget fires only after the
+    /// ticks it covers. Omitted when empty, and on rows written before it
+    /// existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    cutoffs: Vec<Cutoff>,
+}
+
+/// The ticks at which a seed records a [`Cutoff`] (#554): early-stop
+/// candidates from `0.0125·T` to `0.75·T` at the search horizon `T = 2000`.
+const CUTOFF_TICKS: [u64; 9] = [25, 50, 100, 200, 300, 500, 750, 1000, 1500];
+
+/// The state of a rollout at one of [`CUTOFF_TICKS`].
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct Cutoff {
+    tick: u64,
+    population: usize,
+    /// The largest population at any tick up to and including `tick`
+    /// (tick 0 is the founders).
+    running_peak: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -842,6 +865,7 @@ fn run_seed(
     let mut observations = RolloutObservations::with_capacity(horizon as usize);
     let mut peak_population = founders;
     let mut peak_tick = 0;
+    let mut cutoffs = Vec::new();
     let mut population_after_tick1 = 0;
     let mut producers_after_tick1 = 0;
     let mut consumers_after_tick1 = 0;
@@ -866,6 +890,13 @@ fn run_seed(
         if world.agents().len() > peak_population {
             peak_population = world.agents().len();
             peak_tick = world.tick();
+        }
+        if CUTOFF_TICKS.contains(&world.tick()) {
+            cutoffs.push(Cutoff {
+                tick: world.tick(),
+                population: world.agents().len(),
+                running_peak: peak_population,
+            });
         }
         if world.agents().is_empty() {
             break;
@@ -907,6 +938,7 @@ fn run_seed(
         peak_tick: (!is_unfinished(mode)).then_some(peak_tick),
         first_tick_without_consumers,
         first_tick_without_producers,
+        cutoffs,
     }
 }
 
@@ -1608,6 +1640,7 @@ mod tests {
             peak_tick: Some(12),
             first_tick_without_consumers: None,
             first_tick_without_producers: None,
+            cutoffs: Vec::new(),
         }
     }
 
@@ -2064,6 +2097,54 @@ mod resume_tests {
         old.as_object_mut().unwrap().remove("peak_tick");
         let parsed: SeedOutcome = serde_json::from_value(old).unwrap();
         assert_eq!(parsed.peak_tick, None);
+    }
+
+    /// At each cut-off the run reaches, `cutoffs` records the population at
+    /// that tick and the running peak up to it (tick 0 is the founders),
+    /// pinned against a replay of the same world. Cut-offs past the horizon
+    /// are not recorded.
+    #[test]
+    fn cutoffs_record_the_population_and_running_peak_at_each_reached_cutoff() {
+        let ranges = default_ranges();
+        let (params, dist) = decode(&sampled_units(ranges.len())[14], &ranges);
+        let horizon = 60;
+        let outcome = run_seed(
+            &params,
+            &dist,
+            SEED_BASE,
+            horizon,
+            Duration::MAX,
+            Duration::MAX,
+        );
+        let mut world = World::new(params.clone(), dist.clone(), SEED_BASE);
+        let mut series = vec![world.agents().len()];
+        while world.tick() < horizon {
+            world.step();
+            series.push(world.agents().len());
+        }
+        let expected: Vec<Cutoff> = [25, 50]
+            .into_iter()
+            .map(|t| Cutoff {
+                tick: t,
+                population: series[t as usize],
+                running_peak: *series[..=t as usize].iter().max().unwrap(),
+            })
+            .collect();
+        assert_eq!(outcome.cutoffs, expected);
+    }
+
+    /// A seed stopped before the first cut-off records none, and the key is
+    /// omitted, so a row from before cut-offs existed still parses.
+    #[test]
+    fn a_seed_stopped_before_the_first_cutoff_records_none_and_old_rows_parse() {
+        let ranges = default_ranges();
+        let (params, dist) = decode(&vec![0.5; ranges.len()], &ranges);
+        let outcome = run_seed(&params, &dist, SEED_BASE, 20, Duration::MAX, Duration::MAX);
+        assert!(outcome.cutoffs.is_empty());
+        let line = serde_json::to_string(&outcome).unwrap();
+        assert!(!line.contains("cutoffs"), "{line}");
+        let parsed: SeedOutcome = serde_json::from_str(&line).unwrap();
+        assert!(parsed.cutoffs.is_empty());
     }
 
     /// A row with no evaluation timeout serialises exactly as it did before
