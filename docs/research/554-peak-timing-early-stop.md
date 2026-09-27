@@ -246,7 +246,7 @@ What this shows:
 **Verdict.** The saving over the gate is not in ticks. It is in the tall
 blooms' agent-ticks and in the rollouts that would otherwise run into their
 wall-clock budget. That is worth a search change only as a cost measure.
-Whether it is worth the live false stops (0.3 %) is the follow-up's
+Whether it is worth the live false stops (0.3 %) is follow-up #573's
 decision, including which form it takes: a predictive stop under the
 early-stop cross-check, or a fitness down-weight that saves nothing.
 The one-draw caveat of §5 still applies: `t` and θ were chosen on these
