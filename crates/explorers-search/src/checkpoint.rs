@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use explorers_genesis::BloomStop;
 use rand_chacha::ChaCha8Rng;
 
 use crate::qd::{Atlas, GenerationReport, QdConfig, SearchState};
@@ -158,6 +159,9 @@ struct Stamp {
     prefilter_crosscheck_fraction: f32,
     early_stop_crosscheck_fraction: f32,
     carcass_seed_count: usize,
+    /// Absent from a checkpoint written before #573, which ran without one.
+    #[serde(default)]
+    bloom_stop: Option<BloomStop>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -189,6 +193,7 @@ impl Stamp {
             prefilter_crosscheck_fraction: config.prefilter_crosscheck_fraction,
             early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
             carcass_seed_count: config.carcass_seed_count,
+            bloom_stop: config.bloom_stop,
         }
     }
 
@@ -218,7 +223,8 @@ impl Stamp {
             archive_learning_rate,
             prefilter_crosscheck_fraction,
             early_stop_crosscheck_fraction,
-            carcass_seed_count
+            carcass_seed_count,
+            bloom_stop
         );
         if self.ranges != invocation.ranges {
             out.push(match self.ranges.len() == invocation.ranges.len() {
@@ -359,6 +365,24 @@ mod tests {
             generations: 3,
             ..QdConfig::default()
         }
+    }
+
+    /// A checkpoint written before #573 has no `bloom_stop`. It ran without
+    /// one, so it resumes under a config without one and not under one with.
+    #[test]
+    fn a_stamp_from_before_the_bloom_stop_reads_as_none() {
+        let mut old = serde_json::to_value(Stamp::of(&tiny(), 42)).unwrap();
+        old.as_object_mut().unwrap().remove("bloom_stop");
+        let old: Stamp = serde_json::from_value(old).unwrap();
+        assert!(old.mismatches(&Stamp::of(&tiny(), 42)).is_empty());
+        let with = QdConfig {
+            bloom_stop: Some(BloomStop {
+                tick: 300,
+                factor: 5.0,
+            }),
+            ..tiny()
+        };
+        assert_eq!(old.mismatches(&Stamp::of(&with, 42)).len(), 1);
     }
 
     #[test]
@@ -530,6 +554,17 @@ mod tests {
                 "early_stop_crosscheck_fraction",
                 QdConfig {
                     early_stop_crosscheck_fraction: 0.5,
+                    ..tiny()
+                },
+                42,
+            ),
+            (
+                "bloom_stop",
+                QdConfig {
+                    bloom_stop: Some(explorers_genesis::BloomStop {
+                        tick: 300,
+                        factor: 5.0,
+                    }),
                     ..tiny()
                 },
                 42,

@@ -45,6 +45,7 @@ fn failure_name(failure: &Option<FailureMode>) -> &'static str {
         Some(FailureMode::Monoculture) => "monoculture",
         Some(FailureMode::GeneralistDominance) => "generalist_dominance",
         Some(FailureMode::NutrientLockup) => "nutrient_lockup",
+        Some(FailureMode::BloomStop) => "bloom_stop",
     }
 }
 

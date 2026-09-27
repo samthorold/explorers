@@ -48,8 +48,8 @@
 use rand::Rng;
 
 use explorers_genesis::{
-    EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, FitnessBreakdown, RolloutBudget,
-    RunConfig, RunResult, run_ensemble_within,
+    BloomStop, EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, FitnessBreakdown,
+    RolloutBudget, RunConfig, RunResult, run_ensemble_within,
 };
 use explorers_sim::WorldRecipe;
 
@@ -73,6 +73,9 @@ pub enum Cliff {
     NutrientLockup,
     Monoculture,
     GeneralistDominance,
+    /// The predictive bloom stop (#573): its own cliff, so the dead frontier
+    /// never counts a predicted failure as an observed one.
+    BloomStop,
 }
 
 impl Cliff {
@@ -84,6 +87,7 @@ impl Cliff {
             FailureMode::NutrientLockup => Cliff::NutrientLockup,
             FailureMode::Monoculture => Cliff::Monoculture,
             FailureMode::GeneralistDominance => Cliff::GeneralistDominance,
+            FailureMode::BloomStop => Cliff::BloomStop,
         }
     }
 
@@ -96,6 +100,7 @@ impl Cliff {
             Cliff::NutrientLockup => "nutrient_lockup",
             Cliff::Monoculture => "monoculture",
             Cliff::GeneralistDominance => "generalist_dominance",
+            Cliff::BloomStop => "bloom_stop",
         }
     }
 }
@@ -1482,6 +1487,11 @@ pub struct QdConfig {
     /// Wall-clock budget on each seed rollout (#562). Not part of what a
     /// checkpoint must match: it changes the atlas only when it fires.
     pub rollout_budget: RolloutBudget,
+    /// The predictive bloom stop the search's rollouts apply (#573), or
+    /// `None`, the default. Its stops are tallied on their own cliff,
+    /// `bloom_stop`, and the early-stop cross-check carries a sample of
+    /// them. The refinement never applies it.
+    pub bloom_stop: Option<BloomStop>,
 }
 
 /// The search's and the refinement's default [`RolloutBudget`] (#562):
@@ -1514,6 +1524,7 @@ impl Default for QdConfig {
             early_stop_crosscheck_fraction: 0.05,
             carcass_seed_count: 2,
             rollout_budget: SEARCH_ROLLOUT_BUDGET,
+            bloom_stop: None,
         }
     }
 }
@@ -1690,7 +1701,10 @@ impl<R: Rng> SearchState<R> {
             ensemble_size: config.ensemble_size,
             run_config: RunConfig {
                 max_ticks: config.max_ticks,
-                eval_config: EvalConfig::default(),
+                eval_config: EvalConfig {
+                    bloom_stop: config.bloom_stop,
+                    ..EvalConfig::default()
+                },
                 early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
             },
         };
@@ -3536,6 +3550,36 @@ mod tests {
             atlas.rollouts_unfinished,
             rolled_out * config.ensemble_size as usize
         );
+    }
+
+    #[test]
+    fn slow_a_bloom_stop_tallies_its_own_cliff_and_fills_no_cell() {
+        // #573: a bloom stop is a predicted failure, kept apart from the
+        // observed cliffs. Factor 0 fires on every rollout still running at
+        // its tick.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = QdConfig {
+            ensemble_size: 2,
+            max_ticks: 20,
+            batch: 4,
+            generations: 1,
+            prefilter_crosscheck_fraction: 0.0,
+            bloom_stop: Some(BloomStop {
+                tick: 10,
+                factor: 0.0,
+            }),
+            ..QdConfig::default()
+        };
+        let atlas = run_qd(&config, 42, &mut ChaCha8Rng::seed_from_u64(42));
+        assert_eq!(atlas.coverage, 0);
+        assert!(
+            atlas.dead_frontier.get("bloom_stop").copied().unwrap_or(0) > 0,
+            "{:?}",
+            atlas.dead_frontier
+        );
+        assert!(!atlas.dead_frontier_apriori.contains_key("bloom_stop"));
     }
 
     #[test]

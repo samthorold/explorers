@@ -127,6 +127,7 @@ fn mode_label(failure: &Option<FailureMode>) -> &'static str {
         Some(FailureMode::GeneralistDominance) => "generalist-dominance",
         Some(FailureMode::EnergyDeath) => "energy-death",
         Some(FailureMode::NutrientLockup) => "nutrient-lockup",
+        Some(FailureMode::BloomStop) => "bloom-stop",
     }
 }
 

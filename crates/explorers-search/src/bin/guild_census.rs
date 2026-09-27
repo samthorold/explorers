@@ -159,6 +159,7 @@ fn failure_label(f: &FailureMode) -> &'static str {
         FailureMode::PopulationExplosion => "population_explosion",
         FailureMode::EnergyDeath => "energy_death",
         FailureMode::NutrientLockup => "nutrient_lockup",
+        FailureMode::BloomStop => "bloom_stop",
         FailureMode::Monoculture => "monoculture",
         FailureMode::GeneralistDominance => "generalist_dominance",
     }

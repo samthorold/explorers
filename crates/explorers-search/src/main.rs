@@ -12,7 +12,8 @@ use explorers_search::qd::{
     REFINE_TOP_K, RefinedProjection, RefinementConfig, SEARCH_ROLLOUT_BUDGET, refined_best_recipe,
 };
 use explorers_search::search::{
-    SearchConfig, resume_search, run_search_checkpointed, run_search_observed,
+    BLOOM_STOP_FLAG, SearchConfig, parse_bloom_stop, resume_search, run_search_checkpointed,
+    run_search_observed,
 };
 use explorers_search::sweep::{EVAL_TIMEOUT_FLAG, RUN_TIMEOUT_FLAG};
 
@@ -33,6 +34,7 @@ fn main() {
     let mut resume_path: Option<PathBuf> = None;
     let mut reproject_path: Option<PathBuf> = None;
     let mut rollout_budget = SEARCH_ROLLOUT_BUDGET;
+    let mut bloom_stop = None;
     // Flags that configure the search itself, refused on --reproject (which
     // runs no search) rather than silently ignored.
     let mut search_flags: Vec<&str> = Vec::new();
@@ -105,6 +107,14 @@ fn main() {
                 i += 1;
                 reproject_path = Some(PathBuf::from(&args[i]));
             }
+            flag if flag == BLOOM_STOP_FLAG => {
+                i += 1;
+                search_flags.push(BLOOM_STOP_FLAG);
+                bloom_stop = Some(parse_bloom_stop(&args[i]).unwrap_or_else(|e| {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }));
+            }
             flag if flag == RUN_TIMEOUT_FLAG => {
                 i += 1;
                 rollout_budget.simulation = Duration::from_secs(args[i].parse().unwrap());
@@ -167,6 +177,7 @@ fn main() {
         batch,
         generations,
         rollout_budget,
+        bloom_stop,
         ..Default::default()
     };
 
@@ -183,6 +194,12 @@ fn main() {
         rollout_budget.simulation.as_secs(),
         rollout_budget.evaluation.as_secs()
     );
+    if let Some(rule) = bloom_stop {
+        eprintln!(
+            "  Bloom stop: tick {}, running peak >= {}x founders (trial, #573)",
+            rule.tick, rule.factor
+        );
+    }
 
     // One line per completed generation (#529): a multi-hour regeneration is
     // otherwise silent between the header above and the summary below. With a
@@ -491,6 +508,9 @@ fn print_usage() {
     eprintln!("                      holds only while no budget fires.");
     eprintln!("  {EVAL_TIMEOUT_FLAG} N Wall-clock budget on each rollout's terminal evaluation");
     eprintln!("                      (default: {DEFAULT_SEARCH_TIMEOUT_SECS}); as above.");
+    eprintln!("  {BLOOM_STOP_FLAG} T:F  Trial (#573): stop a rollout at tick T if its running");
+    eprintln!("                      peak is >= F x founders, tallied as bloom_stop in the");
+    eprintln!("                      dead frontier. Off by default; never applied in refinement.");
     eprintln!("  --checkpoint PATH   Write the search state to PATH at every generation");
     eprintln!("                      boundary (atomically), so an interrupted search can be");
     eprintln!("                      resumed. Refuses to overwrite an existing PATH.");

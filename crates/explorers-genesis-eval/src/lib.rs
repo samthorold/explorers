@@ -43,6 +43,11 @@ pub enum FailureMode {
     /// the living system of nutrient (issue #342). The nutrient-side sibling of
     /// `EnergyDeath` — distinct pool, distinct quantity.
     NutrientLockup,
+    /// Stopped by the predictive [`BloomStop`] (#573): the world bloomed
+    /// past the rule's factor by its tick. This is a prediction, not an
+    /// observation. The rollout never produces it at the horizon, only as an
+    /// early stop.
+    BloomStop,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +150,31 @@ pub struct EvalConfig {
     /// 200-point LHS box, 8 seeds, 3000-tick horizon), rounded up to 10;
     /// `docs/research/505-settling-time.md` holds the distribution.
     pub grace_ticks: u64,
+    /// The predictive bloom stop the rollout may apply (#573), or `None`,
+    /// the default. A trial, not a committed gate: see [`BloomStop`].
+    pub bloom_stop: Option<BloomStop>,
+}
+
+/// A predictive early stop (#573, `docs/research/554-peak-timing-early-stop.md`
+/// §4 and §7): at exactly `tick`, a rollout whose running peak population
+/// (tick 0, the founders, included) is at least `factor` × founders is
+/// stopped as [`FailureMode::BloomStop`]. Unlike the dead-pool gates, it
+/// stops a world that *will* fail, not one that has. On the 9421 draw, at
+/// (300, 5) it stopped 3 of 1088 live seeds. So it is a cost measure, off
+/// by default, and the early-stop cross-check carries a sample of its stops
+/// to the horizon like any gate's.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BloomStop {
+    pub tick: u64,
+    pub factor: f32,
+}
+
+impl BloomStop {
+    /// Whether the rule stops a rollout at `tick`, given its founder count
+    /// and its running peak up to and including `tick`.
+    pub fn fires(&self, tick: u64, founders: usize, running_peak: usize) -> bool {
+        tick == self.tick && running_peak as f32 >= self.factor * founders as f32
+    }
 }
 
 impl Default for EvalConfig {
@@ -160,6 +190,7 @@ impl Default for EvalConfig {
             generalist_threshold: 0.3,
             generalist_dominance_fraction: 0.5,
             grace_ticks: 260,
+            bloom_stop: None,
         }
     }
 }
@@ -1453,6 +1484,20 @@ mod tests {
             first_early_stop(&stock, &carcass, &config),
             Some((FailureMode::NutrientLockup, 350))
         );
+    }
+
+    #[test]
+    fn bloom_stop_fires_only_at_its_tick_and_only_on_a_bloom_at_or_past_the_factor() {
+        let rule = BloomStop {
+            tick: 300,
+            factor: 5.0,
+        };
+        assert!(rule.fires(300, 10, 50), "exactly 5× founders");
+        assert!(rule.fires(300, 10, 400));
+        assert!(!rule.fires(300, 10, 49), "just under the factor");
+        assert!(!rule.fires(299, 10, 400), "before its tick");
+        assert!(!rule.fires(301, 10, 400), "after its tick: read once");
+        assert!(EvalConfig::default().bloom_stop.is_none(), "off by default");
     }
 
     #[test]
