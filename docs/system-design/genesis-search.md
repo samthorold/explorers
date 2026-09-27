@@ -81,11 +81,15 @@ default (#559), the narrowed box illuminated less than the full box on both sear
 | narrowed, 43 | 84 | 33.8 | 0.713 / 0.434 | 4 | 85 |
 
 The full box is stable across seeds. The narrowed box loses 10–18 % of coverage, fills fewer bins of
-the clustering axis, and records about 1.7× as many nutrient-lockup dead configs on both seeds. That
-last one is the steadiest signal: the band centres sit in a lockup-prone part of the box, so the loss
-is about *where* the bands sit, not only how narrow they are. The one gain, a higher best elite on seed
-43, is the concentration a smaller box buys. A narrowing that is to become the default has to be chosen
-against the behaviour axes as well as the outcomes (#561).
+the clustering axis, and records about 1.7× as many nutrient-lockup dead configs on both seeds. The
+cause is the narrowing itself, not where the bands sit. On the two LHS draws, bands centred on the
+range midpoints predict the same lockup as bands centred on the baseline. Narrowing the 22 dims around
+either centre raises predicted lockup and lowers the live fraction, and the cost is spread thinly
+across all 22. It starts at a band width of 0.75, and no dim carries more than about 0.02 of it. No
+narrowed dim is a strong behaviour driver either: clustering and carcass follow the core. So no
+re-centred, wider or selective narrowing is worth promoting
+([`561-narrowing-behaviour-axes.md`](../research/561-narrowing-behaviour-axes.md)). The one gain, a
+higher best elite on seed 43, is the concentration a smaller box buys.
 
 **A unit vector names a world only together with its box.** The same `unit` decodes to different
 worlds under the full and the narrowed box. So the atlas records the box it was searched under
