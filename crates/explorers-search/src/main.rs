@@ -35,6 +35,7 @@ fn main() {
     let mut reproject_path: Option<PathBuf> = None;
     let mut rollout_budget = SEARCH_ROLLOUT_BUDGET;
     let mut bloom_stop = None;
+    let mut early_stop_crosscheck_fraction: Option<f32> = None;
     // Flags that configure the search itself, refused on --reproject (which
     // runs no search) rather than silently ignored.
     let mut search_flags: Vec<&str> = Vec::new();
@@ -79,6 +80,11 @@ fn main() {
             "--refine-top-k" => {
                 i += 1;
                 refine_top_k = args[i].parse().unwrap();
+            }
+            "--early-stop-crosscheck-fraction" => {
+                i += 1;
+                search_flags.push("--early-stop-crosscheck-fraction");
+                early_stop_crosscheck_fraction = Some(args[i].parse().unwrap());
             }
             "--refine-ensemble" => {
                 i += 1;
@@ -178,6 +184,8 @@ fn main() {
         generations,
         rollout_budget,
         bloom_stop,
+        early_stop_crosscheck_fraction: early_stop_crosscheck_fraction
+            .unwrap_or(SearchConfig::default().early_stop_crosscheck_fraction),
         ..Default::default()
     };
 
@@ -193,6 +201,10 @@ fn main() {
         "  Rollout budget: {}s simulation, {}s evaluation",
         rollout_budget.simulation.as_secs(),
         rollout_budget.evaluation.as_secs()
+    );
+    eprintln!(
+        "  Early-stop cross-check fraction: {}",
+        config.early_stop_crosscheck_fraction
     );
     if let Some(rule) = bloom_stop {
         eprintln!(
@@ -495,6 +507,10 @@ fn print_usage() {
     eprintln!("  --recipe-output PATH  Recipe JSON path (default: recipe.json)");
     eprintln!("  --refine-top-k N    Top live cells to refine before projecting (default: 10)");
     eprintln!("  --refine-ensemble N Refinement ensemble size, independent seeds (default: 32)");
+    eprintln!("  --early-stop-crosscheck-fraction F");
+    eprintln!("                      Fraction of early-stopped rollouts carried to the horizon");
+    eprintln!("                      and re-verdicted (default: 0.05). Changes no verdict, only");
+    eprintln!("                      what the atlas records and how long the search takes.");
     eprintln!("  --coexistence-floor plain|decomposer|consumer|either");
     eprintln!("                      Which coexistence the projection's floor reads (default:");
     eprintln!("                      plain). The guild-aware floors also require the seed to");
