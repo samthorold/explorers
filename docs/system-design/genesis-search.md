@@ -200,8 +200,8 @@ coordinates and whose reported distributions describe different objects.
 **The frontier costs a bloom, the atlas costs the horizon.** A rollout that hits a terminal gate is
 tallied and stopped where it dies; only a world still alive past the bloom is carried to `T`. Nothing
 is *scored* before `T` — an early stop is a frontier entry, never a cell — so the map is the same map
-as if every rollout ran the full horizon; the search simply does not pay a settled-community price
-for a world that has no settled community. This is the tick-0 prefilter's interlock moved along the
+as if every rollout ran the full horizon, with one stated exception, the bloom stop below; the search
+simply does not pay a settled-community price for a world that has no settled community. This is the tick-0 prefilter's interlock moved along the
 trajectory, and it is why the longer horizon does not force the map to get coarser: cutting
 generations or batch to hold wall-clock trades the atlas's resolution for its correctness, and
 shrinking the seed ensemble makes the median-over-seeds selection signal noisier exactly where
@@ -218,8 +218,29 @@ deterministically from the rollout seed) is carried to `T` anyway and re-verdict
 series, and every stopped-dead / alive-at-`T` disagreement is surfaced beside the prefilter and
 bifurcation disagreements (`early_stop_disagreements`), never swallowed. The carry changes only
 what is *recorded*: a carried rollout's own verdict stays the gate's, so the atlas is the same map
-at any carry fraction. A non-empty list localises a gate firing on a reversible collapse — the
-evidence for tightening the gate's definition, not for lengthening the grace.
+at any carry fraction — while no budget fires. A carried rollout runs to `T`, so it can exhaust a
+rollout budget a stopped one would not, and an unfinished seed drops out of its config's verdict
+([573 §5](../research/573-bloom-stop-trial.md): carrying every stop moved one or two frontier
+configs and no cells). A non-empty list localises a gate firing on a reversible collapse — the
+evidence for tightening the gate's definition, not for lengthening the grace. Carried in full on
+two searches, the gates' own list is not empty: of 1261 carried stops, 13 gate stops read alive at `T`.
+
+**One predictive stop: the bloom stop (#573).** The gates stop a world that *has* collapsed. The
+**bloom stop** stops one that very likely *will*. At tick 300, a rollout whose running peak
+(founders included) has reached 10 × its founders is stopped and tallied on its own cliff,
+`bloom_stop`, never as an observed death (`--bloom-stop T:F`, default `300:10`; `--no-bloom-stop`
+turns it off). It is read after the gates, so a gate firing on the same tick keeps its verdict,
+and the carry samples it like any gate. It exists because the tall blooms are where the search's
+wall clock goes. On an LHS draw, a bloom past 5× founders by tick 300 ended in lockup or another
+failure 97 % of the time ([554 §4, §7](../research/554-peak-timing-early-stop.md)). In the
+search it halves the time to an identical 10-generation atlas, so a search reaches about twice
+as far in the same time ([573](../research/573-bloom-stop-trial.md)). The factor is 10, not 5,
+because at 5 it stopped every seed of a config that was live on 8 of 8, one that blooms 5–8×
+and settles. **The cost is a stated blind spot:** the atlas does not hold worlds that bloom past
+10× by tick 300 and then persist. The one such world found carried thousands of agents at `T`
+(1200–4700), the dense region the rollout budgets already cannot finish. The atlas records the
+rule it ran under (`provenance.bloom_stop`), and the refinement never applies it, since it
+re-reads cells that are already live.
 
 **The gates' reference excludes the founder transient, by a measured tick count.** Lockup is read as
 a trailing window against the trajectory's earlier history (the low the dead pool once reached);

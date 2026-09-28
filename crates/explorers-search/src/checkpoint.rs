@@ -368,21 +368,19 @@ mod tests {
     }
 
     /// A checkpoint written before #573 has no `bloom_stop`. It ran without
-    /// one, so it resumes under a config without one and not under one with.
+    /// one, so it resumes under a config without one (`--no-bloom-stop`),
+    /// and is refused under the default, which has one.
     #[test]
     fn a_stamp_from_before_the_bloom_stop_reads_as_none() {
-        let mut old = serde_json::to_value(Stamp::of(&tiny(), 42)).unwrap();
-        old.as_object_mut().unwrap().remove("bloom_stop");
-        let old: Stamp = serde_json::from_value(old).unwrap();
-        assert!(old.mismatches(&Stamp::of(&tiny(), 42)).is_empty());
-        let with = QdConfig {
-            bloom_stop: Some(BloomStop {
-                tick: 300,
-                factor: 5.0,
-            }),
+        let without = QdConfig {
+            bloom_stop: None,
             ..tiny()
         };
-        assert_eq!(old.mismatches(&Stamp::of(&with, 42)).len(), 1);
+        let mut old = serde_json::to_value(Stamp::of(&without, 42)).unwrap();
+        old.as_object_mut().unwrap().remove("bloom_stop");
+        let old: Stamp = serde_json::from_value(old).unwrap();
+        assert!(old.mismatches(&Stamp::of(&without, 42)).is_empty());
+        assert_eq!(old.mismatches(&Stamp::of(&tiny(), 42)).len(), 1);
     }
 
     #[test]

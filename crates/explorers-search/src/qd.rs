@@ -1017,14 +1017,28 @@ pub struct Atlas {
 
 /// What an [`Atlas`] records of the search that drew it (#531): everything the
 /// projection reads that the cells themselves do not carry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AtlasProvenance {
     /// The search's base seed; refinement seeds are drawn off it.
     pub seed: u64,
     /// The search's rollout horizon (`max_ticks`), which the refinement and the
     /// recipe share.
     pub max_ticks: u64,
+    /// The bloom stop the search's rollouts applied (#573), so an atlas says
+    /// which blooms it cannot contain. `None` for a search without one, and
+    /// for an atlas written before it existed. Informational: refinement
+    /// never applies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bloom_stop: Option<BloomStop>,
 }
+
+/// The search's default [`BloomStop`] (#573): at tick 300, stop a rollout
+/// whose running peak has reached 10 × founders
+/// (`docs/research/573-bloom-stop-trial.md` §5).
+pub const DEFAULT_BLOOM_STOP: BloomStop = BloomStop {
+    tick: 300,
+    factor: 10.0,
+};
 
 /// The carcass-locked fraction at which the evaluator gates a world as
 /// `NutrientLockup` — mirrored here so the search can cross-check its atlas against
@@ -1487,8 +1501,8 @@ pub struct QdConfig {
     /// Wall-clock budget on each seed rollout (#562). Not part of what a
     /// checkpoint must match: it changes the atlas only when it fires.
     pub rollout_budget: RolloutBudget,
-    /// The predictive bloom stop the search's rollouts apply (#573), or
-    /// `None`, the default. Its stops are tallied on their own cliff,
+    /// The predictive bloom stop the search's rollouts apply (#573),
+    /// [`DEFAULT_BLOOM_STOP`] by default, or `None`. Its stops are tallied on their own cliff,
     /// `bloom_stop`, and the early-stop cross-check carries a sample of
     /// them. The refinement never applies it.
     pub bloom_stop: Option<BloomStop>,
@@ -1524,7 +1538,7 @@ impl Default for QdConfig {
             early_stop_crosscheck_fraction: 0.05,
             carcass_seed_count: 2,
             rollout_budget: SEARCH_ROLLOUT_BUDGET,
-            bloom_stop: None,
+            bloom_stop: Some(DEFAULT_BLOOM_STOP),
         }
     }
 }
@@ -1751,6 +1765,7 @@ impl<R: Rng> SearchState<R> {
         atlas.provenance = Some(AtlasProvenance {
             seed: base_seed,
             max_ticks: config.max_ticks,
+            bloom_stop: config.bloom_stop,
         });
         atlas.search_box = Some(config.ranges.clone());
         Ok(atlas)
@@ -3580,6 +3595,7 @@ mod tests {
             atlas.dead_frontier
         );
         assert!(!atlas.dead_frontier_apriori.contains_key("bloom_stop"));
+        assert_eq!(atlas.provenance.unwrap().bloom_stop, config.bloom_stop);
     }
 
     #[test]

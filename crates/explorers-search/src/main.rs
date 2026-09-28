@@ -12,8 +12,8 @@ use explorers_search::qd::{
     REFINE_TOP_K, RefinedProjection, RefinementConfig, SEARCH_ROLLOUT_BUDGET, refined_best_recipe,
 };
 use explorers_search::search::{
-    BLOOM_STOP_FLAG, SearchConfig, parse_bloom_stop, resume_search, run_search_checkpointed,
-    run_search_observed,
+    BLOOM_STOP_FLAG, NO_BLOOM_STOP_FLAG, SearchConfig, parse_bloom_stop, resume_search,
+    run_search_checkpointed, run_search_observed,
 };
 use explorers_search::sweep::{EVAL_TIMEOUT_FLAG, RUN_TIMEOUT_FLAG};
 
@@ -34,7 +34,7 @@ fn main() {
     let mut resume_path: Option<PathBuf> = None;
     let mut reproject_path: Option<PathBuf> = None;
     let mut rollout_budget = SEARCH_ROLLOUT_BUDGET;
-    let mut bloom_stop = None;
+    let mut bloom_stop = SearchConfig::default().bloom_stop;
     let mut early_stop_crosscheck_fraction: Option<f32> = None;
     // Flags that configure the search itself, refused on --reproject (which
     // runs no search) rather than silently ignored.
@@ -112,6 +112,10 @@ fn main() {
             "--reproject" => {
                 i += 1;
                 reproject_path = Some(PathBuf::from(&args[i]));
+            }
+            flag if flag == NO_BLOOM_STOP_FLAG => {
+                search_flags.push(NO_BLOOM_STOP_FLAG);
+                bloom_stop = None;
             }
             flag if flag == BLOOM_STOP_FLAG => {
                 i += 1;
@@ -206,11 +210,12 @@ fn main() {
         "  Early-stop cross-check fraction: {}",
         config.early_stop_crosscheck_fraction
     );
-    if let Some(rule) = bloom_stop {
-        eprintln!(
-            "  Bloom stop: tick {}, running peak >= {}x founders (trial, #573)",
+    match bloom_stop {
+        Some(rule) => eprintln!(
+            "  Bloom stop: tick {}, running peak >= {}x founders",
             rule.tick, rule.factor
-        );
+        ),
+        None => eprintln!("  Bloom stop: off"),
     }
 
     // One line per completed generation (#529): a multi-hour regeneration is
@@ -524,9 +529,13 @@ fn print_usage() {
     eprintln!("                      holds only while no budget fires.");
     eprintln!("  {EVAL_TIMEOUT_FLAG} N Wall-clock budget on each rollout's terminal evaluation");
     eprintln!("                      (default: {DEFAULT_SEARCH_TIMEOUT_SECS}); as above.");
-    eprintln!("  {BLOOM_STOP_FLAG} T:F  Trial (#573): stop a rollout at tick T if its running");
-    eprintln!("                      peak is >= F x founders, tallied as bloom_stop in the");
-    eprintln!("                      dead frontier. Off by default; never applied in refinement.");
+    eprintln!("  {BLOOM_STOP_FLAG} T:F  Stop a rollout at tick T if its running peak is >= F x");
+    eprintln!("                      founders, tallied as bloom_stop in the dead frontier");
+    eprintln!("                      (default: 300:10, #573). Never applied in refinement.");
+    eprintln!(
+        "  {NO_BLOOM_STOP_FLAG}     Search without the bloom stop (e.g. to resume a checkpoint"
+    );
+    eprintln!("                      written before it existed).");
     eprintln!("  --checkpoint PATH   Write the search state to PATH at every generation");
     eprintln!("                      boundary (atomically), so an interrupted search can be");
     eprintln!("                      resumed. Refuses to overwrite an existing PATH.");

@@ -115,7 +115,9 @@ pub fn reproject(
     atlas: &Atlas,
     settings: &ReprojectSettings,
 ) -> Result<RefinedProjection, AtlasFileError> {
-    let AtlasProvenance { seed, max_ticks } = provenance(atlas, settings)?;
+    let AtlasProvenance {
+        seed, max_ticks, ..
+    } = provenance(atlas, settings)?;
     let refinement = RefinementConfig {
         top_k: settings.top_k,
         ensemble_size: settings.ensemble_size,
@@ -139,7 +141,11 @@ fn provenance(
 ) -> Result<AtlasProvenance, AtlasFileError> {
     let Some(recorded) = atlas.provenance else {
         return match (settings.seed, settings.max_ticks) {
-            (Some(seed), Some(max_ticks)) => Ok(AtlasProvenance { seed, max_ticks }),
+            (Some(seed), Some(max_ticks)) => Ok(AtlasProvenance {
+                seed,
+                max_ticks,
+                bloom_stop: None,
+            }),
             _ => Err(AtlasFileError::MissingProvenance),
         };
     };
@@ -208,6 +214,25 @@ mod tests {
             cells: atlas.cells.into_iter().take(1).collect(),
             ..atlas
         }
+    }
+
+    /// #573: an atlas says whether its search stopped blooms. One searched
+    /// without the stop, or written before the stop existed, records none.
+    #[test]
+    fn the_atlas_provenance_records_the_bloom_stop_and_old_atlases_read_none() {
+        let with = run_qd(&tiny(), 7, &mut ChaCha8Rng::seed_from_u64(7));
+        assert_eq!(with.provenance.unwrap().bloom_stop, tiny().bloom_stop);
+        assert!(tiny().bloom_stop.is_some(), "on by default");
+
+        let off = QdConfig {
+            bloom_stop: None,
+            ..tiny()
+        };
+        let without = run_qd(&off, 7, &mut ChaCha8Rng::seed_from_u64(7));
+        let line = serde_json::to_string(&without.provenance).unwrap();
+        assert!(!line.contains("bloom_stop"), "{line}");
+        let old: AtlasProvenance = serde_json::from_str(&line).unwrap();
+        assert_eq!(old.bloom_stop, None);
     }
 
     #[test]
@@ -292,6 +317,7 @@ mod tests {
         let recorded = one_cell_atlas(Some(AtlasProvenance {
             seed: 7,
             max_ticks: 20,
+            bloom_stop: None,
         }));
         assert_eq!(
             serde_json::to_string(&reproject(&legacy, &given).unwrap().recipe).unwrap(),
@@ -306,6 +332,7 @@ mod tests {
         let atlas = one_cell_atlas(Some(AtlasProvenance {
             seed: 7,
             max_ticks: 20,
+            bloom_stop: None,
         }));
         let agreeing = ReprojectSettings {
             seed: Some(7),
@@ -448,6 +475,7 @@ mod tests {
             ..one_cell_atlas(Some(AtlasProvenance {
                 seed: 7,
                 max_ticks: 20,
+                bloom_stop: None,
             }))
         };
         let path = scratch("all-dead").join("atlas.json");

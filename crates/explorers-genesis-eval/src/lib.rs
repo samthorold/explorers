@@ -150,8 +150,8 @@ pub struct EvalConfig {
     /// 200-point LHS box, 8 seeds, 3000-tick horizon), rounded up to 10;
     /// `docs/research/505-settling-time.md` holds the distribution.
     pub grace_ticks: u64,
-    /// The predictive bloom stop the rollout may apply (#573), or `None`,
-    /// the default. A trial, not a committed gate: see [`BloomStop`].
+    /// The predictive bloom stop the rollout applies (#573), or `None`, the
+    /// default here. See [`BloomStop`].
     pub bloom_stop: Option<BloomStop>,
 }
 
@@ -159,10 +159,11 @@ pub struct EvalConfig {
 /// §4 and §7): at exactly `tick`, a rollout whose running peak population
 /// (tick 0, the founders, included) is at least `factor` × founders is
 /// stopped as [`FailureMode::BloomStop`]. Unlike the dead-pool gates, it
-/// stops a world that *will* fail, not one that has. On the 9421 draw, at
-/// (300, 5) it stopped 3 of 1088 live seeds. So it is a cost measure, off
-/// by default, and the early-stop cross-check carries a sample of its stops
-/// to the horizon like any gate's.
+/// stops a world that *will* fail, not one that has, so it is a cost
+/// measure. The early-stop cross-check carries a sample of its stops to the
+/// horizon like any gate's. Off in [`EvalConfig::default`], which the
+/// research sweeps use. The genesis search applies it at (300, 10)
+/// (`docs/research/573-bloom-stop-trial.md` §5).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BloomStop {
     pub tick: u64,

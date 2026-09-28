@@ -297,7 +297,7 @@ One of the three coordinates the atlas bins surviving worlds on, each a cheap pe
 _Avoid_: behaviour descriptor (acceptable, but "axis" names its role in the atlas), feature, dimension (overloaded with trait-space dimensions)
 
 **Dead frontier**:
-The half of the **atlas** that records non-viable parameter regions — the **degenerate configurations**, tallied by which failure mode (cliff) they hit, rather than placed in a behaviour cell (a degenerate world has no meaningful behaviour coordinate). It is where parameter space stops being survivable. Entries arrive two ways: ruled out a priori by a **viability** gate before any run, or observed when a run carries a config into a cliff — the two must agree, and the disagreement is diagnostic.
+The half of the **atlas** that records non-viable parameter regions — the **degenerate configurations**, tallied by which failure mode (cliff) they hit, rather than placed in a behaviour cell (a degenerate world has no meaningful behaviour coordinate). It is where parameter space stops being survivable. Entries arrive two ways: ruled out a priori by a **viability** gate before any run, or observed when a run carries a config into a cliff — the two must agree, and the disagreement is diagnostic. A third, the **bloom stop**, is a prediction rather than either: a run that has bloomed to 10× its founders by tick 300 is stopped as very likely to fail, and is kept on its own `bloom_stop` cliff so it is never counted as an observed death.
 _Avoid_: failure list, dead zone (the frontier is the *boundary* structure keyed by cliff, not an undifferentiated region)
 
 **Degenerate configuration**:
