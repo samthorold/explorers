@@ -99,3 +99,78 @@ In both, the "on" search also found cells the "off" one did not: 14 and 6.
 
 Whether to make it the default is a promotion decision for #573, alongside the
 matched-wall-clock run above if a stricter test is wanted.
+
+## 5. Addendum: equal wall clock, and the factor raised to 10
+
+**At 5×, the equal-time test passes, but the rule kills a class of live
+worlds.** All runs here are on AC, with the "off" searches re-run on AC.
+Their atlases are byte-identical to the battery runs', and the first 10
+generations of a 20-generation "on" search reproduce the 10-generation run
+exactly.
+
+- Seed 42: at 5× and 20 generations, 116 cells / QD 45.2 in 17.6 min,
+  against 95 / 36.4 in 23.6 min with the stop off at 10.
+- Seed 43: at the 13.4 min mark where the "off" search finished, the stop
+  run had 96 / 37.7, against 93 / 36.6.
+
+The cross-check carried two bloom stops in generations 11–20 of seed 43 that
+were alive at `T`. Re-run on seeds 1000–1007 to `T = 2000`:
+
+- One config is **live on 8 of 8 seeds, and every seed is past 5× at tick
+  300** (5.1–7.7×). It has 42 founders and settles at 250–300 agents.
+- The other is mixed: 5 live, 2 lockup, 1 monoculture. The rule would stop
+  2 of its live seeds.
+- The fall from the running peak does not separate them. At tick 300 every
+  seed, live or lockup, is within about 10 % of its peak.
+
+The search proposes worlds an LHS draw rarely produced (§3; the #554 note's
+§5), and 5× cuts into them.
+
+**At 10×.** Per seed: a timing run (`--bloom-stop 300:10`, 20 generations,
+default carry 0.05), and a measurement run with every early stop carried to
+`T` (`--early-stop-crosscheck-fraction 1.0`, #577).
+
+| seed | run | 10 gens | cells / QD at 10 | 20 gens | cells / QD at 20 |
+|---|---|---|---|---|---|
+| 42 | off | 23m38s | 95 / 36.404 | — | — |
+| 42 | 300:10 | 12m14s | 95 / 36.404 | 28m56s | 119 / 46.77 |
+| 43 | off | 13m26s | 93 / 36.574 | — | — |
+| 43 | 300:10 | 7m25s | 93 / 36.574 | 31m06s | 129 / 52.67 |
+
+- **At 10×, the first 10 generations are identical to the stop-off search,
+  in about half the time.** No config's verdict changes, so the search does
+  not diverge. The rule only cuts the expensive rollouts short. Later
+  generations still hold dense configs the rule does not reach: generation 16
+  of seed 42 took 10.6 min, and generation 20 of seed 43 took 7.6 min.
+- **Wrongful stops, carrying everything:**
+
+  | | seed 42 | seed 43 |
+  |---|---|---|
+  | stops carried to `T` | 669 | 592 |
+  | alive at `T` | 5 | 13 |
+  | of which bloom stops | 1 | 4 |
+  | configs behind the bloom stops | 1 | 1 |
+
+  The rest are the existing gates' own reversible collapses: 3 lockup and
+  1 energy death on seed 42, 4 lockup and 5 energy death on seed 43, some
+  of them at high horizon fitness.
+- **Re-run to `T = 2000` on seeds 1000–1007:**
+  - Seed 42's config is 8/8 non-live (7 lockup, 1 monoculture). Its one live
+    seed in the search was a fluke, and the stop was right.
+  - Seed 43's config is live. Every seed that finished persists at 1200–1800
+    agents from 37 founders, and the other 4 of 8 hit the 300 s simulation
+    budget holding 2000–4700 agents. Its bloom at tick 300 ranges from 3× to
+    120×. It is the dense-bloom world the rollout budgets already struggle
+    with, and the search placed it nowhere.
+- **The carry is not verdict-neutral when budgets bite.** A carried rollout
+  that exhausts its budget is unfinished, which drops the seed and can move
+  its config's verdict. The measurement runs had 5 and 12 unfinished seeds,
+  against 1 and 0 in the timing runs. Their dead frontiers differ by one or
+  two configs, and their cells not at all.
+
+**Answer.** At 300:10 the stop halves the time to an identical 10-generation
+atlas. Across two 20-generation searches, its one real loss is a very dense
+live world, and the existing gates wrongly stop live worlds more often. The
+cost of promoting it is a stated blind spot: the atlas will not hold worlds
+that bloom past 10× by tick 300 and then persist at thousands of agents.
+Whether that is acceptable is a design call on #573.
