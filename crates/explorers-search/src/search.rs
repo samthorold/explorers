@@ -55,8 +55,8 @@ pub struct SearchConfig {
     /// Wall-clock budget on each seed rollout (`rollout_budget` in
     /// [`QdConfig`], #562).
     pub rollout_budget: RolloutBudget,
-    /// The predictive bloom stop (`bloom_stop` in [`QdConfig`], #573). Off
-    /// by default.
+    /// The predictive bloom stop (`bloom_stop` in [`QdConfig`], #573):
+    /// `DEFAULT_BLOOM_STOP` unless turned off.
     pub bloom_stop: Option<BloomStop>,
 }
 
@@ -74,13 +74,16 @@ impl Default for SearchConfig {
             early_stop_crosscheck_fraction: 0.05,
             carcass_seed_count: 2,
             rollout_budget: SEARCH_ROLLOUT_BUDGET,
-            bloom_stop: None,
+            bloom_stop: Some(crate::qd::DEFAULT_BLOOM_STOP),
         }
     }
 }
 
 /// The search's flag for the predictive bloom stop (#573), `TICK:FACTOR`.
 pub const BLOOM_STOP_FLAG: &str = "--bloom-stop";
+
+/// The search's flag that turns the bloom stop off.
+pub const NO_BLOOM_STOP_FLAG: &str = "--no-bloom-stop";
 
 /// Parse a [`BLOOM_STOP_FLAG`] value: `300:5` stops, at tick 300, a rollout
 /// whose running peak is at least 5 × founders.
@@ -608,6 +611,19 @@ impl SearchConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #573: the search stops a rollout that has bloomed to 10x its founders
+    /// by tick 300, by default.
+    #[test]
+    fn the_search_applies_the_bloom_stop_at_300_by_10_by_default() {
+        let rule = Some(BloomStop {
+            tick: 300,
+            factor: 10.0,
+        });
+        assert_eq!(SearchConfig::default().bloom_stop, rule);
+        assert_eq!(SearchConfig::default().qd().bloom_stop, rule);
+        assert_eq!(crate::qd::QdConfig::default().bloom_stop, rule);
+    }
 
     #[test]
     fn the_bloom_stop_flag_reads_tick_colon_factor_and_refuses_anything_else() {
