@@ -7,6 +7,7 @@ pub mod gp;
 pub mod lhs;
 pub mod prefilter;
 pub mod qd;
+pub mod recipe_export;
 pub mod search;
 pub mod sobol;
 pub mod sweep;

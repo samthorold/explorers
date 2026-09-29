@@ -129,19 +129,29 @@ pub fn parse_selector(
 ) -> HashSet<(ConfigSource, usize)> {
     let mut set = HashSet::new();
     for tok in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
-        let (source, idx) = match tok.split_once(':') {
-            Some((label, idx)) => (label.parse().unwrap_or_else(|e| panic!("{var} {e}")), idx),
-            None => match bare {
-                Some(source) => (source, tok),
-                None => panic!("{var} token {tok:?} is not source:index"),
-            },
+        let key = match (tok.contains(':'), bare) {
+            (false, Some(source)) => parse_index(tok).map(|index| (source, index)),
+            _ => parse_config_key(tok),
         };
-        let index: usize = idx
-            .parse()
-            .unwrap_or_else(|_| panic!("{var} index {idx:?} is not a usize"));
-        set.insert((source, index));
+        set.insert(key.unwrap_or_else(|e| panic!("{var} {e}")));
     }
     set
+}
+
+/// Parse one `source:index` key (`atlas:3`, `sample:12`, `sample@9421:12`) —
+/// the grammar of a [`parse_selector`] token, and of the config reference
+/// `export_recipe` takes (#581), so one reference names one config in every
+/// bin.
+pub fn parse_config_key(tok: &str) -> Result<(ConfigSource, usize), String> {
+    let (label, idx) = tok
+        .split_once(':')
+        .ok_or_else(|| format!("token {tok:?} is not source:index"))?;
+    Ok((label.parse()?, parse_index(idx)?))
+}
+
+fn parse_index(idx: &str) -> Result<usize, String> {
+    idx.parse()
+        .map_err(|_| format!("index {idx:?} is not a usize"))
 }
 
 #[cfg(test)]
