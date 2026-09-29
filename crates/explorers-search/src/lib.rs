@@ -3,6 +3,7 @@ pub mod bayesopt;
 pub mod bifurcation;
 pub mod checkpoint;
 pub mod config_source;
+pub mod energy_accounting;
 pub mod gp;
 pub mod heterotroph_margin;
 pub mod invasion;
