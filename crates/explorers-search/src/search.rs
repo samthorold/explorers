@@ -625,6 +625,18 @@ mod tests {
         assert_eq!(crate::qd::QdConfig::default().bloom_stop, rule);
     }
 
+    /// #582: the evaluator the search runs by default is the shared
+    /// `EvalConfig::search()` the app's verdict panel reads with, so the two
+    /// cannot drift apart.
+    #[test]
+    fn the_default_search_evaluates_with_the_shared_search_eval_config() {
+        let shared = explorers_genesis::EvalConfig::search();
+        assert_eq!(
+            format!("{:?}", SearchConfig::default().qd().eval_config()),
+            format!("{shared:?}")
+        );
+    }
+
     #[test]
     fn the_bloom_stop_flag_reads_tick_colon_factor_and_refuses_anything_else() {
         assert_eq!(

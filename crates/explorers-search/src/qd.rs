@@ -1032,13 +1032,9 @@ pub struct AtlasProvenance {
     pub bloom_stop: Option<BloomStop>,
 }
 
-/// The search's default [`BloomStop`] (#573): at tick 300, stop a rollout
-/// whose running peak has reached 10 × founders
-/// (`docs/research/573-bloom-stop-trial.md` §5).
-pub const DEFAULT_BLOOM_STOP: BloomStop = BloomStop {
-    tick: 300,
-    factor: 10.0,
-};
+/// The search's default [`BloomStop`] (#573), owned by the evaluator beside
+/// the rule so the app's verdict panel reads the same value (#582).
+pub use explorers_genesis_eval::DEFAULT_BLOOM_STOP;
 
 /// The carcass-locked fraction at which the evaluator gates a world as
 /// `NutrientLockup` — mirrored here so the search can cross-check its atlas against
@@ -1524,6 +1520,18 @@ fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
+impl QdConfig {
+    /// The evaluator the search's rollouts run: the evaluator's defaults with
+    /// this search's bloom stop. With the default [`QdConfig`] it is
+    /// [`EvalConfig::search`], the one the app's verdict panel reads with.
+    pub fn eval_config(&self) -> EvalConfig {
+        EvalConfig {
+            bloom_stop: self.bloom_stop,
+            ..EvalConfig::default()
+        }
+    }
+}
+
 impl Default for QdConfig {
     fn default() -> Self {
         QdConfig {
@@ -1715,10 +1723,7 @@ impl<R: Rng> SearchState<R> {
             ensemble_size: config.ensemble_size,
             run_config: RunConfig {
                 max_ticks: config.max_ticks,
-                eval_config: EvalConfig {
-                    bloom_stop: config.bloom_stop,
-                    ..EvalConfig::default()
-                },
+                eval_config: config.eval_config(),
                 early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
             },
         };

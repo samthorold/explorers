@@ -597,6 +597,8 @@ dependencies = [
  "eframe",
  "egui",
  "egui_plot",
+ "explorers-genesis",
+ "explorers-genesis-eval",
  "explorers-sim",
  "rand",
  "serde_json",

@@ -1,3 +1,5 @@
+mod verdict;
+
 use std::collections::HashMap;
 use std::fs;
 
@@ -167,6 +169,8 @@ const DEFAULT_HISTORY_CAPACITY: usize = 2048;
 /// by pool. Sampled once per applied `world.step()` so the plots reflect
 /// pause/step/speed. Framework-agnostic and unit-testable.
 struct History {
+    /// Living agents, all roles: the series the bloom markers read against.
+    population: RingBuffer<f64>,
     producers: RingBuffer<f64>,
     consumers: RingBuffer<f64>,
     decomposers: RingBuffer<f64>,
@@ -183,6 +187,7 @@ impl History {
     /// samples.
     fn new(capacity: usize) -> Self {
         Self {
+            population: RingBuffer::new(capacity),
             producers: RingBuffer::new(capacity),
             consumers: RingBuffer::new(capacity),
             decomposers: RingBuffer::new(capacity),
@@ -204,6 +209,7 @@ impl History {
         let breakdown = RoleBreakdown::from_roles(&topology.trophic_roles(world.agents()));
         let budget = compute_energy_budget(world);
 
+        self.population.push(world.agents().len() as f64);
         self.producers.push(breakdown.producers as f64);
         self.consumers.push(breakdown.consumers as f64);
         self.decomposers.push(breakdown.decomposers as f64);
@@ -227,15 +233,23 @@ impl History {
     }
 }
 
-/// Build an `egui_plot` line from a ring-buffered series. The x-axis is the
-/// sample index (oldest at 0), so the most recent sample sits at the right edge
-/// and older samples scroll left as eviction advances. Thin glue over the
-/// buffer; the buffer itself is the unit-tested part.
-fn series_line(name: &str, series: &RingBuffer<f64>) -> egui_plot::Line<'static> {
-    let points: egui_plot::PlotPoints = series
-        .iter()
-        .enumerate()
-        .map(|(i, &y)| [i as f64, y])
+/// The world tick of each retained sample, oldest first, when the newest was
+/// sampled at `last_tick`: one sample per applied step, so the samples sit on
+/// consecutive ticks ending at `last_tick`. Puts the plots on a tick x-axis,
+/// where the verdict panel's tick markers (bloom stop, early stop) belong.
+fn sample_ticks(len: usize, last_tick: u64) -> impl Iterator<Item = u64> {
+    let first = (last_tick + 1).saturating_sub(len as u64);
+    first..=last_tick
+}
+
+/// Build an `egui_plot` line from a ring-buffered series whose newest sample
+/// is at `last_tick`, on a tick x-axis: the most recent sample sits at the
+/// right edge and older samples scroll left as eviction advances. Thin glue
+/// over the buffer; the buffer itself is the unit-tested part.
+fn series_line(name: &str, series: &RingBuffer<f64>, last_tick: u64) -> egui_plot::Line<'static> {
+    let points: egui_plot::PlotPoints = sample_ticks(series.len(), last_tick)
+        .zip(series.iter())
+        .map(|(tick, &y)| [tick as f64, y])
         .collect();
     egui_plot::Line::new(name.to_owned(), points)
 }
@@ -693,7 +707,7 @@ fn main() -> eframe::Result {
     let recipe = load_recipe(&config);
 
     let seed: u64 = config.seed.unwrap_or_else(rand::random);
-    let mut world = World::from_recipe(&recipe, seed);
+    let world = World::from_recipe(&recipe, seed);
 
     if config.trace {
         eprintln!("Tracing {} ticks (seed {seed})...", recipe.max_ticks);
@@ -705,18 +719,17 @@ fn main() -> eframe::Result {
         return Ok(());
     }
 
+    // Fast-forward through the app's own step path so the history and the
+    // verdict panel observe every tick, as the genesis rollout does.
+    let mut app = ExplorersApp::new(world, recipe.max_ticks);
     if config.fast_forward > 0 {
         eprintln!("Fast-forwarding {} ticks...", config.fast_forward);
-        for _ in 0..config.fast_forward {
-            world.step();
-        }
+        app.apply_steps(config.fast_forward as u32);
         eprintln!(
             "Fast-forward complete. {} agents alive.",
-            world.agents().len()
+            app.world.agents().len()
         );
     }
-
-    let app = ExplorersApp::new(world, config.fast_forward);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Explorers"),
@@ -745,17 +758,31 @@ struct ExplorersApp {
     /// decomposition) that drive the role readout. Lives on the app (the sim stays
     /// projection-free per ADR 0001).
     topology: TopologyProjection,
+    /// The genesis evaluator's incremental observation of the world, read
+    /// with the search's own `EvalConfig` against the recipe's horizon
+    /// (#582). Observed once per applied step, alongside the history.
+    verdict: verdict::VerdictObserver,
+    /// The last verdict read on demand, with the tick it was read at.
+    last_verdict: Option<(u64, explorers_genesis_eval::FitnessBreakdown)>,
 }
 
 impl ExplorersApp {
-    fn new(world: World, tick_count: u64) -> Self {
+    /// An app over `world` at tick 0, whose verdict panel reads the world
+    /// against the recipe's `horizon`.
+    fn new(world: World, horizon: u64) -> Self {
         Self {
-            world,
-            tick_count,
+            tick_count: world.tick(),
             clock: RunClock::new(),
             selected_agent: None,
             history: History::new(DEFAULT_HISTORY_CAPACITY),
             topology: TopologyProjection::new(),
+            verdict: verdict::VerdictObserver::new(
+                &world,
+                explorers_genesis_eval::EvalConfig::search(),
+                horizon,
+            ),
+            last_verdict: None,
+            world,
         }
     }
 
@@ -769,6 +796,15 @@ impl ExplorersApp {
             self.tick_count += 1;
             self.topology.update(self.world.event_log());
             self.history.sample(&self.world, &self.topology);
+            self.verdict.observe(&self.world);
+            // Both log readers (the topology and the evaluator's
+            // observations) have consumed the step's events, so the log is
+            // dropped behind them, as the genesis rollout drops it behind
+            // `consumed_events()`: memory stays bounded however long the app
+            // runs. Past the horizon the observations stop reading, and the
+            // topology alone still has.
+            let consumed = self.world.event_log().len();
+            self.world.compact_event_log_before(consumed);
         }
     }
 }
@@ -915,6 +951,8 @@ impl ExplorersApp {
                     ui.separator();
                     self.debug_history_plots(ui);
                     ui.separator();
+                    self.debug_verdict(ui);
+                    ui.separator();
                     self.debug_world_parameters(ui);
                     ui.separator();
                     self.debug_selected_agent(ui);
@@ -983,19 +1021,58 @@ impl ExplorersApp {
     /// Updates live as the simulation advances because the buffers are sampled
     /// once per applied step. Thin rendering glue over the unit-tested buffers.
     fn debug_history_plots(&self, ui: &mut egui::Ui) {
-        use egui_plot::{Legend, Plot};
+        use egui_plot::{HLine, Legend, Plot, VLine};
 
+        let t = self.world.tick();
         egui::CollapsingHeader::new("History")
             .default_open(true)
             .show(ui, |ui| {
-                ui.label("Population by role");
+                // The bloom markers: founders, running peak and bloom factor,
+                // the bloom stop's tick, and where the search would first
+                // have stopped this world (#582).
+                let bloom = self.verdict.bloom();
+                ui.label(format!(
+                    "Population by role — bloom ×{:.1} (peak {} / {} founders)",
+                    bloom.factor(),
+                    bloom.running_peak,
+                    bloom.founders
+                ));
                 Plot::new("history_population")
                     .height(140.0)
                     .legend(Legend::default())
                     .show(ui, |plot_ui| {
-                        plot_ui.line(series_line("producers", &self.history.producers));
-                        plot_ui.line(series_line("consumers", &self.history.consumers));
-                        plot_ui.line(series_line("decomposers", &self.history.decomposers));
+                        plot_ui.line(series_line("living", &self.history.population, t));
+                        plot_ui.line(series_line("producers", &self.history.producers, t));
+                        plot_ui.line(series_line("consumers", &self.history.consumers, t));
+                        plot_ui.line(series_line("decomposers", &self.history.decomposers, t));
+                        plot_ui.hline(
+                            HLine::new("founders", bloom.founders as f64).color(Color32::GRAY),
+                        );
+                        plot_ui.hline(
+                            HLine::new(
+                                format!("running peak (×{:.1})", bloom.factor()),
+                                bloom.running_peak as f64,
+                            )
+                            .color(Color32::LIGHT_BLUE),
+                        );
+                        if let Some(rule) = bloom.rule {
+                            plot_ui.vline(
+                                VLine::new(
+                                    format!("bloom stop {}:{}", rule.tick, rule.factor),
+                                    rule.tick as f64,
+                                )
+                                .color(Color32::GOLD),
+                            );
+                        }
+                        if let Some(stop) = self.verdict.first_stop() {
+                            plot_ui.vline(
+                                VLine::new(
+                                    format!("early stop: {:?}", stop.failure),
+                                    stop.tick as f64,
+                                )
+                                .color(Color32::RED),
+                            );
+                        }
                     });
 
                 ui.label("Energy by pool");
@@ -1003,9 +1080,13 @@ impl ExplorersApp {
                     .height(140.0)
                     .legend(Legend::default())
                     .show(ui, |plot_ui| {
-                        plot_ui.line(series_line("living", &self.history.living_energy));
-                        plot_ui.line(series_line("carcass", &self.history.carcass_energy));
-                        plot_ui.line(series_line("dissipated", &self.history.dissipated_energy));
+                        plot_ui.line(series_line("living", &self.history.living_energy, t));
+                        plot_ui.line(series_line("carcass", &self.history.carcass_energy, t));
+                        plot_ui.line(series_line(
+                            "dissipated",
+                            &self.history.dissipated_energy,
+                            t,
+                        ));
                     });
 
                 ui.label("Nutrient by pool");
@@ -1013,10 +1094,61 @@ impl ExplorersApp {
                     .height(140.0)
                     .legend(Legend::default())
                     .show(ui, |plot_ui| {
-                        plot_ui.line(series_line("available", &self.history.nutrient_available));
-                        plot_ui.line(series_line("living", &self.history.nutrient_living));
-                        plot_ui.line(series_line("carcasses", &self.history.nutrient_carcasses));
+                        plot_ui.line(series_line(
+                            "available",
+                            &self.history.nutrient_available,
+                            t,
+                        ));
+                        plot_ui.line(series_line("living", &self.history.nutrient_living, t));
+                        plot_ui.line(series_line(
+                            "carcasses",
+                            &self.history.nutrient_carcasses,
+                            t,
+                        ));
                     });
+            });
+    }
+
+    /// The genesis verdict panel (#582): the evaluator's reading of the
+    /// running world with the search's own `EvalConfig`, where the search
+    /// would first have stopped it, and whether the bloom stop fires. The
+    /// verdict clusters the roster, so it is read on the button, not every
+    /// frame; the early stops and the bloom read are kept per step and cost
+    /// nothing to show.
+    fn debug_verdict(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Genesis verdict")
+            .default_open(true)
+            .show(ui, |ui| {
+                let horizon = self.verdict.horizon();
+                let observed = self.verdict.observed_ticks();
+                if observed < horizon {
+                    ui.label(format!(
+                        "Observing tick {observed} of horizon T = {horizon}"
+                    ));
+                } else {
+                    ui.label(format!(
+                        "Horizon T = {horizon} reached: the verdict read there is kept"
+                    ));
+                }
+
+                if ui.button("Read verdict").clicked() {
+                    self.last_verdict =
+                        Some((self.world.tick(), self.verdict.verdict(&self.world)));
+                }
+                match &self.last_verdict {
+                    None => {
+                        ui.label("Verdict: not read yet");
+                    }
+                    Some((tick, breakdown)) => {
+                        for line in verdict::verdict_lines(*tick, horizon, breakdown) {
+                            ui.label(line);
+                        }
+                    }
+                }
+
+                ui.separator();
+                ui.label(verdict::early_stop_line(self.verdict.first_stop()));
+                ui.label(verdict::bloom_line(&self.verdict.bloom()));
             });
     }
 
@@ -1217,6 +1349,12 @@ mod tests {
     }
 
     #[test]
+    fn samples_sit_on_consecutive_ticks_ending_at_the_newest() {
+        assert_eq!(sample_ticks(3, 10).collect::<Vec<_>>(), vec![8, 9, 10]);
+        assert_eq!(sample_ticks(0, 10).count(), 0);
+    }
+
+    #[test]
     fn ring_buffer_len_caps_at_capacity() {
         let mut ring: RingBuffer<i32> = RingBuffer::new(2);
         assert_eq!(ring.len(), 0);
@@ -1250,7 +1388,7 @@ mod tests {
     #[test]
     fn apply_steps_samples_history_once_per_applied_step() {
         let world = World::from_recipe(&default_recipe(), 7);
-        let mut app = ExplorersApp::new(world, 0);
+        let mut app = ExplorersApp::new(world, default_recipe().max_ticks);
         assert_eq!(app.history.len(), 0);
 
         app.apply_steps(5);
@@ -1267,6 +1405,108 @@ mod tests {
         // Zero steps (the running clock between intervals) add nothing.
         app.apply_steps(0);
         assert_eq!(app.history.len(), 6);
+    }
+
+    /// The genesis rollout driver's `RunConfig` for `recipe` as the search
+    /// runs it, with the carry-to-horizon cross-check off so a stopped
+    /// rollout ends where it stops.
+    fn search_run_config(recipe: &WorldRecipe) -> explorers_genesis::RunConfig {
+        explorers_genesis::RunConfig {
+            max_ticks: recipe.max_ticks,
+            eval_config: explorers_genesis_eval::EvalConfig::search(),
+            early_stop_crosscheck_fraction: 0.0,
+        }
+    }
+
+    fn genesis_rollout(recipe: &WorldRecipe, seed: u64) -> explorers_genesis::RunResult {
+        explorers_genesis::run_single(
+            &recipe.parameters,
+            recipe.initial_distribution.as_ref().unwrap(),
+            &search_run_config(recipe),
+            seed,
+        )
+    }
+
+    /// The repo's `recipe.json` (an atlas cell's world) over a short horizon.
+    fn living_recipe() -> WorldRecipe {
+        let mut recipe: WorldRecipe =
+            serde_json::from_str(include_str!("../../../recipe.json")).unwrap();
+        recipe.max_ticks = 200;
+        recipe
+    }
+
+    #[test]
+    fn the_app_reads_the_genesis_rollouts_verdict_at_the_horizon() {
+        let recipe = living_recipe();
+        let seed = 7;
+        let rollout = genesis_rollout(&recipe, seed);
+        assert_eq!(
+            rollout.termination_tick, recipe.max_ticks,
+            "the scenario must reach the horizon for a like-for-like verdict"
+        );
+
+        let mut app = ExplorersApp::new(World::from_recipe(&recipe, seed), recipe.max_ticks);
+        app.apply_steps(recipe.max_ticks as u32);
+        let verdict = app.verdict.verdict(&app.world);
+        assert_eq!(format!("{verdict:?}"), format!("{:?}", rollout.breakdown));
+
+        // Past the horizon the verdict is the one read there.
+        app.apply_steps(20);
+        let later = app.verdict.verdict(&app.world);
+        assert_eq!(format!("{later:?}"), format!("{:?}", rollout.breakdown));
+    }
+
+    #[test]
+    fn the_bloom_reading_tracks_founders_and_running_peak_and_reads_the_stop_at_its_tick() {
+        let mut recipe = living_recipe();
+        recipe.max_ticks = 400;
+        let mut app = ExplorersApp::new(World::from_recipe(&recipe, 3), recipe.max_ticks);
+        let founders = app.world.agents().len();
+        let rule = explorers_genesis_eval::DEFAULT_BLOOM_STOP;
+        let mut peak = founders;
+        while app.world.tick() < rule.tick {
+            assert_eq!(app.verdict.bloom().fired, None, "unread before its tick");
+            app.apply_steps(1);
+            peak = peak.max(app.world.agents().len());
+        }
+
+        let bloom = app.verdict.bloom();
+        assert_eq!(bloom.founders, founders);
+        assert_eq!(bloom.running_peak, peak);
+        assert_eq!(bloom.factor(), peak as f32 / founders as f32);
+        assert_eq!(bloom.rule, Some(rule));
+        assert_eq!(bloom.fired, Some(bloom.factor() >= rule.factor));
+    }
+
+    #[test]
+    fn the_event_log_and_the_observations_stay_bounded_over_a_long_run() {
+        let mut recipe = living_recipe();
+        recipe.max_ticks = 50;
+        let mut app = ExplorersApp::new(World::from_recipe(&recipe, 7), recipe.max_ticks);
+        for _ in 0..300 {
+            app.apply_steps(1);
+            // Every reader has consumed the step's events, so none are held.
+            assert_eq!(app.world.event_log().retained(), 0);
+        }
+        assert!(app.world.event_log().len() > 0, "the world did log events");
+        // The evaluator's series stop at the horizon, as the rollout's do.
+        assert_eq!(app.verdict.observed_ticks(), recipe.max_ticks);
+    }
+
+    #[test]
+    fn the_first_early_stop_is_the_tick_the_genesis_rollout_stops() {
+        // The built-in recipe's three founders starve within a few ticks.
+        let recipe = default_recipe();
+        let seed = 7;
+        let rollout = genesis_rollout(&recipe, seed);
+        assert!(rollout.termination_tick < recipe.max_ticks);
+
+        let mut app = ExplorersApp::new(World::from_recipe(&recipe, seed), recipe.max_ticks);
+        app.apply_steps(recipe.max_ticks as u32);
+        let stop = app.verdict.first_stop().expect("the rollout stopped early");
+
+        assert_eq!(stop.tick, rollout.termination_tick);
+        assert_eq!(Some(stop.failure.clone()), rollout.failure);
     }
 
     #[test]
@@ -1299,6 +1539,11 @@ mod tests {
             history.producers.iter().last().copied(),
             Some(breakdown.producers as f64),
             "producer series records the behavioural-role count"
+        );
+        assert_eq!(
+            history.population.iter().last().copied(),
+            Some(world.agents().len() as f64),
+            "population series records the living count"
         );
         let recorded_living = history.living_energy.iter().last().copied().unwrap();
         assert!(
