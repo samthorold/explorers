@@ -52,7 +52,7 @@ The distinction is not academic. Reid's paradox — the observation that trees r
 
 **Natal versus breeding dispersal.** Natal dispersal is the movement from birthplace to the site of first reproduction. Breeding dispersal is movement between successive breeding sites. The distinction matters because natal dispersal is typically longer and more common — it is the primary mechanism by which populations spread and gene flow occurs. Breeding dispersal is often shorter and driven by local conditions (territory quality, mate availability, predation risk).
 
-**Dispersal and gene flow.** Dispersal is the spatial expression of gene flow. Limited dispersal produces spatial genetic structure — nearby individuals are more related than distant ones (isolation by distance, Wright 1943). This spatial genetic structure enables local adaptation, kin selection, and ultimately, if barriers to dispersal are strong enough, speciation. The tension between gene flow (homogenizing) and local selection (differentiating) is mediated by dispersal distance relative to the spatial scale of environmental variation.
+**Dispersal and gene flow.** Dispersal is the spatial expression of gene flow. Limited dispersal produces spatial genetic structure — nearby individuals are more related than distant ones (isolation by distance, Wright 1943). This spatial genetic structure enables local adaptation, kin selection, and ultimately, if barriers to dispersal are strong enough, speciation. It also makes neighbours relatives, so kin competition, including consumption of kin, is itself a selective pressure for dispersal (Hamilton & May 1977; see [cannibalism and kin](cannibalism-and-kin.md)). The tension between gene flow (homogenizing) and local selection (differentiating) is mediated by dispersal distance relative to the spatial scale of environmental variation.
 
 **Dispersal in fragmented landscapes.** When habitat is fragmented, the matrix between patches becomes a critical factor. Dispersal is not just a distance function but a landscape-resistance function: some matrix types are hostile (cleared land for forest species), others are permeable (hedgerows, stepping-stone habitats). Connectivity — the degree to which the landscape facilitates movement between patches — is the emergent property that determines whether a fragmented metapopulation functions as a connected system or a set of isolated remnants.
 
@@ -179,6 +179,7 @@ Spatial ecology is where agent-based models are not merely useful but arguably n
 - Grimm, V. & Railsback, S.F. (2005) *Individual-based Modeling and Ecology*. Princeton University Press.
 - Grimm, V., Berger, U., Bastiansen, F. et al. (2006) A standard protocol for describing individual-based and agent-based models. *Ecological Modelling*, 198, 115-126.
 - Grimm, V., Berger, U., DeAngelis, D.L., Polhill, J.G., Giske, J. & Railsback, S.F. (2010) The ODD protocol: A review and first update. *Ecological Modelling*, 221, 2760-2768.
+- Hamilton, W.D. & May, R.M. (1977) Dispersal in stable habitats. *Nature*, 269, 578-581.
 - Hanski, I. (1994) A practical model of metapopulation dynamics. *Journal of Animal Ecology*, 63, 151-162.
 - Hanski, I. (1998) Metapopulation dynamics. *Nature*, 396, 41-49.
 - Hanski, I. (1999) *Metapopulation Ecology*. Oxford University Press.
