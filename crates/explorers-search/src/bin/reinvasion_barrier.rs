@@ -58,8 +58,25 @@
 //! re-reads chunk files and prints the combined summary. Artifact
 //! `target/reinvasion-barrier.json` (`--out PATH`).
 //!
+//! ## Accounting mode (#591)
+//!
+//! `--accounting` runs the named arms (`step 0`, `step 1`, `full`, each at
+//! both placements) under [`LineageAccountant`], which books each lineage's
+//! realised energy account per member-tick: carcasses in reach against
+//! #589's break-even `k*`, carcass intake against the `k · h · u_H · e`
+//! ceiling (the gap split into wear, exhaustion and sharing), photosynthesis
+//! against its unshaded ceiling, every maintenance term, growth loss,
+//! movement, grazing (and by whom), the reproductive earmark and its gates,
+//! deaths and births. The control fork books the resident's own consumers
+//! (role consumer or decomposer at the injection tick) the same way: the
+//! contrast case. The account reconciles with the stepper's energy ledger;
+//! the tables print the worst residual. Artifact
+//! `target/carcass-income-accounting.json`. The lineage read (rates, diet,
+//! deaths) is the plain mode's, unchanged.
+//!
 //! Run with:
 //!   cargo run --release -p explorers-search --bin reinvasion_barrier -- sample:31
+//!   cargo run --release -p explorers-search --bin reinvasion_barrier -- sample:31 --accounting
 //!
 //! No change to the stepper, the evaluator or the search; no assertion on
 //! emergent values beyond smoke checks.
@@ -72,9 +89,10 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_search::config_source::{parse_config_key, resolve_config, sampled_units};
+use explorers_search::energy_accounting::{EnergyAccount, LineageAccountant};
 use explorers_search::invasion::{
-    ConsumedCounts, DrainedEnergy, Lineage, RateSummary, growth_rate, median, place_cohort,
-    run_window, summarise_rates,
+    ConsumedCounts, DrainedEnergy, Lineage, RateSummary, SERIES_INTERVAL, WindowOutcome,
+    growth_rate, median, place_cohort, run_window, summarise_rates,
 };
 use explorers_search::search::default_ranges;
 use explorers_search::sweep::read_atlas_units;
@@ -149,6 +167,85 @@ fn all_arms() -> Vec<Arm> {
             })
         })
         .collect()
+}
+
+/// The arms the accounting mode (#591) books: the unmodified producer
+/// (`step 0`), one mutation step toward heterotrophy, and the full
+/// heterotroph, each at both placements.
+fn accounting_arms() -> Vec<Arm> {
+    [Phenotype::Step(0), Phenotype::Step(1), Phenotype::Full]
+        .into_iter()
+        .flat_map(|phenotype| {
+            [Placement::Uniform, Placement::Pile].map(|placement| Arm {
+                phenotype,
+                placement,
+            })
+        })
+        .collect()
+}
+
+/// Whether an arm's window is stepped plainly (`run_window`) or under the
+/// energy accountant (#591).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Plain,
+    Accounting,
+}
+
+/// `run_window` under a [`LineageAccountant`]: the same lineage read (series,
+/// extinction, the lineage's diet and deaths), plus its energy account.
+fn run_accounted_window(
+    world: &mut World,
+    lineage: Lineage,
+    window: u64,
+    max_population: usize,
+) -> (WindowOutcome, EnergyAccount) {
+    let mut acct = LineageAccountant::new(world, lineage);
+    let cohort = acct.alive(world);
+    let mut series = vec![cohort];
+    let (mut alive, mut extinct_tick, mut ticks_run, mut stopped) = (cohort, None, 0, None);
+    for t in 1..=window {
+        acct.step(world);
+        ticks_run = t;
+        alive = acct.alive(world);
+        if alive == 0 && extinct_tick.is_none() {
+            extinct_tick = Some(t);
+        }
+        if t.is_multiple_of(SERIES_INTERVAL) {
+            series.push(alive);
+        }
+        if world.agents().is_empty() {
+            stopped = Some("extinct");
+            break;
+        }
+        if world.agents().len() > max_population {
+            stopped = Some("explosion");
+            break;
+        }
+    }
+    if !ticks_run.is_multiple_of(SERIES_INTERVAL) {
+        series.push(alive);
+    }
+    let account = *acct.account();
+    let outcome = WindowOutcome {
+        ticks_run,
+        stopped,
+        series,
+        alive,
+        extinct_tick,
+        lineage: Some(acct.lineage().clone()),
+    };
+    (outcome, account)
+}
+
+/// #589's break-even count: carcasses in reach per tick the phenotype needs
+/// for the carcass ceiling `h · u_H · e` to cover base and heterotrophy
+/// maintenance, `k* = (base + h^x · c_H) / (h · u_H · e)`.
+fn break_even_count(traits: &TraitVector, e: f32, p: &WorldParameters) -> f32 {
+    let maintenance = p.base_metabolic_rate
+        + traits.heterotrophy.powf(p.maintenance_cost_exponent) * p.heterotrophy_maintenance_cost;
+    maintenance
+        / (traits.heterotrophy * explorers_sim::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK * e)
 }
 
 /// The founder heterotroph centroid `World::new` seeds for this
@@ -279,6 +376,13 @@ struct Control {
     ticks_run: u64,
     stopped: Option<String>,
     end: Stocks,
+    /// The resident's consumers — agents in the consumer or decomposer role
+    /// at the injection tick — and, in the accounting mode, their energy
+    /// account (with descendants) over the window: the contrast case (#591).
+    #[serde(default)]
+    consumers_at_injection: usize,
+    #[serde(default)]
+    consumer_account: Option<EnergyAccount>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -320,6 +424,14 @@ struct Injection {
     carcass_drawdown: f32,
     /// Available pool N at the window end, arm − control.
     pool_gain: f32,
+    /// #589's break-even carcass count on the resident producer (`None`
+    /// without one, or in the plain mode).
+    #[serde(default)]
+    k_star: Option<f32>,
+    /// The lineage's realised energy account over the window (#591's
+    /// accounting mode; `None` in the plain mode).
+    #[serde(default)]
+    account: Option<EnergyAccount>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -350,12 +462,25 @@ fn producer_centroid(agents: &[Agent], roles: &HashMap<u64, TrophicRole>) -> Opt
 
 /// One seed: the resident to `t_inj`, then the control and each arm as forks
 /// of that one resident.
+#[cfg(test)]
 fn run_seed(
+    config: &(WorldParameters, InitialDistribution),
+    seed: u64,
+    t_inj: u64,
+    window: u64,
+    arms: &[Arm],
+) -> SeedRecord {
+    run_seed_with(config, seed, t_inj, window, arms, Mode::Plain)
+}
+
+/// [`run_seed`], with each arm's window stepped in the given mode.
+fn run_seed_with(
     (params, dist): &(WorldParameters, InitialDistribution),
     seed: u64,
     t_inj: u64,
     window: u64,
     arms: &[Arm],
+    mode: Mode,
 ) -> SeedRecord {
     let max_population = EvalConfig::default().max_population;
     let mut world = World::new(params.clone(), dist.clone(), seed);
@@ -415,14 +540,32 @@ fn run_seed(
     // The history has been read; forks clone a near-empty log.
     world.compact_event_log_before(world.event_log().len());
 
+    let resident_consumers: Vec<u64> = roles
+        .iter()
+        .filter(|(_, r)| **r != TrophicRole::Producer)
+        .map(|(id, _)| *id)
+        .collect();
     let control = {
         let mut fork = world.clone();
-        let mut fork_topo = topo.clone();
-        let out = run_window(&mut fork, &mut fork_topo, None, window, max_population);
+        let (out, consumer_account) = match mode {
+            Mode::Plain => {
+                let mut fork_topo = topo.clone();
+                let out = run_window(&mut fork, &mut fork_topo, None, window, max_population);
+                (out, None)
+            }
+            Mode::Accounting => {
+                let lineage = Lineage::new(resident_consumers.iter().copied());
+                let (out, account) =
+                    run_accounted_window(&mut fork, lineage, window, max_population);
+                (out, Some(account))
+            }
+        };
         Control {
             ticks_run: out.ticks_run,
             stopped: out.stopped.map(str::to_string),
             end: stocks(&fork),
+            consumers_at_injection: resident_consumers.len(),
+            consumer_account,
         }
     };
 
@@ -445,13 +588,23 @@ fn run_seed(
         let mut fork_topo = topo.clone();
         let positions = cohort_positions(&fork, arm.placement, INVADER_COHORT, seed, arm.tag());
         let ids = place_cohort(&mut fork, traits, &positions, dist.initial_energy_per_agent);
-        let out = run_window(
-            &mut fork,
-            &mut fork_topo,
-            Some(Lineage::new(ids)),
-            window,
-            max_population,
-        );
+        let (out, account) = match mode {
+            Mode::Plain => {
+                let out = run_window(
+                    &mut fork,
+                    &mut fork_topo,
+                    Some(Lineage::new(ids)),
+                    window,
+                    max_population,
+                );
+                (out, None)
+            }
+            Mode::Accounting => {
+                let (out, account) =
+                    run_accounted_window(&mut fork, Lineage::new(ids), window, max_population);
+                (out, Some(account))
+            }
+        };
         let lineage = out.lineage.expect("lineage arm");
         let end = stocks(&fork);
         injections.push(Injection {
@@ -480,6 +633,11 @@ fn run_seed(
             end,
             carcass_drawdown: control.end.carcass_nutrient - end.carcass_nutrient,
             pool_gain: end.pool_nutrient - control.end.pool_nutrient,
+            k_star: match mode {
+                Mode::Plain => None,
+                Mode::Accounting => efficiency.map(|e| break_even_count(&traits, e, params)),
+            },
+            account,
         });
     }
     SeedRecord {
@@ -620,6 +778,9 @@ struct Artifact {
     window: u64,
     cohort: usize,
     arms: Vec<Arm>,
+    /// Whether the arms ran under the energy accountant (#591).
+    #[serde(default)]
+    accounting: bool,
     seeds: Vec<SeedRecord>,
     /// Derived from `seeds`: not read back from a file (an empty arm's
     /// medians are NaN, written as `null`); `merge` recomputes it.
@@ -630,6 +791,7 @@ struct Artifact {
 impl Artifact {
     /// Run seeds `SEED_BASE + seed_from ..` (`n` of them) in parallel; the
     /// indexed collect keeps seed order, so the artifact is deterministic.
+    #[allow(clippy::too_many_arguments)]
     fn run(
         reference: &str,
         config: &(WorldParameters, InitialDistribution),
@@ -638,12 +800,16 @@ impl Artifact {
         seed_from: u64,
         n: u64,
         arms: &[Arm],
+        mode: Mode,
     ) -> Artifact {
         let seeds: Vec<SeedRecord> = (seed_from..seed_from + n)
             .into_par_iter()
-            .map(|s| run_seed(config, SEED_BASE + s, t_inj, window, arms))
+            .map(|s| run_seed_with(config, SEED_BASE + s, t_inj, window, arms, mode))
             .collect();
-        Artifact::from_seeds(reference.to_string(), t_inj, window, arms.to_vec(), seeds)
+        let mut a =
+            Artifact::from_seeds(reference.to_string(), t_inj, window, arms.to_vec(), seeds);
+        a.accounting = mode == Mode::Accounting;
+        a
     }
 
     fn from_seeds(
@@ -660,6 +826,7 @@ impl Artifact {
             window,
             cohort: INVADER_COHORT,
             arms,
+            accounting: false,
             seeds,
             summary,
         }
@@ -669,7 +836,15 @@ impl Artifact {
     /// disjoint seeds) into the whole run's artifact, seeds in order.
     fn merge(chunks: Vec<Artifact>) -> Result<Artifact, String> {
         let first = chunks.first().ok_or("nothing to merge")?;
-        let key = |a: &Artifact| (a.reference.clone(), a.t_inj, a.window, a.arms.clone());
+        let key = |a: &Artifact| {
+            (
+                a.reference.clone(),
+                a.t_inj,
+                a.window,
+                a.arms.clone(),
+                a.accounting,
+            )
+        };
         let want = key(first);
         if let Some(bad) = chunks.iter().find(|a| key(a) != want) {
             return Err(format!(
@@ -677,17 +852,19 @@ impl Artifact {
                 bad.reference, bad.t_inj, bad.window, want.0, want.1, want.2
             ));
         }
-        let (reference, t_inj, window, arms) = want;
+        let (reference, t_inj, window, arms, accounting) = want;
         let mut seeds: Vec<SeedRecord> = chunks.into_iter().flat_map(|a| a.seeds).collect();
         seeds.sort_by_key(|s| s.seed);
         if seeds.windows(2).any(|w| w[0].seed == w[1].seed) {
             return Err("chunks share a seed".to_string());
         }
-        Ok(Artifact::from_seeds(reference, t_inj, window, arms, seeds))
+        let mut a = Artifact::from_seeds(reference, t_inj, window, arms, seeds);
+        a.accounting = accounting;
+        Ok(a)
     }
 }
 
-const USAGE: &str = "usage: reinvasion_barrier [CONFIG_KEY (default sample:31)] [--t-inj N] [--window N] [--seed-from A] [--seeds N] [--atlas PATH] [--out PATH] | --merge FILE...";
+const USAGE: &str = "usage: reinvasion_barrier [CONFIG_KEY (default sample:31)] [--accounting] [--t-inj N] [--window N] [--seed-from A] [--seeds N] [--atlas PATH] [--out PATH] | --merge FILE...";
 
 #[derive(Debug)]
 struct Cli {
@@ -699,6 +876,9 @@ struct Cli {
     atlas: Option<std::path::PathBuf>,
     out: String,
     merge: Vec<String>,
+    /// Run the accounting mode (#591): the named arms under the energy
+    /// accountant, written to `target/carcass-income-accounting.json`.
+    accounting: bool,
 }
 
 impl Cli {
@@ -710,8 +890,9 @@ impl Cli {
             seed_from: 0,
             seeds: N_SEEDS,
             atlas: None,
-            out: "target/reinvasion-barrier.json".to_string(),
+            out: String::new(),
             merge: Vec::new(),
+            accounting: false,
         };
         let mut it = argv.into_iter();
         let mut merging = false;
@@ -730,12 +911,21 @@ impl Cli {
                 "--atlas" => cli.atlas = Some(value("--atlas")?.into()),
                 "--out" => cli.out = value("--out")?,
                 "--merge" => merging = true,
+                "--accounting" => cli.accounting = true,
                 flag if flag.starts_with("--") => {
                     return Err(format!("unknown argument {flag:?}\n{USAGE}"));
                 }
                 file if merging => cli.merge.push(file.to_string()),
                 key => cli.reference = key.to_string(),
             }
+        }
+        if cli.out.is_empty() {
+            cli.out = if cli.accounting {
+                "target/carcass-income-accounting.json"
+            } else {
+                "target/reinvasion-barrier.json"
+            }
+            .to_string();
         }
         if cli.t_inj == 0 || cli.window == 0 {
             return Err("--t-inj and --window must be positive".to_string());
@@ -765,7 +955,11 @@ fn main() {
             eprintln!("{e}");
             std::process::exit(2)
         });
-        let arms = all_arms();
+        let (arms, mode) = if cli.accounting {
+            (accounting_arms(), Mode::Accounting)
+        } else {
+            (all_arms(), Mode::Plain)
+        };
         eprintln!(
             "reinvasion_barrier: {} × {} arms × seeds {}..{}; t_inj {}, window {}, cohort {INVADER_COHORT}",
             cli.reference,
@@ -784,6 +978,7 @@ fn main() {
             cli.seed_from,
             cli.seeds,
             &arms,
+            mode,
         );
         eprintln!(
             "reinvasion_barrier: done in {:.0}s",
@@ -927,6 +1122,180 @@ fn print_summary(a: &Artifact) {
         );
     }
     println!("{economics}");
+    if a.accounting {
+        print_accounting(a);
+    }
+}
+
+/// The accounting mode's tables (#591): per arm — and for the resident's own
+/// consumers on the control fork, the contrast case — the median over seeds
+/// of each term per member-tick (E / tick unless a count). Seeds on which a
+/// row has no member-tick are left out of its medians.
+fn print_accounting(a: &Artifact) {
+    struct Row {
+        label: String,
+        accounts: Vec<EnergyAccount>,
+        k_star: f64,
+    }
+    let mut rows: Vec<Row> = a
+        .arms
+        .iter()
+        .map(|&arm| {
+            let inj = injections_of(&a.seeds, arm);
+            Row {
+                label: arm_label(arm),
+                accounts: inj.iter().filter_map(|i| i.account).collect(),
+                k_star: median_of(inj.iter().filter_map(|i| i.k_star.map(f64::from))),
+            }
+        })
+        .collect();
+    rows.push(Row {
+        label: "resident consumers (control)".to_string(),
+        accounts: a
+            .seeds
+            .iter()
+            .filter_map(|s| s.control.as_ref())
+            .filter_map(|c| c.consumer_account)
+            .collect(),
+        k_star: f64::NAN,
+    });
+    for row in &mut rows {
+        row.accounts.retain(|acc| acc.member_ticks > 0);
+    }
+    type Term = fn(&EnergyAccount) -> f64;
+    let med = |row: &Row, f: Term| {
+        median_of(
+            row.accounts
+                .iter()
+                .map(|acc| f(acc) / acc.member_ticks as f64),
+        )
+    };
+    let sum = |row: &Row, f: fn(&EnergyAccount) -> u64| row.accounts.iter().map(f).sum::<u64>();
+    println!("\n# Energy accounting (issue #591): median over seeds of per-member-tick means");
+    println!(
+        "resident consumers at injection (control fork, median over seeds): {:.1}",
+        median_of(
+            a.seeds
+                .iter()
+                .filter_map(|s| s.control.as_ref())
+                .map(|c| c.consumers_at_injection as f64)
+        )
+    );
+    println!(
+        "\n| row | seeds | member-ticks | k* | k reached | k with energy | carcasses in cell | P(k ≥ 1) | co-consumers per contact | carcass ceiling | wear gap | exhaustion gap | sharing gap | carcass gain | living gain | photosynthesis | photo ceiling (unshaded) |"
+    );
+    println!(
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    );
+    for r in &rows {
+        let co = median_of(
+            r.accounts
+                .iter()
+                .map(|x| x.carcass.co_consumers as f64 / x.carcass.reached.max(1) as f64),
+        );
+        println!(
+            "| {} | {} | {:.0} | {:.2} | {:.3} | {:.3} | {:.1} | {:.3} | {:.2} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} |",
+            r.label,
+            r.accounts.len(),
+            median_of(r.accounts.iter().map(|x| x.member_ticks as f64)),
+            r.k_star,
+            med(r, |x| x.carcass.reached as f64),
+            med(r, |x| x.carcass.reached_with_energy as f64),
+            med(r, |x| x.carcass.in_cell as f64),
+            med(r, |x| (x.member_ticks - x.carcass.k_histogram[0]) as f64),
+            co,
+            med(r, |x| x.carcass.ceiling),
+            med(r, |x| x.carcass.wear_gap),
+            med(r, |x| x.carcass.exhaustion_gap),
+            med(r, |x| x.carcass.sharing_gap),
+            med(r, |x| x.carcass.gain),
+            med(r, |x| x.living_gain),
+            med(r, |x| x.photosynthesis),
+            med(r, |x| x.photosynthesis_ceiling),
+        );
+    }
+    println!(
+        "\n| row | base | heterotrophy | #587 terms | photo | mobility | asexual | structure | maintenance total | unpaid | growth loss | repair | movement | upkeep | income | net (income − upkeep) | grazed | of it by kin |"
+    );
+    println!(
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    );
+    for r in &rows {
+        println!(
+            "| {} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} | {:.4} |",
+            r.label,
+            med(r, |x| x.maintenance.base),
+            med(r, |x| x.maintenance.heterotrophy),
+            med(r, |x| x.maintenance.margin_terms()),
+            med(r, |x| x.maintenance.photosynthesis),
+            med(r, |x| x.maintenance.mobility),
+            med(r, |x| x.maintenance.asexual),
+            med(r, |x| x.maintenance.structure),
+            med(r, |x| x.maintenance.total()),
+            med(r, |x| x.maintenance.unpaid),
+            med(r, |x| x.growth_loss),
+            med(r, |x| x.repair),
+            med(r, |x| x.movement),
+            med(r, |x| x.upkeep()),
+            med(r, |x| x.income()),
+            med(r, |x| x.income() - x.upkeep()),
+            med(r, |x| x.grazed),
+            med(r, |x| x.grazed_by_kin),
+        );
+    }
+    println!(
+        "\n| row | earmark fill | earmark level | energy gate met | nutrient earmark level | nutrient gate met | reproduction outlay | births (sum) | deaths (sum) | starved | grazed to death | infant (≤ 50 ticks) / grazed | death → carcass | death dissipated | stranded earmark | max residual / throughput | max ledger gap / throughput |"
+    );
+    println!(
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    );
+    let throughput = |x: &EnergyAccount| (x.income() + x.outgo() + x.births_endowment).max(1.0);
+    for r in &rows {
+        let max_residual = r
+            .accounts
+            .iter()
+            .map(|x| x.residual_abs / throughput(x))
+            .fold(0.0, f64::max);
+        let max_ledger = r
+            .accounts
+            .iter()
+            .map(|x| {
+                let l = x.ledger;
+                [
+                    x.photosynthesis - l.photosynthesis,
+                    x.carcass.gain - l.carcass_gain,
+                    x.living_gain - l.living_gain,
+                    x.outgo() - l.sent,
+                    x.births_endowment - l.births_endowment,
+                ]
+                .into_iter()
+                .map(f64::abs)
+                .fold(0.0, f64::max)
+                    / throughput(x)
+            })
+            .fold(0.0, f64::max);
+        println!(
+            "| {} | {:.4} | {:.2} | {:.3} | {:.3} | {:.3} | {:.4} | {} | {} | {} | {} | {} / {} | {:.4} | {:.4} | {:.4} | {:.1e} | {:.1e} |",
+            r.label,
+            med(r, |x| x.earmark_fill),
+            med(r, |x| x.earmark_level),
+            med(r, |x| x.energy_gate_met as f64),
+            med(r, |x| x.nutrient_earmark_level),
+            med(r, |x| x.nutrient_gate_met as f64),
+            med(r, |x| x.reproduction_outlay),
+            sum(r, |x| x.births),
+            sum(r, |x| x.deaths),
+            sum(r, |x| x.deaths_starved),
+            sum(r, |x| x.deaths_grazed),
+            sum(r, |x| x.infant_deaths),
+            sum(r, |x| x.infant_deaths_grazed),
+            med(r, |x| x.death_to_carcass),
+            med(r, |x| x.death_dissipated),
+            med(r, |x| x.stranded_earmark),
+            max_residual,
+            max_ledger,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1071,7 +1440,9 @@ mod tests {
     fn summary_has_a_row_per_arm_and_merging_chunks_recovers_the_whole_run() {
         let config = resolve_reference("sample:31", None).unwrap();
         let arms = all_arms();
-        let run = |from: u64, n: u64| Artifact::run("sample:31", &config, 30, 10, from, n, &arms);
+        let run = |from: u64, n: u64| {
+            Artifact::run("sample:31", &config, 30, 10, from, n, &arms, Mode::Plain)
+        };
         let whole = run(0, 2);
         assert_eq!(whole.summary.len(), arms.len());
         for row in &whole.summary {
@@ -1090,11 +1461,41 @@ mod tests {
             serde_json::to_string(&merged).unwrap(),
             serde_json::to_string(&whole).unwrap()
         );
-        let other = Artifact::run("sample:31", &config, 31, 10, 2, 1, &arms);
+        let other = Artifact::run("sample:31", &config, 31, 10, 2, 1, &arms, Mode::Plain);
         assert!(
             Artifact::merge(vec![whole, other]).is_err(),
             "t_inj differs"
         );
+    }
+
+    /// The accounting mode (#591) runs the named arms — `step 0`, one step and
+    /// `full`, at both placements — and books each lineage's energy account;
+    /// the record stays deterministic. Smoke only: the account's closure is
+    /// pinned in `energy_accounting`.
+    #[test]
+    fn accounting_mode_books_an_energy_account_per_named_arm() {
+        let config = resolve_reference("sample:31", None).expect("sample:31 resolves");
+        let arms = accounting_arms();
+        assert_eq!(arms.len(), 6);
+        let run = || run_seed_with(&config, SEED_BASE, 40, 20, &arms, Mode::Accounting);
+        let record = run();
+        assert_eq!(record.injections.len(), arms.len());
+        for inj in &record.injections {
+            let account = inj.account.as_ref().expect("accounted");
+            assert!(account.member_ticks >= INVADER_COHORT as u64, "{inj:?}");
+            assert!(inj.k_star.is_some());
+        }
+        // The control books the resident's consumers (role consumer or
+        // decomposer at the injection tick), the contrast case.
+        let control = record.control.as_ref().expect("control");
+        let consumers = control.consumer_account.as_ref().expect("consumers booked");
+        assert!(consumers.member_ticks >= control.consumers_at_injection as u64);
+        let a = serde_json::to_string(&record).unwrap();
+        let b = serde_json::to_string(&run()).unwrap();
+        assert_eq!(a, b, "record is deterministic");
+        // The plain mode books nothing extra.
+        let plain = run_seed(&config, SEED_BASE, 40, 20, &arms);
+        assert!(plain.injections.iter().all(|i| i.account.is_none()));
     }
 
     #[test]
@@ -1118,6 +1519,10 @@ mod tests {
         assert_eq!((cli.t_inj, cli.seed_from, cli.seeds), (600, 4, 2));
         assert!(parse(&["--seeds", "9"]).is_err(), "seed block is 8");
         assert!(parse(&["--bogus"]).is_err());
+        assert!(!parse(&[]).unwrap().accounting);
+        let cli = parse(&["--accounting"]).unwrap();
+        assert!(cli.accounting);
+        assert_eq!(cli.out, "target/carcass-income-accounting.json");
         let cli = parse(&["--merge", "a.json", "b.json"]).unwrap();
         assert_eq!(cli.merge, vec!["a.json".to_string(), "b.json".to_string()]);
     }
