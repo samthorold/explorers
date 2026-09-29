@@ -10,6 +10,8 @@ atlas. It asks three things: how much of the box has no heterotroph phenotype th
 that predicts lockup or guild absence beyond `light_competition_radius`, and which box axes set
 it.
 
+> **Correction (#596).** The "consumers" outcome read here is the trait split counted at T. [#596](596-role-tag-vs-diet.md) finds about 97 % of such agents in live worlds take ≥ 90 % of their income from light. The null result stands. The account in §7 and the TL;DR of *how* those consumers persist (carcasses and prey in reach, reserve) does not: they persist on photosynthesis.
+
 ## TL;DR
 
 1. **On one carcass in reach, 84 % of the box has no phenotype on the producer→heterotroph line

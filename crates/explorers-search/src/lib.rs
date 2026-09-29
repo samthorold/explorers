@@ -11,6 +11,7 @@ pub mod lhs;
 pub mod prefilter;
 pub mod qd;
 pub mod recipe_export;
+pub mod role_diet;
 pub mod search;
 pub mod sobol;
 pub mod sweep;
