@@ -1,3 +1,4 @@
+mod nutrient_overlay;
 mod verdict;
 
 use std::collections::HashMap;
@@ -764,6 +765,8 @@ struct ExplorersApp {
     verdict: verdict::VerdictObserver,
     /// The last verdict read on demand, with the tick it was read at.
     last_verdict: Option<(u64, explorers_genesis_eval::FitnessBreakdown)>,
+    /// Which nutrient the world view shades by location (#583), if any.
+    nutrient_layer: nutrient_overlay::NutrientLayer,
 }
 
 impl ExplorersApp {
@@ -782,6 +785,7 @@ impl ExplorersApp {
                 horizon,
             ),
             last_verdict: None,
+            nutrient_layer: nutrient_overlay::NutrientLayer::Off,
             world,
         }
     }
@@ -850,6 +854,11 @@ impl eframe::App for ExplorersApp {
                 ui.separator();
                 ui.label(format!("Tick: {}", self.tick_count));
                 ui.label(format!("Agents: {}", self.world.agents().len()));
+                ui.separator();
+                ui.label("Nutrient:");
+                for layer in nutrient_overlay::NutrientLayer::ALL {
+                    ui.selectable_value(&mut self.nutrient_layer, layer, layer.label());
+                }
             });
         });
 
@@ -882,12 +891,49 @@ impl eframe::App for ExplorersApp {
                     egui::StrokeKind::Inside,
                 );
 
-                // Carcasses: gray squares (brightness from energy).
+                // Nutrient overlay: each nutrient-grid cell shaded by where
+                // its nutrient sits, under the carcasses and agents.
+                let field = (self.nutrient_layer != nutrient_overlay::NutrientLayer::Off)
+                    .then(|| nutrient_overlay::NutrientField::of(&self.world));
+                if let Some(field) = &field {
+                    let reference = field.reference();
+                    for i in 0..field.available.len() {
+                        let Some(colour) = nutrient_overlay::cell_color(
+                            self.nutrient_layer,
+                            field.cell(i),
+                            reference,
+                        ) else {
+                            continue;
+                        };
+                        let (min, max) = field.cell_bounds(i);
+                        let rect = Rect::from_two_pos(view.to_screen(min), view.to_screen(max));
+                        painter.rect_filled(rect, 0.0, colour);
+                    }
+                }
+
+                // Carcasses: gray squares (brightness from energy), or amber
+                // by the nutrient they hold under the carcass layer.
+                let carcass_reference = field
+                    .as_ref()
+                    .filter(|_| {
+                        matches!(
+                            self.nutrient_layer,
+                            nutrient_overlay::NutrientLayer::Carcasses
+                                | nutrient_overlay::NutrientLayer::Combined
+                        )
+                    })
+                    .map(|field| field.reference());
                 for carcass in self.world.carcasses() {
                     let center = view.to_screen(carcass.position);
                     let half = view.scale * CARCASS_HALF_SIDE;
                     let rect = Rect::from_center_size(center, Vec2::splat(half * 2.0));
-                    painter.rect_filled(rect, 0.0, carcass_color(carcass.energy));
+                    let colour = match carcass_reference {
+                        Some(reference) => {
+                            nutrient_overlay::carcass_nutrient_color(carcass.nutrient, reference)
+                        }
+                        None => carcass_color(carcass.energy),
+                    };
+                    painter.rect_filled(rect, 0.0, colour);
                 }
 
                 // Agents: trophic-coloured circles (fixed radius).
@@ -1405,6 +1451,56 @@ mod tests {
         // Zero steps (the running clock between intervals) add nothing.
         app.apply_steps(0);
         assert_eq!(app.history.len(), 6);
+    }
+
+    /// Headless stand-in for watching the nutrient overlay (#583): drive a
+    /// recipe through the app's step path and print, every `EVERY` ticks, the
+    /// living population and the overlay's summed available, carcass and
+    /// living nutrient. Run on a lockup config exported by `export_recipe`:
+    ///
+    /// ```text
+    /// OVERLAY_RECIPE=/path/sample-31.json OVERLAY_SEED=0 \
+    ///   cargo test -p explorers-app overlay_trace -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "manual check: needs OVERLAY_RECIPE pointing at an exported recipe"]
+    fn overlay_trace() {
+        const EVERY: u64 = 50;
+        let path = std::env::var("OVERLAY_RECIPE").expect("set OVERLAY_RECIPE");
+        let seed: u64 = std::env::var("OVERLAY_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let recipe: WorldRecipe =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let mut app = ExplorersApp::new(World::from_recipe(&recipe, seed), recipe.max_ticks);
+        println!("recipe {path}, seed {seed}");
+        println!("| tick | living agents | carcasses | available | in carcasses | in bodies |");
+        println!("|---:|---:|---:|---:|---:|---:|");
+        loop {
+            let field = nutrient_overlay::NutrientField::of(&app.world);
+            let sum = |v: &[f32]| v.iter().sum::<f32>();
+            println!(
+                "| {} | {} | {} | {:.1} | {:.1} | {:.1} |",
+                app.tick_count,
+                app.world.agents().len(),
+                app.world.carcasses().len(),
+                sum(&field.available),
+                sum(&field.carcasses),
+                sum(&field.living),
+            );
+            if app.tick_count >= recipe.max_ticks || app.world.agents().is_empty() {
+                break;
+            }
+            app.apply_steps(EVERY as u32);
+        }
+    }
+
+    #[test]
+    fn the_app_opens_with_the_nutrient_overlay_off() {
+        let world = World::from_recipe(&default_recipe(), 7);
+        let app = ExplorersApp::new(world, default_recipe().max_ticks);
+        assert_eq!(app.nutrient_layer, nutrient_overlay::NutrientLayer::Off);
     }
 
     /// The genesis rollout driver's `RunConfig` for `recipe` as the search
