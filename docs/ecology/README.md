@@ -12,6 +12,7 @@ The cross-cutting topics describe system-level properties that emerge regardless
 - [Nutrient Cycling](nutrient-cycling.md) — carbon, nitrogen, phosphorus as a complete system; stoichiometric constraints; multi-currency dynamics
 - [Life History Theory](life-history-theory.md) — energy allocation trade-offs, r/K selection, reproductive strategies, senescence, bet-hedging, dispersal-fecundity trade-offs
 - [Spatial Ecology](spatial-ecology.md) — patch dynamics, dispersal, movement ecology, spatial pattern formation, spatial competition, spatial feedbacks
+- [Cannibalism and Kin](cannibalism-and-kin.md) — intraspecific and kin-directed consumption: how common it is, its forms (filial, sibling, matriphagy), what limits it, how organisms avoid eating relatives (recognition, timing, location, dispersal), and its population dynamics
 - [Disturbance and Succession](disturbance-and-succession.md) — disturbance regimes, successional models, alternative stable states, resilience, gap dynamics, recovery trajectories
 
 ## Taxa
