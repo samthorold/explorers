@@ -74,9 +74,21 @@
 //! `target/carcass-income-accounting.json`. The lineage read (rates, diet,
 //! deaths) is the plain mode's, unchanged.
 //!
+//! ## Dispersal mode (#593)
+//!
+//! `--dispersal` tests #591's self-grazing reading causally. It runs
+//! `step 0`, `1` and `2` at uniform placement, each at the phenotype's own
+//! dispersal and at [`DISPERSAL_LEVELS_CENTI`], under the accountant. Only
+//! the cohort's dispersal trait changes, and each raised-dispersal cohort is
+//! placed where its own-dispersal twin is. The extra table reads each arm's
+//! rate paired per seed against `step 0` at the same dispersal and against
+//! its own dispersal, next to the infant grazing and kin-grazed energy.
+//! Artifact `target/self-grazing-dispersal.json`.
+//!
 //! Run with:
 //!   cargo run --release -p explorers-search --bin reinvasion_barrier -- sample:31
 //!   cargo run --release -p explorers-search --bin reinvasion_barrier -- sample:31 --accounting
+//!   cargo run --release -p explorers-search --bin reinvasion_barrier -- sample:31 --dispersal
 //!
 //! No change to the stepper, the evaluator or the search; no assertion on
 //! emergent values beyond smoke checks.
@@ -139,10 +151,17 @@ enum Placement {
 struct Arm {
     phenotype: Phenotype,
     placement: Placement,
+    /// The dispersal mode's (#593) override of the cohort's dispersal trait,
+    /// in hundredths; `None` keeps the phenotype's own. Absent from the
+    /// artifact when `None`, so earlier artifacts read back unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dispersal_centi: Option<u32>,
 }
 
 impl Arm {
-    /// A distinct tag per arm for the cohort's position stream.
+    /// A distinct tag per (phenotype, placement) for the cohort's position
+    /// stream. The dispersal override is left out, so a raised-dispersal
+    /// cohort lands where its resident-dispersal twin does (paired, #593).
     fn tag(self) -> u64 {
         let p = match self.phenotype {
             Phenotype::Full => 0,
@@ -164,6 +183,7 @@ fn all_arms() -> Vec<Arm> {
             [Placement::Uniform, Placement::Pile].map(|placement| Arm {
                 phenotype,
                 placement,
+                dispersal_centi: None,
             })
         })
         .collect()
@@ -179,6 +199,31 @@ fn accounting_arms() -> Vec<Arm> {
             [Placement::Uniform, Placement::Pile].map(|placement| Arm {
                 phenotype,
                 placement,
+                dispersal_centi: None,
+            })
+        })
+        .collect()
+}
+
+/// The dispersal mode's (#593) raised dispersal levels, in hundredths: the
+/// offspring offset `σ = dispersal × DISPERSAL_KERNEL_SIGMA` well past the
+/// step's consumption reach (≈ 0.28 on `sample:31`, against a resident
+/// dispersal ≈ 0.31).
+const DISPERSAL_LEVELS_CENTI: [u32; 3] = [100, 200, 400];
+
+/// The arms the dispersal mode (#593) runs: `step 0`, `1` and `2`, each at
+/// the phenotype's own dispersal and at every raised level, at uniform
+/// placement. If self-grazing of dispersed-beside-kin newborns is what sinks
+/// the step, dispersing them should help the step more than `step 0`.
+fn dispersal_arms() -> Vec<Arm> {
+    let levels = std::iter::once(None).chain(DISPERSAL_LEVELS_CENTI.map(Some));
+    [0, 1, 2]
+        .into_iter()
+        .flat_map(|k| {
+            levels.clone().map(move |dispersal_centi| Arm {
+                phenotype: Phenotype::Step(k),
+                placement: Placement::Uniform,
+                dispersal_centi,
             })
         })
         .collect()
@@ -390,6 +435,9 @@ struct Injection {
     arm: Arm,
     traits: TraitVector,
     cohort: usize,
+    /// Where the cohort was placed (a pure function of seed and arm tag).
+    #[serde(default)]
+    cohort_positions: Vec<(f32, f32)>,
     ticks_run: u64,
     stopped: Option<String>,
     /// Live lineage size every `SERIES_INTERVAL` ticks (first entry the
@@ -582,6 +630,13 @@ fn run_seed_with(
                 }
             },
         };
+        let traits = match arm.dispersal_centi {
+            Some(c) => TraitVector {
+                dispersal: c as f32 / 100.0,
+                ..traits
+            },
+            None => traits,
+        };
         let efficiency = producer_centroid
             .map(|p| explorers_sim::trophic_transfer_efficiency(&traits, &p, params));
         let mut fork = world.clone();
@@ -611,6 +666,7 @@ fn run_seed_with(
             arm,
             traits,
             cohort: INVADER_COHORT,
+            cohort_positions: positions,
             ticks_run: out.ticks_run,
             stopped: out.stopped.map(str::to_string),
             lineage_series: out.series,
@@ -864,7 +920,7 @@ impl Artifact {
     }
 }
 
-const USAGE: &str = "usage: reinvasion_barrier [CONFIG_KEY (default sample:31)] [--accounting] [--t-inj N] [--window N] [--seed-from A] [--seeds N] [--atlas PATH] [--out PATH] | --merge FILE...";
+const USAGE: &str = "usage: reinvasion_barrier [CONFIG_KEY (default sample:31)] [--accounting | --dispersal] [--t-inj N] [--window N] [--seed-from A] [--seeds N] [--atlas PATH] [--out PATH] | --merge FILE...";
 
 #[derive(Debug)]
 struct Cli {
@@ -879,6 +935,10 @@ struct Cli {
     /// Run the accounting mode (#591): the named arms under the energy
     /// accountant, written to `target/carcass-income-accounting.json`.
     accounting: bool,
+    /// Run the dispersal mode (#593): the step arms at raised dispersal,
+    /// under the energy accountant, written to
+    /// `target/self-grazing-dispersal.json`.
+    dispersal: bool,
 }
 
 impl Cli {
@@ -893,6 +953,7 @@ impl Cli {
             out: String::new(),
             merge: Vec::new(),
             accounting: false,
+            dispersal: false,
         };
         let mut it = argv.into_iter();
         let mut merging = false;
@@ -912,6 +973,7 @@ impl Cli {
                 "--out" => cli.out = value("--out")?,
                 "--merge" => merging = true,
                 "--accounting" => cli.accounting = true,
+                "--dispersal" => cli.dispersal = true,
                 flag if flag.starts_with("--") => {
                     return Err(format!("unknown argument {flag:?}\n{USAGE}"));
                 }
@@ -919,9 +981,16 @@ impl Cli {
                 key => cli.reference = key.to_string(),
             }
         }
+        if cli.accounting && cli.dispersal {
+            return Err(format!(
+                "--accounting and --dispersal are exclusive\n{USAGE}"
+            ));
+        }
         if cli.out.is_empty() {
             cli.out = if cli.accounting {
                 "target/carcass-income-accounting.json"
+            } else if cli.dispersal {
+                "target/self-grazing-dispersal.json"
             } else {
                 "target/reinvasion-barrier.json"
             }
@@ -957,6 +1026,8 @@ fn main() {
         });
         let (arms, mode) = if cli.accounting {
             (accounting_arms(), Mode::Accounting)
+        } else if cli.dispersal {
+            (dispersal_arms(), Mode::Accounting)
         } else {
             (all_arms(), Mode::Plain)
         };
@@ -1022,7 +1093,10 @@ fn arm_label(arm: Arm) -> String {
         Placement::Uniform => "uniform",
         Placement::Pile => "pile",
     };
-    format!("{p} / {q}")
+    match arm.dispersal_centi {
+        Some(c) => format!("{p} / {q} / dispersal {:.2}", c as f32 / 100.0),
+        None => format!("{p} / {q}"),
+    }
 }
 
 fn print_summary(a: &Artifact) {
@@ -1124,6 +1198,81 @@ fn print_summary(a: &Artifact) {
     println!("{economics}");
     if a.accounting {
         print_accounting(a);
+    }
+    if a.arms.iter().any(|arm| arm.dispersal_centi.is_some()) {
+        print_dispersal(a);
+    }
+}
+
+/// The median over seeds of the per-seed rate difference `arm − base`, over
+/// the seeds on which both ran: the paired read of one manipulation.
+fn paired_delta(seeds: &[SeedRecord], arm: Arm, base: Arm) -> f64 {
+    median_of(seeds.iter().filter_map(|s| {
+        let rate = |want: Arm| {
+            s.injections
+                .iter()
+                .find(|i| i.arm == want)
+                .map(|i| i.growth_rate)
+        };
+        Some(rate(arm)? - rate(base)?)
+    }))
+}
+
+/// The dispersal mode's table (#593): per arm, the invasion read and the
+/// demography #591 found separates the step from the producer, with two
+/// paired contrasts. `Δ vs step 0` is the step's rate against the producer
+/// cohort at the same dispersal; `Δ vs own dispersal` is the arm against the
+/// same phenotype at its own (resident) dispersal. Self-grazing as the
+/// barrier reads as `Δ vs step 0` rising with dispersal.
+fn print_dispersal(a: &Artifact) {
+    println!("\n# Self-grazing and dispersal (issue #593)");
+    println!(
+        "\n| arm | n | cohort dispersal | median r | r > 0 | invades | Δ vs step 0 | Δ vs own dispersal | births pure / cross | deaths | grazed to death | infant (≤ 50 ticks) / grazed | infant grazed per birth | grazed by kin (E / member-tick) | energy gate met |"
+    );
+    println!("|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for s in &a.summary {
+        let arm = s.arm;
+        let inj = injections_of(&a.seeds, arm);
+        let accounts: Vec<EnergyAccount> = inj
+            .iter()
+            .filter_map(|i| i.account)
+            .filter(|x| x.member_ticks > 0)
+            .collect();
+        let sum = |f: fn(&EnergyAccount) -> u64| accounts.iter().map(f).sum::<u64>();
+        let per_tick = |f: fn(&EnergyAccount) -> f64| {
+            median_of(accounts.iter().map(|x| f(x) / x.member_ticks as f64))
+        };
+        let step0 = Arm {
+            phenotype: Phenotype::Step(0),
+            ..arm
+        };
+        let own = Arm {
+            dispersal_centi: None,
+            ..arm
+        };
+        let births = sum(|x| x.births);
+        let r = &s.rates;
+        println!(
+            "| {} | {} | {:.3} | {:.5} | {}/{} | {} | {:+.5} | {:+.5} | {} / {} | {} | {} | {} / {} | {:.2} | {:.4} | {:.3} |",
+            arm_label(arm),
+            r.n,
+            median_of(inj.iter().map(|i| i.traits.dispersal as f64)),
+            r.median,
+            r.positive_seeds,
+            r.n,
+            if r.invades { "yes" } else { "no" },
+            paired_delta(&a.seeds, arm, step0),
+            paired_delta(&a.seeds, arm, own),
+            s.births_pure,
+            s.births_cross,
+            sum(|x| x.deaths),
+            sum(|x| x.deaths_grazed),
+            sum(|x| x.infant_deaths),
+            sum(|x| x.infant_deaths_grazed),
+            sum(|x| x.infant_deaths_grazed) as f64 / births.max(1) as f64,
+            per_tick(|x| x.grazed_by_kin),
+            per_tick(|x| x.energy_gate_met as f64),
+        );
     }
 }
 
@@ -1498,6 +1647,64 @@ mod tests {
         assert!(plain.injections.iter().all(|i| i.account.is_none()));
     }
 
+    /// The dispersal mode (#593) crosses `step 0`, `1` and `2` with the
+    /// resident's own dispersal and the raised levels, at uniform placement.
+    /// Each cohort carries its arm's dispersal with every other trait as its
+    /// phenotype sets it, lands where its resident-dispersal twin lands
+    /// (paired), and is booked by the accountant; the record is
+    /// deterministic.
+    #[test]
+    fn dispersal_mode_sets_only_the_cohorts_dispersal_and_pairs_its_positions() {
+        let config = resolve_reference("sample:31", None).expect("sample:31 resolves");
+        let arms = dispersal_arms();
+        assert_eq!(arms.len(), 3 * (1 + DISPERSAL_LEVELS_CENTI.len()));
+        assert!(arms.iter().all(|a| a.placement == Placement::Uniform));
+        let run = || run_seed_with(&config, SEED_BASE, 40, 20, &arms, Mode::Accounting);
+        let record = run();
+        assert_eq!(record.injections.len(), arms.len());
+        let producer = record.resident.producer_centroid.expect("producers");
+        for inj in &record.injections {
+            assert!(inj.account.is_some(), "{inj:?}");
+            let twin = record
+                .injections
+                .iter()
+                .find(|i| i.arm.phenotype == inj.arm.phenotype && i.arm.dispersal_centi.is_none())
+                .expect("resident-dispersal twin");
+            let Phenotype::Step(k) = inj.arm.phenotype else {
+                panic!("steps only")
+            };
+            let expect = small_step(producer, k, config.0.mutation_magnitude);
+            match inj.arm.dispersal_centi {
+                None => assert_eq!(inj.traits, expect),
+                Some(c) => {
+                    assert_eq!(inj.traits.dispersal, c as f32 / 100.0);
+                    for dim in (0..TraitVector::NUM_DIMS).filter(|&d| d != 6) {
+                        assert_eq!(inj.traits.get(dim), expect.get(dim), "dim {dim}");
+                    }
+                }
+            }
+            assert_eq!(inj.cohort_positions, twin.cohort_positions, "paired");
+        }
+        let a = serde_json::to_string(&record).unwrap();
+        let b = serde_json::to_string(&run()).unwrap();
+        assert_eq!(a, b, "record is deterministic");
+    }
+
+    /// An arm without a dispersal override serialises as it did before #593,
+    /// so earlier artifacts still merge and read back.
+    #[test]
+    fn an_arm_without_dispersal_serialises_as_before() {
+        let arm = Arm {
+            phenotype: Phenotype::Step(1),
+            placement: Placement::Pile,
+            dispersal_centi: None,
+        };
+        let json = serde_json::to_string(&arm).unwrap();
+        assert_eq!(json, r#"{"phenotype":{"step":1},"placement":"pile"}"#);
+        let back: Arm = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, arm);
+    }
+
     #[test]
     fn cli_defaults_to_sample_31_at_tick_1000_and_takes_a_seed_chunk() {
         let parse = |args: &[&str]| Cli::parse(args.iter().map(|s| s.to_string()));
@@ -1523,6 +1730,10 @@ mod tests {
         let cli = parse(&["--accounting"]).unwrap();
         assert!(cli.accounting);
         assert_eq!(cli.out, "target/carcass-income-accounting.json");
+        let cli = parse(&["--dispersal"]).unwrap();
+        assert!(cli.dispersal && !cli.accounting);
+        assert_eq!(cli.out, "target/self-grazing-dispersal.json");
+        assert!(parse(&["--dispersal", "--accounting"]).is_err());
         let cli = parse(&["--merge", "a.json", "b.json"]).unwrap();
         assert_eq!(cli.merge, vec!["a.json".to_string(), "b.json".to_string()]);
     }
