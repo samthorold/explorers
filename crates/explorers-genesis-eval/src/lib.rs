@@ -178,6 +178,29 @@ impl BloomStop {
     }
 }
 
+/// The genesis search's default [`BloomStop`] (#573): at tick 300, stop a
+/// rollout whose running peak has reached 10 × founders
+/// (`docs/research/573-bloom-stop-trial.md` §5). It lives beside the rule so
+/// the search and the app's verdict panel (#582) read one value.
+pub const DEFAULT_BLOOM_STOP: BloomStop = BloomStop {
+    tick: 300,
+    factor: 10.0,
+};
+
+impl EvalConfig {
+    /// The evaluator as the genesis search runs it by default: every
+    /// threshold at its [`Default`], with the [`DEFAULT_BLOOM_STOP`] applied.
+    /// The search's own flags (`--no-bloom-stop`, `--bloom-stop`) can depart
+    /// from it; an instrument that wants to read a world the way the search
+    /// would have (the app's verdict panel, #582) starts here.
+    pub fn search() -> Self {
+        Self {
+            bloom_stop: Some(DEFAULT_BLOOM_STOP),
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for EvalConfig {
     fn default() -> Self {
         Self {
@@ -1499,6 +1522,25 @@ mod tests {
         assert!(!rule.fires(299, 10, 400), "before its tick");
         assert!(!rule.fires(301, 10, 400), "after its tick: read once");
         assert!(EvalConfig::default().bloom_stop.is_none(), "off by default");
+    }
+
+    #[test]
+    fn the_search_config_is_the_default_with_the_bloom_stop_at_300_by_10() {
+        let search = EvalConfig::search();
+        assert_eq!(
+            search.bloom_stop,
+            Some(BloomStop {
+                tick: 300,
+                factor: 10.0,
+            })
+        );
+        assert_eq!(search.bloom_stop, Some(DEFAULT_BLOOM_STOP));
+        // Every threshold other than the bloom stop is the evaluator's default.
+        let default = EvalConfig {
+            bloom_stop: search.bloom_stop,
+            ..EvalConfig::default()
+        };
+        assert_eq!(format!("{search:?}"), format!("{default:?}"));
     }
 
     #[test]
