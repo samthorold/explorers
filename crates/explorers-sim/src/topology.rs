@@ -2,6 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::event::{EventKind, EventLog};
 
+/// An agent's trophic role: a reading of its recent realised income, never
+/// of its trait vector (CONTEXT.md, *Trophic role*). The read itself lives
+/// with the evaluator (`explorers_genesis_eval::income`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TrophicRole {
     Producer,
@@ -17,10 +20,10 @@ enum EdgeKind {
     Decomposed,
 }
 
-/// Share of an agent's consumed energy that must flow through the detrital
-/// (carcass) pathway for the readout to bucket it as a `Decomposer`. This is a
-/// display constant for the debug instrument — the simulation itself has no
-/// such threshold (continuum in the sim, buckets in the readout).
+/// Share of an agent's drained energy that must come from carcasses for the
+/// trophic-role read to bucket a non-producer as a `Decomposer` rather than a
+/// `Consumer`. A readout constant — the simulation itself has no such
+/// threshold (continuum in the sim, buckets in the readout).
 pub const DETRITAL_RELIANCE_THRESHOLD: f32 = 0.5;
 
 #[derive(Clone, Debug)]
@@ -122,51 +125,11 @@ impl TopologyProjection {
                 .unwrap_or(0.0)
     }
 
-    /// Classify each of the given agents into a trophic role, reading the green
-    /// (predation) vs brown (decomposition) food web from accumulated consumption
-    /// edges. The caller supplies the living population (the projection stores no
-    /// trait state and seeded founders never emit a birth event), so roles are
-    /// keyed to exactly those agents.
-    ///
-    /// **Producer** is a trait reading: an autotrophy-dominant agent is a producer
-    /// regardless of any incidental consumption (no window artifact). Among
-    /// heterotrophs, an agent is a **Decomposer** when detrital reliance reaches
-    /// [`DETRITAL_RELIANCE_THRESHOLD`] of its consumed energy, else a **Consumer**;
-    /// a non-eater defaults to Consumer.
-    pub fn trophic_roles(&self, agents: &[crate::Agent]) -> HashMap<u64, TrophicRole> {
-        self.trophic_roles_of(agents.iter().map(|a| (a.id, &a.traits)))
-    }
-
-    /// [`Self::trophic_roles`] over a roster given as `(id, traits)` pairs — the
-    /// same classification for a caller holding a recorded roster snapshot
-    /// rather than live `Agent`s.
-    pub fn trophic_roles_of<'a>(
-        &self,
-        roster: impl IntoIterator<Item = (u64, &'a crate::TraitVector)>,
-    ) -> HashMap<u64, TrophicRole> {
-        let mut roles = HashMap::new();
-        for (id, traits) in roster {
-            if traits.photosynthetic_absorption >= traits.heterotrophy {
-                roles.insert(id, TrophicRole::Producer);
-                continue;
-            }
-
-            let role = match self.detrital_reliance(id) {
-                Some(reliance) if reliance >= DETRITAL_RELIANCE_THRESHOLD => {
-                    TrophicRole::Decomposer
-                }
-                _ => TrophicRole::Consumer,
-            };
-            roles.insert(id, role);
-        }
-        roles
-    }
-
     /// An agent's detrital reliance: the share of the energy it has drained
-    /// that came from carcasses (decomposed ÷ consumed), as
-    /// [`Self::trophic_roles_of`] reads it to split heterotrophs into
-    /// decomposers and consumers. `None` for an agent that has drained
-    /// nothing.
+    /// that came from carcasses (decomposed ÷ consumed), over the edges the
+    /// projection still holds. `None` for an agent that has drained nothing.
+    /// (The trophic role is read from recent income, not from here:
+    /// `explorers_genesis_eval::income`.)
     pub fn detrital_reliance(&self, id: u64) -> Option<f32> {
         let predation = self.outgoing_energy(id, EdgeKind::Consumed);
         let decomposition = self.outgoing_energy(id, EdgeKind::Decomposed);
@@ -260,20 +223,6 @@ impl TopologyProjection {
         }
         result
     }
-
-    pub fn energy_flow_between(
-        &self,
-        agents: &[crate::Agent],
-        from: TrophicRole,
-        to: TrophicRole,
-    ) -> f32 {
-        let roles = self.trophic_roles(agents);
-        self.edges
-            .iter()
-            .filter(|&(&(s, t, _), _)| roles.get(&s) == Some(&from) && roles.get(&t) == Some(&to))
-            .map(|(_, &w)| w)
-            .sum()
-    }
 }
 
 #[cfg(test)]
@@ -289,29 +238,8 @@ mod tests {
         log
     }
 
-    /// An agent carrying only the trophic traits `trophic_roles` reads: autotrophy
-    /// (`photo`) and heterotrophy (`hetero`). Everything else is zeroed.
-    fn agent(id: u64, photo: f32, hetero: f32) -> crate::Agent {
-        crate::Agent::new(
-            id,
-            (0.0, 0.0),
-            1.0,
-            1.0,
-            0.0,
-            crate::TraitVector {
-                photosynthetic_absorption: photo,
-                heterotrophy: hetero,
-                mobility: 0.0,
-                kappa: 0.0,
-                fecundity: 0.0,
-                asexual_propensity: 0.0,
-                dispersal: 0.0,
-            },
-        )
-    }
-
     #[test]
-    fn carcass_eating_heterotroph_reads_as_decomposer() {
+    fn carcass_drains_read_as_full_detrital_reliance() {
         let log = make_log(vec![
             Event {
                 tick: 1,
@@ -341,9 +269,8 @@ mod tests {
         let mut proj = TopologyProjection::new();
         proj.update(&log);
 
-        // Heterotrophy-dominant trait, all consumed energy detrital -> Decomposer.
-        let roles = proj.trophic_roles(&[agent(1, 0.0, 1.0)]);
-        assert_eq!(roles[&1], TrophicRole::Decomposer);
+        // All drained energy detrital.
+        assert_eq!(proj.detrital_reliance(1), Some(1.0));
     }
 
     #[test]
@@ -477,118 +404,8 @@ mod tests {
     }
 
     #[test]
-    fn trophic_roles_classify_by_energy_flow() {
-        let log = make_log(vec![
-            Event {
-                tick: 1,
-                seq: 0,
-                kind: EventKind::Reproduced,
-                source: 1,
-                target: None,
-                energy_delta: 10.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-            Event {
-                tick: 1,
-                seq: 1,
-                kind: EventKind::Reproduced,
-                source: 2,
-                target: None,
-                energy_delta: 10.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-            Event {
-                tick: 1,
-                seq: 2,
-                kind: EventKind::Reproduced,
-                source: 3,
-                target: None,
-                energy_delta: 10.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-            // Agent 2 consumes agent 1 -> consumer
-            Event {
-                tick: 2,
-                seq: 3,
-                kind: EventKind::Consumed,
-                source: 2,
-                target: Some(1),
-                energy_delta: 5.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-            // Agent 3 drains carcass 99 -> detrital pathway
-            Event {
-                tick: 2,
-                seq: 4,
-                kind: EventKind::Consumed,
-                source: 3,
-                target: Some(99),
-                energy_delta: 3.0,
-                position: None,
-                target_was_carcass: true,
-                second_parent: None,
-            },
-        ]);
-
-        let mut proj = TopologyProjection::new();
-        proj.update(&log);
-
-        // Agent 1 is autotrophy-dominant -> producer (a trait reading); agents 2
-        // and 3 are heterotrophs split by what they ate.
-        let agents = [agent(1, 1.0, 0.0), agent(2, 0.0, 1.0), agent(3, 0.0, 1.0)];
-        let roles = proj.trophic_roles(&agents);
-        assert_eq!(roles[&1], TrophicRole::Producer);
-        assert_eq!(roles[&2], TrophicRole::Consumer);
-        assert_eq!(roles[&3], TrophicRole::Decomposer);
-    }
-
-    #[test]
-    fn autotrophy_dominant_agent_is_producer_even_when_it_eats() {
-        // Producer is a trait reading, not a window artifact: an autotroph that
-        // incidentally scavenges a carcass is still a producer.
-        let log = make_log(vec![
-            Event {
-                tick: 1,
-                seq: 0,
-                kind: EventKind::Reproduced,
-                source: 1,
-                target: None,
-                energy_delta: 10.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-            Event {
-                tick: 2,
-                seq: 1,
-                kind: EventKind::Consumed,
-                source: 1,
-                target: Some(99),
-                energy_delta: 5.0,
-                position: None,
-                target_was_carcass: true,
-                second_parent: None,
-            },
-        ]);
-
-        let mut proj = TopologyProjection::new();
-        proj.update(&log);
-
-        let roles = proj.trophic_roles(&[agent(1, 1.0, 0.2)]);
-        assert_eq!(roles[&1], TrophicRole::Producer);
-    }
-
-    #[test]
-    fn heterotroph_below_detrital_threshold_is_consumer() {
-        // Mostly-predation diet (1 of 4 units detrital = 25% < 50%) -> Consumer.
+    fn detrital_reliance_is_the_carcass_share_of_drained_energy() {
+        // Mostly-predation diet: 1 of 4 units detrital.
         let log = make_log(vec![
             Event {
                 tick: 1,
@@ -628,13 +445,11 @@ mod tests {
         let mut proj = TopologyProjection::new();
         proj.update(&log);
 
-        let roles = proj.trophic_roles(&[agent(1, 0.0, 1.0)]);
-        assert_eq!(roles[&1], TrophicRole::Consumer);
+        assert_eq!(proj.detrital_reliance(1), Some(0.25));
     }
 
     #[test]
-    fn heterotroph_at_detrital_threshold_is_decomposer() {
-        // Exactly 50% detrital sits on the bucket boundary -> Decomposer (>=).
+    fn an_even_split_reads_half_detrital_reliance() {
         let log = make_log(vec![
             Event {
                 tick: 1,
@@ -674,14 +489,11 @@ mod tests {
         let mut proj = TopologyProjection::new();
         proj.update(&log);
 
-        let roles = proj.trophic_roles(&[agent(1, 0.0, 1.0)]);
-        assert_eq!(roles[&1], TrophicRole::Decomposer);
+        assert_eq!(proj.detrital_reliance(1), Some(0.5));
     }
 
     #[test]
-    fn non_eating_heterotroph_defaults_to_consumer() {
-        // A heterotroph that has eaten nothing has no detrital reliance to read,
-        // so it defaults to Consumer rather than Decomposer.
+    fn an_agent_that_drained_nothing_has_no_detrital_reliance() {
         let log = make_log(vec![Event {
             tick: 1,
             seq: 0,
@@ -697,8 +509,7 @@ mod tests {
         let mut proj = TopologyProjection::new();
         proj.update(&log);
 
-        let roles = proj.trophic_roles(&[agent(1, 0.0, 1.0)]);
-        assert_eq!(roles[&1], TrophicRole::Consumer);
+        assert_eq!(proj.detrital_reliance(1), None);
     }
 
     #[test]
@@ -793,94 +604,6 @@ mod tests {
         assert_eq!(proj.active_agents_at(2), HashSet::from([1, 2]));
         assert_eq!(proj.active_agents_at(3), HashSet::from([2]));
         assert_eq!(proj.active_agents_at(4), HashSet::from([2, 3]));
-    }
-
-    #[test]
-    fn energy_flow_between_trophic_groups() {
-        let log = make_log(vec![
-            Event {
-                tick: 1,
-                seq: 0,
-                kind: EventKind::Reproduced,
-                source: 1,
-                target: None,
-                energy_delta: 10.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-            Event {
-                tick: 1,
-                seq: 1,
-                kind: EventKind::Reproduced,
-                source: 2,
-                target: None,
-                energy_delta: 10.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-            Event {
-                tick: 1,
-                seq: 2,
-                kind: EventKind::Reproduced,
-                source: 3,
-                target: None,
-                energy_delta: 10.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-            // Consumer 2 eats producer 1 twice
-            Event {
-                tick: 2,
-                seq: 3,
-                kind: EventKind::Consumed,
-                source: 2,
-                target: Some(1),
-                energy_delta: 5.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-            Event {
-                tick: 3,
-                seq: 4,
-                kind: EventKind::Consumed,
-                source: 2,
-                target: Some(1),
-                energy_delta: 3.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-            // Consumer 3 also eats producer 1
-            Event {
-                tick: 3,
-                seq: 5,
-                kind: EventKind::Consumed,
-                source: 3,
-                target: Some(1),
-                energy_delta: 2.0,
-                position: None,
-                target_was_carcass: false,
-                second_parent: None,
-            },
-        ]);
-
-        let mut proj = TopologyProjection::new();
-        proj.update(&log);
-
-        // 1 is autotrophy-dominant (producer); 2 and 3 are heterotroph predators.
-        let agents = [agent(1, 1.0, 0.0), agent(2, 0.0, 1.0), agent(3, 0.0, 1.0)];
-        assert_eq!(
-            proj.energy_flow_between(&agents, TrophicRole::Consumer, TrophicRole::Producer),
-            10.0
-        );
-        assert_eq!(
-            proj.energy_flow_between(&agents, TrophicRole::Producer, TrophicRole::Consumer),
-            0.0
-        );
     }
 
     #[test]

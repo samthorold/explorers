@@ -26,7 +26,7 @@
 //!   initial distribution seeds (`World::new`'s odd cluster: all of the
 //!   trophic budget on heterotrophy, the other traits at the mean);
 //! - phenotype **`step_k`** (k = 1, 2, 4) — the resident producer centroid
-//!   at the injection tick (`topology::trophic_roles`, as `invasion_growth`)
+//!   at the injection tick (the income role read, `IncomeLedger` (#599), as `invasion_growth`)
 //!   with heterotrophy raised by `k × mutation_magnitude` (the standard
 //!   deviation of one mutation step), everything else unchanged;
 //! - placement **`uniform`** — cohort positions uniform over the world (as
@@ -100,6 +100,7 @@ use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
+use explorers_genesis_eval::income::IncomeLedger;
 use explorers_search::config_source::{parse_config_key, resolve_config, sampled_units};
 use explorers_search::energy_accounting::{EnergyAccount, LineageAccountant};
 use explorers_search::invasion::{
@@ -109,7 +110,7 @@ use explorers_search::invasion::{
 use explorers_search::search::default_ranges;
 use explorers_search::sweep::read_atlas_units;
 use explorers_sim::event::EventKind;
-use explorers_sim::topology::{TopologyProjection, TrophicRole};
+use explorers_sim::topology::TrophicRole;
 use explorers_sim::{Agent, InitialDistribution, TraitVector, World, WorldParameters};
 
 /// Fixed contiguous seed block (the `invasion_growth` convention).
@@ -532,14 +533,15 @@ fn run_seed_with(
 ) -> SeedRecord {
     let max_population = EvalConfig::default().max_population;
     let mut world = World::new(params.clone(), dist.clone(), seed);
-    // Only what the projection's roles and the lineage read (observer-side).
+    // Only what the income roles and the lineage read (observer-side).
     world.retain_event_kinds(&[
+        EventKind::Photosynthesized,
         EventKind::Consumed,
         EventKind::Reproduced,
         EventKind::Died,
         EventKind::Born,
     ]);
-    let mut topo = TopologyProjection::new();
+    let mut income = IncomeLedger::new();
     let mut termination = "alive";
     for _ in 0..t_inj {
         world.step();
@@ -552,8 +554,8 @@ fn run_seed_with(
             break;
         }
     }
-    topo.update(world.event_log());
-    let roles: HashMap<u64, TrophicRole> = topo.trophic_roles(world.agents()).into_iter().collect();
+    income.update(world.event_log());
+    let roles: HashMap<u64, TrophicRole> = income.roles_of(world.agents().iter().map(|a| a.id));
     let producers = roles
         .values()
         .filter(|r| **r == TrophicRole::Producer)
@@ -597,8 +599,8 @@ fn run_seed_with(
         let mut fork = world.clone();
         let (out, consumer_account) = match mode {
             Mode::Plain => {
-                let mut fork_topo = topo.clone();
-                let out = run_window(&mut fork, &mut fork_topo, None, window, max_population);
+                let mut fork_income = income.clone();
+                let out = run_window(&mut fork, &mut fork_income, None, window, max_population);
                 (out, None)
             }
             Mode::Accounting => {
@@ -640,14 +642,14 @@ fn run_seed_with(
         let efficiency = producer_centroid
             .map(|p| explorers_sim::trophic_transfer_efficiency(&traits, &p, params));
         let mut fork = world.clone();
-        let mut fork_topo = topo.clone();
+        let mut fork_income = income.clone();
         let positions = cohort_positions(&fork, arm.placement, INVADER_COHORT, seed, arm.tag());
         let ids = place_cohort(&mut fork, traits, &positions, dist.initial_energy_per_agent);
         let (out, account) = match mode {
             Mode::Plain => {
                 let out = run_window(
                     &mut fork,
-                    &mut fork_topo,
+                    &mut fork_income,
                     Some(Lineage::new(ids)),
                     window,
                     max_population,

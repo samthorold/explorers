@@ -1,15 +1,19 @@
 //! Heterotroph guild read (#490): a heterotroph *population* — sustained size
 //! and recruitment — as distinct from a heterotroph *individual* carrying a
-//! role tag. Reported only (genesis-search.md, the authority boundary): never
+//! role tag. Membership is each agent's trophic role read from its recent
+//! realised income ([`crate::income`], #599), never from its trait vector. Reported only (genesis-search.md, the authority boundary): never
 //! a behaviour axis, never a fitness term, never read by the robustness floor.
 
 use std::collections::{HashMap, HashSet};
 
 use explorers_sim::TraitVector;
 use explorers_sim::event::{Event, EventKind, EventLog};
-use explorers_sim::topology::{TopologyProjection, TrophicRole};
+use explorers_sim::topology::TrophicRole;
 
-/// The living roster at one world tick, as `(id, traits)` pairs.
+use crate::income::IncomeLedger;
+
+/// The living roster at one world tick, as `(id, traits)` pairs. The guild
+/// read uses only the ids: roles come from income, not traits.
 pub type RosterSnapshot = (u64, Vec<(u64, TraitVector)>);
 
 /// Minimum role count a guild must hold on every sampled tick of the window.
@@ -59,8 +63,8 @@ pub fn heterotroph_guilds(
 }
 
 /// The living roster at one world tick, each agent read into its trophic
-/// role by the projection as of that tick (`TopologyProjection::update_before`
-/// then `trophic_roles_of`).
+/// role by the income ledger as of that tick (`IncomeLedger::update_before`
+/// then `roles_of`). An agent with no income yet has no role and is absent.
 pub type RoleSnapshot = (u64, HashMap<u64, TrophicRole>);
 
 /// The descent facts of one `Born` event — what the guild's recruitment clause
@@ -88,8 +92,8 @@ impl Birth {
 }
 
 /// Read every role's guild off a finished run whose log still holds its
-/// `Consumed` / `Reproduced` / `Died` / `Born` history: the projection is
-/// walked to each second-half roster snapshot to classify it, and the rule is
+/// `Photosynthesized` / `Consumed` / `Died` / `Born` history: the income
+/// ledger is walked to each second-half roster snapshot to classify it, and the rule is
 /// [`role_guilds_from_samples`]. A rollout that drops history once read
 /// classifies each sample as it is taken instead
 /// (`RolloutObservations::observe`) and calls the rule directly.
@@ -99,16 +103,13 @@ pub fn role_guilds(
     max_ticks: u64,
 ) -> RoleGuilds {
     let window_start = window_start(max_ticks);
-    let mut topo = TopologyProjection::new();
+    let mut income = IncomeLedger::new();
     let role_snapshots: Vec<RoleSnapshot> = roster_snapshots
         .iter()
         .filter(|(t, _)| *t >= window_start)
         .map(|(tick, roster)| {
-            topo.update_before(log, *tick);
-            (
-                *tick,
-                topo.trophic_roles_of(roster.iter().map(|(id, tr)| (*id, tr))),
-            )
+            income.update_before(log, *tick);
+            (*tick, income.roles_of(roster.iter().map(|(id, _)| *id)))
         })
         .collect();
     let births: Vec<Birth> = log
@@ -124,9 +125,8 @@ fn window_start(max_ticks: u64) -> u64 {
     max_ticks / 2 + 1
 }
 
-/// The guild rule over classified samples. Membership is the `trophic_roles`
-/// read (heterotroph by trait, consumer/decomposer by realised diet) on each
-/// role snapshot whose tick falls in the second half of the run
+/// The guild rule over classified samples. Membership is the income role
+/// read on each role snapshot whose tick falls in the second half of the run
 /// (`tick > max_ticks / 2`). A guild holds when the role count reaches
 /// [`GUILD_MIN_SIZE`] on every such sample **and** at least one birth in the
 /// window names a member of the role (either parent) — which rules out a
@@ -224,8 +224,8 @@ mod tests {
         }
     }
 
-    /// A log where each of `decomposers` drains a carcass on tick 0 (so realised
-    /// diet reads them as decomposers from the first sample on).
+    /// A log where each of `decomposers` drains a carcass on tick 0 (so their
+    /// income reads them as decomposers from the first sample on).
     fn log_with_carcass_drains(decomposers: &[u64]) -> EventLog {
         let mut log = EventLog::new();
         for (i, &id) in decomposers.iter().enumerate() {
@@ -332,7 +332,7 @@ mod tests {
         assert!(!guilds.decomposer);
     }
 
-    /// The consumer twin: heterotrophs whose realised diet is living prey.
+    /// The consumer twin: heterotrophs whose income is living prey.
     fn log_with_living_drains(consumers: &[u64]) -> EventLog {
         let mut log = EventLog::new();
         for (i, &id) in consumers.iter().enumerate() {
@@ -370,13 +370,51 @@ mod tests {
         );
     }
 
+    /// A log where each of `ids` photosynthesizes on tick 0.
+    fn log_with_light(ids: &[u64]) -> EventLog {
+        let mut log = EventLog::new();
+        for (i, &id) in ids.iter().enumerate() {
+            log.append(event(0, i as u64, EventKind::Photosynthesized, id, None))
+                .unwrap();
+        }
+        log
+    }
+
+    #[test]
+    fn membership_is_the_income_role_not_the_investment_profile() {
+        // Six heterotrophs by investment living on light are producers; the
+        // same roster with no income at all holds no role.
+        let ids: Vec<u64> = (101..=106).collect();
+        let roster: Vec<(u64, TraitVector)> =
+            ids.iter().map(|&id| (id, heterotroph(0.4))).collect();
+        let mut light_fed = log_with_light(&ids);
+        light_fed
+            .append(event(60, 100, EventKind::Born, 107, Some(101)))
+            .unwrap();
+        let guilds = role_guilds(&light_fed, &constant_roster(&roster), MAX_TICKS);
+        assert_eq!(
+            guilds,
+            RoleGuilds {
+                producer: true,
+                consumer: false,
+                decomposer: false
+            }
+        );
+        let mut no_income = EventLog::new();
+        no_income
+            .append(event(60, 0, EventKind::Born, 107, Some(101)))
+            .unwrap();
+        let guilds = role_guilds(&no_income, &constant_roster(&roster), MAX_TICKS);
+        assert_eq!(guilds, RoleGuilds::default(), "no income, no role");
+    }
+
     #[test]
     fn producer_guild_reads_by_the_same_rule_through_role_guilds() {
         // Five producers on every sample; a birth in the window names one.
         let roster: Vec<(u64, TraitVector)> = (1..=5).map(|id| (id, producer())).collect();
-        let mut recruiting = EventLog::new();
+        let mut recruiting = log_with_light(&[1, 2, 3, 4, 5]);
         recruiting
-            .append(event(60, 0, EventKind::Born, 99, Some(1)))
+            .append(event(60, 5, EventKind::Born, 99, Some(1)))
             .unwrap();
         let guilds = role_guilds(&recruiting, &constant_roster(&roster), MAX_TICKS);
         assert!(guilds.producer);
@@ -387,7 +425,7 @@ mod tests {
         let h = heterotroph_guilds(&recruiting, &constant_roster(&roster), MAX_TICKS);
         assert_eq!(h, HeterotrophGuilds::default());
         // Sterile producers are not a guild.
-        let sterile = EventLog::new();
+        let sterile = log_with_light(&[1, 2, 3, 4, 5]);
         assert!(!role_guilds(&sterile, &constant_roster(&roster), MAX_TICKS).producer);
     }
 

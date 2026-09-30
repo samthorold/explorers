@@ -12,9 +12,9 @@
 //! It drives the genesis ensemble path the real `explorers-search` binary uses —
 //! the same `decode()` over `default_ranges()` that yields the #326 known-viable
 //! baseline, then the same per-tick step loop as `explorers_genesis::run_single`
-//! (step → early-stop on extinction/explosion). It additionally accumulates a
-//! `TopologyProjection` so it can classify each surviving agent's realised diet
-//! via the authoritative `topology::trophic_roles`, counting `Decomposer`s and
+//! (step → early-stop on extinction/explosion). It additionally accumulates an
+//! `IncomeLedger` so it can read each surviving agent's trophic role from its
+//! recent realised income (#599), counting `Decomposer`s and
 //! how long >= 1 decomposer persists. It does NOT shell out to the binary or run a
 //! Sobol sweep (too slow — see #326); it drives `decode` + the sim directly.
 //!
@@ -33,6 +33,18 @@
 //!     some point) in ~1/3 of surviving seeds (16/48 observed).
 //!   * A **persistent** decomposer guild (>= 1 decomposer present for >= 25% of the
 //!     run) forms in ~1/5 of surviving seeds (10/48 observed).
+//!
+//! **Re-read under the income role (#599).** Those counts were taken with the
+//! retired trait read (heterotroph by trait, decomposer by detrital reliance).
+//! Read from recent realised income, a decomposer **appears** in 48/50 surviving
+//! seeds but is **transient**: agents drift through the role for a few ticks
+//! (mostly heterotrophs by investment draining a carcass while their light
+//! income lapses), and only **2/50** seeds hold >= 1 decomposer for >= 25% of the
+//! run. The persistence fractions no longer split into two modes either side of
+//! 0.25; they spread from 0 to 0.33. The persistence threshold below is
+//! therefore a floor against the role vanishing (>= 1 seed), not a claim that a
+//! persistent guild forms in several seeds — by income it does not, at the
+//! midpoint and 500 ticks.
 //!
 //! So the guild *does* form, unseeded, on correctly-specified worlds — but at the
 //! decoder midpoint it is **sporadic, not a strong majority**: detritivory is a
@@ -60,9 +72,10 @@
 //!   cargo test -p explorers-search --test decomposer_emergence -- --nocapture
 
 use explorers_genesis::EvalConfig;
+use explorers_genesis_eval::income::IncomeLedger;
 use explorers_search::search::{decode, default_ranges};
 use explorers_sim::World;
-use explorers_sim::topology::{TopologyProjection, TrophicRole};
+use explorers_sim::topology::TrophicRole;
 
 /// Horizon for each run. 500 ticks matches the `explorers-search` default
 /// (`SearchConfig::max_ticks`) and the example9 test horizon; the emergence
@@ -78,9 +91,9 @@ const SEED_BASE: u64 = 1000;
 
 /// A decomposer guild is "persistent" in a run when >= 1 agent reads as a
 /// `Decomposer` for at least this fraction of the ticks the run actually ran.
-/// 0.25 distinguishes a sustained detrital guild from a one-tick transient (the
-/// observed `frac` values cluster either near 0 / a few percent, or above 0.5 —
-/// 0.25 sits cleanly in the empty gap between those modes).
+/// Under the retired trait read the observed `frac` values clustered near 0 or
+/// above 0.5 and 0.25 sat in the gap; under the income read (#599) they spread
+/// from 0 to 0.33 with no gap, so 0.25 is kept as a fixed cut, not a mode split.
 const PERSISTENCE_FRACTION: f64 = 0.25;
 
 /// One run's emergence summary.
@@ -104,15 +117,15 @@ impl RunOutcome {
 }
 
 /// Run one seed of the #326 baseline through the genesis ensemble step loop,
-/// classifying trophic roles each tick via `topology::trophic_roles`. Mirrors
+/// classifying trophic roles each tick via the income role read (`IncomeLedger`). Mirrors
 /// `explorers_genesis::run_single`'s loop (step, early-stop on empty / explosion)
-/// but also threads a `TopologyProjection` so realised diets can be read out.
+/// but also threads an `IncomeLedger` so realised income can be read out.
 fn run_seed(unit: &[f64], seed: u64) -> RunOutcome {
     let ranges = default_ranges();
     let (params, dist) = decode(unit, &ranges);
     let eval = EvalConfig::default();
     let mut world = World::new(params, dist, seed);
-    let mut topo = TopologyProjection::new();
+    let mut income = IncomeLedger::new();
 
     let mut peak_decomposers = 0usize;
     let mut decomposer_ticks = 0u64;
@@ -122,9 +135,9 @@ fn run_seed(unit: &[f64], seed: u64) -> RunOutcome {
     for _ in 0..MAX_TICKS {
         world.step();
         ran_ticks += 1;
-        topo.update(world.event_log());
+        income.update(world.event_log());
 
-        let roles = topo.trophic_roles(world.agents());
+        let roles = income.roles_of(world.agents().iter().map(|a| a.id));
         let decomposers = roles
             .values()
             .filter(|&&r| r == TrophicRole::Decomposer)
@@ -213,8 +226,9 @@ fn slow_baseline_survives_extinction_regime() {
 }
 
 /// A decomposer EMERGES from dynamics — unseeded — in a meaningful fraction of the
-/// surviving ensemble. Observed: 16/48 surviving seeds spawn >= 1 agent that reads
-/// as `Decomposer` via `trophic_roles`. Threshold: >= 6 surviving seeds. This is
+/// surviving ensemble. Observed: 48/50 surviving seeds spawn >= 1 agent that reads
+/// as `Decomposer` by income (16/48 under the retired trait read). Threshold:
+/// >= 6 surviving seeds. This is
 /// the core emergence claim — the detrital role appears on correctly-specified
 /// worlds with nothing hand-seeded — asserted distributionally over the ensemble,
 /// never on a single seed.
@@ -230,20 +244,21 @@ fn slow_decomposer_role_emerges_across_ensemble() {
     );
 }
 
-/// A PERSISTENT decomposer guild forms — >= 1 decomposer sustained for >= 25% of a
-/// run — in several seeds of the ensemble, again unseeded. Observed: 10/48
-/// surviving seeds. Threshold: >= 4 surviving seeds. This is the property #330's
-/// grill turns on: the guild does not merely flicker, it self-sustains on the
-/// emergent carcass supply across multiple independent draws. Asserted over the
-/// ensemble (#314 precedent), NOT on any single regime-sensitive seed.
+/// A PERSISTENT decomposer — >= 1 decomposer sustained for >= 25% of a run —
+/// holds on at least one seed of the ensemble, unseeded. Observed: 2/50 surviving
+/// seeds by income (10/48 under the retired trait read, when the threshold was
+/// >= 4). Threshold: >= 1 surviving seed — a floor against the persistent role
+/// vanishing outright, not the #330 claim that it forms in several draws, which
+/// the income read does not support at the midpoint (see the module header).
+/// Asserted over the ensemble (#314 precedent), NOT on any single seed.
 #[test]
 fn slow_persistent_decomposer_guild_forms_across_ensemble() {
     let e = midpoint_ensemble();
     assert!(
-        e.persistent >= 4,
-        "a persistent decomposer guild (>= 1 decomposer for >= {PERSISTENCE_FRACTION} of \
-         the run) should form in several of the {} surviving seeds; only {} did. The \
-         guild has regressed to flicker-only or absent.",
+        e.persistent >= 1,
+        "a persistent decomposer (>= 1 decomposer for >= {PERSISTENCE_FRACTION} of \
+         the run) should hold on at least one of the {} surviving seeds; {} did. The \
+         role has regressed to flicker-only or absent.",
         e.surviving,
         e.persistent
     );

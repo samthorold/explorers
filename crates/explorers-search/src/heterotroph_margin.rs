@@ -53,7 +53,8 @@ pub struct LineRead {
     /// heterotrophy one carcass in reach still pays. `None` if nowhere.
     pub positive_reach: Option<f32>,
     /// The best point among nominal heterotrophs (`heterotrophy >
-    /// photosynthetic_absorption`, `topology::trophic_roles`' split).
+    /// photosynthetic_absorption`: heterotrophs by investment, the split the
+    /// retired trait-read role tag made before #599).
     pub best_heterotroph_t: f32,
     pub best_heterotroph: MarginTerms,
     /// The best point on the strict margin (all trait terms charged).
@@ -280,7 +281,7 @@ mod tests {
     /// The read also names how far toward heterotrophy the carcass pays: the
     /// last grid point with a positive margin, and the best point among
     /// nominal heterotrophs (`heterotrophy > photosynthetic_absorption`, the
-    /// role split `topology::trophic_roles` makes).
+    /// split the retired trait-read role tag made before #599).
     #[test]
     fn read_names_the_positive_reach_and_the_best_nominal_heterotroph() {
         let (params, dist) = sample_31();

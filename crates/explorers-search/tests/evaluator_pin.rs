@@ -46,6 +46,17 @@
 //! Re-pinned under #494 on the regenerated settled-horizon atlas: the
 //! committed `atlas.json` was replaced, so the cell indices and every golden
 //! below are new, chosen afresh for the same spread of verdicts (see `CELLS`).
+//!
+//! Re-captured under #599, an evaluator read changed by design: every
+//! agent's trophic role is read from its recent realised income, not its
+//! trait vector, for both the guild read and `trophic_balance_score` (an
+//! agent with no income yet has no role and is left out). No trajectory
+//! changed: every gate verdict and `ticks_survived` is bit-identical. On
+//! every live seed `trophic_balance_score` went to 1 — the trait-tagged
+//! "heterotrophs" whose energy it counted against producers live on light
+//! (#596) — and the fitness that sums it moved with it. Two guild flags fell:
+//! cell 27 / seed 1001's decomposer guild and cell 59 / seed 1001's consumer
+//! guild were trait-read guilds of agents living on light.
 
 use std::path::Path;
 
@@ -62,7 +73,8 @@ const HORIZON: u64 = 500;
 /// a lockup early stop (cell 11 / seed 1000), a decomposer-guild seed on a
 /// high-fitness cell (27 / 1001), a monoculture on both seeds (39), a
 /// consumer-guild seed (59 / 1001), a generalist-dominance gate (66 / 1000),
-/// an extinction (71 / 1000) and the top-fitness seed (76 / 1001).
+/// an extinction (71 / 1000) and the top-fitness seed (76 / 1001). The two
+/// guild seeds were guilds by the trait read; by income (#599) they hold none.
 const CELLS: [usize; 7] = [11, 27, 39, 59, 66, 71, 76];
 const SEEDS: [u64; 2] = [1000, 1001];
 
@@ -184,13 +196,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 27,
             seed: 1000,
-            fitness: 0x3f037bbf,
+            fitness: 0x3f1281b9,
             failure: None,
             oscillation_strength: 0x3eb4f8a9,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3eb851ec,
             turnover_score: 0x3e178d50,
-            trophic_balance_score: 0x3f34e21b,
+            trophic_balance_score: 0x3f800000,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3d9174a1,
             has_decomposer_guild: false,
@@ -199,16 +211,16 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 27,
             seed: 1001,
-            fitness: 0x3f42562a,
+            fitness: 0x3f56a089,
             failure: None,
             oscillation_strength: 0x3ef3adcf,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f800000,
             turnover_score: 0x3f374bc7,
-            trophic_balance_score: 0x3f1a8c26,
+            trophic_balance_score: 0x3f800000,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3e28dfc9,
-            has_decomposer_guild: true,
+            has_decomposer_guild: false,
             has_consumer_guild: false,
         },
         Pinned {
@@ -244,13 +256,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 59,
             seed: 1000,
-            fitness: 0x3f040060,
+            fitness: 0x3f0fe008,
             failure: None,
             oscillation_strength: 0x3ea3df02,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3e23d70a,
             turnover_score: 0x3ea8f5c3,
-            trophic_balance_score: 0x3f44a1bc,
+            trophic_balance_score: 0x3f800000,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3d198c9a,
             has_decomposer_guild: false,
@@ -259,17 +271,17 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 59,
             seed: 1001,
-            fitness: 0x3ee7037e,
+            fitness: 0x3ef6e608,
             failure: None,
             oscillation_strength: 0x3ea77c1c,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x0,
             turnover_score: 0x3dac0831,
-            trophic_balance_score: 0x3f5849a8,
+            trophic_balance_score: 0x3f800000,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3d02247d,
             has_decomposer_guild: false,
-            has_consumer_guild: true,
+            has_consumer_guild: false,
         },
         Pinned {
             cell: 66,
@@ -289,13 +301,13 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 66,
             seed: 1001,
-            fitness: 0x3f0ed3d5,
+            fitness: 0x3f211646,
             failure: None,
             oscillation_strength: 0x3e9392f2,
             clustering_strength: 0x3f333333,
             coexistence_duration: 0x3f6b851f,
             turnover_score: 0x3e73b646,
-            trophic_balance_score: 0x3f24b3ce,
+            trophic_balance_score: 0x3f800000,
             ticks_survived: 500,
             carcass_locked_fraction: 0x3d67632a,
             has_decomposer_guild: false,

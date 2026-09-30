@@ -1,8 +1,9 @@
 pub mod ensemble;
 pub mod guild;
+pub mod income;
 
 use explorers_sim::event::EventKind;
-use explorers_sim::topology::{TopologyProjection, TrophicRole};
+use explorers_sim::topology::TrophicRole;
 
 /// The event kinds the evaluator consumes — the retention a rollout applies
 /// with `World::retain_event_kinds` so a settled-community horizon fits in
@@ -14,17 +15,19 @@ use explorers_sim::topology::{TopologyProjection, TrophicRole};
 ///
 /// - `Reproduced`, `Died` — counted for the turnover term
 ///   (`turnover_score`; `total_births` / `total_deaths`).
-/// - `Consumed`, `Reproduced`, `Died` — walked by the
-///   [`TopologyProjection`] whose realised-diet edges classify each roster
-///   sample into trophic roles for the heterotroph guild read (#490).
+/// - `Photosynthesized`, `Consumed`, `Died` — booked by the
+///   [`income::IncomeLedger`] whose recent realised income reads each agent's
+///   trophic role (#599): the heterotroph guild read (#490) on every roster
+///   sample, and the trophic-balance term on the terminal roster.
 /// - `Born` — the guild's recruitment clause: a second-half birth naming a
 ///   guild member as a parent ([`guild::Birth`]).
 ///
 /// Nothing else the evaluator computes reads the log: the energy-death,
 /// lockup, oscillation and coexistence reads are off the per-tick series and
-/// snapshots in [`RolloutObservations`], and clustering, trophic balance,
-/// monoculture and generalist dominance read the final roster.
+/// snapshots in [`RolloutObservations`], and clustering, monoculture and
+/// generalist dominance read the final roster.
 pub const EVALUATOR_EVENT_KINDS: &[EventKind] = &[
+    EventKind::Photosynthesized,
     EventKind::Consumed,
     EventKind::Reproduced,
     EventKind::Died,
@@ -230,8 +233,8 @@ impl Default for EvalConfig {
 ///
 /// The bundle also carries every read the evaluator takes off the event log,
 /// consumed tick by tick from the log's tail (#502): the turnover counts, the
-/// `Born` descent facts, and the roster samples already classified into
-/// trophic roles by the projection as of the sample tick. Reading them as they
+/// `Born` descent facts, and the roster samples already read into trophic
+/// roles by the income ledger as of the sample tick. Reading them as they
 /// happen is what lets a rollout keep only [`EVALUATOR_EVENT_KINDS`] and drop
 /// the log before [`consumed_events`](Self::consumed_events) after every
 /// step — the world stays history-free and so, at the horizon, does the log.
@@ -252,12 +255,13 @@ pub struct RolloutObservations {
     /// seed is disproportionate for one noisy 0.2-weight term.
     pub cluster_snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)>,
     /// Living roster snapshotted at the same coarse interval, tagged with its
-    /// tick and read into trophic roles by the projection as of that tick, for
+    /// tick and read into trophic roles by the income ledger as of that tick
+    /// (an agent with no income yet has no role and is left out), for
     /// the heterotroph guild read (#490). The guild is a population over time
     /// — role count on every sampled tick of the second half plus recruitment
     /// — so it needs the roster *at each sample*, which the history-free world
     /// cannot supply after the fact; classifying at the sample is what lets
-    /// the log history behind the projection be dropped (#502).
+    /// the log history behind the ledger be dropped (#502).
     pub role_snapshots: Vec<guild::RoleSnapshot>,
     /// `Reproduced` events seen so far — the turnover term's births.
     pub total_births: usize,
@@ -265,9 +269,9 @@ pub struct RolloutObservations {
     pub total_deaths: usize,
     /// Every `Born` event's descent facts, for the guild's recruitment clause.
     pub born: Vec<guild::Birth>,
-    /// The projection that classifies each roster sample, walked to the
-    /// present on every `observe`.
-    topology: TopologyProjection,
+    /// The recent-income ledger that reads each agent's trophic role, walked
+    /// to the present on every `observe`.
+    income: income::IncomeLedger,
     /// Absolute log index up to which the counts and `born` have been read.
     log_cursor: usize,
 }
@@ -290,19 +294,19 @@ impl RolloutObservations {
             total_births: 0,
             total_deaths: 0,
             born: Vec::new(),
-            topology: TopologyProjection::new(),
+            income: income::IncomeLedger::new(),
             log_cursor: 0,
         }
     }
 
     /// Record one stepped tick of `world`: the log tail since the last call
-    /// (turnover counts, `Born` facts, the projection), the three per-tick
+    /// (turnover counts, `Born` facts, the income ledger), the three per-tick
     /// series every tick, and the trait-vector and role snapshots when the
     /// world's tick is a multiple of `sample_interval` (the evaluator's
     /// `coexistence_sample_interval`). Pure observation — no clustering; the
-    /// evaluator owns that. Role classification is the projection's read of
-    /// the log as of this tick, taken here because it cannot be taken later
-    /// from a log that has been dropped.
+    /// evaluator owns that. Role classification is the income ledger's read
+    /// as of this tick, taken here because it cannot be taken later from a
+    /// log that has been dropped.
     pub fn observe(&mut self, world: &explorers_sim::World, sample_interval: usize) {
         let log = world.event_log();
         for event in log.since(self.log_cursor) {
@@ -316,8 +320,8 @@ impl RolloutObservations {
         self.log_cursor = log.len();
         // Events are stamped with the tick they happened in and the world's
         // counter advances after the step, so walking to the present here is
-        // the projection as of `world.tick()`.
-        self.topology.update(log);
+        // the ledger as of `world.tick()`.
+        self.income.update(log);
 
         self.free_energy.push(world.free_energy());
         self.carcass_fraction
@@ -330,18 +334,17 @@ impl RolloutObservations {
             ));
             self.role_snapshots.push((
                 world.tick(),
-                self.topology
-                    .trophic_roles_of(world.agents().iter().map(|a| (a.id, &a.traits))),
+                self.income.roles_of(world.agents().iter().map(|a| a.id)),
             ));
         }
     }
 
-    /// The projection as of the last observed tick — the one the evaluator
-    /// reads the terminal roster's trophic roles off. Read-only, for
-    /// instruments that ask the same projection more than the role (the
-    /// detrital reliance behind a decomposer read, #546).
-    pub fn topology(&self) -> &TopologyProjection {
-        &self.topology
+    /// The income ledger as of the last observed tick — the one the
+    /// evaluator reads the terminal roster's trophic roles off. Read-only,
+    /// for instruments that ask the ledger more than the role (the income
+    /// behind a role read).
+    pub fn income(&self) -> &income::IncomeLedger {
+        &self.income
     }
 
     /// Absolute event-log index below which everything has been read: a
@@ -446,13 +449,14 @@ fn evaluate(
         0.0
     };
 
-    // Balance is scored per agent against the topology's trophic-role read
-    // (#486), the same read the guild observables classify with.
-    let roles = observations
-        .topology
-        .trophic_roles_of(agents.iter().map(|a| (a.id, &a.traits)));
-    let agent_roles: Vec<TrophicRole> = agents.iter().map(|a| roles[&a.id]).collect();
-    let tb = trophic_balance_score(&agent_roles, &energies);
+    // Balance is scored per agent against the income ledger's trophic-role
+    // read (#486, #599), the same read the guild observables classify with.
+    // An agent with no income yet has no role and is left out of both sides.
+    let (agent_roles, role_energies): (Vec<TrophicRole>, Vec<f32>) = agents
+        .iter()
+        .filter_map(|a| observations.income.role(a.id).map(|r| (r, a.energy())))
+        .unzip();
+    let tb = trophic_balance_score(&agent_roles, &role_energies);
 
     let grace_ticks = config.grace_ticks;
     if let Some(failure) = dead_pool_gate(observations, config, sustainable_stock(world.params())) {
@@ -948,12 +952,13 @@ pub fn has_trophic_pyramid(
 /// the pyramid base — energy concentrated in producers — per the "Trophic
 /// structure" expected property.
 ///
-/// Scored per agent against the topology's trophic-role read
-/// ([`TopologyProjection::trophic_roles_of`]), not on DBSCAN cluster means
-/// (#486): a merged cluster of producers and heterotrophs scores its producer
-/// energy share, not a whole-cluster 0 or 1 decided by a count-parity tie.
-/// Every living agent counts, whatever its DBSCAN label; a `Producer` is on
-/// the producer side and every other role on the other.
+/// Scored per agent against the income ledger's trophic-role read
+/// ([`income::IncomeLedger`], #599), not on DBSCAN cluster means (#486): a
+/// merged cluster of producers and heterotrophs scores its producer energy
+/// share, not a whole-cluster 0 or 1 decided by a count-parity tie. Every
+/// agent with a role counts, whatever its DBSCAN label; a `Producer` is on
+/// the producer side and every other role on the other. The evaluator passes
+/// only agents with a role: one with no income yet is on neither side.
 ///
 /// It is deliberately **decomposer-blind**: decomposers are heterotrophs, so they
 /// fall on the non-producer side, and this score does not — and cannot — reward
@@ -2137,6 +2142,42 @@ mod tests {
     }
 
     #[test]
+    fn role_snapshots_read_each_agent_by_its_income_not_its_traits() {
+        // #599: an agent whose heterotrophy exceeds its autotrophy but which
+        // lives on light is a producer. Founders leaning heterotroph by
+        // investment, kept apart on a wide sunlit world.
+        let params = live_world_params();
+        let dist = explorers_sim::InitialDistribution {
+            mean_traits: explorers_sim::TraitVector {
+                photosynthetic_absorption: 0.5,
+                heterotrophy: 0.6,
+                ..test_distribution().mean_traits
+            },
+            ..test_distribution()
+        };
+        let interval = EvalConfig::default().coexistence_sample_interval;
+        let mut world = explorers_sim::World::new(params, dist, 42);
+        let mut observations = RolloutObservations::with_capacity(100);
+        let mut light_fed_heterotrophs_by_trait = 0;
+        for _ in 0..100 {
+            world.step();
+            observations.observe(&world, interval);
+            if world.tick().is_multiple_of(interval as u64) {
+                let (_, roles) = observations.role_snapshots.last().unwrap();
+                light_fed_heterotrophs_by_trait += world
+                    .agents()
+                    .iter()
+                    .filter(|a| {
+                        a.traits.heterotrophy > a.traits.photosynthetic_absorption
+                            && roles.get(&a.id) == Some(&TrophicRole::Producer)
+                    })
+                    .count();
+            }
+        }
+        assert!(light_fed_heterotrophs_by_trait > 0);
+    }
+
+    #[test]
     fn evaluate_from_log_reads_both_heterotroph_guilds_off_the_role_snapshots() {
         // The guild read (#490) is a population read over the second-half role
         // snapshots, not a terminal-roster role tag. Feed a real run's births
@@ -2589,20 +2630,36 @@ mod tests {
         };
         let max_ticks = 50;
         let mut world = explorers_sim::World::new(params, dist, 42);
-        let free = run_collecting_free_energy(&mut world, max_ticks);
-        if world.agents().is_empty() {
-            return; // can't test final-state metrics on extinct world
+        let mut observations = RolloutObservations::with_capacity(max_ticks as usize);
+        for _ in 0..max_ticks {
+            world.step();
+            observations.observe(&world, config.coexistence_sample_interval);
+            if world.agents().is_empty() {
+                return; // can't test final-state metrics on extinct world
+            }
         }
-        let result = evaluate_from_log(&world, &obs(&free, &[], &[], &[]), &config, max_ticks);
+        let observations = RolloutObservations {
+            cluster_snapshots: Vec::new(),
+            role_snapshots: Vec::new(),
+            ..observations
+        };
+        let result = evaluate_from_log(&world, &observations, &config, max_ticks);
 
         let trait_vectors: Vec<_> = world.agents().iter().map(|a| a.traits).collect();
-        let energies: Vec<_> = world.agents().iter().map(|a| a.energy()).collect();
         let expected_cs = if trait_vectors.len() >= 4 {
             clustering_strength(&trait_vectors)
         } else {
             0.0
         };
-        let expected_tb = trophic_balance_score(&roles_of(&trait_vectors), &energies);
+        // Balance reads each agent's income role; an agent with none is left
+        // out of both sides.
+        let (roles, energies): (Vec<TrophicRole>, Vec<f32>) = world
+            .agents()
+            .iter()
+            .filter_map(|a| observations.income().role(a.id).map(|r| (r, a.energy())))
+            .unzip();
+        assert!(!roles.is_empty(), "the fixture books income");
+        let expected_tb = trophic_balance_score(&roles, &energies);
 
         assert_eq!(result.clustering_strength, expected_cs);
         assert_eq!(result.trophic_balance_score, expected_tb);
@@ -3220,12 +3277,21 @@ mod tests {
         assert_eq!(score, 1.0);
     }
 
-    /// The topology's per-agent trophic-role read of `traits`, in roster
-    /// order — the read the evaluator scores balance against.
+    /// The trophic role each fixture agent is given, in roster order: the
+    /// fixtures pair an autotrophy-leaning investment profile with a producer
+    /// role and a heterotrophy-leaning one with a consumer role, so the
+    /// DBSCAN preconditions read the same agents the balance scores.
     fn roles_of(traits: &[explorers_sim::TraitVector]) -> Vec<TrophicRole> {
-        let roles = TopologyProjection::new()
-            .trophic_roles_of(traits.iter().enumerate().map(|(i, t)| (i as u64, t)));
-        (0..traits.len()).map(|i| roles[&(i as u64)]).collect()
+        traits
+            .iter()
+            .map(|t| {
+                if t.photosynthetic_absorption >= t.heterotrophy {
+                    TrophicRole::Producer
+                } else {
+                    TrophicRole::Consumer
+                }
+            })
+            .collect()
     }
 
     #[test]

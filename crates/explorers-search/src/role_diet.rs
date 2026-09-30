@@ -1,27 +1,30 @@
 //! Trait-read role tag against realised diet (issue #596).
 //!
-//! The evaluator's role tag reads an agent as a heterotroph by *trait*
-//! (heterotrophy > photosynthetic absorption) and splits heterotrophs into
-//! consumer and decomposer by realised diet (`TopologyProjection::
-//! trophic_roles_of`). #591 found tagged "consumers" living almost entirely on
-//! light. This module books every agent's lifetime energy income by source —
-//! light (`Photosynthesized`), living prey and carcasses (`Consumed`, split by
-//! `target_was_carcass`) — and reads a **diet role** from it: a producer by
-//! diet when light is at least [`PRODUCER_LIGHT_SHARE`] of its income, else a
-//! consumer or decomposer by the same living/carcass split the tag uses.
+//! Until #599 the evaluator's role tag read an agent as a heterotroph by
+//! *trait* (heterotrophy > photosynthetic absorption) and split heterotrophs
+//! into consumer and decomposer by realised diet (the projection's detrital
+//! reliance). #591 found tagged "consumers" living almost entirely on light.
+//! This module keeps that retired tag ([`trait_tag`]) as the thing measured,
+//! books every agent's lifetime energy income by source — light
+//! (`Photosynthesized`), living prey and carcasses (`Consumed`, split by
+//! `target_was_carcass`) — and reads a **diet role** from it by the
+//! evaluator's income rule ([`Income::role`]): a producer when light is at
+//! least [`PRODUCER_LIGHT_SHARE`] of its income, else a consumer or
+//! decomposer by the living/carcass split. The evaluator (#599) reads the same
+//! rule over a decaying recent window; the census reads it over the lifetime.
 //!
 //! [`rollout`] mirrors the genesis rollout (`explorers_genesis::rollout`)
 //! step for step: the same retention, the same `RolloutObservations`, the same
 //! early stops and the same horizon verdict. On the evaluator's own
-//! second-half role snapshots it also takes the diet role of every agent, so
-//! the guild rule (`guild::role_guilds_from_samples`) reads the trait tag and
-//! the diet role on identical samples. It also attributes every death:
+//! second-half sample ticks it takes the trait tag and the diet role of every
+//! agent, so the guild rule (`guild::role_guilds_from_samples`) reads both on
+//! identical samples. It also attributes every death:
 //! age class, whether the agent was grazed alive in its death tick, and
 //! whether a grazer was kin (parent, offspring or sibling, by `Born`).
 //!
 //! Heterotrophic income is booked as energy *drained* (`Consumed`'s
 //! `energy_delta`, before the trophic transfer efficiency): the quantity the
-//! tag's detrital-reliance split already reads, and an upper bound on what the
+//! tag's detrital-reliance split reads, and an upper bound on what the
 //! agent kept. A light share read against it is therefore a lower bound — the
 //! conservative direction for asking whether a tagged heterotroph lives on
 //! light.
@@ -31,15 +34,11 @@
 use std::collections::HashMap;
 
 use explorers_genesis_eval::guild::{RoleGuilds, RoleSnapshot, role_guilds_from_samples};
+pub use explorers_genesis_eval::income::{Income, PRODUCER_LIGHT_SHARE};
 use explorers_genesis_eval::{EvalConfig, FailureMode, RolloutObservations};
 use explorers_sim::event::{Event, EventKind};
-use explorers_sim::topology::{DETRITAL_RELIANCE_THRESHOLD, TrophicRole};
+use explorers_sim::topology::{DETRITAL_RELIANCE_THRESHOLD, TopologyProjection, TrophicRole};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
-
-/// Light share of lifetime income at or above which an agent is a producer by
-/// diet. A starting value: the census reports the whole light-share
-/// distribution so a reading does not hinge on it.
-pub const PRODUCER_LIGHT_SHARE: f64 = 0.5;
 
 /// A death at or below this age (ticks from birth) is an infant death, as
 /// #591's accountant counts it.
@@ -48,45 +47,24 @@ pub const INFANT_AGE: u64 = 50;
 /// Deciles of the light share.
 pub const LIGHT_SHARE_BINS: usize = 10;
 
-/// An agent's lifetime energy income by source.
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Income {
-    pub light: f64,
-    /// Energy drained from living agents.
-    pub living: f64,
-    /// Energy drained from carcasses.
-    pub carcass: f64,
-}
-
-impl Income {
-    pub fn total(&self) -> f64 {
-        self.light + self.living + self.carcass
-    }
-
-    /// Light's share of the income; `None` for an agent with no income yet.
-    pub fn light_share(&self) -> Option<f64> {
-        let total = self.total();
-        (total > 0.0).then(|| self.light / total)
-    }
-}
-
-/// The role an agent's realised diet reads as: `None` with no income yet.
-/// Light at or above [`PRODUCER_LIGHT_SHARE`] reads producer; otherwise the
-/// heterotrophic income splits consumer / decomposer at the tag's own
-/// detrital-reliance threshold.
+/// The role an agent's lifetime income reads as, by the evaluator's income
+/// rule ([`Income::role`]): `None` with no income yet.
 pub fn diet_role(income: &Income) -> Option<TrophicRole> {
-    let share = income.light_share()?;
-    if share >= PRODUCER_LIGHT_SHARE {
-        return Some(TrophicRole::Producer);
+    income.role()
+}
+
+/// The retired trait-read role tag (pre-#599), kept as the thing this census
+/// measures: a producer when autotrophy is at least heterotrophy, else a
+/// decomposer when the projection's detrital reliance reaches
+/// [`DETRITAL_RELIANCE_THRESHOLD`], else a consumer (a non-eater included).
+pub fn trait_tag(id: u64, traits: &TraitVector, topology: &TopologyProjection) -> TrophicRole {
+    if traits.photosynthetic_absorption >= traits.heterotrophy {
+        return TrophicRole::Producer;
     }
-    let drained = income.living + income.carcass;
-    Some(
-        if income.carcass / drained >= DETRITAL_RELIANCE_THRESHOLD as f64 {
-            TrophicRole::Decomposer
-        } else {
-            TrophicRole::Consumer
-        },
-    )
+    match topology.detrital_reliance(id) {
+        Some(r) if r >= DETRITAL_RELIANCE_THRESHOLD => TrophicRole::Decomposer,
+        _ => TrophicRole::Consumer,
+    }
 }
 
 /// Index of a role in the census tables: producer, consumer, decomposer.
@@ -294,10 +272,12 @@ pub struct SeedDiet {
     /// The evaluator's failure label, `None` for a live run.
     pub failure: Option<String>,
     pub termination_tick: u64,
-    /// The evaluator's guild read (the trait tag).
+    /// The guild rule read with the retired trait tag ([`trait_tag`]; the
+    /// evaluator's read before #599).
     pub tag_guilds: [bool; 3],
-    /// The same rule on the same samples with every agent read by its diet
-    /// role (an agent with no income yet keeps its tag).
+    /// The same rule on the same samples with every agent read by its
+    /// lifetime diet role (an agent with no income yet has no role and is
+    /// left out, as in the evaluator).
     pub diet_guilds: [bool; 3],
     /// Trait tag × diet role over the second-half samples.
     pub confusion: Confusion,
@@ -308,8 +288,8 @@ pub struct SeedDiet {
     pub deaths: DeathTable,
     /// The terminal roster's producer share of living energy — the
     /// evaluator's trophic-balance term — with agents bucketed by the trait
-    /// tag (the evaluator's read) and by diet role (an agent with no income
-    /// keeps its tag). `None` for an empty roster.
+    /// tag (the evaluator's read before #599) and by lifetime diet role (an
+    /// agent with no income is left out). `None` for an empty roster.
     #[serde(default)]
     pub trophic_balance_tag: Option<f32>,
     #[serde(default)]
@@ -360,6 +340,8 @@ pub fn rollout(
     let window_start = max_ticks / 2 + 1;
 
     let mut ledger = DietLedger::new(&world);
+    let mut topology = TopologyProjection::new();
+    let mut tag_snapshots: Vec<RoleSnapshot> = Vec::new();
     let mut cursor = 0;
     let mut diet_snapshots: Vec<RoleSnapshot> = Vec::new();
     let mut confusion = Confusion::default();
@@ -370,13 +352,19 @@ pub fn rollout(
         let tail: Vec<Event> = world.event_log().since(cursor).to_vec();
         cursor = world.event_log().len();
         ledger.ingest(&world, &tail);
+        topology.update(world.event_log());
         let sampled_before = observations.role_snapshots.len();
         observations.observe(&world, interval);
         if observations.role_snapshots.len() > sampled_before {
-            let (tick, tags) = observations.role_snapshots.last().expect("just pushed");
-            if *tick >= window_start {
+            let tick = world.tick();
+            if tick >= window_start {
+                let tags: HashMap<u64, TrophicRole> = world
+                    .agents()
+                    .iter()
+                    .map(|a| (a.id, trait_tag(a.id, &a.traits, &topology)))
+                    .collect();
                 let mut diet = HashMap::with_capacity(tags.len());
-                for (&id, &tag) in tags {
+                for (&id, &tag) in &tags {
                     let income = ledger.income(id);
                     let role = diet_role(&income);
                     confusion.add(tag, role);
@@ -387,9 +375,12 @@ pub fn rollout(
                             ((share * LIGHT_SHARE_BINS as f64) as usize).min(LIGHT_SHARE_BINS - 1);
                         light_share[bin] += 1;
                     }
-                    diet.insert(id, role.unwrap_or(tag));
+                    if let Some(role) = role {
+                        diet.insert(id, role);
+                    }
                 }
-                diet_snapshots.push((*tick, diet));
+                diet_snapshots.push((tick, diet));
+                tag_snapshots.push((tick, tags));
             }
         }
         world.compact_event_log_before(cursor.min(observations.consumed_events()));
@@ -419,17 +410,8 @@ pub fn rollout(
                 eval_config,
                 max_ticks,
             );
-            let tag = role_guilds_from_samples(
-                &observations.role_snapshots,
-                &observations.born,
-                max_ticks,
-            );
+            let tag = role_guilds_from_samples(&tag_snapshots, &observations.born, max_ticks);
             let diet = role_guilds_from_samples(&diet_snapshots, &observations.born, max_ticks);
-            debug_assert_eq!(
-                (tag.consumer, tag.decomposer),
-                (breakdown.has_consumer_guild, breakdown.has_decomposer_guild),
-                "the tag read is the evaluator's"
-            );
             let (tag, diet) = (guild_flags(tag), guild_flags(diet));
             (breakdown.failure, world.tick(), tag, diet)
         }
@@ -438,22 +420,22 @@ pub fn rollout(
         (None, None)
     } else {
         let agents = world.agents();
-        let tags = observations
-            .topology()
-            .trophic_roles_of(agents.iter().map(|a| (a.id, &a.traits)));
         let energies: Vec<f32> = agents.iter().map(|a| a.energy()).collect();
-        let tag_roles: Vec<TrophicRole> = agents.iter().map(|a| tags[&a.id]).collect();
-        let diet_roles: Vec<TrophicRole> = agents
+        let tag_roles: Vec<TrophicRole> = agents
             .iter()
-            .map(|a| diet_role(&ledger.income(a.id)).unwrap_or(tags[&a.id]))
+            .map(|a| trait_tag(a.id, &a.traits, &topology))
             .collect();
+        let (diet_roles, diet_energies): (Vec<TrophicRole>, Vec<f32>) = agents
+            .iter()
+            .filter_map(|a| diet_role(&ledger.income(a.id)).map(|r| (r, a.energy())))
+            .unzip();
         (
             Some(explorers_genesis_eval::trophic_balance_score(
                 &tag_roles, &energies,
             )),
             Some(explorers_genesis_eval::trophic_balance_score(
                 &diet_roles,
-                &energies,
+                &diet_energies,
             )),
         )
     };
@@ -495,35 +477,6 @@ mod tests {
             target_was_carcass: false,
             second_parent: None,
         }
-    }
-
-    #[test]
-    fn diet_role_reads_light_share_then_the_living_carcass_split() {
-        let role = |light, living, carcass| {
-            diet_role(&Income {
-                light,
-                living,
-                carcass,
-            })
-        };
-        assert_eq!(role(0.0, 0.0, 0.0), None);
-        assert_eq!(role(9.99, 0.01, 0.0), Some(TrophicRole::Producer));
-        assert_eq!(
-            role(1.0, 1.0, 0.0),
-            Some(TrophicRole::Producer),
-            "at the share"
-        );
-        assert_eq!(role(0.9, 1.0, 0.1), Some(TrophicRole::Consumer));
-        assert_eq!(role(0.0, 0.2, 0.8), Some(TrophicRole::Decomposer));
-        assert_eq!(
-            Income {
-                light: 3.0,
-                living: 1.0,
-                carcass: 0.0
-            }
-            .light_share(),
-            Some(0.75)
-        );
     }
 
     fn sample_31() -> (WorldParameters, InitialDistribution) {
@@ -599,14 +552,16 @@ mod tests {
     }
 
     /// The census's rollout is the genesis rollout: on real seeds it reaches
-    /// the same verdict, termination tick and heterotroph guild read as
-    /// `explorers_genesis::rollout`, and it is deterministic.
+    /// the same verdict and termination tick as `explorers_genesis::rollout`,
+    /// its diet read agrees with the evaluator's income role on both
+    /// heterotroph guilds (#599), and it is deterministic.
     #[test]
-    fn rollout_reproduces_the_genesis_verdict_and_guilds() {
+    fn rollout_reproduces_the_genesis_verdict_and_its_diet_read_agrees_with_the_evaluator() {
         let (params, dist) = sample_31();
         let eval = EvalConfig::default();
         let horizon = 200;
-        let mut balance_checked = 0;
+        let mut live = 0;
+        let mut producer_guilds = 0;
         for seed in [1000, 1001] {
             let ours = rollout(&params, &dist, seed, horizon, &eval);
             let run_config = explorers_genesis::RunConfig {
@@ -614,7 +569,8 @@ mod tests {
                 eval_config: eval.clone(),
                 early_stop_crosscheck_fraction: 0.0,
             };
-            let theirs = explorers_genesis::rollout(&params, &dist, &run_config, seed).result;
+            let genesis = explorers_genesis::rollout(&params, &dist, &run_config, seed);
+            let theirs = genesis.result;
             assert_eq!(
                 ours.failure,
                 theirs
@@ -623,21 +579,29 @@ mod tests {
                     .map(|f| failure_label(f).to_string())
             );
             assert_eq!(ours.termination_tick, theirs.termination_tick);
-            assert_eq!(ours.tag_guilds[1], theirs.breakdown.has_consumer_guild);
-            assert_eq!(ours.tag_guilds[2], theirs.breakdown.has_decomposer_guild);
+            assert_eq!(ours.diet_guilds[1], theirs.breakdown.has_consumer_guild);
+            assert_eq!(ours.diet_guilds[2], theirs.breakdown.has_decomposer_guild);
             if theirs.failure.is_none() {
-                assert_eq!(
-                    ours.trophic_balance_tag,
-                    Some(theirs.breakdown.trophic_balance_score),
-                    "the tag balance is the evaluator's term"
+                // All three roles, the producer guild included, on the
+                // evaluator's own role snapshots.
+                let evaluator = role_guilds_from_samples(
+                    &genesis.observations.role_snapshots,
+                    &genesis.observations.born,
+                    horizon,
                 );
-                balance_checked += 1;
+                assert_eq!(ours.diet_guilds, guild_flags(evaluator));
+                producer_guilds += usize::from(evaluator.producer);
+                live += 1;
             }
             assert_eq!(ours, rollout(&params, &dist, seed, horizon, &eval));
             // Every second-half sample is in the confusion table.
             let samples: u64 = ours.confusion.0.iter().flatten().sum();
             assert!(samples > 0, "{ours:?}");
         }
-        assert!(balance_checked > 0, "a live seed pins the balance");
+        assert!(live > 0, "a live seed pins the guild read");
+        assert!(
+            producer_guilds > 0,
+            "a guild that holds is pinned, not only absences"
+        );
     }
 }

@@ -10,11 +10,12 @@
 //! world and observations. Every read is an evaluator or topology function:
 //! the verdict and guild flags are the rollout's own; the monoculture margin
 //! is `clustering_strength` against `clustering_threshold`; trophic position
-//! is `trophic_coordinates`; roles are `TopologyProjection::trophic_roles_of`
-//! (the terminal read the evaluator scores balance with, and the
-//! settled-window role snapshots the guild predicate reads); detrital
-//! reliance is `TopologyProjection::detrital_reliance`, the quantity the role
-//! read cuts at 0.5; the generalist share is `generalist_energy_share`.
+//! is `trophic_coordinates`; roles are the evaluator's income read
+//! (`IncomeLedger::roles_of`, #599: the terminal read the evaluator scores
+//! balance with, and the settled-window role snapshots the guild predicate
+//! reads); detrital reliance is the carcass share of the ledger's recent
+//! drained income, the quantity the role read cuts at 0.5 (before #599 it
+//! was `TopologyProjection::detrital_reliance` and roles were trait-read); the generalist share is `generalist_energy_share`.
 //!
 //! ## Classification rule
 //!
@@ -420,10 +421,10 @@ fn measure(unit: &[f64], guild_seed: &GuildSeed, horizon: u64) -> SeedStructure 
         .as_ref()
         .map(|f| Cliff::from_failure(f).label());
     let agents = world.agents();
-    let topology = observations.topology();
-    // The evaluator's own terminal read: the projection's trophic roles over
-    // the living roster, traits and `energy()` per agent.
-    let roles = topology.trophic_roles_of(agents.iter().map(|a| (a.id, &a.traits)));
+    let income = observations.income();
+    // The evaluator's own terminal read: the income ledger's trophic roles
+    // over the living roster, traits and `energy()` per agent.
+    let roles = income.roles_of(agents.iter().map(|a| a.id));
     let roster: Vec<(u64, TraitVector, f32)> = agents
         .iter()
         .map(|a| (a.id, a.traits, a.energy()))
@@ -431,7 +432,11 @@ fn measure(unit: &[f64], guild_seed: &GuildSeed, horizon: u64) -> SeedStructure 
     let terminal = TerminalStructure::of(
         &roster,
         &roles,
-        |id| topology.detrital_reliance(id),
+        |id| {
+            let i = income.income(id);
+            let drained = i.living + i.carcass;
+            (drained > 0.0).then(|| (i.carcass / drained) as f32)
+        },
         &run_config.eval_config,
     );
     SeedStructure {

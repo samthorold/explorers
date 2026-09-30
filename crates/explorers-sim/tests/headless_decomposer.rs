@@ -39,7 +39,7 @@
 //! Any future slow sweep should adopt the `slow_` prefix to join the category for
 //! free. The cheap correctness regressions stay unprefixed.
 
-use explorers_sim::topology::{TopologyProjection, TrophicRole};
+use explorers_sim::topology::{DETRITAL_RELIANCE_THRESHOLD, TopologyProjection};
 use explorers_sim::{World, WorldRecipe};
 
 const PATHWAY_SCENARIO: &str =
@@ -297,10 +297,12 @@ struct PathwaySeedResult {
     predation: f32,
     /// Cumulative decomposition energy (carcass-sourced) across the run.
     decomposition: f32,
-    /// Agents that read as a `Decomposer` behavioural role at end of run.
-    decomposers: usize,
+    /// Surviving agents that drain carcasses for at least
+    /// `DETRITAL_RELIANCE_THRESHOLD` of what they drain (by the projection's
+    /// detrital reliance) at end of run.
+    carcass_drainers: usize,
     /// Surviving heterotrophy-dominant agents at end of run.
-    surviving_heterotrophs: usize,
+    surviving_heterotrophy_dominant: usize,
     /// Final living population.
     final_population: usize,
 }
@@ -317,7 +319,7 @@ const PATHWAY_TEST_MAX_TICKS: u64 = 500;
 
 /// Run the pathway scenario once at `seed` and distil every property the tests
 /// need. The same single step-loop accumulates the topology projection (for the
-/// role classification) and the predation-vs-decomposition tally (the green/brown
+/// detrital reliance) and the predation-vs-decomposition tally (the green/brown
 /// split), so no property requires a second run of the same seed.
 fn compute_pathway_seed(seed: u64) -> PathwaySeedResult {
     let recipe = load_pathway();
@@ -344,12 +346,16 @@ fn compute_pathway_seed(seed: u64) -> PathwaySeedResult {
             break;
         }
     }
-    let roles = topology.trophic_roles(world.agents());
-    let decomposers = roles
-        .values()
-        .filter(|&&r| r == TrophicRole::Decomposer)
+    let carcass_drainers = world
+        .agents()
+        .iter()
+        .filter(|a| {
+            topology
+                .detrital_reliance(a.id)
+                .is_some_and(|r| r >= DETRITAL_RELIANCE_THRESHOLD)
+        })
         .count();
-    let surviving_heterotrophs = world
+    let surviving_heterotrophy_dominant = world
         .agents()
         .iter()
         .filter(|a| a.traits.heterotrophy > a.traits.photosynthetic_absorption)
@@ -357,8 +363,8 @@ fn compute_pathway_seed(seed: u64) -> PathwaySeedResult {
     PathwaySeedResult {
         predation,
         decomposition,
-        decomposers,
-        surviving_heterotrophs,
+        carcass_drainers,
+        surviving_heterotrophy_dominant,
         final_population: world.agents().len(),
     }
 }
@@ -409,17 +415,21 @@ fn slow_pathway_is_majority_detrital_on_every_seed() {
     }
 }
 
-/// The surviving decomposer reads as a `Decomposer` behavioural role on every
-/// seed — its own lifetime diet is majority detrital.
+/// A surviving agent's drains are majority detrital on every seed — the
+/// wiring feeds it from carcasses. This is not a trophic-role claim: the role
+/// is read from income, light included (`explorers_genesis_eval::income`,
+/// #599), and on seed 10 the survivor is a descendant mixotroph that takes
+/// about two thirds of its income from light — a producer by role, which the
+/// retired trait read called a decomposer.
 #[test]
-fn slow_pathway_decomposer_reads_as_decomposer_role() {
+fn slow_pathway_survivor_drains_carcasses() {
     for seed in PATHWAY_SEEDS {
         let result = pathway_seed_result(seed);
         assert!(
-            result.decomposers >= 1,
-            "seed {seed}: expected a surviving agent to read as Decomposer; \
-             decomposers = {}",
-            result.decomposers
+            result.carcass_drainers >= 1,
+            "seed {seed}: expected a surviving agent to drain mostly carcasses; \
+             carcass drainers = {}",
+            result.carcass_drainers
         );
     }
 }
@@ -431,7 +441,7 @@ fn slow_pathway_decomposer_sustains_itself_to_end_of_run() {
     for seed in PATHWAY_SEEDS {
         let result = pathway_seed_result(seed);
         assert!(
-            result.surviving_heterotrophs >= 1,
+            result.surviving_heterotrophy_dominant >= 1,
             "seed {seed}: decomposer lineage must survive to the end of the run, but no \
              heterotroph-dominant agent remains (final population {})",
             result.final_population

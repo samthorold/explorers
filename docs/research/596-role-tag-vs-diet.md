@@ -11,6 +11,14 @@ that the tagged "consumers" of three live baselines take 97–100 % of the unsha
 and about a thousandth of that from prey and carcasses. This note asks how general that is and
 what it does to the readouts that use the tag.
 
+> **After #599.** The evaluator now reads the trophic role from recent realised income
+> (`explorers_genesis_eval::income`), and `TopologyProjection::trophic_roles_of` is gone. The census
+> keeps the retired tag as `role_diet::trait_tag` (same rule), shares the income rule
+> (`Income::role`), and its diet read now leaves an agent with no income out of the role counts
+> instead of letting it keep its tag, as the evaluator does. The figures below were taken before
+> that change; a re-run may move the diet guild counts by the handful of seeds where a no-income
+> heterotroph by trait sat at a guild's floor.
+
 ## TL;DR
 
 1. **The heterotroph tag almost never means heterotrophy.** On live configs:

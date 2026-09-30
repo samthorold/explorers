@@ -7,8 +7,8 @@
 //! community formed by the others at their attractor — every species has a
 //! positive per-capita growth rate *when rare*. This instrument reads that
 //! off the simulation for every atlas live cell, per trophic role
-//! (producer / consumer / decomposer as `topology::trophic_roles` classifies
-//! them), and turns it into a per-cell verdict that can stand next to the
+//! (producer / consumer / decomposer as the income role read
+//! (`IncomeLedger`, #599) classifies them), and turns it into a per-cell verdict that can stand next to the
 //! atlas's `coexistence_fraction`.
 //!
 //! Per (cell, seed): the resident web is `World::new` on the cell's decoded
@@ -119,6 +119,7 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_genesis_eval::guild::{RoleGuilds, RosterSnapshot, role_guilds};
+use explorers_genesis_eval::income::IncomeLedger;
 use explorers_search::config_source::{
     ConfigSource, parse_selector, resolve_config, sampled_units,
 };
@@ -130,7 +131,7 @@ use explorers_search::qd::COEXISTENCE_FLOOR;
 use explorers_search::search::{SearchConfig, default_ranges};
 use explorers_search::sweep::{plan_tasks, read_atlas_units};
 use explorers_sim::event::EventKind;
-use explorers_sim::topology::{TopologyProjection, TrophicRole};
+use explorers_sim::topology::TrophicRole;
 use explorers_sim::{Agent, InitialDistribution, TraitVector, World, WorldParameters};
 
 /// Fixed contiguous seed block per cell (the `permanence_crosscheck` convention).
@@ -195,7 +196,7 @@ enum Arm {
     Removed,
 }
 
-/// Role headcount of a roster, by `topology::trophic_roles`.
+/// Role headcount of a roster, by the income role read (`IncomeLedger`, #599).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 struct RoleCounts {
     producers: usize,
@@ -224,12 +225,12 @@ impl RoleCounts {
 /// Classify a roster and count the roles, optionally excluding a set of ids
 /// (the lineage) so the *resident's* composition can be read on its own.
 fn role_counts(
-    topo: &TopologyProjection,
+    income: &IncomeLedger,
     agents: &[Agent],
     exclude: Option<&Lineage>,
 ) -> (HashMap<u64, Role>, RoleCounts) {
-    let roles: HashMap<u64, Role> = topo
-        .trophic_roles(agents)
+    let roles: HashMap<u64, Role> = income
+        .roles_of(agents.iter().map(|a| a.id))
         .into_iter()
         .map(|(id, r)| (id, Role::of(r)))
         .collect();
@@ -408,18 +409,19 @@ fn run_cell_seed(
 ) -> SeedRecord {
     let max_population = EvalConfig::default().max_population;
     let mut world = World::new(params.clone(), dist.clone(), seed);
-    // Everything this instrument reads off the log — the projection's roles
-    // (Consumed / Reproduced / Died), the guild read and lineage (Born,
-    // Consumed, Died) — is in these kinds; the per-agent-per-tick
+    // Everything this instrument reads off the log — the income roles
+    // (Photosynthesized / Consumed / Died), the guild read and lineage (Born,
+    // Consumed, Died) — is in these kinds; the other per-agent-per-tick
     // bookkeeping events are dropped at source so a 2000-tick resident at
     // P ≈ 1000 fits in memory. Observer-side: no trajectory changes.
     world.retain_event_kinds(&[
+        EventKind::Photosynthesized,
         EventKind::Consumed,
         EventKind::Reproduced,
         EventKind::Died,
         EventKind::Born,
     ]);
-    let mut topo = TopologyProjection::new();
+    let mut income = IncomeLedger::new();
     let mut termination = "alive";
     // Living roster on each second-half sample (and on `t_inj` itself), for
     // the guild read: the guild is a population over time, which the
@@ -443,8 +445,8 @@ fn run_cell_seed(
             ));
         }
     }
-    topo.update(world.event_log());
-    let (roles, counts) = role_counts(&topo, world.agents(), None);
+    income.update(world.event_log());
+    let (roles, counts) = role_counts(&income, world.agents(), None);
     let guilds = if termination == "alive" {
         role_guilds(world.event_log(), &roster_snapshots, t_inj)
     } else {
@@ -512,9 +514,9 @@ fn run_cell_seed(
 
     let control = {
         let mut fork = world.clone();
-        let mut fork_topo = topo.clone();
-        let out = run_window(&mut fork, &mut fork_topo, None, window, max_population);
-        let (_, roles_end) = role_counts(&fork_topo, fork.agents(), None);
+        let mut fork_income = income.clone();
+        let out = run_window(&mut fork, &mut fork_income, None, window, max_population);
+        let (_, roles_end) = role_counts(&fork_income, fork.agents(), None);
         Control {
             ticks_run: out.ticks_run,
             stopped: out.stopped,
@@ -527,7 +529,7 @@ fn run_cell_seed(
         for c in &testable {
             let (role, centroid_source, centroid) = (c.role, c.source, c.traits);
             let mut fork = world.clone();
-            let mut fork_topo = topo.clone();
+            let mut fork_income = income.clone();
             let residents_removed = match arm {
                 Arm::Intact => 0,
                 Arm::Removed => remove_role(&mut fork, &roles, role),
@@ -542,13 +544,13 @@ fn run_cell_seed(
             );
             let out = run_window(
                 &mut fork,
-                &mut fork_topo,
+                &mut fork_income,
                 Some(Lineage::new(ids)),
                 window,
                 max_population,
             );
             let lineage = out.lineage.expect("lineage arm");
-            let (_, resident_roles_end) = role_counts(&fork_topo, fork.agents(), Some(&lineage));
+            let (_, resident_roles_end) = role_counts(&fork_income, fork.agents(), Some(&lineage));
             injections.push(Injection {
                 role,
                 arm,

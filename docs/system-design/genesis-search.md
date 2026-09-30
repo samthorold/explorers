@@ -315,6 +315,13 @@ on **every** such sample *and* at least one `Born` event in that window names a 
 sustained size rules out the lone long-lived individual, recruitment rules out a sterile founder cohort
 sitting at exactly the floor. Both values are starting points, not settled thresholds.
 
+The income read is the evaluator's own ledger (`explorers_genesis_eval::income`), built from the
+rollout's `Photosynthesized` and `Consumed` events and never stored in the world. Income decays with a
+half-life of `INCOME_HALF_LIFE = 50` ticks, so a role follows a diet change within a few hundred ticks
+while averaging over the tick-to-tick flicker of need-gated consumption; the half-life is a starting
+value too. An agent with no income yet — a newborn — has no role and is left out of every role count.
+The same read buckets the trophic-balance term, so the evaluator has one role read.
+
 Membership reads income, not traits, because a guild is a population occupying a network position, and
 a trait read does not find one. Among agents whose heterotrophy exceeds their autotrophy, about 97 % take
 at least 90 % of their income from light, and a trait-read decomposer guild appears on seeds where no
