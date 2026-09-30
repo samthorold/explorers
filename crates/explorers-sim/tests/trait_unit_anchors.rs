@@ -68,14 +68,17 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// example10 (predator–prey, sexual and asexual placement kernels).
 /// example4 re-pinned for #540: its starving heterotrophs now die the tick
 /// their metabolic charge is capped instead of surviving on feeding residue.
+/// example4 and example10 re-pinned for #600: consumers now express a
+/// need-gated share of their heterotrophic capability (example8 feeds no
+/// consumer, so it is unchanged).
 const GOLDEN: [(&str, u64, u64, u64); 3] = [
-    ("example4.json", 7, 300, 0xad2c51c161dd3c80),
+    ("example4.json", 7, 300, 0x12fdd902a964b6c7),
     ("example8.json", 11, 300, 0x366aea7e88b3c291),
     (
         "example10_predator_prey_hopf.json",
         3,
         300,
-        0xbb8c3ea933cf05fb,
+        0x671d7eda38c7175d,
     ),
 ];
 
@@ -97,13 +100,13 @@ fn naming_the_unit_anchors_leaves_every_trajectory_byte_identical() {
 /// config where all three couplings are live at once: example10's sessile
 /// producers capture energy while its lightly mobile consumers both drain
 /// structure and move. Digest pinned on `main` at 5a7bede, before the anchors
-/// were named.
+/// were named; re-pinned for #600 (need-gated consumption).
 const USE_WEAR_GOLDEN: (&str, f32, u64, u64, u64) = (
     "example10_predator_prey_hopf.json",
     0.02,
     3,
     300,
-    0x2ddcc795057d930b,
+    0x2392afe8c3fd5757,
 );
 
 #[test]

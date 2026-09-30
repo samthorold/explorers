@@ -2176,13 +2176,15 @@ mod resume_tests {
     /// The first tick at which the search's incremental stop (`early_stop`)
     /// would have fired, and its mode, pinned against an independent replay
     /// that asks `early_stop` after every tick — without the rollout being
-    /// stopped there. `sample@9421:110` seed 1002 dies to a few agents by
-    /// tick 200 and is verdicted energy death at the horizon.
+    /// stopped there. `sample@9421:110` seed 1003 is verdicted energy death
+    /// at the horizon (seed 1002 was the witness until #600's need-gated
+    /// consumption moved it off energy death; 1003 is the nearest seed that
+    /// still fires, at the same tick).
     #[test]
     fn early_stop_records_where_the_search_would_have_stopped_without_stopping() {
         let ranges = default_ranges();
         let (params, dist) = decode(&sample_draw(9421, ranges.len())[110], &ranges);
-        let seed = 1002;
+        let seed = 1003;
         let horizon = 400;
         let outcome = run_seed(&params, &dist, seed, horizon, Duration::MAX, Duration::MAX);
         let eval_config = EvalConfig::default();

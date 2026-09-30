@@ -25,25 +25,28 @@ fn recipe() -> WorldRecipe {
 /// agent against the role read, not on cluster means) — only fitness and
 /// trophic balance moved. Re-pinned under #494 on the regenerated
 /// settled-horizon atlas's recipe: `recipe.json` itself was replaced, so every
-/// value is new (a different world, not a changed read). Re-capture with
+/// value is new (a different world, not a changed read). Re-pinned under #600:
+/// need-gated consumption changes the physics the recipe runs under, so every
+/// reading but the saturated clustering and trophic scores moved (again a
+/// different world, not a changed read). Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 7]); 3] = [
     (
         1,
         [
-            1057418803, 1049594728, 1065353216, 0, 1052099215, 1065353216, 1047125560,
+            1057133260, 1051571141, 1065353216, 0, 1045958754, 1065353216, 1046300262,
         ],
     ),
     (
         2,
         [
-            1057277051, 1051129998, 1065353216, 0, 1049146425, 1065353216, 1046411327,
+            1057056085, 1047620518, 1065353216, 0, 1049968509, 1065353216, 1041586047,
         ],
     ),
     (
         3,
         [
-            1057622103, 1053154461, 1065353216, 0, 1050572489, 1065353216, 1047379013,
+            1057926453, 1056281847, 1065353216, 0, 1050488603, 1065353216, 1043557839,
         ],
     ),
 ];

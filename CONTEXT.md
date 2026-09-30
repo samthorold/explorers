@@ -72,7 +72,7 @@ An agent draining structure and nutrient from a living agent over time through s
 _Avoid_: eating, attacking, harvesting
 
 **Satiation**:
-How well supplied a consumer is, co-limited across both currencies: the lesser of its reserve against its maintenance need (per-tick metabolic cost) and its free nutrient against what its mobilisable energy would bind. The state that gates how much of its heterotrophic capability a consumer expresses: a sated consumer drains little, a hungry one drains at full capability.
+How well supplied a consumer is, co-limited across both currencies: the lesser of its reserve against its maintenance need (per-tick metabolic cost) and its free nutrient against what its mobilisable energy would bind. The state that gates how much of its heterotrophic capability a consumer expresses: a sated consumer drains little, a hungry one drains at full capability. The response's shape is the **satiation sensitivity**. The energy side is realised; the nutrient side of the co-limitation is #603.
 _Avoid_: fullness, appetite (appetite suggests a trait; satiation is state)
 
 **Carcass**:
@@ -236,6 +236,10 @@ _Avoid_: retention factor (too generic), metabolic safety margin (implies a hard
 **Reserve mobilisation rate**:
 The fraction of an agent's mobilisable reserve (the reserve above the metabolic retention buffer) that is mobilised and kappa-split each tick in the grow phase: `mobilised = reserve_mobilisation_rate × (reserve − buffer)`. The DEB **energy conductance** analogue (Kooijman 2010) — reserve is drawn down as a *rate*, a bounded fraction of standing reserve per tick, never the whole stock in one step. This is what lets **reserve** serve as a feast-famine buffer: a fraction below 1 spreads mobilisation over many ticks, so a seeded or newborn agent's provisioning persists as a survival cushion and a large meal is drawn down gradually rather than dumped in a single tick (most of it to conversion heat and the off-limits reproductive earmark). Load-bearing for consumers, whose income arrives in discrete meals; invisible for producers, whose every-tick photosynthetic income refills reserve regardless of draw-down speed. A world parameter searched by genesis. Default 1.0 — at 1.0 the whole mobilisable excess is mobilised each tick (the unbuffered limiting case), so the default is a no-op against recipes that predate the parameter.
 _Avoid_: energy conductance (the DEB term is the grounding, but "mobilisation rate" names its role here), reserve drain rate (drain conflates with metabolism, which is a separate outflow)
+
+**Satiation sensitivity**:
+The shape of need-gated consumption. A consumer expresses `1 / (1 + satiation_sensitivity × s)` of its heterotrophic capability, where `s` is its energy **satiation**: reserve in ticks of its own per-tick metabolic cost (the retention buffer's yardstick). An empty consumer drains at full capability; one holding `1 / satiation_sensitivity` ticks of maintenance drains half; the response falls smoothly toward zero with no threshold. It reads only the consumer, so living and carcass targets are drained under the same expression. A world parameter (units `1/T`), default 0.1. At 0 the response is flat — the ungated drain, kept as a limiting case for comparison. Enters the genesis search box with #607.
+_Avoid_: appetite (a trait word; this is world physics), hunger threshold (there is no threshold)
 
 **Reproduction efficiency**:
 Fraction of energy invested by the parent that the offspring actually receives. The remainder is dissipated. Reproduction is lossy like all energy transfers.

@@ -176,6 +176,9 @@ fn default_growth_retention_multiplier() -> f32 {
 fn default_reserve_mobilisation_rate() -> f32 {
     1.0
 }
+fn default_satiation_sensitivity() -> f32 {
+    0.1
+}
 fn default_offspring_structure_fraction() -> f32 {
     0.2
 }
@@ -492,6 +495,21 @@ pub struct WorldParameters {
     /// Default 0.0 (network off).
     #[serde(default)]
     pub network_transfer_efficiency: f32,
+    /// Satiation sensitivity `c` of need-gated consumption (world-rules.md,
+    /// "Capability and expression are decoupled: consumption is need-gated").
+    /// Heterotrophy is capability — the most a consumer can drain per tick; the
+    /// drain it expresses is capability × `1 / (1 + c × s)`, where `s` is the
+    /// consumer's **energy satiation**: its reserve measured in ticks of its own
+    /// per-tick metabolic cost (the yardstick the grow phase's retention buffer
+    /// uses). A consumer with no reserve drains at full capability; one holding
+    /// `1/c` ticks of maintenance drains half; the response falls smoothly, with
+    /// no threshold, toward zero as reserve grows. The gate reads only the
+    /// consumer, so it applies identically to living and carcass targets.
+    /// `0.0` is the flat (ungated) limiting case — the pre-need-gating drain —
+    /// kept for comparison. Units `1/T` (per tick of maintenance held).
+    /// Default 0.1: half expression at ten ticks of maintenance in reserve.
+    #[serde(default = "default_satiation_sensitivity")]
+    pub satiation_sensitivity: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1790,6 +1808,7 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
+            satiation_sensitivity: 0.1,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -3695,6 +3714,7 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
+            satiation_sensitivity: 0.1,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,
