@@ -1699,7 +1699,11 @@ mod tests {
         assert_eq!(record.verdicts.len(), 2);
         assert!(record.atlas_coexisting);
         let json = serde_json::to_string(&record).expect("record serialises");
-        assert!(json.contains("lambda_C(K_P)"));
+        // The producer eigenvalue is read on every reached seed; whether a
+        // consumer centroid exists at tick 20 is emergent (under need-gated
+        // consumption, #600, this mid-box world's well-provisioned founders
+        // realise too little consumer income to be tagged consumers yet).
+        assert!(json.contains("lambda_P(virgin)"));
         let summary = arm_summary(std::slice::from_ref(&record), Arm::Intact);
         assert_eq!(summary.cells, 1);
     }

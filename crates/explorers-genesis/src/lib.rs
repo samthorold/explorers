@@ -431,6 +431,7 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
+            satiation_sensitivity: 0.1,
         }
     }
 

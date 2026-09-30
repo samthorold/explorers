@@ -1236,6 +1236,7 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
+            satiation_sensitivity: 0.1,
         }
     }
 
@@ -1323,13 +1324,18 @@ mod tests {
 
     #[test]
     fn evaluate_from_log_turnover_matches_event_counts() {
-        let params = test_world_params();
+        // A world that survives the horizon, so the breakdown is not gated
+        // and the turnover read is actually exercised: the packed base
+        // fixture goes extinct, and a gated breakdown reports zero turnover
+        // whatever the log holds (it only matched while that world also
+        // happened to see no birth, until #600's need gate let one through).
+        let params = live_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
             grace_ticks: 50,
             ..EvalConfig::default()
         };
-        let max_ticks = 50;
+        let max_ticks = 200;
         let mut world = explorers_sim::World::new(params, dist, 42);
         let mut observations = RolloutObservations::with_capacity(max_ticks as usize);
         for _ in 0..max_ticks {
@@ -1349,6 +1355,7 @@ mod tests {
             .by_kind(&explorers_sim::event::EventKind::Died)
             .len();
         let expected_ts = turnover_score(born_count, died_count, max_ticks);
+        assert_eq!(result.failure, None, "the turnover read runs ungated");
         // With reproduction not yet implemented, births may be zero.
         // Turnover score computation should still be consistent.
         assert_eq!(result.turnover_score, expected_ts);
@@ -2712,6 +2719,7 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
+            satiation_sensitivity: 0.1,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {

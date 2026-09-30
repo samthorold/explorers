@@ -168,15 +168,8 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
     let mut events = Vec::new();
     let mut total_dissipated = 0.0_f32;
 
-    let exp = params.maintenance_cost_exponent;
     for agent in agents.iter_mut() {
-        let cost = params.base_metabolic_rate
-            + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
-            + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
-            + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
-            + agent.traits.asexual_propensity.powf(exp)
-                * params.asexual_propensity_maintenance_cost
-            + agent.structure * params.structure_maintenance_coefficient;
+        let cost = metabolic_cost(agent, params);
 
         // Flow 8 / reserve depletion: an agent pays only what it holds. The
         // charge is capped at the available reserve (as the move phase caps
@@ -218,14 +211,40 @@ pub fn starved_ids(agents: &[Agent]) -> HashSet<u64> {
 /// metabolic cost times `growth_retention_multiplier` (the same buffer the grow
 /// phase mobilises surplus above). Reserve above this is the agent's surplus.
 fn retention_buffer(agent: &Agent, params: &WorldParameters) -> f32 {
+    metabolic_cost(agent, params) * params.growth_retention_multiplier
+}
+
+/// An agent's per-tick metabolic cost — its maintenance need: base rate, trait
+/// maintenance and structure maintenance (what `metabolise` charges, before the
+/// cap at available reserve). The yardstick both the grow phase's retention
+/// buffer and consumption's energy satiation measure reserve against.
+pub fn metabolic_cost(agent: &Agent, params: &WorldParameters) -> f32 {
     let exp = params.maintenance_cost_exponent;
-    let metabolic_cost = params.base_metabolic_rate
+    params.base_metabolic_rate
         + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
         + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
         + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
         + agent.traits.asexual_propensity.powf(exp) * params.asexual_propensity_maintenance_cost
-        + agent.structure * params.structure_maintenance_coefficient;
-    metabolic_cost * params.growth_retention_multiplier
+        + agent.structure * params.structure_maintenance_coefficient
+}
+
+/// The fraction of its heterotrophic capability a consumer expresses this tick
+/// (need-gated consumption; world-rules.md, "Capability and expression are
+/// decoupled"): `1 / (1 + satiation_sensitivity × s)`, where the **energy
+/// satiation** `s` is the consumer's reserve measured in ticks of its own
+/// metabolic cost. Written as `m / (m + c·R)` so a body with no maintenance
+/// need is sated by any reserve rather than dividing by zero. Smooth and
+/// monotone decreasing in reserve, `1` at zero reserve, and exactly `1` at
+/// sensitivity zero (the flat, ungated limiting case). Reads only the consumer,
+/// never the target.
+pub fn consumption_expression(agent: &Agent, params: &WorldParameters) -> f32 {
+    let c = params.satiation_sensitivity;
+    let reserve = agent.reserve.max(0.0);
+    if c <= 0.0 || reserve <= 0.0 {
+        return 1.0;
+    }
+    let need = metabolic_cost(agent, params).max(0.0);
+    need / (need + c * reserve)
 }
 
 /// Maintain network connections (flow 5): each connection's builder pays the
@@ -444,20 +463,12 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
     let mut events = Vec::new();
     let mut total_dissipated = 0.0_f32;
 
-    let exp = params.maintenance_cost_exponent;
     for agent in agents.iter_mut() {
         if agent.reserve <= 0.0 {
             continue;
         }
         // Retain enough reserve for next tick's metabolism
-        let metabolic_cost = params.base_metabolic_rate
-            + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
-            + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
-            + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
-            + agent.traits.asexual_propensity.powf(exp)
-                * params.asexual_propensity_maintenance_cost
-            + agent.structure * params.structure_maintenance_coefficient;
-        let retention = metabolic_cost * params.growth_retention_multiplier;
+        let retention = retention_buffer(agent, params);
         // Reserve above the buffer is mobilisable; of that excess only a bounded
         // fraction `reserve_mobilisation_rate` is mobilised this tick (DEB energy
         // conductance — flow 9). The remainder stays in reserve as a feast-famine
@@ -700,6 +711,17 @@ pub fn resolve_drains(
         .map(|a| crate::stoichiometric_demand(&a.traits, a.structure, params))
         .collect();
 
+    // Each consumer's need-gated expression, likewise read once at tick-start
+    // state: a consumer's reserve rises as it feeds in the living pass, so a
+    // live read would make its carcass drain depend on its living meals and on
+    // slice order. One tick-start gate per consumer also makes the expression
+    // identical toward living and carcass targets (the gate reads only the
+    // consumer).
+    let consumer_expression: Vec<f32> = agents
+        .iter()
+        .map(|a| consumption_expression(a, params))
+        .collect();
+
     // --- Pass over living targets ---
     // For each agent that has structure, find consumers in range. The spatial
     // grid is keyed by slice index (see `World::step`), so query results are
@@ -753,7 +775,17 @@ pub fn resolve_drains(
                 // target's structural death threshold, not from contact duration.
                 // Drain in structure (energy) per tick: the heterotrophy
                 // anchor u_H (#459).
-                let demand = eff_heterotrophy * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+                // Capability scaled by need-gated expression: the proportional
+                // split below operates on this expressed demand.
+                let demand = eff_heterotrophy
+                    * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK
+                    * consumer_expression[consumer_idx];
+                // A fully sated consumer expresses no drain: it is not a
+                // consumer of this target this tick (and must not enter the
+                // proportional split, where an all-zero demand would be 0/0).
+                if demand <= 0.0 {
+                    continue;
+                }
                 let trophic_eff = crate::trophic_transfer_efficiency(
                     &agents[consumer_idx].traits,
                     &agents[target_idx].traits,
@@ -911,7 +943,17 @@ pub fn resolve_drains(
                 // contact-duration ramp.
                 // Drain in structure (energy) per tick: the heterotrophy
                 // anchor u_H (#459).
-                let demand = eff_heterotrophy * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+                // Capability scaled by need-gated expression: the proportional
+                // split below operates on this expressed demand.
+                let demand = eff_heterotrophy
+                    * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK
+                    * consumer_expression[consumer_idx];
+                // A fully sated consumer expresses no drain: it is not a
+                // consumer of this target this tick (and must not enter the
+                // proportional split, where an all-zero demand would be 0/0).
+                if demand <= 0.0 {
+                    continue;
+                }
                 let trophic_eff = crate::trophic_transfer_efficiency(
                     &agents[consumer_idx].traits,
                     &carcasses[carcass_idx].traits,
@@ -1968,6 +2010,9 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
+            // Flat (ungated) drain: these tests pin drain mechanics; need-gating
+            // tests set the sensitivity explicitly.
+            satiation_sensitivity: 0.0,
         }
     }
 
@@ -4016,6 +4061,285 @@ mod tests {
     }
 
     // --- Resolve drains ---
+
+    /// The structure each consumer drained this tick, by consumer id, read off
+    /// the `Consumed` events (summed over targets).
+    fn drained_by(result: &DrainResult, consumer_id: u64) -> f32 {
+        result
+            .events
+            .iter()
+            .filter(|e| e.kind == EventKind::Consumed && e.source == consumer_id)
+            .map(|e| e.energy_delta)
+            .sum()
+    }
+
+    /// Run one drain pass over a single living target (ample structure, so no
+    /// proportional split) surrounded by `consumers`, each `(id, reserve,
+    /// traits)`. Returns the drain result and the agents after it.
+    fn drain_one_ample_target(
+        consumers: &[(u64, f32, TraitVector)],
+        params: &WorldParameters,
+    ) -> (DrainResult, Vec<Agent>) {
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let mut agents: Vec<Agent> = consumers
+            .iter()
+            .map(|&(id, reserve, traits)| make_agent(id, (0.0, 0.0), reserve, traits))
+            .collect();
+        let mut target = make_agent(999, (1.0, 0.0), 10.0, target_traits);
+        target.structure = 1000.0;
+        agents.push(target);
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let result = resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            params,
+            &mut nutrient_grid,
+        );
+        (result, agents)
+    }
+
+    #[test]
+    fn sated_consumer_drains_less_than_its_hungry_twin() {
+        // Need-gated consumption (world-rules.md, "Capability and expression are
+        // decoupled"): two consumers identical but for reserve drain the same
+        // target by different amounts — the one holding many ticks of
+        // maintenance drains less.
+        let mut params = test_params();
+        params.satiation_sensitivity = 0.1;
+        let consumer = TraitVector {
+            heterotrophy: 0.4,
+            ..zero_traits()
+        };
+        let (result, _) =
+            drain_one_ample_target(&[(1, 0.1, consumer), (2, 50.0, consumer)], &params);
+        let hungry = drained_by(&result, 1);
+        let sated = drained_by(&result, 2);
+        assert!(hungry > 0.0, "the hungry consumer must feed");
+        assert!(
+            sated < hungry,
+            "sated consumer should drain less: sated {sated}, hungry {hungry}"
+        );
+    }
+
+    #[test]
+    fn expressed_drain_falls_smoothly_and_monotonically_with_reserve() {
+        // The response has no threshold: sweeping reserve finely from empty to
+        // hundreds of ticks of maintenance, the drain starts at full
+        // capability, strictly decreases, and never jumps between neighbouring
+        // reserves.
+        let mut params = test_params();
+        params.satiation_sensitivity = 0.1;
+        let traits = TraitVector {
+            heterotrophy: 0.4,
+            ..zero_traits()
+        };
+        let capability = 0.4 * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+        let step = 0.05;
+        let drains: Vec<f32> = (0..=1000)
+            .map(|i| {
+                let (result, _) = drain_one_ample_target(&[(1, i as f32 * step, traits)], &params);
+                drained_by(&result, 1)
+            })
+            .collect();
+        assert!(
+            (drains[0] - capability).abs() < 1e-6,
+            "an empty consumer drains at full capability: {} vs {capability}",
+            drains[0]
+        );
+        for w in drains.windows(2) {
+            assert!(w[1] < w[0], "drain must strictly decrease: {w:?}");
+            assert!(
+                w[0] - w[1] < 0.05 * capability,
+                "no jump between neighbouring reserves: {w:?}"
+            );
+        }
+        assert!(
+            drains[1000] < 0.1 * capability,
+            "a consumer holding hundreds of ticks of maintenance drains a small fraction: {}",
+            drains[1000]
+        );
+    }
+
+    #[test]
+    fn co_feeders_split_a_scarce_target_by_expressed_demand() {
+        // Two consumers of equal capability on a target too small for both:
+        // the scarce structure is split in proportion to what each expresses,
+        // not to capability, so the sated one takes the smaller share.
+        let mut params = test_params();
+        params.satiation_sensitivity = 0.1;
+        params.base_metabolic_rate = 1.0;
+        let traits = TraitVector {
+            heterotrophy: 3.0,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        // Hungry: no reserve → expression 1. Sated: 10 ticks of maintenance →
+        // expression 1/2. Capability 3.0 each, so expressed demand 3.0 and 1.5
+        // against 1.0 available: shares 2/3 and 1/3.
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 0.0, traits),
+            make_agent(2, (1.0, 0.0), 10.0, traits),
+            make_agent(3, (0.5, 0.0), 10.0, target_traits),
+        ];
+        agents[2].structure = 1.0;
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        grid.insert(2, (0.5, 0.0));
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let result = resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
+        let hungry = drained_by(&result, 1);
+        let sated = drained_by(&result, 2);
+        assert!((hungry - 2.0 / 3.0).abs() < 1e-5, "hungry share {hungry}");
+        assert!((sated - 1.0 / 3.0).abs() < 1e-5, "sated share {sated}");
+    }
+
+    #[test]
+    fn need_gate_applies_identically_to_a_carcass_target() {
+        // The gate reads only the consumer: a sated consumer draining a living
+        // target and a carcass in the same tick expresses the same reduced
+        // drain toward both — read at tick-start state, so its living meal
+        // does not sate it further before the carcass pass.
+        let mut params = test_params();
+        params.satiation_sensitivity = 0.1;
+        let traits = TraitVector {
+            heterotrophy: 0.4,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 20.0, traits),
+            make_agent(2, (1.0, 0.0), 10.0, target_traits),
+        ];
+        agents[1].structure = 1000.0;
+        let mut carcasses = vec![Carcass {
+            id: 50,
+            position: (0.0, 1.0),
+            energy: 1000.0,
+            nutrient: 0.0,
+            traits: target_traits,
+        }];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let result = resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
+        let drain_toward = |carcass: bool| -> f32 {
+            result
+                .events
+                .iter()
+                .filter(|e| {
+                    e.kind == EventKind::Consumed
+                        && e.source == 1
+                        && e.target_was_carcass == carcass
+                })
+                .map(|e| e.energy_delta)
+                .sum()
+        };
+        let capability = 0.4 * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+        let living = drain_toward(false);
+        let carcass = drain_toward(true);
+        assert!(living < capability, "the sated consumer is gated: {living}");
+        assert_eq!(
+            living.to_bits(),
+            carcass.to_bits(),
+            "same expression toward living ({living}) and carcass ({carcass})"
+        );
+    }
+
+    #[test]
+    fn a_fully_sated_consumer_leaves_a_spent_carcass_intact() {
+        // A consumer with no maintenance need is sated by any reserve, so it
+        // expresses no drain at all. Beside a spent carcass (energy gone,
+        // nutrient left) that must mean "no bite", not a 0/0 share that
+        // poisons the carcass's and the cell's nutrient.
+        let mut params = test_params();
+        params.base_metabolic_rate = 0.0;
+        params.satiation_sensitivity = 0.1;
+        let traits = TraitVector {
+            heterotrophy: 0.4,
+            ..zero_traits()
+        };
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut carcasses = vec![Carcass {
+            id: 50,
+            position: (0.0, 1.0),
+            energy: 0.0,
+            nutrient: 5.0,
+            traits,
+        }];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let result = resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
+        assert_eq!(carcasses[0].nutrient, 5.0, "no bite, no nutrient moved");
+        assert!(agents[0].nutrient.is_finite());
+        assert_eq!(*nutrient_grid.at_position((0.0, 1.0)), 0.0);
+        assert!(
+            result.events.iter().all(|e| e.kind != EventKind::Consumed),
+            "a zero expressed drain is not a feeding event"
+        );
+    }
+
+    #[test]
+    fn satiation_is_measured_against_maintenance_need() {
+        // The same reserve is "full" to a cheap body and "running low" to an
+        // expensive one: a consumer with a higher metabolic cost (here mobility
+        // maintenance, which leaves capability untouched) drains more.
+        let mut params = test_params();
+        params.satiation_sensitivity = 0.1;
+        params.mobility_maintenance_cost = 1.0;
+        let cheap = TraitVector {
+            heterotrophy: 0.4,
+            ..zero_traits()
+        };
+        let expensive = TraitVector {
+            mobility: 1.0,
+            ..cheap
+        };
+        let (result, _) =
+            drain_one_ample_target(&[(1, 10.0, cheap), (2, 10.0, expensive)], &params);
+        assert!(
+            drained_by(&result, 2) > drained_by(&result, 1),
+            "the costlier body is hungrier at equal reserve: expensive {}, cheap {}",
+            drained_by(&result, 2),
+            drained_by(&result, 1)
+        );
+    }
 
     #[test]
     fn drain_single_consumer_drains_living_target_structure() {
