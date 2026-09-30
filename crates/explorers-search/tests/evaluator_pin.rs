@@ -84,6 +84,17 @@
 //! verdict, `ticks_survived`, criterion and guild flag is bit-identical; only
 //! `fitness` moved, on every live seed. The shares read `None` on the lockup
 //! early stops, which have no terminal verdict to read them on.
+//!
+//! Re-captured under #603, a stepper change: satiation is co-limited — the
+//! lesser of energy satiation and nutrient satiation (free nutrient against
+//! what the reserve would bind into structure) — so a consumer short of free
+//! nutrient feeds near full capability however full its reserve. Every
+//! trajectory that feeds moved. One cell's verdict moved with it: cell 71 is
+//! extinct again on both seeds (tick 43 / seed 1000, tick 48 / seed 1001; it
+//! was live to the horizon under the energy-only gate, and dies at tick 13 on
+//! seed 1000 ungated). It founds four agents whose free nutrient growth binds
+//! almost as fast as they take it up, so the nutrient side keeps the gate
+//! open. Every other verdict, `ticks_survived` and guild flag is unchanged.
 
 use std::path::Path;
 
@@ -103,7 +114,8 @@ const HORIZON: u64 = 500;
 /// an extinction (71 / 1000) and the top-fitness seed (76 / 1001). The two
 /// guild seeds were guilds by the trait read; by income (#599) they hold none.
 /// Under need-gated consumption (#600) four of these verdicts moved (see the
-/// module note), so the spread is now narrower than described.
+/// module note), so the spread is now narrower than described; under
+/// co-limited satiation (#603) cell 71 is an extinction again.
 const CELLS: [usize; 7] = [11, 27, 39, 59, 66, 71, 76];
 const SEEDS: [u64; 2] = [1000, 1001];
 
@@ -234,29 +246,29 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 27,
             seed: 1000,
-            fitness: 0x3ed1f558,
+            fitness: 0x3eb50e5a,
             failure: None,
-            oscillation_strength: 0x3f019cde,
+            oscillation_strength: 0x3e8b8532,
             clustering_strength: 0x3f800000,
-            coexistence_duration: 0x0,
-            turnover_score: 0x3e09374c,
+            coexistence_duration: 0x3d23d70a,
+            turnover_score: 0x3dd0e560,
             ticks_survived: 500,
-            carcass_locked_fraction: 0x3d4f1241,
+            carcass_locked_fraction: 0x3d83c40d,
             has_decomposer_guild: false,
             has_consumer_guild: false,
-            heterotroph_shares: Some([975418433, 0, 958168774, 0]),
+            heterotroph_shares: Some([0, 0, 0, 0]),
         },
         Pinned {
             cell: 27,
             seed: 1001,
-            fitness: 0x3f57f01e,
+            fitness: 0x3f4d2379,
             failure: None,
-            oscillation_strength: 0x3edd3322,
+            oscillation_strength: 0x3eb2d629,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x3f800000,
-            turnover_score: 0x3f7126e9,
+            turnover_score: 0x3f5b22d1,
             ticks_survived: 500,
-            carcass_locked_fraction: 0x3eb3afc3,
+            carcass_locked_fraction: 0x3ea6fa7b,
             has_decomposer_guild: false,
             has_consumer_guild: false,
             heterotroph_shares: Some([0, 0, 0, 0]),
@@ -294,14 +306,14 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 59,
             seed: 1000,
-            fitness: 0x3be56042,
+            fitness: 0x3bd4fdf4,
             failure: None,
             oscillation_strength: 0x0,
             clustering_strength: 0x0,
             coexistence_duration: 0x0,
-            turnover_score: 0x3ce56042,
+            turnover_score: 0x3cd4fdf4,
             ticks_survived: 500,
-            carcass_locked_fraction: 0x3c73ac8d,
+            carcass_locked_fraction: 0x3c5b3cba,
             has_decomposer_guild: false,
             has_consumer_guild: false,
             heterotroph_shares: Some([0, 0, 0, 0]),
@@ -309,14 +321,14 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 59,
             seed: 1001,
-            fitness: 0x3d7f99b9,
+            fitness: 0x3d7f589f,
             failure: None,
-            oscillation_strength: 0x3e2ba1ea,
+            oscillation_strength: 0x3e2b60d0,
             clustering_strength: 0x0,
             coexistence_duration: 0x0,
             turnover_score: 0x3da7ef9e,
             ticks_survived: 500,
-            carcass_locked_fraction: 0x3cc8d9da,
+            carcass_locked_fraction: 0x3cc89d0e,
             has_decomposer_guild: false,
             has_consumer_guild: false,
             heterotroph_shares: Some([0, 0, 0, 0]),
@@ -324,14 +336,14 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 66,
             seed: 1000,
-            fitness: 0x3eb58f92,
+            fitness: 0x3eac8108,
             failure: None,
-            oscillation_strength: 0x3e803a32,
+            oscillation_strength: 0x3e7b958d,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x0,
-            turnover_score: 0x3e2c0831,
+            turnover_score: 0x3dd0e560,
             ticks_survived: 500,
-            carcass_locked_fraction: 0x3c3714cf,
+            carcass_locked_fraction: 0x3c1f11a4,
             has_decomposer_guild: false,
             has_consumer_guild: false,
             heterotroph_shares: Some([0, 0, 0, 0]),
@@ -339,14 +351,14 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 66,
             seed: 1001,
-            fitness: 0x3f0aab94,
+            fitness: 0x3efcaf24,
             failure: None,
-            oscillation_strength: 0x3e98da4a,
-            clustering_strength: 0x3f51745d,
-            coexistence_duration: 0x3f6147ae,
-            turnover_score: 0x3e2e147b,
+            oscillation_strength: 0x3f1ebe8a,
+            clustering_strength: 0x3f800000,
+            coexistence_duration: 0x3e23d70a,
+            turnover_score: 0x3e46a7f0,
             ticks_survived: 500,
-            carcass_locked_fraction: 0x3d2815e9,
+            carcass_locked_fraction: 0x3d8594c9,
             has_decomposer_guild: false,
             has_consumer_guild: false,
             heterotroph_shares: Some([0, 0, 0, 0]),
@@ -354,62 +366,62 @@ fn golden() -> Vec<Pinned> {
         Pinned {
             cell: 71,
             seed: 1000,
-            fitness: 0x3dd6b0d3,
-            failure: None,
-            oscillation_strength: 0x3ea483c5,
+            fitness: 0x0,
+            failure: Some(FailureMode::Extinction),
+            oscillation_strength: 0x0,
             clustering_strength: 0x0,
             coexistence_duration: 0x0,
-            turnover_score: 0x3dc8b439,
-            ticks_survived: 500,
-            carcass_locked_fraction: 0x3a4d8bc1,
+            turnover_score: 0x0,
+            ticks_survived: 43,
+            carcass_locked_fraction: 0x0,
             has_decomposer_guild: false,
             has_consumer_guild: false,
-            heterotroph_shares: Some([0, 0, 0, 0]),
+            heterotroph_shares: None,
         },
         Pinned {
             cell: 71,
             seed: 1001,
-            fitness: 0x3e8dd2f2,
+            fitness: 0x0,
+            failure: Some(FailureMode::Extinction),
+            oscillation_strength: 0x0,
+            clustering_strength: 0x0,
+            coexistence_duration: 0x0,
+            turnover_score: 0x0,
+            ticks_survived: 48,
+            carcass_locked_fraction: 0x0,
+            has_decomposer_guild: false,
+            has_consumer_guild: false,
+            heterotroph_shares: None,
+        },
+        Pinned {
+            cell: 76,
+            seed: 1000,
+            fitness: 0x3e91a9fc,
             failure: None,
             oscillation_strength: 0x0,
             clustering_strength: 0x3f800000,
             coexistence_duration: 0x0,
-            turnover_score: 0x3ddd2f1b,
+            turnover_score: 0x3e0d4fdf,
             ticks_survived: 500,
-            carcass_locked_fraction: 0x3c348afd,
+            carcass_locked_fraction: 0x3cf1f611,
             has_decomposer_guild: false,
             has_consumer_guild: false,
-            heterotroph_shares: Some([0, 0, 0, 0]),
-        },
-        Pinned {
-            cell: 76,
-            seed: 1000,
-            fitness: 0x3eb38442,
-            failure: None,
-            oscillation_strength: 0x3e4d48f8,
-            clustering_strength: 0x3f800000,
-            coexistence_duration: 0x3d23d70a,
-            turnover_score: 0x3e25e354,
-            ticks_survived: 500,
-            carcass_locked_fraction: 0x3d103d66,
-            has_decomposer_guild: false,
-            has_consumer_guild: false,
-            heterotroph_shares: Some([986813358, 0, 948423958, 0]),
+            heterotroph_shares: Some([990218257, 0, 956928237, 0]),
         },
         Pinned {
             cell: 76,
             seed: 1001,
-            fitness: 0x3f49ceed,
+            fitness: 0x3f28b1f2,
             failure: None,
-            oscillation_strength: 0x3ede7273,
-            clustering_strength: 0x3f60f83e,
-            coexistence_duration: 0x3f570a3d,
+            oscillation_strength: 0x3e8e956f,
+            clustering_strength: 0x3f0eb043,
+            coexistence_duration: 0x3f4ccccd,
             turnover_score: 0x3f800000,
             ticks_survived: 500,
-            carcass_locked_fraction: 0x3de2ed20,
+            carcass_locked_fraction: 0x3e387081,
             has_decomposer_guild: false,
             has_consumer_guild: false,
-            heterotroph_shares: Some([0, 986272621, 0, 999123321]),
+            heterotroph_shares: Some([0, 999985983, 0, 999987341]),
         },
     ]
 }

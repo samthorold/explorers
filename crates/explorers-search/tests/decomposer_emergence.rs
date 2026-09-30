@@ -26,7 +26,8 @@
 //!
 //! ## Empirical finding (the headline for #330)
 //!
-//! Over a fixed ensemble of 50 seeds on the midpoint baseline (deterministic):
+//! Over a fixed ensemble of 50 seeds on the midpoint baseline (deterministic; the
+//! #326 finding, before the ensemble was widened to 400 — see below):
 //!   * 48/50 seeds survive to the 500-tick horizon (the #326 viability fix holds —
 //!     no extinction regime).
 //!   * A decomposer **emerges from dynamics** (>= 1 agent reads as `Decomposer` at
@@ -45,6 +46,16 @@
 //! therefore a floor against the role vanishing (>= 1 seed), not a claim that a
 //! persistent guild forms in several seeds — by income it does not, at the
 //! midpoint and 500 ticks.
+//!
+//! **Re-powered for co-limited satiation (#603).** A persistent decomposer is a
+//! ~1% event at the midpoint: over seeds 1000..1400, 4/400 on the energy-only
+//! gate (#600) and 3/400 once satiation is co-limited with nutrient — the same
+//! rate within noise. The old 50-seed ensemble held its floor on a single
+//! outlier seed (1/50 after #600, 0/50 after #603), so the floor measured which
+//! seeds the block happened to contain rather than whether the role vanished.
+//! The ensemble is now 400 seeds (observed under #603: 400/400 survive, a
+//! decomposer appears in 313, persists in 3), and the survival and emergence
+//! floors are stated as fractions of it.
 //!
 //! So the guild *does* form, unseeded, on correctly-specified worlds — but at the
 //! decoder midpoint it is **sporadic, not a strong majority**: detritivory is a
@@ -66,7 +77,7 @@
 //! this runs a spread of full sim runs, so it carries the `slow_` name prefix to
 //! join the selectable slow category (`cargo test slow_` / `--skip slow_`). It is
 //! a first-class default-run test (NOT `#[ignore]`d) and is fast in practice
-//! (~1.5s for all 50 seeds), but the prefix keeps the convention consistent.
+//! (~7s for all 400 seeds in a debug build), but the prefix keeps the convention consistent.
 //!
 //! Run with:
 //!   cargo test -p explorers-search --test decomposer_emergence -- --nocapture
@@ -82,11 +93,12 @@ use explorers_sim::topology::TrophicRole;
 /// distribution is stable well before it.
 const MAX_TICKS: u64 = 500;
 
-/// Fixed seed ensemble. 50 is enough to estimate the (sporadic) emergence rate
-/// stably — the survived / appeared / persistent counts move by at most a seed or
-/// two between 24 and 50 seeds — while keeping the whole test ~1.5s. Seeds are a
-/// fixed contiguous block so the test is fully deterministic.
-const N_SEEDS: u64 = 50;
+/// Fixed seed ensemble. The persistent role is a ~1% event, so the floor on it
+/// needs a few hundred seeds to be about the role and not about one outlier
+/// seed: 400 puts ~3-4 persistent seeds in the block (#603) for ~7s of debug
+/// wall-clock. Seeds are a fixed contiguous block so the test is fully
+/// deterministic.
+const N_SEEDS: u64 = 400;
 const SEED_BASE: u64 = 1000;
 
 /// A decomposer guild is "persistent" in a run when >= 1 agent reads as a
@@ -169,7 +181,7 @@ struct EnsembleEmergence {
     persistent: usize,
 }
 
-/// Memoised ensemble run: the 50-seed sweep is identical for all three property
+/// Memoised ensemble run: the seed sweep is identical for all three property
 /// tests (which run in parallel by default), so compute it once and share it
 /// rather than re-running 150 sims. Mirrors `pathway_seed_result`'s memoisation in
 /// `headless_decomposer.rs`.
@@ -210,15 +222,15 @@ fn measure_midpoint_ensemble() -> EnsembleEmergence {
 }
 
 /// The #326 baseline stays out of the extinction regime: a strong majority of the
-/// fixed seed ensemble survives to the horizon. Observed: 48/50. Threshold 40/50
-/// (80%) sits well below that with margin; falling under it means the baseline has
+/// fixed seed ensemble survives to the horizon. Observed: 48/50 at #326, 400/400
+/// under #603. Threshold 80% of the ensemble sits well below that with margin; falling under it means the baseline has
 /// regressed toward the extinction regime that made the pre-#326 search yield only
 /// dead worlds.
 #[test]
 fn slow_baseline_survives_extinction_regime() {
     let e = midpoint_ensemble();
     assert!(
-        e.surviving >= 40,
+        e.surviving as u64 >= N_SEEDS * 4 / 5,
         "the #326 baseline should keep a strong majority of the {N_SEEDS}-seed \
          ensemble alive to the horizon (extinction-regime guard); only {} survived",
         e.surviving
@@ -227,8 +239,8 @@ fn slow_baseline_survives_extinction_regime() {
 
 /// A decomposer EMERGES from dynamics — unseeded — in a meaningful fraction of the
 /// surviving ensemble. Observed: 48/50 surviving seeds spawn >= 1 agent that reads
-/// as `Decomposer` by income (16/48 under the retired trait read). Threshold:
-/// >= 6 surviving seeds. This is
+/// as `Decomposer` by income (16/48 under the retired trait read); 313/400 under
+/// #603. Threshold: >= 12% of the ensemble (the old 6/50). This is
 /// the core emergence claim — the detrital role appears on correctly-specified
 /// worlds with nothing hand-seeded — asserted distributionally over the ensemble,
 /// never on a single seed.
@@ -236,7 +248,7 @@ fn slow_baseline_survives_extinction_regime() {
 fn slow_decomposer_role_emerges_across_ensemble() {
     let e = midpoint_ensemble();
     assert!(
-        e.appeared >= 6,
+        e.appeared as u64 >= N_SEEDS * 12 / 100,
         "a decomposer should emerge (read as `Decomposer`) in a meaningful fraction \
          of the {} surviving seeds; only {} produced one (decomposer-free regression?)",
         e.surviving,
@@ -247,7 +259,7 @@ fn slow_decomposer_role_emerges_across_ensemble() {
 /// A PERSISTENT decomposer — >= 1 decomposer sustained for >= 25% of a run —
 /// holds on at least one seed of the ensemble, unseeded. Observed: 2/50 surviving
 /// seeds by income (10/48 under the retired trait read, when the threshold was
-/// >= 4). Threshold: >= 1 surviving seed — a floor against the persistent role
+/// >= 4); 3/400 under co-limited satiation (#603). Threshold: >= 1 surviving seed — a floor against the persistent role
 /// vanishing outright, not the #330 claim that it forms in several draws, which
 /// the income read does not support at the midpoint (see the module header).
 /// Asserted over the ensemble (#314 precedent), NOT on any single seed.

@@ -72,7 +72,7 @@ An agent draining structure and nutrient from a living agent over time through s
 _Avoid_: eating, attacking, harvesting
 
 **Satiation**:
-How well supplied a consumer is, co-limited across both currencies: the lesser of its reserve against its maintenance need (per-tick metabolic cost) and its free nutrient against what its mobilisable energy would bind. The state that gates how much of its heterotrophic capability a consumer expresses: a sated consumer drains little, a hungry one drains at full capability. The response's shape is the **satiation sensitivity**. The energy side is realised; the nutrient side of the co-limitation is #603.
+How well supplied a consumer is, co-limited across both currencies: the lesser of its reserve against its maintenance need (per-tick metabolic cost) and its free nutrient against what its reserve would bind into structure at its stoichiometric demand. Both sides are counted in ticks of maintenance (the nutrient side as the reserve energy its free nutrient could match in growth), so hunger follows whichever currency is scarcer: a full reserve with no free nutrient is hungry. The state that gates how much of its heterotrophic capability a consumer expresses: a sated consumer drains little, a hungry one drains at full capability. The response's shape is the **satiation sensitivity**.
 _Avoid_: fullness, appetite (appetite suggests a trait; satiation is state)
 
 **Carcass**:
@@ -238,7 +238,7 @@ The fraction of an agent's mobilisable reserve (the reserve above the metabolic 
 _Avoid_: energy conductance (the DEB term is the grounding, but "mobilisation rate" names its role here), reserve drain rate (drain conflates with metabolism, which is a separate outflow)
 
 **Satiation sensitivity**:
-The shape of need-gated consumption. A consumer expresses `1 / (1 + satiation_sensitivity × s)` of its heterotrophic capability, where `s` is its energy **satiation**: reserve in ticks of its own per-tick metabolic cost (the retention buffer's yardstick). An empty consumer drains at full capability; one holding `1 / satiation_sensitivity` ticks of maintenance drains half; the response falls smoothly toward zero with no threshold. It reads only the consumer, so living and carcass targets are drained under the same expression. A world parameter (units `1/T`), default 0.1. At 0 the response is flat — the ungated drain, kept as a limiting case for comparison. Enters the genesis search box with #607.
+The shape of need-gated consumption. A consumer expresses `1 / (1 + satiation_sensitivity × s)` of its heterotrophic capability, where `s` is its co-limited **satiation**: the lesser of its reserve and the reserve energy its free nutrient could match in growth (`free_nutrient / (growth_efficiency × ratio)`), in ticks of its own per-tick metabolic cost (the retention buffer's yardstick). One sensitivity shapes both currencies, since both are counted on that one yardstick. An empty consumer, or one with no free nutrient, drains at full capability; one holding `1 / satiation_sensitivity` ticks of maintenance in its scarcer currency drains half; the response falls smoothly toward zero with no threshold. It reads only the consumer, so living and carcass targets are drained under the same expression. A world parameter (units `1/T`), default 0.1. At 0 the response is flat — the ungated drain, kept as a limiting case for comparison. Enters the genesis search box with #607.
 _Avoid_: appetite (a trait word; this is world physics), hunger threshold (there is no threshold)
 
 **Reproduction efficiency**:
