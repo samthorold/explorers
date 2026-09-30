@@ -119,6 +119,28 @@ pub fn resolve_config(
     }
 }
 
+/// Pin a resolved world's **founder aggregation** (#601) when `pin` is given,
+/// leaving everything else as decoded. Decoded worlds found at the aggregated
+/// design default; a measurement against a pre-#601 tree pins `0.0`, the
+/// legacy well-mixed scatter exactly (#605).
+pub fn with_founder_aggregation(
+    (params, mut dist): (WorldParameters, InitialDistribution),
+    pin: Option<f32>,
+) -> (WorldParameters, InitialDistribution) {
+    if let Some(a) = pin {
+        dist.founder_aggregation = a;
+    }
+    (params, dist)
+}
+
+/// Parse a `--founder-aggregation` value: a number in `[0, 1]`.
+pub fn parse_founder_aggregation(raw: &str) -> Result<f32, String> {
+    raw.parse::<f32>()
+        .ok()
+        .filter(|a| (0.0..=1.0).contains(a))
+        .ok_or_else(|| format!("--founder-aggregation {raw:?} must be a number in [0, 1]"))
+}
+
 /// Parse a `source:index` selector list (`atlas:0,sample:12`). A bare
 /// integer is accepted as an index into `bare` when one is given, and is an
 /// error otherwise. `var` names the variable in panic messages.
@@ -157,6 +179,38 @@ fn parse_index(idx: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A decoded world founds aggregated (#601); a measurement comparing
+    /// against a pre-#601 tree pins it back to the well-mixed scatter (#605).
+    #[test]
+    fn a_pinned_founder_aggregation_overrides_the_decoded_default() {
+        let sampled = sampled_units(default_ranges().len());
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        assert_eq!(
+            decoded.1.founder_aggregation,
+            explorers_sim::DEFAULT_FOUNDER_AGGREGATION
+        );
+
+        let unchanged = with_founder_aggregation(decoded.clone(), None);
+        assert_eq!(unchanged, decoded, "no pin leaves the world as decoded");
+
+        let (params, dist) = with_founder_aggregation(decoded.clone(), Some(0.0));
+        assert_eq!(dist.founder_aggregation, 0.0);
+        assert_eq!(params, decoded.0, "only the founding placement moves");
+        let mut as_decoded = decoded.1.clone();
+        as_decoded.founder_aggregation = 0.0;
+        assert_eq!(dist, as_decoded);
+    }
+
+    #[test]
+    fn a_founder_aggregation_flag_value_must_lie_in_the_unit_interval() {
+        assert_eq!(parse_founder_aggregation("0"), Ok(0.0));
+        assert_eq!(parse_founder_aggregation("0.8"), Ok(0.8));
+        assert!(parse_founder_aggregation("1.5").is_err());
+        assert!(parse_founder_aggregation("-0.1").is_err());
+        assert!(parse_founder_aggregation("NaN").is_err());
+        assert!(parse_founder_aggregation("x").is_err());
+    }
 
     #[test]
     fn selector_parses_source_index_and_bare_atlas_indices() {

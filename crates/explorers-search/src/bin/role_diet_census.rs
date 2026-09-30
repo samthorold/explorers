@@ -21,6 +21,9 @@
 //! Seeds run in parallel. One JSON line per config appended to `--out`
 //! (default `target/role-diet-census.jsonl`); configs already present are
 //! skipped; `--limit N` caps a call; `--summary` only prints.
+//! `--founder-aggregation A` pins every world's founding placement (#601)
+//! and records the pin on each row; `0` is the pre-#601 well-mixed scatter,
+//! for comparing against an older tree (#605).
 //!
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --atlas atlas.json
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --configs sample:31,sample:110
@@ -34,7 +37,8 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_search::config_source::{
-    ConfigSource, parse_selector, resolve_config, sampled_units,
+    ConfigSource, parse_founder_aggregation, parse_selector, resolve_config, sampled_units,
+    with_founder_aggregation,
 };
 use explorers_search::role_diet::{
     Confusion, DeathCounts, DeathTable, LIGHT_SHARE_BINS, PRODUCER_LIGHT_SHARE, SeedDiet, rollout,
@@ -57,6 +61,10 @@ struct Row {
     config_index: usize,
     horizon: u64,
     base_seed: u64,
+    /// The founder aggregation every world was pinned to
+    /// (`--founder-aggregation`, #605); absent when worlds ran as decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    founder_aggregation: Option<f32>,
     seeds: Vec<SeedDiet>,
 }
 
@@ -141,6 +149,10 @@ struct Args {
     atlas: Option<PathBuf>,
     configs: Option<HashSet<(ConfigSource, usize)>>,
     summary_only: bool,
+    /// Pin every resolved world's founder aggregation (#601) to this value;
+    /// `None` runs worlds as decoded. `0` is the pre-#601 well-mixed scatter,
+    /// for comparing against an older tree (#605).
+    founder_aggregation: Option<f32>,
 }
 
 fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
@@ -153,6 +165,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
         atlas: None,
         configs: None,
         summary_only: false,
+        founder_aggregation: None,
     };
     let mut it = argv.into_iter();
     while let Some(flag) = it.next() {
@@ -170,6 +183,9 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
             "--atlas" => args.atlas = Some(PathBuf::from(value()?)),
             "--configs" => args.configs = Some(parse_selector(&value()?, "--configs", None)),
             "--summary" => args.summary_only = true,
+            "--founder-aggregation" => {
+                args.founder_aggregation = Some(parse_founder_aggregation(&value()?)?)
+            }
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -189,6 +205,7 @@ fn run_row(
     args: &Args,
 ) -> Row {
     let eval = EvalConfig::default();
+    let config = with_founder_aggregation(config.clone(), args.founder_aggregation);
     let seeds = (0..args.ensemble)
         .into_par_iter()
         .map(|i| rollout(&config.0, &config.1, args.seed + i, args.horizon, &eval))
@@ -198,6 +215,7 @@ fn run_row(
         config_index,
         horizon: args.horizon,
         base_seed: args.seed,
+        founder_aggregation: args.founder_aggregation,
         seeds,
     }
 }
@@ -425,6 +443,7 @@ mod tests {
             config_index: 1,
             horizon: 2000,
             base_seed: 1000,
+            founder_aggregation: None,
             seeds: vec![
                 seed([true, true, false], [true, false, false], None),
                 seed([true, true, false], [true, false, false], None),
@@ -459,5 +478,44 @@ mod tests {
         assert!(a.configs.unwrap().contains(&(ConfigSource::SAMPLE, 31)));
         assert!(parse(&["--bogus"]).is_err());
         assert!(parse(&["--ensemble", "0"]).is_err());
+    }
+
+    /// `--founder-aggregation A` pins every resolved world's founding
+    /// placement (#605: `0` compares against a pre-#601 tree), and each row
+    /// records the pin; unpinned rows read and write as before.
+    #[test]
+    fn a_founder_aggregation_pin_reaches_the_world_and_the_row() {
+        let parse = |a: &[&str]| parse_args(a.iter().map(|s| s.to_string()));
+        assert_eq!(parse(&[]).unwrap().founder_aggregation, None);
+        let args = parse(&[
+            "--founder-aggregation",
+            "0",
+            "--max-ticks",
+            "20",
+            "--ensemble",
+            "1",
+        ])
+        .unwrap();
+        assert_eq!(args.founder_aggregation, Some(0.0));
+        assert!(parse(&["--founder-aggregation", "1.2"]).is_err());
+
+        let sampled = sampled_units(default_ranges().len());
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        let pinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
+        assert_eq!(pinned.founder_aggregation, Some(0.0));
+        let unpinned_args = parse(&["--max-ticks", "20", "--ensemble", "1"]).unwrap();
+        let unpinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &unpinned_args);
+        assert_eq!(unpinned.founder_aggregation, None);
+        assert!(
+            !serde_json::to_string(&unpinned)
+                .unwrap()
+                .contains("founder_aggregation")
+        );
+        assert_ne!(
+            pinned.seeds, unpinned.seeds,
+            "the pin changes the founding placement the rollout sees"
+        );
+        let back: Row = serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
+        assert_eq!(back, pinned);
     }
 }
