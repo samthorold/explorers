@@ -114,9 +114,10 @@ the atlas's cells correspond to distinct ecological regimes:
 
 All three are observables the **evaluator already computes** while scoring a run — they are read off the
 evaluator's output, never re-derived by the search. The third axis is deliberately the carcass-locked
-fraction and **not** trophic balance: trophic balance is decomposer-blind (it reads the
-producer-vs-consumer energy share and cannot see the dead-vs-living distinction), so it would put a
-healthy world and an about-to-lock-up world in the *same* cell. The carcass-locked fraction is the cheap
+fraction and **not** the producer-vs-heterotroph energy share: that share cannot see the
+dead-vs-living distinction, so it would put a healthy world and an about-to-lock-up world in the *same*
+cell (and it is a reported observable, not a fitness term — [expected properties](expected-properties.md),
+*Trophic structure*). The carcass-locked fraction is the cheap
 observable of the [flux-balance order parameter `C*`](viability.md) the lockup cliff actually lives on.
 
 ## The dead frontier is the atlas's most valuable layer
@@ -296,22 +297,30 @@ before `T` is read again, and #492 / 443 §6.3 remain the evidence the working v
 
 ## Authority boundary: the heterotroph guilds are reported, never optimised
 
-A **decomposer** is a behavioural role read from an agent's trait vector and diet, confirmed across seed
+A **decomposer** is a behavioural role — a **trophic role**, read from an agent's recent realised income — confirmed across seed
 ensembles but **sporadic per seed** — a persistent guild forms in only a fraction of surviving runs
 ([expected properties](expected-properties.md); CONTEXT.md, *Decomposition*). The atlas therefore records
 it as a **per-cell distribution** — the fraction of a cell's seed ensemble that holds a
 **[heterotroph guild](../../CONTEXT.md)** of that role, with the sample count — and **never** as a
 behaviour axis or a fitness term. The same read is reported for the **consumer** role
-(`consumer_fraction` beside `decomposer_fraction`).
+(`consumer_fraction` beside `decomposer_fraction`). The heterotroph share of living energy and of
+income, by trophic role, is reported per seed under the same boundary.
 
 A guild is a *population*, not a role tag on one agent (#490; the #443 re-read found the atlas's resident
 "guild" to be a single sessile mixotroph on most seeds, a quarter of them sterile at the `kappa` clamp).
-Membership is the evaluator's existing `trophic_roles` read — heterotroph by trait, consumer/decomposer
-by realised diet — taken on the rollout's roster snapshots (the `coexistence_sample_interval` cadence)
+Membership is each agent's **trophic role** — read from recent realised income, never from the trait
+vector — taken on the rollout's roster snapshots (the `coexistence_sample_interval` cadence)
 over the **second half** of the run. The guild holds when the role's count reaches `GUILD_MIN_SIZE = 5`
 on **every** such sample *and* at least one `Born` event in that window names a member as a parent —
 sustained size rules out the lone long-lived individual, recruitment rules out a sterile founder cohort
 sitting at exactly the floor. Both values are starting points, not settled thresholds.
+
+Membership reads income, not traits, because a guild is a population occupying a network position, and
+a trait read does not find one. Among agents whose heterotrophy exceeds their autotrophy, about 97 % take
+at least 90 % of their income from light, and a trait-read decomposer guild appears on seeds where no
+agent lives on carcasses ([596-role-tag-vs-diet.md](../research/596-role-tag-vs-diet.md)). Under
+need-gated consumption (world rules, *Capability and expression are decoupled*) a sated mixotroph's
+heterotrophy is latent by design, so a trait read would count exactly the agents built to consume least.
 
 **Decided (#494): the guild stays reported.** It is not a binning axis and it does not fold into
 `coexistence_fraction`. The settled-horizon atlas was regenerated with the read reported

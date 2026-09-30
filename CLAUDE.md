@@ -16,6 +16,22 @@ Single-context layout — three layers: CONTEXT.md (ubiquitous language) + docs/
 
 How the crates divide responsibility (sim = pure deterministic stepper; genesis/search own parameter search; app = debugging instrument). Read before deciding where a change belongs. See `docs/agents/architecture.md`.
 
+### Delivery workflow
+
+grill-with-docs → to-issues → one TDD slice per PR, squash-merged. Durable knowledge goes in committed docs, never only in agent memory. See `docs/agents/delivery-workflow.md`.
+
+### Project vision
+
+The game the simulation serves (confusion → wonder → symbiosis). See `docs/agents/project-vision.md`.
+
+### Instrument runtimes
+
+Wall-clock for the search and research bins, and how to drive long sweeps in-harness. See `docs/agents/instrument-runtimes.md`.
+
+### Known traps
+
+Diagnoses that have cost time before (e.g. translation proptest failures). See `docs/agents/known-traps.md`.
+
 ## Code style
 
 The committed code is rustfmt-clean (`cargo fmt --check` passes on HEAD). Run `cargo fmt` freely and keep it clean — it no longer produces unrelated churn, so a focused diff stays focused. fmt is not enforced in CI, so it's on you to run it before committing.
