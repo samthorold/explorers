@@ -541,6 +541,9 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         trait_covariance: v(21) as f32,
         initial_cluster_count: v(22).round() as u32,
         initial_energy_per_agent: v(23) as f32,
+        // Founder aggregation is not yet searched (#607): decoded worlds found
+        // at the aggregated design default.
+        founder_aggregation: explorers_sim::DEFAULT_FOUNDER_AGGREGATION,
     };
 
     (params, dist)

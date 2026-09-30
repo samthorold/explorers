@@ -1457,6 +1457,7 @@ mod tests {
             trait_covariance: 0.1,
             initial_cluster_count: n_clusters,
             initial_energy_per_agent: 10.0,
+            founder_aggregation: 0.0,
         }
     }
 
@@ -2063,8 +2064,10 @@ mod resume_tests {
 
     /// `peak_tick` is the first tick at which the population reaches its
     /// peak (tick 0 is the founders), pinned against a replay of the same
-    /// world. `sample:14` over 40 ticks reaches its peak of 27 at tick 12 and
-    /// again at tick 16: the tie resolves to the first.
+    /// world. `sample:14` over 40 ticks reaches its peak of 20 at tick 4 and
+    /// again at tick 5: the tie resolves to the first. (Re-pinned under #601:
+    /// the decoded world now founds in aggregated patches; it was 27 at ticks
+    /// 12 and 16 under the well-mixed scatter.)
     #[test]
     fn peak_tick_is_the_first_tick_reaching_the_peak_population() {
         let ranges = default_ranges();
@@ -2091,12 +2094,12 @@ mod resume_tests {
         assert_eq!(outcome.peak_population, *series.iter().max().unwrap());
         assert_eq!(
             (outcome.peak_population, &ticks_at_peak[..]),
-            (27, &[12, 16][..])
+            (20, &[4, 5][..])
         );
-        assert_eq!(outcome.peak_tick, Some(12));
+        assert_eq!(outcome.peak_tick, Some(4));
         let line = serde_json::to_string(&outcome).unwrap();
         assert!(
-            line.contains(r#""peak_population":27,"peak_tick":12,"#),
+            line.contains(r#""peak_population":20,"peak_tick":4,"#),
             "{line}"
         );
     }

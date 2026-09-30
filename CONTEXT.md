@@ -281,7 +281,7 @@ Whether initial trait dimensions are independent or correlated (e.g., high mobil
 Whether genesis seeds one uniform population or multiple pre-differentiated groups. Seeding multiple clusters tests whether the world parameters sustain diversity; seeding one tests whether differentiation emerges spontaneously.
 
 **Founder aggregation**:
-How tightly each founding cluster is seeded in space — from tight, separate patches to a well-mixed scatter over the whole surface. Part of the **initial trait distribution**'s search, not a world parameter.
+How tightly each founding cluster is seeded in space — from tight, separate patches to a well-mixed scatter over the whole surface. Part of the **initial trait distribution**'s search, not a world parameter. A scalar in `[0, 1]`: `0` is the well-mixed scatter and larger values shrink each cluster's patch (side `1 − a` of the world side). The design default is aggregated (`0.8`).
 _Avoid_: clumping (describes the emergent pattern, not the founding choice)
 
 **Initial energy per agent**:

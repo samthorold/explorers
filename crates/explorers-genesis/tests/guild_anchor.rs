@@ -28,27 +28,25 @@ fn recipe() -> WorldRecipe {
 /// value is new (a different world, not a changed read). Re-pinned under #600:
 /// need-gated consumption changes the physics the recipe runs under, so every
 /// reading but the saturated clustering and trophic scores moved (again a
-/// different world, not a changed read). Re-capture with
+/// different world, not a changed read). Re-pinned under #601: `recipe.json`
+/// omits founder aggregation, so it now founds at the aggregated default
+/// (`0.8`, one tight patch per cluster) instead of the well-mixed scatter —
+/// a different founding, not a changed read. Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 7]); 3] = [
     (
         1,
         [
-            1057133260, 1051571141, 1065353216, 0, 1045958754, 1065353216, 1046300262,
+            1055207641, 1032831114, 1065353216, 0, 1043073073, 1065353216, 1041937521,
         ],
     ),
     (
         2,
         [
-            1057056085, 1047620518, 1065353216, 0, 1049968509, 1065353216, 1041586047,
+            1055760914, 1040989355, 1065353216, 1008981770, 1043509281, 1065339551, 1029899150,
         ],
     ),
-    (
-        3,
-        [
-            1057926453, 1056281847, 1065353216, 0, 1050488603, 1065353216, 1043557839,
-        ],
-    ),
+    (3, [1046039285, 0, 0, 0, 1031396131, 1065353216, 1028847174]),
 ];
 
 fn readings(seed: u64) -> [u32; 7] {

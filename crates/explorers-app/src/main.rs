@@ -538,6 +538,7 @@ fn default_recipe() -> WorldRecipe {
             trait_covariance: 0.1,
             initial_cluster_count: 1,
             initial_energy_per_agent: 100.0,
+            founder_aggregation: explorers_sim::DEFAULT_FOUNDER_AGGREGATION,
         }),
         agents: None,
         carcasses: None,

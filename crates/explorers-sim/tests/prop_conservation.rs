@@ -177,6 +177,7 @@ fn issue_444_minimal_case() -> WorldCase {
         trait_covariance: 0.1,
         initial_cluster_count: 1,
         initial_energy_per_agent: 1.0,
+        founder_aggregation: 0.0,
     };
     WorldCase {
         params,
