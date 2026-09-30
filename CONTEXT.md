@@ -210,7 +210,7 @@ The trait-space distance threshold within which two agents can sexually reproduc
 _Avoid_: mate selectivity threshold (selectivity implies a per-agent choice — this is a world constant)
 
 **Recognition distance**:
-The trait-space distance over which a consumer spares living targets that resemble it: expressed drain is suppressed most toward a near-identical target and not at all beyond this distance, less so the hungrier the consumer. A world parameter, the feeding counterpart of the **reproductive compatibility distance**. Carcasses are never spared.
+The trait-space distance over which a consumer spares living targets that resemble it: expressed drain is suppressed most toward a near-identical target and not at all beyond this distance, less so the hungrier the consumer — a sated consumer spares a near-identical target entirely, a starving one still drains it at a reduced rate. A world parameter (default 0.5; 0 is the kin-blind limit), the feeding counterpart of the **reproductive compatibility distance**, measured on the same trait-space metric. Carcasses are never spared.
 _Avoid_: kin recognition (the cue is similarity, which cannot tell kin from near-identical non-kin), kin distance
 
 **Base metabolic rate**:

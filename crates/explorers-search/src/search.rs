@@ -488,6 +488,7 @@ fn viable_baseline() -> WorldParameters {
         network_redistribution_rate: 0.0,
         network_transfer_efficiency: 0.0,
         satiation_sensitivity: 0.1,
+        recognition_distance: 0.5,
     }
 }
 

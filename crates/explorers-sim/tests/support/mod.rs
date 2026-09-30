@@ -83,12 +83,14 @@ pub fn viable_baseline() -> WorldParameters {
         network_redistribution_rate: 0.0,
         network_transfer_efficiency: 0.0,
         satiation_sensitivity: 0.1,
+        recognition_distance: 0.5,
     }
 }
 
 /// Strategy over the searched `WorldParameters` dimensions (ranges copied from
 /// `explorers-search::default_ranges()`, indices 0..=16 and 24..=25, 28..=31), plus the need-gate's satiation
-/// sensitivity, spanning the flat limiting case to a strong gate.
+/// sensitivity, spanning the flat limiting case to a strong gate, and the
+/// recognition distance, spanning the kin-blind limit to a wide one.
 pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
     let searched = (
         (
@@ -120,6 +122,7 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
             0.05f32..=0.5, // 30 offspring_structure_fraction
             0.05f32..=1.0, // 31 reserve_mobilisation_rate
             0.0f32..=0.5,  // satiation_sensitivity (not yet searched, #607): flat to strongly gated
+            0.0f32..=1.5,  // recognition_distance (not searched): kin-blind to wide
         ),
     );
     searched.prop_map(|(a, b, c)| WorldParameters {
@@ -147,6 +150,7 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
         offspring_structure_fraction: c.2,
         reserve_mobilisation_rate: c.3,
         satiation_sensitivity: c.4,
+        recognition_distance: c.5,
         ..viable_baseline()
     })
 }
