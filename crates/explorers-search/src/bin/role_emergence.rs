@@ -3,9 +3,9 @@
 //! ## What it measures
 //!
 //! Trophic roles (producer / consumer / decomposer) are *emergent positions in
-//! trait space*, not assigned types — `topology::trophic_roles` reads each agent's
-//! realised role per tick from the green (predation) vs brown (decomposition) food
-//! web. Our only prior evidence about *when* those roles emerge was a single regime
+//! trait space*, not assigned types — the income role read (`IncomeLedger`, #599)
+//! reads each agent's role from its recent realised income: light, living prey
+//! (the green web) and carcasses (the brown web). Our only prior evidence about *when* those roles emerge was a single regime
 //! at one horizon (`decomposer_emergence.rs`: at 500 ticks a decomposer appears in
 //! ~1/3 of surviving midpoint seeds). That leaves a real ambiguity: when a regime
 //! shows no decomposer at the 500-tick search horizon, is it **monostable** (the
@@ -26,17 +26,18 @@
 //! or the search. The decomposer guild stays a *reported observable*, never an
 //! objective or a binning axis. It makes no analytic time-to-branch prediction —
 //! it only times what the committed dynamics actually do. It reuses
-//! `topology::trophic_roles` verbatim for classification (no reimplementation) and
+//! the evaluator's income role read (`IncomeLedger`) for classification (no reimplementation) and
 //! drives `decode` + the genesis step loop directly, exactly as
 //! `decomposer_emergence.rs::run_seed` does (it does NOT shell out to the search
 //! binary).
 //!
-//! ## The non-eater→Consumer caveat
+//! ## The non-eater→Consumer caveat (retired by #599)
 //!
-//! `trophic_roles` defaults a *non-eating* heterotroph to `Consumer` (it has no
-//! detrital reliance to read). So `t_first_consumer` over-counts: it fires for a
-//! heterotroph that has eaten nothing. To distinguish a genuine predator we also
-//! record `t_first_consumer_realised` — the first tick a `Consumer`-classified
+//! The trait read this instrument used before #599 defaulted a *non-eating*
+//! heterotroph to `Consumer`, so `t_first_consumer` over-counted. The income
+//! read gives a non-eater no role, and a `Consumer` by income has drained living
+//! biomass by definition, so the two consumer milestones now coincide. The
+//! realised milestone is kept for continuity: `t_first_consumer_realised` — the first tick a `Consumer`-classified
 //! agent has actually drained *living* biomass (≥1 predation event, read from the
 //! event log's `Consumed` events with `target_was_carcass == false`).
 //! `t_first_all_three` uses the *realised* consumer, so the three-role milestone
@@ -44,9 +45,8 @@
 //!
 //! ## Classification sampling
 //!
-//! `trophic_roles` is O(agents × accumulated edges) and the edge set grows over a
-//! run, so classifying every tick of a high-population 2000-tick survivor is
-//! prohibitive. Roles are therefore read every `CLASSIFY_INTERVAL` ticks (plus the
+//! The trait read this instrument used before #599 was O(agents × accumulated
+//! edges); the income read is O(agents), but roles are still read every `CLASSIFY_INTERVAL` ticks (plus the
 //! terminal tick) — mirroring the evaluator's own `coexistence_sample_interval = 10`,
 //! which coarsens its (also expensive) DBSCAN classification for the same reason.
 //! Cheap per-tick facts (carcass presence, population, predation events) are still
@@ -90,13 +90,14 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_genesis_eval::guild::{RosterSnapshot, heterotroph_guilds};
+use explorers_genesis_eval::income::IncomeLedger;
 use explorers_search::config_source::{
     ConfigSource, parse_selector, resolve_config, sampled_units,
 };
 use explorers_search::search::default_ranges;
 use explorers_search::sweep::{plan_tasks, read_atlas_units};
 use explorers_sim::event::EventKind;
-use explorers_sim::topology::{TopologyProjection, TrophicRole};
+use explorers_sim::topology::TrophicRole;
 use explorers_sim::{InitialDistribution, World, WorldParameters};
 
 /// The extended horizon — 4× the `SearchConfig::max_ticks = 500` search horizon, so
@@ -122,7 +123,7 @@ const SEED_BASE: u64 = 1000;
 /// modes of the observed presence fraction).
 const PERSISTENCE_FRACTION: f64 = 0.25;
 
-/// Tick interval at which roles are classified via `topology::trophic_roles`. The
+/// Tick interval at which roles are classified via the income role read (`IncomeLedger`). The
 /// classification is O(agents × accumulated edges) and the edge set grows over the
 /// run, so per-tick classification on a high-population 2000-tick survivor is
 /// prohibitive. We sample it instead — directly mirroring the evaluator's
@@ -219,7 +220,7 @@ struct RunRecord {
 }
 
 /// Drive one (config, seed) through the genesis step loop to the extended horizon,
-/// classifying trophic roles each tick via `topology::trophic_roles`. Mirrors
+/// classifying trophic roles each tick via the income role read (`IncomeLedger`). Mirrors
 /// `decomposer_emergence.rs::run_seed` / `explorers_genesis::run_single`'s loop
 /// (step, early-stop on empty / explosion), threading a `TopologyProjection` so
 /// realised diets can be read out, plus a predator set (agents that have drained
@@ -243,7 +244,7 @@ fn run(
     let grid_cell_size = light_competition_radius.max(1.0);
     let max_pop = EvalConfig::default().max_population;
     let mut world = World::new(params, dist, seed);
-    let mut topo = TopologyProjection::new();
+    let mut income = IncomeLedger::new();
     let mut peak_population = 0usize;
     let run_start = Instant::now();
 
@@ -282,7 +283,7 @@ fn run(
         ran_ticks += 1;
         let tick = ran_ticks;
         peak_population = peak_population.max(world.agents().len());
-        topo.update(world.event_log());
+        income.update(world.event_log());
 
         // Absorb new predation facts from the log tail (cheap, per-tick).
         let log = world.event_log();
@@ -307,7 +308,7 @@ fn run(
         // the final composition reflects the run's end.
         if tick % CLASSIFY_INTERVAL == 0 || terminal {
             // Authoritative role classification — reused verbatim.
-            let roles = topo.trophic_roles(world.agents());
+            let roles = income.roles_of(world.agents().iter().map(|a| a.id));
             let mut producers = 0usize;
             let mut consumers = 0usize;
             let mut decomposers = 0usize;

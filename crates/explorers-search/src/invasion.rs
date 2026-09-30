@@ -7,8 +7,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use explorers_genesis_eval::income::IncomeLedger;
 use explorers_sim::event::{Event, EventKind};
-use explorers_sim::topology::TopologyProjection;
 use explorers_sim::{Agent, TraitVector, World};
 
 /// Lineage size is sampled into the record every this many ticks.
@@ -77,10 +77,10 @@ pub struct WindowOutcome {
 }
 
 /// Step a forked world through the window, following the lineage (if any)
-/// off the log.
+/// off the log, and bring the income ledger (the role read) up to date.
 pub fn run_window(
     world: &mut World,
-    topo: &mut TopologyProjection,
+    income: &mut IncomeLedger,
     mut lineage: Option<Lineage>,
     window: u64,
     max_population: usize,
@@ -118,7 +118,7 @@ pub fn run_window(
     if !ticks_run.is_multiple_of(SERIES_INTERVAL) {
         series.push(alive);
     }
-    topo.update(world.event_log());
+    income.update(world.event_log());
     WindowOutcome {
         ticks_run,
         stopped,

@@ -6,9 +6,10 @@ use std::fs;
 
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
+use explorers_genesis_eval::income::IncomeLedger;
 use explorers_sim::{
     Agent, InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe,
-    topology::{TopologyProjection, TrophicRole},
+    topology::TrophicRole,
 };
 
 /// Map an agent's trophic traits and reserve to a render colour.
@@ -204,10 +205,10 @@ impl History {
     /// Append one sample per series from the world's current aggregate state.
     /// Reuses the existing aggregations ([`RoleBreakdown`],
     /// [`compute_energy_budget`]) rather than recomputing from scratch. The role
-    /// split is read from `topology` (behavioural roles), not the trait vector.
-    /// Called once per applied step.
-    fn sample(&mut self, world: &World, topology: &TopologyProjection) {
-        let breakdown = RoleBreakdown::from_roles(&topology.trophic_roles(world.agents()));
+    /// split is read from `income` (recent realised income), not the trait
+    /// vector. Called once per applied step.
+    fn sample(&mut self, world: &World, income: &IncomeLedger) {
+        let breakdown = RoleBreakdown::of(world, income);
         let budget = compute_energy_budget(world);
 
         self.population.push(world.agents().len() as f64);
@@ -394,10 +395,12 @@ fn compute_energy_budget(world: &World) -> EnergyBudget {
     }
 }
 
-/// The living population split by behavioural trophic role for the status line.
-/// Roles come from the topology projection's [`TopologyProjection::trophic_roles`]
-/// — a reading of what each agent eats (green predation vs brown decomposition),
-/// never an assigned type. Framework-agnostic and unit-testable.
+/// The living population split by trophic role for the status line. Roles come
+/// from the evaluator's income read ([`IncomeLedger::roles_of`], #599) — a
+/// reading of what each agent lives on (light, living prey, carcasses), never
+/// an assigned type and never the trait vector. An agent with no income yet
+/// has no role and is left out of `total`. Framework-agnostic and
+/// unit-testable.
 #[derive(Debug, PartialEq, Default)]
 struct RoleBreakdown {
     total: usize,
@@ -407,7 +410,12 @@ struct RoleBreakdown {
 }
 
 impl RoleBreakdown {
-    /// Tally a behavioural roles map (from the projection) into the breakdown.
+    /// The breakdown of a world's living roster by its income roles.
+    fn of(world: &World, income: &IncomeLedger) -> Self {
+        Self::from_roles(&income.roles_of(world.agents().iter().map(|a| a.id)))
+    }
+
+    /// Tally a roles map (from the income ledger) into the breakdown.
     fn from_roles(roles: &HashMap<u64, TrophicRole>) -> Self {
         let mut breakdown = RoleBreakdown {
             total: roles.len(),
@@ -424,15 +432,26 @@ impl RoleBreakdown {
     }
 }
 
-/// Classify an agent's trait vector into its dominant trophic role for the
-/// status-line breakdown. A reading of the trait vector, never an assigned type
-/// (per CONTEXT.md): autotrophy-leaning reads as a producer, heterotrophy-leaning
-/// as a consumer. Ties read as producers. Framework-agnostic and unit-testable.
-fn dominant_role(traits: &TraitVector) -> &'static str {
+/// The dominant machinery in an agent's **investment profile** (CONTEXT.md):
+/// which of autotrophy and heterotrophy it invests more in. Not a trophic
+/// role — that is read from income ([`role_label`]). Ties read as autotrophy.
+/// Framework-agnostic and unit-testable.
+fn dominant_investment(traits: &TraitVector) -> &'static str {
     if traits.photosynthetic_absorption >= traits.heterotrophy {
-        "producers"
+        "autotrophy"
     } else {
-        "consumers"
+        "heterotrophy"
+    }
+}
+
+/// An agent's trophic role as the inspector shows it: its income role, or
+/// "none yet" for an agent with no income.
+fn role_label(role: Option<TrophicRole>) -> &'static str {
+    match role {
+        Some(TrophicRole::Producer) => "producer",
+        Some(TrophicRole::Consumer) => "consumer",
+        Some(TrophicRole::Decomposer) => "decomposer",
+        None => "none yet",
     }
 }
 
@@ -609,26 +628,28 @@ impl ReproGateSummary {
 }
 
 /// Build one tick's telemetry as a JSON object — a single JSON-lines row. Reuses
-/// the app's existing aggregations ([`RoleBreakdown`] over the topology
-/// projection's behavioural roles, and [`compute_energy_budget`]) so the headless
+/// the app's existing aggregations ([`RoleBreakdown`] over the income
+/// ledger's trophic roles, and [`compute_energy_budget`]) so the headless
 /// trace and the GUI report identical numbers. Embeds a `reproduction` block
 /// (#280) summarising both reproductive earmarks against their gates, overall and
 /// split by behavioural role, so a birthless tick can be read as energy-gated,
-/// nutrient-gated, mate-limited, or dying. Pure read of public world state; the
-/// projection must already be updated for the current tick.
-fn telemetry_row(world: &World, topology: &TopologyProjection) -> serde_json::Value {
-    let roles = topology.trophic_roles(world.agents());
+/// nutrient-gated, mate-limited, or dying. Agents with no income yet have no
+/// role; they are counted as `no_role` so the role split still partitions the
+/// living set. Pure read of public world state; the ledger must already be
+/// updated for the current tick.
+fn telemetry_row(world: &World, income: &IncomeLedger) -> serde_json::Value {
+    let roles = income.roles_of(world.agents().iter().map(|a| a.id));
     let breakdown = RoleBreakdown::from_roles(&roles);
     let budget = compute_energy_budget(world);
 
     let e_thr = world.params().reproduction_energy_threshold;
     let n_thr = world.params().reproduction_nutrient_threshold;
-    let role_summary = |want: TrophicRole| {
+    let role_summary = |want: Option<TrophicRole>| {
         ReproGateSummary::of(
             world
                 .agents()
                 .iter()
-                .filter(|a| roles.get(&a.id) == Some(&want)),
+                .filter(|a| roles.get(&a.id).copied() == want),
             e_thr,
             n_thr,
         )
@@ -643,6 +664,7 @@ fn telemetry_row(world: &World, topology: &TopologyProjection) -> serde_json::Va
         "producers": breakdown.producers,
         "consumers": breakdown.consumers,
         "decomposers": breakdown.decomposers,
+        "no_role": world.agents().len() - breakdown.total,
         "carcasses": world.carcasses().len(),
         "living_reserve": budget.living_reserve,
         "living_structure": budget.living_structure,
@@ -656,17 +678,18 @@ fn telemetry_row(world: &World, topology: &TopologyProjection) -> serde_json::Va
             "energy_threshold": e_thr,
             "nutrient_threshold": n_thr,
             "overall": ReproGateSummary::of(world.agents().iter(), e_thr, n_thr).to_json(),
-            "producers": role_summary(TrophicRole::Producer),
-            "consumers": role_summary(TrophicRole::Consumer),
-            "decomposers": role_summary(TrophicRole::Decomposer),
+            "producers": role_summary(Some(TrophicRole::Producer)),
+            "consumers": role_summary(Some(TrophicRole::Consumer)),
+            "decomposers": role_summary(Some(TrophicRole::Decomposer)),
+            "no_role": role_summary(None),
         },
     })
 }
 
 /// Run a loaded world headlessly to `max_ticks`, or until the population goes
 /// extinct, writing one JSON-lines [`telemetry_row`] per applied tick to `out`.
-/// Returns the number of rows written. Drives the topology projection each tick
-/// so the behavioural role split (producer/consumer/decomposer) is accurate.
+/// Returns the number of rows written. Drives the income ledger each tick so
+/// the trophic role split (producer/consumer/decomposer) is accurate.
 /// Writes to any [`Write`](std::io::Write), so it is unit-testable without a
 /// window. The extinction tick is itself emitted (so the final row shows the
 /// population reaching zero) before the loop stops.
@@ -675,12 +698,12 @@ fn run_trace<W: std::io::Write>(
     max_ticks: u64,
     out: &mut W,
 ) -> std::io::Result<u64> {
-    let mut topology = TopologyProjection::new();
+    let mut income = IncomeLedger::new();
     let mut rows = 0u64;
     for _ in 0..max_ticks {
         world.step();
-        topology.update(world.event_log());
-        let row = telemetry_row(&world, &topology);
+        income.update(world.event_log());
+        let row = telemetry_row(&world, &income);
         serde_json::to_writer(&mut *out, &row)?;
         out.write_all(b"\n")?;
         rows += 1;
@@ -754,11 +777,12 @@ struct ExplorersApp {
     /// applied step. Owned by the app (the sim stays history-free per ADR 0001)
     /// and rendered as `egui_plot` charts in the debug window.
     history: History,
-    /// Observer-side projection of the event log, accumulated as the world steps.
-    /// Supplies the behavioural trophic roles (green predation vs brown
-    /// decomposition) that drive the role readout. Lives on the app (the sim stays
-    /// projection-free per ADR 0001).
-    topology: TopologyProjection,
+    /// Observer-side income ledger over the event log, accumulated as the
+    /// world steps: the evaluator's trophic-role read (recent realised income,
+    /// #599) that drives the role readout. Lives on the app (the sim stays
+    /// history-free). Unlike the verdict's observations it keeps reading past
+    /// the horizon.
+    income: IncomeLedger,
     /// The genesis evaluator's incremental observation of the world, read
     /// with the search's own `EvalConfig` against the recipe's horizon
     /// (#582). Observed once per applied step, alongside the history.
@@ -778,7 +802,7 @@ impl ExplorersApp {
             clock: RunClock::new(),
             selected_agent: None,
             history: History::new(DEFAULT_HISTORY_CAPACITY),
-            topology: TopologyProjection::new(),
+            income: IncomeLedger::new(),
             verdict: verdict::VerdictObserver::new(
                 &world,
                 explorers_genesis_eval::EvalConfig::search(),
@@ -791,22 +815,22 @@ impl ExplorersApp {
     }
 
     /// Advance the simulation by `steps` whole ticks, keeping the tick readout
-    /// in sync, folding each step's events into the topology projection, and
+    /// in sync, folding each step's events into the income ledger, and
     /// sampling one history point per applied step so the plots reflect
     /// pause/step/speed.
     fn apply_steps(&mut self, steps: u32) {
         for _ in 0..steps {
             self.world.step();
             self.tick_count += 1;
-            self.topology.update(self.world.event_log());
-            self.history.sample(&self.world, &self.topology);
+            self.income.update(self.world.event_log());
+            self.history.sample(&self.world, &self.income);
             self.verdict.observe(&self.world);
-            // Both log readers (the topology and the evaluator's
+            // Both log readers (the income ledger and the evaluator's
             // observations) have consumed the step's events, so the log is
             // dropped behind them, as the genesis rollout drops it behind
             // `consumed_events()`: memory stays bounded however long the app
             // runs. Past the horizon the observations stop reading, and the
-            // topology alone still has.
+            // ledger alone still has.
             let consumed = self.world.event_log().len();
             self.world.compact_event_log_before(consumed);
         }
@@ -1016,7 +1040,8 @@ impl ExplorersApp {
     /// Status line: tick, role breakdown, carcass count, and ticks-per-second.
     fn debug_status_line(&self, ui: &mut egui::Ui) {
         let agents = self.world.agents();
-        let breakdown = RoleBreakdown::from_roles(&self.topology.trophic_roles(agents));
+        let breakdown =
+            RoleBreakdown::from_roles(&self.income.roles_of(agents.iter().map(|a| a.id)));
 
         ui.label(format!("Tick: {}", self.tick_count));
         ui.label(format!(
@@ -1306,7 +1331,14 @@ impl ExplorersApp {
                         ui.label(format!("Nutrient: {:.1}", agent.nutrient));
                         ui.label(format!("Repro reserve: {:.1}", agent.repro_reserve));
                         ui.label(format!("Repro nutrient: {:.1}", agent.repro_nutrient));
-                        ui.label(format!("Dominant role: {}", dominant_role(&agent.traits)));
+                        ui.label(format!(
+                            "Trophic role: {}",
+                            role_label(self.income.role(agent.id))
+                        ));
+                        ui.label(format!(
+                            "Invests most in: {}",
+                            dominant_investment(&agent.traits)
+                        ));
                         let threshold = self.world.params().reproduction_energy_threshold;
                         let demand = explorers_sim::stoichiometric_demand(
                             &agent.traits,
@@ -1418,16 +1450,16 @@ mod tests {
     #[test]
     fn history_sample_appends_one_point_per_metric() {
         let world = World::from_recipe(&default_recipe(), 42);
-        let topology = TopologyProjection::new();
+        let income = IncomeLedger::new();
         let mut history = History::new(100);
         assert_eq!(history.len(), 0);
-        history.sample(&world, &topology);
+        history.sample(&world, &income);
         assert_eq!(
             history.len(),
             1,
             "one sample call appends one point per series"
         );
-        history.sample(&world, &topology);
+        history.sample(&world, &income);
         assert_eq!(history.len(), 2);
     }
 
@@ -1608,15 +1640,15 @@ mod tests {
     #[test]
     fn history_stays_bounded_over_a_long_run() {
         let mut world = World::from_recipe(&default_recipe(), 7);
-        let mut topology = TopologyProjection::new();
+        let mut income = IncomeLedger::new();
         let capacity = 16;
         let mut history = History::new(capacity);
         // Sample far more often than the capacity: length must pin at capacity
         // so memory stays bounded over an arbitrarily long run.
         for _ in 0..1000 {
             world.step();
-            topology.update(world.event_log());
-            history.sample(&world, &topology);
+            income.update(world.event_log());
+            history.sample(&world, &income);
         }
         assert_eq!(history.len(), capacity);
     }
@@ -1624,12 +1656,12 @@ mod tests {
     #[test]
     fn history_sample_records_world_aggregates() {
         let world = World::from_recipe(&default_recipe(), 7);
-        let topology = TopologyProjection::new();
-        let breakdown = RoleBreakdown::from_roles(&topology.trophic_roles(world.agents()));
+        let income = IncomeLedger::new();
+        let breakdown = RoleBreakdown::of(&world, &income);
         let budget = compute_energy_budget(&world);
 
         let mut history = History::new(100);
-        history.sample(&world, &topology);
+        history.sample(&world, &income);
 
         assert_eq!(
             history.producers.iter().last().copied(),
@@ -1735,15 +1767,22 @@ mod tests {
     }
 
     #[test]
-    fn dominant_role_classification() {
-        assert_eq!(dominant_role(&traits(0.8, 0.1)), "producers");
-        assert_eq!(dominant_role(&traits(0.1, 0.8)), "consumers");
+    fn dominant_investment_classification() {
+        assert_eq!(dominant_investment(&traits(0.8, 0.1)), "autotrophy");
+        assert_eq!(dominant_investment(&traits(0.1, 0.8)), "heterotrophy");
     }
 
     #[test]
-    fn dominant_role_ties_to_producer() {
-        // A tie (equal autotrophy and heterotrophy) reads as a producer.
-        assert_eq!(dominant_role(&traits(0.5, 0.5)), "producers");
+    fn dominant_investment_ties_to_autotrophy() {
+        // A tie (equal autotrophy and heterotrophy) reads as autotrophy.
+        assert_eq!(dominant_investment(&traits(0.5, 0.5)), "autotrophy");
+    }
+
+    #[test]
+    fn the_inspector_role_is_the_income_role() {
+        assert_eq!(role_label(Some(TrophicRole::Producer)), "producer");
+        assert_eq!(role_label(Some(TrophicRole::Decomposer)), "decomposer");
+        assert_eq!(role_label(None), "none yet");
     }
 
     #[test]
@@ -2078,12 +2117,12 @@ mod tests {
     #[test]
     fn telemetry_row_matches_the_shared_aggregations() {
         let mut world = World::from_recipe(&default_recipe(), 7);
-        let mut topology = TopologyProjection::new();
+        let mut income = IncomeLedger::new();
         world.step();
-        topology.update(world.event_log());
+        income.update(world.event_log());
 
-        let row = telemetry_row(&world, &topology);
-        let breakdown = RoleBreakdown::from_roles(&topology.trophic_roles(world.agents()));
+        let row = telemetry_row(&world, &income);
+        let breakdown = RoleBreakdown::of(&world, &income);
         let budget = compute_energy_budget(&world);
 
         assert_eq!(row["population"], world.agents().len());
@@ -2199,10 +2238,10 @@ mod tests {
     #[test]
     fn telemetry_row_includes_reproduction_block_split_by_role() {
         let mut world = World::from_recipe(&default_recipe(), 7);
-        let mut topology = TopologyProjection::new();
+        let mut income = IncomeLedger::new();
         world.step();
-        topology.update(world.event_log());
-        let row = telemetry_row(&world, &topology);
+        income.update(world.event_log());
+        let row = telemetry_row(&world, &income);
         let repro = &row["reproduction"];
 
         assert_eq!(
@@ -2213,7 +2252,13 @@ mod tests {
             repro["nutrient_threshold"].as_f64().unwrap() as f32,
             default_recipe().parameters.reproduction_nutrient_threshold
         );
-        for key in ["overall", "producers", "consumers", "decomposers"] {
+        for key in [
+            "overall",
+            "producers",
+            "consumers",
+            "decomposers",
+            "no_role",
+        ] {
             assert!(
                 repro[key]["population"].is_u64(),
                 "{key} missing population"
@@ -2221,7 +2266,7 @@ mod tests {
             assert!(repro[key]["eligible"].is_u64(), "{key} missing eligible");
         }
         let overall = repro["overall"]["population"].as_u64().unwrap();
-        let by_role: u64 = ["producers", "consumers", "decomposers"]
+        let by_role: u64 = ["producers", "consumers", "decomposers", "no_role"]
             .iter()
             .map(|k| repro[*k]["population"].as_u64().unwrap())
             .sum();

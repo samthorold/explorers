@@ -4405,10 +4405,7 @@ mod tests {
         let mut topo = crate::topology::TopologyProjection::new();
         topo.update(world.event_log());
 
-        // Should have processed events without panic
-        // Verify trophic_roles() returns a map (may be empty if all initial agents died)
-        let _roles = topo.trophic_roles(world.agents());
-        // Computing roles without panic is the key test
+        // Should have processed events without panic.
 
         // Died events should remove agents from active set
         let died_events = world.event_log().by_kind(&event::EventKind::Died);
