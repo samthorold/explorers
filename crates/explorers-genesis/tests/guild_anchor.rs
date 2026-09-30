@@ -32,22 +32,25 @@ fn recipe() -> WorldRecipe {
 /// (`0.8`, one tight patch per cluster) instead of the well-mixed scatter —
 /// a different founding, not a changed read. Re-pinned under #602: trophic
 /// balance left fitness, so the column is gone and only fitness moved (the
-/// mean of four criteria, not a weighted five). Re-capture with
+/// mean of four criteria, not a weighted five). Re-pinned under #603:
+/// satiation is co-limited with nutrient, so nutrient-starved consumers keep
+/// feeding — a physics change, not a changed read (seeds 1 and 2 moved; the
+/// carcass-locked fraction fell on both). Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
     (
         1,
         [
-            1050574095, 1032831114, 1065353216, 0, 1043073073, 1041937521,
+            1050750928, 1045507225, 1065353216, 0, 1029785518, 1025518829,
         ],
     ),
     (
         2,
         [
-            1051272519, 1040989355, 1065353216, 1008981770, 1043509281, 1029899150,
+            1056403568, 1056666604, 1065353216, 1046562734, 1046696952, 1041735136,
         ],
     ),
-    (3, [1014618915, 0, 0, 0, 1031396131, 1028847174]),
+    (3, [1014618915, 0, 0, 0, 1031396131, 1028828781]),
 ];
 
 fn readings(seed: u64) -> [u32; 6] {

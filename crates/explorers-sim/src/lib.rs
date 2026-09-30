@@ -555,11 +555,14 @@ pub struct WorldParameters {
     /// "Capability and expression are decoupled: consumption is need-gated").
     /// Heterotrophy is capability — the most a consumer can drain per tick; the
     /// drain it expresses is capability × `1 / (1 + c × s)`, where `s` is the
-    /// consumer's **energy satiation**: its reserve measured in ticks of its own
-    /// per-tick metabolic cost (the yardstick the grow phase's retention buffer
-    /// uses). A consumer with no reserve drains at full capability; one holding
-    /// `1/c` ticks of maintenance drains half; the response falls smoothly, with
-    /// no threshold, toward zero as reserve grows. The gate reads only the
+    /// consumer's co-limited **satiation**: the lesser of its reserve and the
+    /// reserve energy its free nutrient could match in growth, measured in
+    /// ticks of its own per-tick metabolic cost (the yardstick the grow phase's
+    /// retention buffer uses). A consumer with no reserve, or no free nutrient,
+    /// drains at full capability; one holding `1/c` ticks of maintenance in its
+    /// scarcer currency drains half; the response falls smoothly, with no
+    /// threshold, toward zero as both grow. One `c` shapes both currencies,
+    /// which share that yardstick. The gate reads only the
     /// consumer, so it applies identically to living and carcass targets.
     /// `0.0` is the flat (ungated) limiting case — the pre-need-gating drain —
     /// kept for comparison. Units `1/T` (per tick of maintenance held).

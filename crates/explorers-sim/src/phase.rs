@@ -230,21 +230,50 @@ pub fn metabolic_cost(agent: &Agent, params: &WorldParameters) -> f32 {
 
 /// The fraction of its heterotrophic capability a consumer expresses this tick
 /// (need-gated consumption; world-rules.md, "Capability and expression are
-/// decoupled"): `1 / (1 + satiation_sensitivity × s)`, where the **energy
-/// satiation** `s` is the consumer's reserve measured in ticks of its own
-/// metabolic cost. Written as `m / (m + c·R)` so a body with no maintenance
-/// need is sated by any reserve rather than dividing by zero. Smooth and
-/// monotone decreasing in reserve, `1` at zero reserve, and exactly `1` at
-/// sensitivity zero (the flat, ungated limiting case). Reads only the consumer,
-/// never the target.
+/// decoupled"): `1 / (1 + satiation_sensitivity × s)`, where the satiation `s`
+/// is **co-limited** across both currencies, like growth under Liebig's law:
+///
+/// - **energy satiation** — the reserve in ticks of the consumer's own
+///   metabolic cost, `R / m`;
+/// - **nutrient satiation** — free nutrient measured against what the reserve
+///   would bind into structure at the consumer's stoichiometric demand (the
+///   grow phase's conversion: energy × `growth_efficiency` → structure,
+///   structure × demand ratio → bound nutrient). Expressed on the same
+///   yardstick as the energy side: the energy the free nutrient can match,
+///   `N / (η · ratio)`, in ticks of maintenance.
+///
+/// `s = min(R, N / (η · ratio)) / m` — the lesser of two continuous functions,
+/// so continuous where the limiting currency switches, and one sensitivity
+/// shapes both. When growth binds no nutrient (`η = 0` or a zero ratio) free
+/// nutrient cannot limit and the gate reads energy alone. Written as
+/// `m / (m + c·E)` so a body with no maintenance need is sated by any usable
+/// reserve rather than dividing by zero. `1` at zero reserve or zero free
+/// nutrient, and exactly `1` at sensitivity zero (the flat, ungated limiting
+/// case). Reads only the consumer, never the target.
 pub fn consumption_expression(agent: &Agent, params: &WorldParameters) -> f32 {
     let c = params.satiation_sensitivity;
-    let reserve = agent.reserve.max(0.0);
-    if c <= 0.0 || reserve <= 0.0 {
+    let usable = agent
+        .reserve
+        .max(0.0)
+        .min(nutrient_matched_energy(agent, params));
+    if c <= 0.0 || usable <= 0.0 {
         return 1.0;
     }
     let need = metabolic_cost(agent, params).max(0.0);
-    need / (need + c * reserve)
+    need / (need + c * usable)
+}
+
+/// The reserve energy an agent's free (unearmarked) nutrient can match when
+/// built into structure: `N / (growth_efficiency × ratio)`, the inverse of the
+/// grow phase's nutrient binding. Infinite when growth binds no nutrient.
+fn nutrient_matched_energy(agent: &Agent, params: &WorldParameters) -> f32 {
+    let ratio = crate::stoichiometric_demand(&agent.traits, 1.0, params);
+    let binding = params.growth_efficiency * ratio;
+    if binding > 0.0 {
+        agent.nutrient.max(0.0) / binding
+    } else {
+        f32::INFINITY
+    }
 }
 
 /// Maintain network connections (flow 5): each connection's builder pays the
@@ -4127,6 +4156,135 @@ mod tests {
         assert!(
             sated < hungry,
             "sated consumer should drain less: sated {sated}, hungry {hungry}"
+        );
+    }
+
+    /// Run one drain pass over a single ample living target surrounded by
+    /// consumers, each `(id, reserve, free nutrient, traits)`.
+    fn drain_one_ample_target_with_nutrient(
+        consumers: &[(u64, f32, f32, TraitVector)],
+        params: &WorldParameters,
+    ) -> DrainResult {
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let mut agents: Vec<Agent> = consumers
+            .iter()
+            .map(|&(id, reserve, nutrient, traits)| {
+                let mut a = make_agent(id, (0.0, 0.0), reserve, traits);
+                a.nutrient = nutrient;
+                a
+            })
+            .collect();
+        let mut target = make_agent(999, (1.0, 0.0), 10.0, target_traits);
+        target.structure = 1000.0;
+        agents.push(target);
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            params,
+            &mut nutrient_grid,
+        )
+    }
+
+    /// Need-gating params with growth enabled, so free nutrient has something
+    /// to bind into and nutrient satiation is meaningful.
+    fn co_limited_params() -> WorldParameters {
+        let mut params = test_params();
+        params.satiation_sensitivity = 0.1;
+        params.growth_efficiency = 0.5;
+        params
+    }
+
+    #[test]
+    fn a_nutrient_starved_consumer_feeds_despite_a_full_reserve() {
+        // Satiation is co-limited (world-rules.md, "Capability and expression
+        // are decoupled"): hunger follows the scarcer currency. Two consumers
+        // hold the same full reserve (500 ticks of maintenance); the one with
+        // no free nutrient drains at full capability, the one rich in both
+        // drains little.
+        let params = co_limited_params();
+        let traits = TraitVector {
+            heterotrophy: 0.4,
+            ..zero_traits()
+        };
+        let capability = 0.4 * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+        let result = drain_one_ample_target_with_nutrient(
+            &[(1, 50.0, 0.0, traits), (2, 50.0, 100.0, traits)],
+            &params,
+        );
+        let starved = drained_by(&result, 1);
+        let rich = drained_by(&result, 2);
+        assert!(
+            (starved - capability).abs() < 1e-6,
+            "nutrient-starved consumer drains at full capability: {starved} vs {capability}"
+        );
+        assert!(
+            rich < 0.05 * capability,
+            "a consumer rich in both currencies drains little: {rich}"
+        );
+    }
+
+    #[test]
+    fn co_limited_satiation_is_continuous_where_the_limiting_currency_switches() {
+        // Reserve 20 binds 20 × η 0.5 × ratio 0.18 = 1.8 nutrient, so sweeping
+        // free nutrient from 0 to 3.6 crosses from nutrient-limited to
+        // energy-limited at 1.8. The drain falls without jumps, then holds at
+        // the energy-limited value; sweeping reserve at fixed nutrient 0.9
+        // crosses the other way (switch at reserve 10) just as smoothly.
+        let params = co_limited_params();
+        let traits = TraitVector {
+            heterotrophy: 0.4,
+            ..zero_traits()
+        };
+        let capability = 0.4 * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+        let drain = |reserve: f32, nutrient: f32| {
+            drained_by(
+                &drain_one_ample_target_with_nutrient(&[(1, reserve, nutrient, traits)], &params),
+                1,
+            )
+        };
+        let energy_limited = drain(20.0, 1000.0);
+        // Steps fine enough that the steepest slope (at an empty store) moves
+        // the drain by well under the jump tolerance.
+        let by_nutrient: Vec<f32> = (0..=7200).map(|i| drain(20.0, i as f32 * 0.0005)).collect();
+        let by_reserve: Vec<f32> = (0..=4000).map(|i| drain(i as f32 * 0.005, 0.9)).collect();
+        for sweep in [&by_nutrient, &by_reserve] {
+            assert!((sweep[0] - capability).abs() < 1e-6, "starts at capability");
+            for w in sweep.windows(2) {
+                assert!(w[1] <= w[0], "drain never rises with satiation: {w:?}");
+                assert!(
+                    w[0] - w[1] < 0.01 * capability,
+                    "no jump between neighbouring states: {w:?}"
+                );
+            }
+        }
+        // Past the switch, more nutrient no longer sates: energy limits.
+        for &d in &by_nutrient[3601..] {
+            assert!(
+                (d - energy_limited).abs() < 1e-6,
+                "energy-limited plateau {energy_limited}, got {d}"
+            );
+        }
+        // Past the switch the other way, more reserve no longer sates.
+        let nutrient_limited = by_reserve[2000];
+        for &d in &by_reserve[2001..] {
+            assert!(
+                (d - nutrient_limited).abs() < 1e-6,
+                "nutrient-limited plateau {nutrient_limited}, got {d}"
+            );
+        }
+        assert!(
+            by_nutrient[3600] < by_nutrient[1800],
+            "nutrient sates below the switch"
         );
     }
 
