@@ -102,6 +102,22 @@ fn a_legacy_atlas_reads_as_the_full_box() {
     assert_eq!(read.decode(0), decode(&unit, &default_ranges()));
 }
 
+/// The committed atlas predates #602: its fitnesses were scored with trophic
+/// balance and its cells record no heterotroph shares. It still reads back,
+/// every cell with an empty share distribution.
+#[test]
+fn a_legacy_atlas_reads_back_with_no_heterotroph_shares() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
+    let text = std::fs::read_to_string(path).unwrap();
+    assert!(
+        !text.contains("heterotroph_shares"),
+        "the committed atlas is legacy"
+    );
+    let atlas = explorers_search::atlas_file::read_atlas(std::path::Path::new(path)).unwrap();
+    assert!(!atlas.cells.is_empty());
+    assert!(atlas.cells.iter().all(|c| c.heterotroph_shares.is_empty()));
+}
+
 /// A research reader that decodes over a box of its own is refused when the
 /// atlas records another.
 #[test]

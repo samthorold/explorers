@@ -513,8 +513,7 @@ mod tests {
                 || a.oscillation_strength != b.oscillation_strength
                 || a.clustering_strength != b.clustering_strength
                 || a.coexistence_duration != b.coexistence_duration
-                || a.turnover_score != b.turnover_score
-                || a.trophic_balance_score != b.trophic_balance_score,
+                || a.turnover_score != b.turnover_score,
             "different seeds should produce different trajectories \
              (a: tick={} fit={} {:?}, b: tick={} fit={} {:?})",
             result_a.termination_tick,

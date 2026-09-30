@@ -82,9 +82,14 @@ a run, and **located** by genesis. Three artifacts make that concrete:
    Clopper–Pearson), where the earlier `8/8` bounded only `p ≥ 0.63`; the headless harness
    still sweeps the first 8). Each scenario's entry carries a **failure-mode
    distribution** (count over the six + modal mode), the **median and min/max spread** of the
-   five sensible-world scores + `fitness`, the same spread for `ticks_survived` / final
+   four sensible-world scores + `fitness`, the same spread for `ticks_survived` / final
    population / true birth & death counts, the seed set used, and a `per_seed` array with each
-   seed's individual row. The binary stays **prediction-agnostic and verdict-free** — it does
+   seed's individual row — which also reports the seed's `heterotroph_shares` (consumer and
+   decomposer shares of living energy and of income, by trophic role; `null` where no living
+   agent has a role), beside the scores and never one of them. Since #602 there is no
+   `trophic_balance_score`: fitness is the mean of the four, so every live scenario's fitness
+   moved down on regeneration while every other reading stayed byte-identical; the
+   `trophic_balance_score` readings quoted in older verdicts below are historical. The binary stays **prediction-agnostic and verdict-free** — it does
    not read `metadata.prediction` or apply a pass/fail threshold.
 3. **Judged verdict** — [`verdicts.md`](verdicts.md): the *read* of the evidence against the
    declarations, grounded in `expected-properties.md`. A reading (by a human or a

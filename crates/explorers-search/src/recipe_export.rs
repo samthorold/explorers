@@ -139,6 +139,7 @@ mod tests {
             decomposer_fraction: 0.0,
             consumer_fraction: 0.0,
             coexistence_fraction: 1.0,
+            heterotroph_shares: Vec::new(),
             sample_count: 8,
             predicted_oscillation_distance: 0.0,
             predicted_branching_distance: 0.0,

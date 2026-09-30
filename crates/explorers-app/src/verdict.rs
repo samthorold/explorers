@@ -171,7 +171,8 @@ impl VerdictObserver {
 }
 
 /// The verdict as the panel reads it: when it was read, the failure mode
-/// (or none) and fitness, then the five fitness components.
+/// (or none) and fitness, then the four fitness components, then the
+/// heterotroph shares by trophic role — reported, never scored (#602).
 pub fn verdict_lines(tick: u64, horizon: u64, breakdown: &FitnessBreakdown) -> Vec<String> {
     let failure = match &breakdown.failure {
         Some(mode) => format!("{mode:?}"),
@@ -185,7 +186,13 @@ pub fn verdict_lines(tick: u64, horizon: u64, breakdown: &FitnessBreakdown) -> V
         format!("  clustering: {:.3}", breakdown.clustering_strength),
         format!("  coexistence: {:.3}", breakdown.coexistence_duration),
         format!("  turnover: {:.3}", breakdown.turnover_score),
-        format!("  trophic balance: {:.3}", breakdown.trophic_balance_score),
+        match &breakdown.heterotroph_shares {
+            Some(s) => format!(
+                "Heterotroph shares (reported): energy C {:.3} D {:.3}; income C {:.3} D {:.3}",
+                s.energy.consumer, s.energy.decomposer, s.income.consumer, s.income.decomposer
+            ),
+            None => "Heterotroph shares (reported): not read".to_owned(),
+        },
     ]
 }
 
@@ -262,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn the_verdict_lines_name_the_failure_and_all_five_components() {
+    fn the_verdict_lines_name_the_failure_the_four_components_and_the_shares() {
         let gated = FitnessBreakdown::gated(
             FailureMode::EnergyDeath,
             400,
@@ -270,6 +277,31 @@ mod tests {
         );
         let lines = verdict_lines(400, 2000, &gated);
         assert_eq!(lines[1], "Failure mode: EnergyDeath");
-        assert_eq!(lines.len(), 8, "header, mode, fitness and five components");
+        assert_eq!(
+            lines.len(),
+            8,
+            "header, mode, fitness, four components and the heterotroph shares"
+        );
+        assert!(!lines.iter().any(|l| l.contains("trophic balance")));
+        assert_eq!(lines[7], "Heterotroph shares (reported): not read");
+
+        let shares = explorers_genesis_eval::income::HeterotrophShares {
+            energy: explorers_genesis_eval::income::RoleShares {
+                consumer: 0.25,
+                decomposer: 0.125,
+            },
+            income: explorers_genesis_eval::income::RoleShares {
+                consumer: 0.5,
+                decomposer: 0.0,
+            },
+        };
+        let read = FitnessBreakdown {
+            heterotroph_shares: Some(shares),
+            ..gated
+        };
+        assert_eq!(
+            verdict_lines(400, 2000, &read)[7],
+            "Heterotroph shares (reported): energy C 0.250 D 0.125; income C 0.500 D 0.000"
+        );
     }
 }

@@ -287,7 +287,7 @@ pub struct SeedDiet {
     /// Every death of the run, attributed.
     pub deaths: DeathTable,
     /// The terminal roster's producer share of living energy — the
-    /// evaluator's trophic-balance term — with agents bucketed by the trait
+    /// evaluator's trophic-balance term until #602 retired it — with agents bucketed by the trait
     /// tag (the evaluator's read before #599) and by lifetime diet role (an
     /// agent with no income is left out). `None` for an empty roster.
     #[serde(default)]
@@ -430,13 +430,8 @@ pub fn rollout(
             .filter_map(|a| diet_role(&ledger.income(a.id)).map(|r| (r, a.energy())))
             .unzip();
         (
-            Some(explorers_genesis_eval::trophic_balance_score(
-                &tag_roles, &energies,
-            )),
-            Some(explorers_genesis_eval::trophic_balance_score(
-                &diet_roles,
-                &diet_energies,
-            )),
+            Some(producer_energy_share(&tag_roles, &energies)),
+            Some(producer_energy_share(&diet_roles, &diet_energies)),
         )
     };
     SeedDiet {
@@ -451,6 +446,24 @@ pub fn rollout(
         trophic_balance_tag,
         trophic_balance_diet,
     }
+}
+
+/// Producer share of living energy, each agent bucketed by `roles` (parallel
+/// to `energies`); 0 with no energy. The evaluator's trophic-balance term
+/// until #602 retired it from fitness — kept here so the #596 census still
+/// reads the tag-vs-diet comparison it was built for.
+fn producer_energy_share(roles: &[TrophicRole], energies: &[f32]) -> f32 {
+    let total: f32 = energies.iter().sum();
+    if total <= 0.0 {
+        return 0.0;
+    }
+    let producer: f32 = roles
+        .iter()
+        .zip(energies)
+        .filter(|(role, _)| **role == TrophicRole::Producer)
+        .map(|(_, &e)| e)
+        .sum();
+    producer / total
 }
 
 /// Every agent id the ledger still tracks as alive (test support).

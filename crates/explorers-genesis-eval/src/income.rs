@@ -181,6 +181,75 @@ impl IncomeLedger {
     pub fn role(&self, id: u64) -> Option<TrophicRole> {
         self.income.get(&id).and_then(|e| e.income.role())
     }
+
+    /// The agent's recent income decayed to `tick` (never backwards), so
+    /// incomes read at one tick sum across agents.
+    pub fn income_at(&self, id: u64, tick: u64) -> Income {
+        self.income
+            .get(&id)
+            .map(|e| {
+                let mut e = *e;
+                e.advance(tick);
+                e.income
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// A share per heterotroph **trophic role**. The producer share is the rest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RoleShares {
+    pub consumer: f32,
+    pub decomposer: f32,
+}
+
+/// The heterotroph shares of a roster (expected-properties.md, *Trophic
+/// structure*): of living energy and of recent income, each split by trophic
+/// role. A reported per-seed observable under the heterotroph guilds'
+/// authority boundary — never a behaviour axis, never a fitness term (#602).
+/// Only agents with a role count, on either side of a share: one with no
+/// income yet is on neither.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HeterotrophShares {
+    pub energy: RoleShares,
+    pub income: RoleShares,
+}
+
+impl HeterotrophShares {
+    /// Read the shares of `roster` (each agent's id and living energy) off
+    /// `ledger`, incomes decayed to `tick`. `None` when no agent has a role or
+    /// the agents with one hold no energy.
+    pub fn read(
+        ledger: &IncomeLedger,
+        roster: impl IntoIterator<Item = (u64, f32)>,
+        tick: u64,
+    ) -> Option<Self> {
+        let mut energy = [0.0f64; 3];
+        let mut income = [0.0f64; 3];
+        let slot = |role| match role {
+            TrophicRole::Producer => 0,
+            TrophicRole::Consumer => 1,
+            TrophicRole::Decomposer => 2,
+        };
+        for (id, e) in roster {
+            let recent = ledger.income_at(id, tick);
+            if let Some(role) = recent.role() {
+                energy[slot(role)] += e as f64;
+                income[slot(role)] += recent.total();
+            }
+        }
+        let split = |v: [f64; 3]| {
+            let total: f64 = v.iter().sum();
+            RoleShares {
+                consumer: (v[1] / total) as f32,
+                decomposer: (v[2] / total) as f32,
+            }
+        };
+        (energy.iter().sum::<f64>() > 0.0).then(|| HeterotrophShares {
+            energy: split(energy),
+            income: split(income),
+        })
+    }
 }
 
 #[cfg(test)]

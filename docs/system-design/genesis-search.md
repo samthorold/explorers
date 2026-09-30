@@ -304,7 +304,11 @@ it as a **per-cell distribution** — the fraction of a cell's seed ensemble tha
 **[heterotroph guild](../../CONTEXT.md)** of that role, with the sample count — and **never** as a
 behaviour axis or a fitness term. The same read is reported for the **consumer** role
 (`consumer_fraction` beside `decomposer_fraction`). The heterotroph share of living energy and of
-income, by trophic role, is reported per seed under the same boundary.
+income, by trophic role, is reported per seed under the same boundary (#602): the evaluator reads it
+off the terminal roster (`FitnessBreakdown::heterotroph_shares` — consumer and decomposer shares of
+energy and of recent income, over the agents with a role, `None` where no terminal roster was read),
+and each atlas cell records its ensemble's per-seed reads as `heterotroph_shares` beside the guild
+fractions. An atlas or checkpoint written before it reads back with the list empty.
 
 A guild is a *population*, not a role tag on one agent (#490; the #443 re-read found the atlas's resident
 "guild" to be a single sessile mixotroph on most seeds, a quarter of them sterile at the `kappa` clamp).
@@ -320,7 +324,7 @@ rollout's `Photosynthesized` and `Consumed` events and never stored in the world
 half-life of `INCOME_HALF_LIFE = 50` ticks, so a role follows a diet change within a few hundred ticks
 while averaging over the tick-to-tick flicker of need-gated consumption; the half-life is a starting
 value too. An agent with no income yet — a newborn — has no role and is left out of every role count.
-The same read buckets the trophic-balance term, so the evaluator has one role read.
+The same read buckets the heterotroph shares, so the evaluator has one role read.
 
 Membership reads income, not traits, because a guild is a population occupying a network position, and
 a trait read does not find one. Among agents whose heterotrophy exceeds their autotrophy, about 97 % take

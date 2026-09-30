@@ -13,6 +13,8 @@
 
 use serde::Serialize;
 
+use crate::income::HeterotrophShares;
+
 /// The median of `values` (sorted middle, or the mean of the two middles for an
 /// even count). Empty → 0.0. Lifted to match genesis's `run_ensemble` precedent
 /// so the two lenses aggregate identically.
@@ -132,14 +134,13 @@ impl Serialize for FailureDistribution {
     }
 }
 
-/// The five sensible-world criterion scores plus `fitness`, for one seed.
+/// The four sensible-world criterion scores plus `fitness`, for one seed.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SeedScores {
     pub oscillation_strength: f32,
     pub clustering_strength: f32,
     pub coexistence_duration: f32,
     pub turnover_score: f32,
-    pub trophic_balance_score: f32,
     pub fitness: f32,
 }
 
@@ -154,6 +155,10 @@ pub struct SeedObservation {
     pub total_births: usize,
     pub total_deaths: usize,
     pub scores: SeedScores,
+    /// The seed's heterotroph shares of living energy and of income by
+    /// trophic role (#602): reported beside the scores, never one of them.
+    /// `None` when not read (no living agent with a role).
+    pub heterotroph_shares: Option<HeterotrophShares>,
 }
 
 /// The per-scenario aggregate over the seed ensemble: a failure-mode
@@ -177,7 +182,6 @@ pub struct ScenarioAggregate {
     pub clustering_strength: Spread,
     pub coexistence_duration: Spread,
     pub turnover_score: Spread,
-    pub trophic_balance_score: Spread,
     pub fitness: Spread,
     pub ticks_survived: Spread,
     pub final_population: Spread,
@@ -213,7 +217,6 @@ pub fn aggregate(
         clustering_strength: spread(&|r| r.scores.clustering_strength),
         coexistence_duration: spread(&|r| r.scores.coexistence_duration),
         turnover_score: spread(&|r| r.scores.turnover_score),
-        trophic_balance_score: spread(&|r| r.scores.trophic_balance_score),
         fitness: spread(&|r| r.scores.fitness),
         ticks_survived: spread(&|r| r.ticks_survived as f32),
         final_population: spread(&|r| r.final_population as f32),
@@ -226,6 +229,7 @@ pub fn aggregate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::income::RoleShares;
 
     #[test]
     fn median_of_odd_count() {
@@ -301,9 +305,9 @@ mod tests {
                 clustering_strength: 0.0,
                 coexistence_duration: 0.0,
                 turnover_score: 0.0,
-                trophic_balance_score: 0.0,
                 fitness,
             },
+            heterotroph_shares: None,
         }
     }
 
@@ -336,6 +340,37 @@ mod tests {
         assert_eq!(agg.fitness.median, 0.4);
         assert_eq!(agg.fitness.min, 0.0);
         assert_eq!(agg.fitness.max, 0.6);
+    }
+
+    #[test]
+    fn per_seed_rows_report_heterotroph_shares_and_no_trophic_balance() {
+        // Trophic structure is reported per seed by role (#602), not scored.
+        let shares = HeterotrophShares {
+            energy: RoleShares {
+                consumer: 0.25,
+                decomposer: 0.125,
+            },
+            income: RoleShares {
+                consumer: 0.5,
+                decomposer: 0.0625,
+            },
+        };
+        let mut row = seed_obs(1, "none", 0.5, 11);
+        row.heterotroph_shares = Some(shares);
+        let agg = aggregate(
+            "s.json",
+            100,
+            1,
+            vec![row, seed_obs(2, "extinction", 0.0, 0)],
+        );
+        let json = serde_json::to_value(&agg).unwrap();
+        let first = &json["per_seed"][0]["heterotroph_shares"];
+        assert_eq!(first["energy"]["consumer"], 0.25);
+        assert_eq!(first["energy"]["decomposer"], 0.125);
+        assert_eq!(first["income"]["consumer"], 0.5);
+        assert_eq!(first["income"]["decomposer"], 0.0625);
+        assert!(json["per_seed"][1]["heterotroph_shares"].is_null());
+        assert!(!json.to_string().contains("trophic_balance"));
     }
 
     #[test]

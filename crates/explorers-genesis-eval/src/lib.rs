@@ -3,7 +3,6 @@ pub mod guild;
 pub mod income;
 
 use explorers_sim::event::EventKind;
-use explorers_sim::topology::TrophicRole;
 
 /// The event kinds the evaluator consumes — the retention a rollout applies
 /// with `World::retain_event_kinds` so a settled-community horizon fits in
@@ -18,7 +17,7 @@ use explorers_sim::topology::TrophicRole;
 /// - `Photosynthesized`, `Consumed`, `Died` — booked by the
 ///   [`income::IncomeLedger`] whose recent realised income reads each agent's
 ///   trophic role (#599): the heterotroph guild read (#490) on every roster
-///   sample, and the trophic-balance term on the terminal roster.
+///   sample, and the heterotroph shares on the terminal roster (#602).
 /// - `Born` — the guild's recruitment clause: a second-half birth naming a
 ///   guild member as a parent ([`guild::Birth`]).
 ///
@@ -61,7 +60,6 @@ pub struct FitnessBreakdown {
     pub clustering_strength: f32,
     pub coexistence_duration: f32,
     pub turnover_score: f32,
-    pub trophic_balance_score: f32,
     pub ticks_survived: u64,
     /// Genesis behaviour axis iii (genesis-search.md): the dead pool's share of
     /// conserved nutrient, as the trailing-window mean of the per-tick carcass
@@ -83,6 +81,13 @@ pub struct FitnessBreakdown {
     /// The consumer twin of `has_decomposer_guild`: the same guild read for
     /// agents classified `Consumer`. Same authority boundary.
     pub has_consumer_guild: bool,
+    /// The terminal roster's heterotroph shares of living energy and of
+    /// recent income, by trophic role (#602) — what trophic structure is
+    /// reported as, now that it is not scored. Same authority boundary as the
+    /// guilds: never a behaviour axis, never a fitness term. Read, like them,
+    /// on a world gated at the horizon; `None` on the early-stop path and when
+    /// no living agent has a role.
+    pub heterotroph_shares: Option<income::HeterotrophShares>,
 }
 
 impl FitnessBreakdown {
@@ -107,11 +112,11 @@ impl FitnessBreakdown {
             clustering_strength: 0.0,
             coexistence_duration: 0.0,
             turnover_score: 0.0,
-            trophic_balance_score: 0.0,
             ticks_survived,
             carcass_locked_fraction: 0.0,
             has_decomposer_guild: guilds.decomposer,
             has_consumer_guild: guilds.consumer,
+            heterotroph_shares: None,
         }
     }
 }
@@ -131,7 +136,7 @@ pub struct EvalConfig {
     /// Tick interval at which the rollout snapshots living-population trait vectors
     /// for the coexistence descriptor (issue #394). Coarse, not per-tick: DBSCAN is
     /// O(n²) and `max_population` is large, so clustering every tick of every seed
-    /// is disproportionate for one noisy 0.2-weight term. A co-presence *fraction*
+    /// is disproportionate for one noisy 0.25-weight term. A co-presence *fraction*
     /// needs only a representative sample of the settled window `(T/2, T]`.
     pub coexistence_sample_interval: usize,
     pub clustering_threshold: f32,
@@ -252,7 +257,7 @@ pub struct RolloutObservations {
     /// Living-population trait vectors snapshotted at a coarse interval, each
     /// tagged with its tick, for the coexistence descriptor (issue #394). Sparse,
     /// not per-tick, because DBSCAN is O(n²) and clustering every tick of every
-    /// seed is disproportionate for one noisy 0.2-weight term.
+    /// seed is disproportionate for one noisy 0.25-weight term.
     pub cluster_snapshots: Vec<(u64, Vec<explorers_sim::TraitVector>)>,
     /// Living roster snapshotted at the same coarse interval, tagged with its
     /// tick and read into trophic roles by the income ledger as of that tick
@@ -355,7 +360,7 @@ impl RolloutObservations {
     }
 }
 
-/// The terminal verdict on a rollout: the gates in order, then the five
+/// The terminal verdict on a rollout: the gates in order, then the four
 /// fitness components. Unbounded — for callers with no wall-clock budget (the
 /// tests, the genesis rollout driver). A budgeted caller uses
 /// [`evaluate_from_log_within`], which reaches the same verdict when it
@@ -421,8 +426,21 @@ fn evaluate(
     // gate zeroes coordinates, not observables (#527).
     let guilds = guild::role_guilds_from_samples(role_snapshots, born, max_ticks);
 
-    let zero_breakdown =
-        |failure: FailureMode| Some(FitnessBreakdown::gated(failure, ticks_survived, guilds));
+    // Heterotroph shares (#602): the terminal roster read by trophic role off
+    // the income ledger, under the guilds' authority boundary and, like them,
+    // read before the gates.
+    let heterotroph_shares = income::HeterotrophShares::read(
+        &observations.income,
+        agents.iter().map(|a| (a.id, a.energy())),
+        ticks_survived,
+    );
+
+    let zero_breakdown = |failure: FailureMode| {
+        Some(FitnessBreakdown {
+            heterotroph_shares,
+            ..FitnessBreakdown::gated(failure, ticks_survived, guilds)
+        })
+    };
 
     if agents.is_empty() {
         return zero_breakdown(FailureMode::Extinction);
@@ -448,15 +466,6 @@ fn evaluate(
     } else {
         0.0
     };
-
-    // Balance is scored per agent against the income ledger's trophic-role
-    // read (#486, #599), the same read the guild observables classify with.
-    // An agent with no income yet has no role and is left out of both sides.
-    let (agent_roles, role_energies): (Vec<TrophicRole>, Vec<f32>) = agents
-        .iter()
-        .filter_map(|a| observations.income.role(a.id).map(|r| (r, a.energy())))
-        .unzip();
-    let tb = trophic_balance_score(&agent_roles, &role_energies);
 
     let grace_ticks = config.grace_ticks;
     if let Some(failure) = dead_pool_gate(observations, config, sustainable_stock(world.params())) {
@@ -516,7 +525,10 @@ fn evaluate(
         0.0
     };
 
-    let fitness = 0.2 * os + 0.2 * cs + 0.2 * cd + 0.2 * ts + 0.2 * tb;
+    // The sensible-world mean over its four criteria (CONTEXT.md). Trophic
+    // structure is not one: the producer share of living energy it was once
+    // scored as is maximised by a world with no heterotrophs (#602).
+    let fitness = (os + cs + cd + ts) / 4.0;
 
     // Behaviour axis iii: the carcass-locked fraction the lockup gate reads, as
     // the trailing-window mean of the per-tick series the caller sampled (same
@@ -531,11 +543,11 @@ fn evaluate(
         clustering_strength: cs,
         coexistence_duration: cd,
         turnover_score: ts,
-        trophic_balance_score: tb,
         ticks_survived,
         carcass_locked_fraction,
         has_decomposer_guild: guilds.decomposer,
         has_consumer_guild: guilds.consumer,
+        heterotroph_shares,
     })
 }
 
@@ -945,40 +957,6 @@ pub fn has_trophic_pyramid(
     }
 
     producer_energy > consumer_energy
-}
-
-/// Producer share of living energy: `producer_energy / total`, bucketing each
-/// agent by its own trophic role (`roles`, parallel to `energies`). It rewards
-/// the pyramid base — energy concentrated in producers — per the "Trophic
-/// structure" expected property.
-///
-/// Scored per agent against the income ledger's trophic-role read
-/// ([`income::IncomeLedger`], #599), not on DBSCAN cluster means (#486): a
-/// merged cluster of producers and heterotrophs scores its producer energy
-/// share, not a whole-cluster 0 or 1 decided by a count-parity tie. Every
-/// agent with a role counts, whatever its DBSCAN label; a `Producer` is on
-/// the producer side and every other role on the other. The evaluator passes
-/// only agents with a role: one with no income yet is on neither side.
-///
-/// It is deliberately **decomposer-blind**: decomposers are heterotrophs, so they
-/// fall on the non-producer side, and this score does not — and cannot — reward
-/// a decomposer guild distinctly. Decomposer-ness is not in the trait vector to
-/// score (see `docs/system-design/trait-space.md`, "Decomposer is a behavioural
-/// role, not a heritable trait"), so the detrital pathway is held to account
-/// negatively by the `EnergyDeath` failure gate (a world where it fails locks
-/// matter in carcasses and scores zero fitness), never by this term.
-pub fn trophic_balance_score(roles: &[TrophicRole], energies: &[f32]) -> f32 {
-    let total: f32 = energies.iter().sum();
-    if total <= 0.0 {
-        return 0.0;
-    }
-    let producer_energy: f32 = roles
-        .iter()
-        .zip(energies)
-        .filter(|(role, _)| **role == TrophicRole::Producer)
-        .map(|(_, &e)| e)
-        .sum();
-    producer_energy / total
 }
 
 pub fn coexistence_duration(cluster_counts_per_tick: &[usize]) -> f32 {
@@ -1674,12 +1652,11 @@ mod tests {
             low_bd.carcass_locked_fraction
         );
         // It must not be summed into fitness (the descriptor is read-only).
-        let expected_fitness = 0.2
-            * (low_bd.oscillation_strength
-                + low_bd.clustering_strength
-                + low_bd.coexistence_duration
-                + low_bd.turnover_score
-                + low_bd.trophic_balance_score);
+        let expected_fitness = (low_bd.oscillation_strength
+            + low_bd.clustering_strength
+            + low_bd.coexistence_duration
+            + low_bd.turnover_score)
+            / 4.0;
         assert!((low_bd.fitness - expected_fitness).abs() < 1e-5);
 
         // A flat higher carcass series reports a higher fraction (monotone read).
@@ -2034,7 +2011,6 @@ mod tests {
         assert_eq!(result.clustering_strength, 0.0);
         assert_eq!(result.coexistence_duration, 0.0);
         assert_eq!(result.turnover_score, 0.0);
-        assert_eq!(result.trophic_balance_score, 0.0);
         assert_eq!(result.carcass_locked_fraction, 0.0);
     }
 
@@ -2177,7 +2153,8 @@ mod tests {
                     .iter()
                     .filter(|a| {
                         a.traits.heterotrophy > a.traits.photosynthetic_absorption
-                            && roles.get(&a.id) == Some(&TrophicRole::Producer)
+                            && roles.get(&a.id)
+                                == Some(&explorers_sim::topology::TrophicRole::Producer)
                     })
                     .count();
             }
@@ -2254,7 +2231,7 @@ mod tests {
         // living population carries >=2 trait-space clusters (issue #394). Feed
         // a known K of N settled snapshots that carry >=2 clusters and assert
         // the breakdown's coexistence_duration is exactly K/N. The fitness is
-        // the weighted sum of the five components.
+        // the mean of the four components.
         let params = live_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
@@ -2288,14 +2265,14 @@ mod tests {
             "coexistence should be K/N = 3/5, got {}",
             result.coexistence_duration
         );
-        let fitness = 0.2 * result.oscillation_strength
-            + 0.2 * result.clustering_strength
-            + 0.2 * result.coexistence_duration
-            + 0.2 * result.turnover_score
-            + 0.2 * result.trophic_balance_score;
+        let fitness = (result.oscillation_strength
+            + result.clustering_strength
+            + result.coexistence_duration
+            + result.turnover_score)
+            / 4.0;
         assert_eq!(
             result.fitness, fitness,
-            "fitness should be weighted sum of components"
+            "fitness should be the mean of the four criteria"
         );
     }
 
@@ -2316,6 +2293,138 @@ mod tests {
             (50, snapshot_with_clusters(3)),
         ];
         (world, obs(&free, &[], &[], &snapshots), config, max_ticks)
+    }
+
+    /// `observations` with its income ledger replaced by one booked off
+    /// synthetic events: each listed agent living on `light` (a producer),
+    /// `living` prey (a consumer) or `carcass` (a decomposer) at `tick`.
+    fn with_income(
+        observations: RolloutObservations,
+        tick: u64,
+        diets: &[(u64, f32, f32, f32)],
+    ) -> RolloutObservations {
+        use explorers_sim::event::{Event, EventLog};
+        let mut log = EventLog::new();
+        let mut seq = 0;
+        let mut push = |kind, source, carcass, e: f32| {
+            if e > 0.0 {
+                let target = (kind == EventKind::Consumed).then_some(u64::MAX);
+                log.append(Event {
+                    tick,
+                    seq,
+                    kind,
+                    source,
+                    target,
+                    energy_delta: e,
+                    position: None,
+                    target_was_carcass: carcass,
+                    second_parent: None,
+                })
+                .unwrap();
+                seq += 1;
+            }
+        };
+        for &(id, light, living, carcass) in diets {
+            push(EventKind::Photosynthesized, id, false, light);
+            push(EventKind::Consumed, id, false, living);
+            push(EventKind::Consumed, id, true, carcass);
+        }
+        let mut income = income::IncomeLedger::new();
+        income.update(&log);
+        RolloutObservations {
+            income,
+            ..observations
+        }
+    }
+
+    #[test]
+    fn fitness_does_not_depend_on_heterotroph_energy() {
+        // The same world read twice: once with every agent living on light,
+        // once with half of them living on prey. The retired trophic-balance
+        // term (producer share of living energy) would score the second lower;
+        // the four sensible-world criteria do not read roles at all.
+        let (world, observations, config, max_ticks) = settled_fixture();
+        assert!(!world.agents().is_empty(), "the fixture survives");
+        let ids: Vec<u64> = world.agents().iter().map(|a| a.id).collect();
+        let tick = world.tick() - 1;
+        let all_producers: Vec<_> = ids.iter().map(|&id| (id, 1.0, 0.0, 0.0)).collect();
+        let half_consumers: Vec<_> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| match i % 2 {
+                0 => (id, 1.0, 0.0, 0.0),
+                _ => (id, 0.0, 1.0, 0.0),
+            })
+            .collect();
+        let producers = evaluate_from_log(
+            &world,
+            &with_income(observations.clone(), tick, &all_producers),
+            &config,
+            max_ticks,
+        );
+        let mixed = evaluate_from_log(
+            &world,
+            &with_income(observations, tick, &half_consumers),
+            &config,
+            max_ticks,
+        );
+        assert_eq!(producers.failure, None, "the fixture reads live");
+        assert_eq!(producers.fitness, mixed.fitness);
+        assert_eq!(
+            producers.fitness,
+            (producers.oscillation_strength
+                + producers.clustering_strength
+                + producers.coexistence_duration
+                + producers.turnover_score)
+                / 4.0,
+            "fitness is the mean of the four sensible-world criteria"
+        );
+    }
+
+    #[test]
+    fn the_verdict_reports_heterotroph_shares_of_energy_and_income_by_role() {
+        // Agents cycle producer / consumer / decomposer / no income. Each
+        // share is over the agents with a role: the newcomer is on no side.
+        let (world, observations, config, max_ticks) = settled_fixture();
+        let tick = world.tick() - 1;
+        let diets: Vec<_> = world
+            .agents()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| match i % 4 {
+                0 => Some((a.id, 3.0, 0.0, 0.0)),
+                1 => Some((a.id, 0.0, 1.0, 0.0)),
+                2 => Some((a.id, 0.0, 0.0, 2.0)),
+                _ => None,
+            })
+            .collect();
+        let energy_of = |r: usize| -> f32 {
+            world
+                .agents()
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| i % 4 == r)
+                .map(|(_, a)| a.energy())
+                .sum()
+        };
+        let count = |r: usize| (0..world.agents().len()).filter(|i| i % 4 == r).count() as f32;
+        let roled_energy = energy_of(0) + energy_of(1) + energy_of(2);
+        let income = 3.0 * count(0) + count(1) + 2.0 * count(2);
+
+        let bd = evaluate_from_log(
+            &world,
+            &with_income(observations, tick, &diets),
+            &config,
+            max_ticks,
+        );
+        let shares = bd
+            .heterotroph_shares
+            .expect("a roster with roles reads shares");
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        assert!(close(shares.energy.consumer, energy_of(1) / roled_energy));
+        assert!(close(shares.energy.decomposer, energy_of(2) / roled_energy));
+        assert!(close(shares.income.consumer, count(1) / income));
+        assert!(close(shares.income.decomposer, 2.0 * count(2) / income));
     }
 
     #[test]
@@ -2629,7 +2738,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_from_log_clustering_and_trophic_from_final_state() {
+    fn evaluate_from_log_clustering_from_final_state() {
         let params = test_world_params();
         let dist = test_distribution();
         let config = EvalConfig {
@@ -2659,18 +2768,7 @@ mod tests {
         } else {
             0.0
         };
-        // Balance reads each agent's income role; an agent with none is left
-        // out of both sides.
-        let (roles, energies): (Vec<TrophicRole>, Vec<f32>) = world
-            .agents()
-            .iter()
-            .filter_map(|a| observations.income().role(a.id).map(|r| (r, a.energy())))
-            .unzip();
-        assert!(!roles.is_empty(), "the fixture books income");
-        let expected_tb = trophic_balance_score(&roles, &energies);
-
         assert_eq!(result.clustering_strength, expected_cs);
-        assert_eq!(result.trophic_balance_score, expected_tb);
     }
 
     #[test]
@@ -3243,30 +3341,6 @@ mod tests {
     }
 
     #[test]
-    fn fitness_is_weighted_sum_of_five_criteria() {
-        let os = 0.8_f32;
-        let cs = 0.6;
-        let cd = 0.7;
-        let ts = 0.5;
-        let tb = 0.9;
-        let expected = 0.2 * os + 0.2 * cs + 0.2 * cd + 0.2 * ts + 0.2 * tb;
-        let result = FitnessBreakdown {
-            fitness: expected,
-            failure: None,
-            oscillation_strength: os,
-            clustering_strength: cs,
-            coexistence_duration: cd,
-            turnover_score: ts,
-            trophic_balance_score: tb,
-            ticks_survived: 100,
-            carcass_locked_fraction: 0.0,
-            has_decomposer_guild: false,
-            has_consumer_guild: false,
-        };
-        assert!((result.fitness - expected).abs() < 1e-5);
-    }
-
-    #[test]
     fn turnover_score_zero_when_no_births_or_deaths() {
         assert_eq!(turnover_score(0, 0, 100), 0.0);
         assert_eq!(turnover_score(5, 0, 100), 0.0);
@@ -3285,150 +3359,6 @@ mod tests {
     fn turnover_score_clamps_to_one() {
         let score = turnover_score(200, 200, 100);
         assert_eq!(score, 1.0);
-    }
-
-    /// The trophic role each fixture agent is given, in roster order: the
-    /// fixtures pair an autotrophy-leaning investment profile with a producer
-    /// role and a heterotrophy-leaning one with a consumer role, so the
-    /// DBSCAN preconditions read the same agents the balance scores.
-    fn roles_of(traits: &[explorers_sim::TraitVector]) -> Vec<TrophicRole> {
-        traits
-            .iter()
-            .map(|t| {
-                if t.photosynthetic_absorption >= t.heterotrophy {
-                    TrophicRole::Producer
-                } else {
-                    TrophicRole::Consumer
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn trophic_balance_on_a_merged_parity_cluster_is_the_producer_energy_share() {
-        // The example12/13 knife edge (#486): equal producer and consumer
-        // counts in one merged DBSCAN cluster. The balance is the producer
-        // energy share, not a whole-cluster 0 or 1.
-        let config = EvalConfig::default();
-        let mut traits = Vec::new();
-        let mut energies = Vec::new();
-        for _ in 0..10 {
-            traits.push(make_trait_vector([0.5, 0.0, 0.0, 0.0]));
-            energies.push(100.0);
-        }
-        for _ in 0..10 {
-            traits.push(make_trait_vector([0.0, 0.5, 0.0, 0.0]));
-            energies.push(100.0);
-        }
-        assert_eq!(
-            distinct_cluster_count(&traits, config.dbscan_eps, config.dbscan_min_points),
-            1,
-            "precondition: DBSCAN merges producers and heterotrophs"
-        );
-        assert_eq!(trophic_balance_score(&roles_of(&traits), &energies), 0.5);
-    }
-
-    #[test]
-    fn trophic_balance_high_when_producers_dominate() {
-        let mut traits = Vec::new();
-        let mut energies = Vec::new();
-        for _ in 0..10 {
-            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0]));
-            energies.push(100.0);
-        }
-        for _ in 0..5 {
-            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0]));
-            energies.push(50.0);
-        }
-        let score = trophic_balance_score(&roles_of(&traits), &energies);
-        assert!(
-            score > 0.5,
-            "producers dominating should score > 0.5: {score}"
-        );
-    }
-
-    #[test]
-    fn trophic_balance_low_when_consumers_dominate() {
-        let mut traits = Vec::new();
-        let mut energies = Vec::new();
-        for _ in 0..5 {
-            traits.push(make_trait_vector([0.9, 0.1, 0.0, 0.0]));
-            energies.push(10.0);
-        }
-        for _ in 0..10 {
-            traits.push(make_trait_vector([0.1, 0.9, 0.0, 0.0]));
-            energies.push(100.0);
-        }
-        let score = trophic_balance_score(&roles_of(&traits), &energies);
-        assert!(
-            score < 0.5,
-            "consumers dominating should score < 0.5: {score}"
-        );
-    }
-
-    #[test]
-    fn noise_labelled_agents_count_toward_trophic_balance() {
-        // A roster too sparse for DBSCAN to cluster at all: every agent is
-        // noise, yet each is scored by its own role.
-        let config = EvalConfig::default();
-        let traits = vec![
-            make_trait_vector([0.9, 0.1, 0.0, 0.0]),
-            make_trait_vector([0.1, 0.9, 10.0, 0.0]),
-        ];
-        let energies = vec![30.0, 10.0];
-        let labels = dbscan(&traits, config.dbscan_eps, config.dbscan_min_points);
-        assert!(
-            labels.iter().all(Option::is_none),
-            "precondition: all noise"
-        );
-        assert_eq!(trophic_balance_score(&roles_of(&traits), &energies), 0.75);
-    }
-
-    #[test]
-    fn trophic_balance_zero_when_no_living_energy() {
-        let traits = vec![make_trait_vector([0.9, 0.1, 0.0, 0.0])];
-        assert_eq!(trophic_balance_score(&roles_of(&traits), &[0.0]), 0.0);
-    }
-
-    #[test]
-    fn weighted_sum_of_five_equal_values() {
-        let breakdown = FitnessBreakdown {
-            fitness: 0.5,
-            failure: None,
-            oscillation_strength: 0.5,
-            clustering_strength: 0.5,
-            coexistence_duration: 0.5,
-            turnover_score: 0.5,
-            trophic_balance_score: 0.5,
-            ticks_survived: 100,
-            carcass_locked_fraction: 0.0,
-            has_decomposer_guild: false,
-            has_consumer_guild: false,
-        };
-        assert!((breakdown.fitness - 0.5).abs() < 1e-5);
-    }
-
-    #[test]
-    fn fitness_breakdown_includes_all_five_criteria() {
-        let breakdown = FitnessBreakdown {
-            fitness: 0.0,
-            failure: None,
-            oscillation_strength: 0.1,
-            clustering_strength: 0.2,
-            coexistence_duration: 0.3,
-            turnover_score: 0.4,
-            trophic_balance_score: 0.5,
-            ticks_survived: 50,
-            carcass_locked_fraction: 0.0,
-            has_decomposer_guild: false,
-            has_consumer_guild: false,
-        };
-        assert_eq!(breakdown.oscillation_strength, 0.1);
-        assert_eq!(breakdown.clustering_strength, 0.2);
-        assert_eq!(breakdown.coexistence_duration, 0.3);
-        assert_eq!(breakdown.turnover_score, 0.4);
-        assert_eq!(breakdown.trophic_balance_score, 0.5);
-        assert_eq!(breakdown.ticks_survived, 50);
     }
 
     #[test]
