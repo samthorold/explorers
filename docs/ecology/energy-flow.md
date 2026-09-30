@@ -135,6 +135,10 @@ Since Lindeman, ecologists have decomposed trophic transfer into component effic
 
 The compounding effect of ~10% efficiency at each step limits most food chains to 4–5 trophic levels. At 10% per step, the energy available at the fifth level is 0.01% of primary production — a vanishing resource base. This is a thermodynamic ceiling, not a biological one. Aquatic systems occasionally sustain longer food chains because their higher per-step efficiency (ectotherm-dominated, higher assimilation of protein-rich phytoplankton) provides a larger energy base at upper levels.
 
+### Pyramids of flow and pyramids of stock
+
+The pyramid of energy *flow* cannot invert: each level's production is bounded by the production of the level below, less transfer losses. The pyramid of standing *biomass* can. Where producers are small and turn over quickly, a small standing stock of phytoplankton can support a larger standing stock of consumers. Inverted biomass pyramids are common in oligotrophic open-ocean plankton, where heterotroph biomass often exceeds autotroph biomass (Gasol, del Giorgio & Duarte 1997). A pyramid read off standing stock therefore describes turnover as much as trophic structure.
+
 ### The metabolic tax of body temperature
 
 The difference between ectotherm and endotherm net production efficiency is stark and structurally important. An endothermic predator (wolf, hawk) converts roughly 1–5% of its assimilated energy to new biomass. An ectothermic predator (bass, spider) converts 25–50%. The energy "lost" to thermoregulation in endotherms is not wasted in a fitness sense — it buys activity independence from environmental temperature, enabling sustained pursuit predation, nocturnal foraging, and exploitation of cold environments. But thermodynamically, it is dissipated heat that could otherwise have become offspring.
@@ -213,6 +217,8 @@ Brown, J. H., Gillooly, J. F., Allen, A. P., Savage, V. M., & West, G. B. (2004)
 Cebrian, J. (1999). Patterns in the fate of production in plant communities. *American Naturalist*, 154(4), 449-468.
 
 Cyr, H., & Pace, M. L. (1993). Magnitude and patterns of herbivory in aquatic and terrestrial ecosystems. *Nature*, 361(6408), 148-150.
+
+Gasol, J. M., del Giorgio, P. A., & Duarte, C. M. (1997). Biomass distribution in marine planktonic communities. *Limnology and Oceanography*, 42(6), 1353–1363.
 
 Gifford, R. M. (2003). Plant respiration in productivity models: conceptualisation, representation and issues for global terrestrial carbon-cycle research. *Functional Plant Biology*, 30(2), 171-186.
 

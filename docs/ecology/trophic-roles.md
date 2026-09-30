@@ -50,7 +50,7 @@ Textbooks typically distinguish consumers (organisms that eat living things) fro
 
 **Consumers** feed on living biomass. Their targets resist being eaten — through defenses, escape behavior, immune responses, structural barriers. The consumer must overcome these defenses, which imposes energetic costs and drives coevolutionary arms races. Consumer-prey interactions create the trophic cascade dynamics that structure food webs (Paine 1966; Estes et al. 2011).
 
-**Decomposers** feed on dead organic matter. Their targets do not resist. The challenges are different: accessing the substrate physically (penetrating bark, soil aggregates, chitin), breaking down recalcitrant compounds (lignin, cellulose, keratin), and competing with other decomposers for the resource. Fungi and bacteria dominate decomposition not because they possess unique heterotrophic biochemistry but because their growth forms — hyphae that penetrate substrate, extracellular enzyme secretion, high surface-area-to-volume ratios — are well-suited to processing dead, structurally complex organic matter (de Boer et al. 2005).
+**Decomposers** feed on dead organic matter. Their targets do not resist. The challenges are different: accessing the substrate physically (penetrating bark, soil aggregates, chitin), breaking down recalcitrant compounds (lignin, cellulose, keratin), and competing with other decomposers for the resource. Fungi and bacteria dominate decomposition not because they possess unique heterotrophic biochemistry but because their growth forms — hyphae that penetrate substrate, extracellular enzyme secretion, high surface-area-to-volume ratios — are well-suited to processing dead, structurally complex organic matter (de Boer et al. 2005). Decomposition effort is itself regulated by need: soil microbes raise production of nutrient-acquiring enzymes when that nutrient is scarce and cut it when the nutrient is supplied directly (Allison & Vitousek 2005). A decomposer does not attack dead matter at a fixed rate.
 
 The distinction is not binary. Many organisms span both categories. Vultures are consumers that specialize on dead animals. Parasites consume living tissue from within. Detritivorous invertebrates (earthworms, millipedes, isopods) fragment dead matter, increasing the surface area available to microbial decomposers — a processing role rather than a purely metabolic one. The boundary between "consumer" and "decomposer" is better understood as a continuum of target states than as a categorical divide. The same machinery also does not stop at the species boundary. The nearest living target is often a conspecific, and often a relative. How common that is, and how organisms avoid eating their own kin, is covered in [cannibalism and kin](cannibalism-and-kin.md).
 
@@ -84,10 +84,13 @@ The three roles are better understood as positions in the energy-and-nutrient fl
 
 Some organisms occupy a single position cleanly. Obligate photoautotrophs are pure producers. Obligate saprophytes are pure decomposers. But many organisms span positions. Mixotrophic protists photosynthesize and consume prey simultaneously (Stoecker 1998). Mycorrhizal fungi receive carbon from living plant partners (a consumer-like relationship) while decomposing soil organic matter (a decomposer function). Insectivorous plants photosynthesize (producer) while digesting animal prey (consumer) to obtain limiting nutrients.
 
+In mixotrophs, consumption is expressed conditionally, and the condition is usually the *limiting* currency rather than energy. Light-rich mixotrophic algae increase bacterivory under phosphorus or nitrogen limitation, and eat for nutrient rather than carbon (Nygaard & Tobiesen 1993; Stoecker 1998). The northern pitcher plant (*Sarracenia purpurea*) builds fewer, less carnivorous pitchers when nitrogen is added and more when it is scarce (Ellison & Gotelli 2002). The capacity to consume is retained, but its expression tracks need.
+
 The roles are emergent properties of the flow network, not innate properties of the organisms. An organism's trophic role is determined by what it does — which flows it participates in — not by what it is. And those flows are constrained, ultimately, by the two physics: energy flows one way, matter cycles, and any self-sustaining biotic system must have functional positions that together maintain both flows.
 
 ## References
 
+- Allison, S.D. & Vitousek, P.M. (2005). Responses of extracellular enzymes to simple and complex nutrient inputs. *Soil Biology and Biochemistry* 37(5): 937–944.
 - Bach, W. et al. (2006). Energy in the dark: fuel for life in the deep ocean and beyond. *Eos, Transactions AGU* 87(7): 73–78.
 - Bar-On, Y.M., Phillips, R. & Milo, R. (2018). The biomass distribution on Earth. *Proceedings of the National Academy of Sciences* 115(25): 6506–6511.
 - Beer, C. et al. (2010). Terrestrial gross carbon dioxide uptake: global distribution and covariation with climate. *Science* 329(5993): 834–838.
@@ -96,10 +99,12 @@ The roles are emergent properties of the flow network, not innate properties of 
 - Cyr, H. & Pace, M.L. (1993). Magnitude and patterns of herbivory in aquatic and terrestrial ecosystems. *Nature* 361: 148–150.
 - de Boer, W. et al. (2005). Living in a fungal world: impact of fungi on soil bacterial niche development. *FEMS Microbiology Reviews* 29(4): 795–811.
 - DeVault, T.L., Rhodes, O.E. & Shivik, J.A. (2003). Scavenging by vertebrates: behavioral, ecological, and evolutionary perspectives on an important energy transfer pathway in terrestrial ecosystems. *Oikos* 102(2): 225–234.
+- Ellison, A.M. & Gotelli, N.J. (2002). Nitrogen availability alters the expression of carnivory in the northern pitcher plant, *Sarracenia purpurea*. *Proceedings of the National Academy of Sciences* 99(7): 4409–4412.
 - Estes, J.A. et al. (2011). Trophic downgrading of planet Earth. *Science* 333(6040): 301–306.
 - Field, C.B. et al. (1998). Primary production of the biosphere: integrating terrestrial and oceanic components. *Science* 281(5374): 237–240.
 - Gorham, E. (1991). Northern peatlands: role in the carbon cycle and probable responses to climatic warming. *Ecological Applications* 1(2): 182–195.
 - Hobbie, S.E. (1992). Effects of plant species on nutrient cycling. *Trends in Ecology and Evolution* 7(10): 336–339.
+- Nygaard, K. & Tobiesen, A. (1993). Bacterivory in algae: a survival strategy during nutrient limitation. *Limnology and Oceanography* 38(2): 273–279.
 - Paine, R.T. (1966). Food web complexity and species diversity. *American Naturalist* 100(910): 65–75.
 - Schmitz, O.J., Krivan, V. & Ovadia, O. (2004). Trophic cascades: the primacy of trait-mediated indirect effects. *Ecology Letters* 7(2): 153–163.
 - Schmitz, O.J. et al. (2010). Predator control of ecosystem nutrient dynamics. *Ecology Letters* 13(10): 1199–1209.
