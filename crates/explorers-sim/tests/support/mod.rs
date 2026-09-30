@@ -152,7 +152,8 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
 }
 
 /// Strategy over the searched `InitialDistribution` dimensions (ranges copied
-/// from `explorers-search::default_ranges()`, indices 17..=23 and 26..=27).
+/// from `explorers-search::default_ranges()`, indices 17..=23 and 26..=27), plus founder
+/// aggregation spanning the well-mixed end to tight patches.
 /// Founder fecundity is fixed at the search's template value (0.35), as in
 /// `decode`.
 pub fn initial_distribution() -> impl Strategy<Value = InitialDistribution> {
@@ -166,9 +167,21 @@ pub fn initial_distribution() -> impl Strategy<Value = InitialDistribution> {
         1.0f32..=50.0, // 23 initial_energy_per_agent
         0.0f32..=1.0,  // 26 mean_asexual_propensity
         0.0f32..=2.0,  // 27 mean_dispersal
+        0.0f32..=1.0,  // founder_aggregation (not yet searched, #607): well-mixed to tight
     )
         .prop_map(
-            |(photo, hetero, mobility, kappa, cov, clusters, energy, asexual, dispersal)| {
+            |(
+                photo,
+                hetero,
+                mobility,
+                kappa,
+                cov,
+                clusters,
+                energy,
+                asexual,
+                dispersal,
+                aggregation,
+            )| {
                 InitialDistribution {
                     mean_traits: TraitVector {
                         photosynthetic_absorption: photo,
@@ -182,6 +195,7 @@ pub fn initial_distribution() -> impl Strategy<Value = InitialDistribution> {
                     trait_covariance: cov,
                     initial_cluster_count: clusters,
                     initial_energy_per_agent: energy,
+                    founder_aggregation: aggregation,
                 }
             },
         )

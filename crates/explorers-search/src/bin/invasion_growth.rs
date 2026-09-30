@@ -1460,15 +1460,13 @@ mod tests {
     fn run_cell_seed_injects_every_role_on_every_arm_and_is_deterministic() {
         let ranges = default_ranges();
         let unit = vec![0.5; ranges.len()];
-        let run = || {
-            run_cell_seed(
-                &decode(&unit, &ranges),
-                SEED_BASE,
-                30,
-                30,
-                &[Arm::Intact, Arm::Removed],
-            )
-        };
+        // Founded well-mixed: the smoke check needs a resident whose producers
+        // breed inside 30 ticks, and the box-centre world founded in tight
+        // patches (the #601 default) has not bred yet at 30.
+        let (params, mut dist) = decode(&unit, &ranges);
+        dist.founder_aggregation = 0.0;
+        let config = (params, dist);
+        let run = || run_cell_seed(&config, SEED_BASE, 30, 30, &[Arm::Intact, Arm::Removed]);
         let record = run();
         assert_eq!(record.seed, SEED_BASE);
         assert_eq!(record.resident.termination, "alive");

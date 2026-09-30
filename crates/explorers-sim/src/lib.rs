@@ -286,6 +286,62 @@ pub fn provision_offspring(
 /// are born with structure, which binds `structure × demand`; sourcing it from
 /// the pool keeps total system nutrient at world creation equal to the initial
 /// pool (nutrient is conserved, never conjured into the living system).
+/// The founding patch centres, one per cluster (#601), drawn deterministically
+/// from the world seed on their own keyed stream, so the main stream's founder
+/// draws (positions, then traits) are untouched. The centres sit on the cells
+/// of a `k × k` lattice (`k = ⌈√n⌉`), each cluster on a distinct cell chosen
+/// at random, and the whole lattice is translated by a random offset — the
+/// torus has no privileged origin. Distinct lattice cells keep the centres at
+/// least `extent / k` apart, so tight patches never overlap.
+fn founding_patch_centres(n_clusters: usize, extent: f32, seed: u64) -> Vec<(f32, f32)> {
+    use rand::Rng;
+    let mut rng = keyed_rng::agent_rng(seed, 0, 0, keyed_rng::PhaseTag::FounderPlacement);
+    let k = (n_clusters as f64).sqrt().ceil() as usize;
+    let cell = extent / k as f32;
+    let mut cells: Vec<usize> = (0..k * k).collect();
+    // Partial Fisher–Yates: the first `n_clusters` cells are a uniform draw
+    // without replacement.
+    for i in 0..n_clusters {
+        let j = rng.random_range(i..cells.len());
+        cells.swap(i, j);
+    }
+    let offset = (rng.random::<f32>() * extent, rng.random::<f32>() * extent);
+    cells[..n_clusters]
+        .iter()
+        .map(|&c| {
+            let (col, row) = ((c % k) as f32, (c / k) as f32);
+            wrap_position(
+                (
+                    -extent / 2.0 + (col + 0.5) * cell + offset.0,
+                    -extent / 2.0 + (row + 0.5) * cell + offset.1,
+                ),
+                extent,
+            )
+        })
+        .collect()
+}
+
+/// Place one founder in its cluster's patch (#601). `uniform` is the founder's
+/// uniform draw over the torus (centred on the origin); it is scaled into a
+/// square patch of side `(1 − aggregation) × extent` about the cluster's
+/// centre. At `aggregation = 0` the draw is returned unchanged — the patch is
+/// the whole torus, and placement is exactly the legacy well-mixed scatter.
+fn founder_position(
+    uniform: (f32, f32),
+    centre: (f32, f32),
+    aggregation: f32,
+    extent: f32,
+) -> (f32, f32) {
+    if aggregation <= 0.0 {
+        return uniform;
+    }
+    let spread = 1.0 - aggregation;
+    wrap_position(
+        (centre.0 + spread * uniform.0, centre.1 + spread * uniform.1),
+        extent,
+    )
+}
+
 fn bind_seed_structure_nutrient(
     agents: &[Agent],
     nutrient_grid: &mut spatial::NutrientGrid,
@@ -518,6 +574,29 @@ pub struct InitialDistribution {
     pub trait_covariance: f32,
     pub initial_cluster_count: u32,
     pub initial_energy_per_agent: f32,
+    /// **Founder aggregation** (#601): how tightly each founding cluster is
+    /// seeded in space. Dimensionless, in `[0, 1]`. Each cluster founds one
+    /// square patch of side `(1 − a) × world_extent` around a patch centre
+    /// drawn from the world seed; founders scatter uniformly within it. `0.0`
+    /// is the well-mixed limiting case — the patch is the whole torus and
+    /// placement is exactly the uniform draw it has always been. Towards `1.0`
+    /// the patches shrink to tight, spatially separate founding populations.
+    /// Omitted in a recipe it reads back at [`DEFAULT_FOUNDER_AGGREGATION`].
+    #[serde(default = "default_founder_aggregation")]
+    pub founder_aggregation: f32,
+}
+
+/// Design default founder aggregation (#601): aggregated founding is the
+/// physics (expected-properties.md, "Founder placement"). At `0.8` each patch
+/// spans a fifth of the world side (4 % of its area), so for any searched
+/// cluster count (1–5, laid on at most a 3×3 lattice with spacing ≥ a third of
+/// the side) the patches are spatially separate, while each patch still spans
+/// several nutrient cells and light-competition radii at the searched scales,
+/// so founders are crowded, not stacked on one point.
+pub const DEFAULT_FOUNDER_AGGREGATION: f32 = 0.8;
+
+fn default_founder_aggregation() -> f32 {
+    DEFAULT_FOUNDER_AGGREGATION
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -923,16 +1002,21 @@ impl World {
             })
             .collect();
 
+        let patch_centres = founding_patch_centres(n_clusters, extent, seed);
+        let aggregation = distribution.founder_aggregation.clamp(0.0, 1.0);
+
         let (seed_reserve, seed_structure, seed_heat) =
             provision_initial_reserve_structure(distribution.initial_energy_per_agent, &params);
         let agents: Vec<Agent> = (0..pop_size)
             .map(|id| {
                 let x = pos_dist.sample(&mut rng);
                 let y = pos_dist.sample(&mut rng);
+                let position =
+                    founder_position((x, y), patch_centres[id % n_clusters], aggregation, extent);
                 let centroid = &cluster_centroids[id % n_clusters];
                 Agent {
                     id: id as u64,
-                    position: (x, y),
+                    position,
                     reserve: seed_reserve,
                     structure: seed_structure,
                     // Seed structure is the high-water mark: a fresh seed is
@@ -1860,6 +1944,7 @@ mod tests {
             trait_covariance: 0.1,
             initial_cluster_count: 1,
             initial_energy_per_agent: 100.0,
+            founder_aggregation: 0.0,
         }
     }
 
@@ -2595,6 +2680,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         // Manually add pure producers, seeded with a little nutrient so they can
@@ -2665,6 +2751,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         // Add a single producer with structure (so it can photosynthesise)
@@ -2733,6 +2820,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         // Consumer
@@ -2805,6 +2893,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         // A mobile agent: nonzero mobility drives a random-walk move each tick.
@@ -2866,6 +2955,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
@@ -3305,6 +3395,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 40.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 7);
 
@@ -3814,6 +3905,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
@@ -3857,6 +3949,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         seed_mixed_population(&mut world);
@@ -3915,6 +4008,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let world = World::new(params.clone(), dist, 42);
 
@@ -3955,6 +4049,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         seed_mixed_population(&mut world);
@@ -4004,6 +4099,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
@@ -4039,6 +4135,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         // Consumer: heterotroph, co-located with target.
@@ -4095,6 +4192,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
@@ -4138,6 +4236,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
@@ -4187,6 +4286,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
@@ -4247,6 +4347,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         for x in [0.0, 1.0] {
@@ -4314,6 +4415,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 7);
         // A single sessile autotroph with kappa < 1 (so some uptake is
@@ -4364,6 +4466,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         seed_mixed_population(&mut world);
@@ -4387,6 +4490,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         seed_mixed_population(&mut world);
@@ -4411,6 +4515,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         seed_mixed_population(&mut world);
@@ -4577,6 +4682,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
         seed_mixed_population(&mut world);
@@ -4635,6 +4741,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
 

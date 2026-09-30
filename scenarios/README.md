@@ -15,7 +15,10 @@ across the three raises confidence; disagreement localises the fault.
 
 A scenario is a `WorldRecipe` (`crates/explorers-sim/src/lib.rs`): a `parameters`
 block (`WorldParameters`), an optional `agents` list (fixed roster; omit for a random
-seeded population), and `max_ticks`. Loaded via `--scenario PATH` / `--recipe PATH`
+seeded population), and `max_ticks`. A random seeded population is described by an
+`initial_distribution` (`InitialDistribution`). Its `founder_aggregation` (`0` well-mixed
+to `1` tight, separate patches, one per founding cluster; #601) defaults to `0.8` when
+omitted. Loaded via `--scenario PATH` / `--recipe PATH`
 in `explorers-app`, or `serde_json::from_str` in tests.
 
 Open one in the GUI:

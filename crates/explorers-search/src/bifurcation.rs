@@ -659,6 +659,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 10.0,
+            founder_aggregation: 0.0,
         };
 
         // Steady-state per-tick accumulation of the reproductive allocation, read

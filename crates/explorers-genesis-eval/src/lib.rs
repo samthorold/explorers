@@ -1319,6 +1319,7 @@ mod tests {
             trait_covariance: 0.5,
             initial_cluster_count: 2,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         }
     }
 
@@ -2734,6 +2735,7 @@ mod tests {
             trait_covariance: 0.0,
             initial_cluster_count: 1,
             initial_energy_per_agent: 50.0,
+            founder_aggregation: 0.0,
         };
         let config = EvalConfig::default();
         let max_ticks = 100;

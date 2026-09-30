@@ -449,6 +449,7 @@ mod tests {
             trait_covariance: 0.1,
             initial_cluster_count: 1,
             initial_energy_per_agent: 10.0,
+            founder_aggregation: 0.0,
         }
     }
 

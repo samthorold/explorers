@@ -788,6 +788,14 @@ fn scaling_case() -> impl Strategy<Value = WorldCase> {
             .sensing_range_coefficient
             .min(SCALING_MAX_RADIUS / 2.0);
         c.params.dispersal_reach_coefficient = 1.0;
+        // Founded well-mixed. Aggregated founding (#601) adds a length scale
+        // of its own: a founding patch spans `(1 − a) × L`. Founder density
+        // inside it is unchanged by the scaling, but its side doubles against
+        // the fixed interaction radii, and at tight aggregation on the base
+        // world a whole patch sits inside one interaction disc — the
+        // thermodynamic-limit condition `r ≪ patch` fails. The founder bloom
+        // then differs with size for physical reasons, not a scaling bug.
+        c.dist.founder_aggregation = 0.0;
         c
     })
 }

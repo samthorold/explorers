@@ -70,6 +70,9 @@ pub enum PhaseTag {
     /// Sexual reproduction (fecundity, seed-parent coin, crossover, mutation,
     /// dispersal). Keyed on the ordered pair.
     SexualReproduction = 3,
+    /// Founder placement at world creation (#601): the founding patch centres.
+    /// World-level, keyed on the run seed alone (tick 0, no agent identity).
+    FounderPlacement = 4,
 }
 
 /// Sentinel occupying the high id slot for single-agent (non-pair) sites, so a
