@@ -11,7 +11,8 @@ Measured wall-clock for the QD search and the research bins, to plan sweeps. Fig
 - `role_emergence`, 35 cells × 8 seeds: ~3 h.
 - `radius_sweep` (4 baselines × 8 levels × 5 seeds): ~1 h 45 min.
 - `guild_census`: atlas ~1 min; 200 LHS configs ~60 min when split over disjoint `--configs` in parallel (one dense config blocks a whole process).
-- `role_diet_census`: atlas ~1 min; 200 LHS configs ~90 min.
+- `role_diet_census`: atlas ~1 min; 200 LHS configs ~1.5–2 h, one config at a time. Ten dense configs (`sample:20`, `24`, `38`, `100`, `129`, `147`, `154`, `165`, `169`, `197`) cost 2–19 min each and dominate; which are heaviest shifts with the physics (#605).
+- `reinvasion_barrier` on `sample:31`: 7–14 s per mode.
 - **QD search** (full box, 10 generations, default `--bloom-stop 300:10` since #579): ~7.5–12 min; 20 generations ~30 min. A few dense generations dominate an unstopped search. Neither the search nor refinement has a per-rollout time limit (#562), so one dense rollout can stall a refinement for hours. Pre-#573 checkpoints need `--no-bloom-stop` to resume.
 
 Memory is not the constraint (RSS < 100–600 MB); wall time is.

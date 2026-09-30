@@ -57,6 +57,9 @@
 //! --seeds N` runs seeds `A..A+N` and writes their records; `--merge F…`
 //! re-reads chunk files and prints the combined summary. Artifact
 //! `target/reinvasion-barrier.json` (`--out PATH`).
+//! `--founder-aggregation A` pins the world's founding placement (#601) and
+//! records the pin in the artifact; `0` is the pre-#601 well-mixed scatter,
+//! for comparing against an older tree (#605).
 //!
 //! ## Accounting mode (#591)
 //!
@@ -101,7 +104,10 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_genesis_eval::income::IncomeLedger;
-use explorers_search::config_source::{parse_config_key, resolve_config, sampled_units};
+use explorers_search::config_source::{
+    parse_config_key, parse_founder_aggregation, resolve_config, sampled_units,
+    with_founder_aggregation,
+};
 use explorers_search::energy_accounting::{EnergyAccount, LineageAccountant};
 use explorers_search::invasion::{
     ConsumedCounts, DrainedEnergy, Lineage, RateSummary, SERIES_INTERVAL, WindowOutcome,
@@ -839,6 +845,10 @@ struct Artifact {
     /// Whether the arms ran under the energy accountant (#591).
     #[serde(default)]
     accounting: bool,
+    /// The founder aggregation the world was pinned to
+    /// (`--founder-aggregation`, #605); absent when the world ran as decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    founder_aggregation: Option<f32>,
     seeds: Vec<SeedRecord>,
     /// Derived from `seeds`: not read back from a file (an empty arm's
     /// medians are NaN, written as `null`); `merge` recomputes it.
@@ -885,6 +895,7 @@ impl Artifact {
             cohort: INVADER_COHORT,
             arms,
             accounting: false,
+            founder_aggregation: None,
             seeds,
             summary,
         }
@@ -901,6 +912,7 @@ impl Artifact {
                 a.window,
                 a.arms.clone(),
                 a.accounting,
+                a.founder_aggregation.map(f32::to_bits),
             )
         };
         let want = key(first);
@@ -910,7 +922,7 @@ impl Artifact {
                 bad.reference, bad.t_inj, bad.window, want.0, want.1, want.2
             ));
         }
-        let (reference, t_inj, window, arms, accounting) = want;
+        let (reference, t_inj, window, arms, accounting, pin) = want;
         let mut seeds: Vec<SeedRecord> = chunks.into_iter().flat_map(|a| a.seeds).collect();
         seeds.sort_by_key(|s| s.seed);
         if seeds.windows(2).any(|w| w[0].seed == w[1].seed) {
@@ -918,11 +930,12 @@ impl Artifact {
         }
         let mut a = Artifact::from_seeds(reference, t_inj, window, arms, seeds);
         a.accounting = accounting;
+        a.founder_aggregation = pin.map(f32::from_bits);
         Ok(a)
     }
 }
 
-const USAGE: &str = "usage: reinvasion_barrier [CONFIG_KEY (default sample:31)] [--accounting | --dispersal] [--t-inj N] [--window N] [--seed-from A] [--seeds N] [--atlas PATH] [--out PATH] | --merge FILE...";
+const USAGE: &str = "usage: reinvasion_barrier [CONFIG_KEY (default sample:31)] [--accounting | --dispersal] [--t-inj N] [--window N] [--seed-from A] [--seeds N] [--atlas PATH] [--founder-aggregation A] [--out PATH] | --merge FILE...";
 
 #[derive(Debug)]
 struct Cli {
@@ -941,6 +954,10 @@ struct Cli {
     /// under the energy accountant, written to
     /// `target/self-grazing-dispersal.json`.
     dispersal: bool,
+    /// Pin the resolved world's founder aggregation (#601) to this value in
+    /// `[0, 1]`; `None` runs the world as decoded. `0` is the pre-#601
+    /// well-mixed scatter, for comparing against an older tree (#605).
+    founder_aggregation: Option<f32>,
 }
 
 impl Cli {
@@ -956,6 +973,7 @@ impl Cli {
             merge: Vec::new(),
             accounting: false,
             dispersal: false,
+            founder_aggregation: None,
         };
         let mut it = argv.into_iter();
         let mut merging = false;
@@ -976,6 +994,10 @@ impl Cli {
                 "--merge" => merging = true,
                 "--accounting" => cli.accounting = true,
                 "--dispersal" => cli.dispersal = true,
+                "--founder-aggregation" => {
+                    cli.founder_aggregation =
+                        Some(parse_founder_aggregation(&value("--founder-aggregation")?)?)
+                }
                 flag if flag.starts_with("--") => {
                     return Err(format!("unknown argument {flag:?}\n{USAGE}"));
                 }
@@ -1026,6 +1048,7 @@ fn main() {
             eprintln!("{e}");
             std::process::exit(2)
         });
+        let config = with_founder_aggregation(config, cli.founder_aggregation);
         let (arms, mode) = if cli.accounting {
             (accounting_arms(), Mode::Accounting)
         } else if cli.dispersal {
@@ -1034,16 +1057,17 @@ fn main() {
             (all_arms(), Mode::Plain)
         };
         eprintln!(
-            "reinvasion_barrier: {} × {} arms × seeds {}..{}; t_inj {}, window {}, cohort {INVADER_COHORT}",
+            "reinvasion_barrier: {} × {} arms × seeds {}..{}; t_inj {}, window {}, cohort {INVADER_COHORT}, founder aggregation {}",
             cli.reference,
             arms.len(),
             cli.seed_from,
             cli.seed_from + cli.seeds,
             cli.t_inj,
-            cli.window
+            cli.window,
+            config.1.founder_aggregation
         );
         let start = std::time::Instant::now();
-        let a = Artifact::run(
+        let mut a = Artifact::run(
             &cli.reference,
             &config,
             cli.t_inj,
@@ -1057,6 +1081,7 @@ fn main() {
             "reinvasion_barrier: done in {:.0}s",
             start.elapsed().as_secs_f64()
         );
+        a.founder_aggregation = cli.founder_aggregation;
         a
     } else {
         let chunks: Vec<Artifact> = cli
@@ -1738,5 +1763,44 @@ mod tests {
         assert!(parse(&["--dispersal", "--accounting"]).is_err());
         let cli = parse(&["--merge", "a.json", "b.json"]).unwrap();
         assert_eq!(cli.merge, vec!["a.json".to_string(), "b.json".to_string()]);
+    }
+
+    /// `--founder-aggregation A` pins the resolved world's founding placement
+    /// (#605: `0` compares against a pre-#601 tree); unset, the world is as
+    /// decoded.
+    #[test]
+    fn cli_pins_founder_aggregation_only_when_asked() {
+        let parse = |args: &[&str]| Cli::parse(args.iter().map(|s| s.to_string()));
+        assert_eq!(parse(&[]).unwrap().founder_aggregation, None);
+        let cli = parse(&["--dispersal", "--founder-aggregation", "0"]).unwrap();
+        assert_eq!(cli.founder_aggregation, Some(0.0));
+        assert!(parse(&["--founder-aggregation", "2"]).is_err());
+        assert!(parse(&["--founder-aggregation"]).is_err());
+    }
+
+    /// The pin is recorded in the artifact, is left out when unset (so
+    /// earlier artifacts read back unchanged), and chunks with different pins
+    /// do not merge.
+    #[test]
+    fn the_artifact_records_the_founder_aggregation_pin() {
+        let config = resolve_reference("sample:31", None).unwrap();
+        let arms = [Arm {
+            phenotype: Phenotype::Step(0),
+            placement: Placement::Uniform,
+            dispersal_centi: None,
+        }];
+        let unpinned = Artifact::run("sample:31", &config, 30, 10, 0, 1, &arms, Mode::Plain);
+        let json = serde_json::to_string(&unpinned).unwrap();
+        assert!(!json.contains("founder_aggregation"));
+        let mut pinned = Artifact::run("sample:31", &config, 30, 10, 1, 1, &arms, Mode::Plain);
+        pinned.founder_aggregation = Some(0.0);
+        let back: Artifact =
+            serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
+        assert_eq!(back.founder_aggregation, Some(0.0));
+        assert!(Artifact::merge(vec![unpinned, back.clone()]).is_err());
+        let mut other = Artifact::run("sample:31", &config, 30, 10, 2, 1, &arms, Mode::Plain);
+        other.founder_aggregation = Some(0.0);
+        let merged = Artifact::merge(vec![back, other]).unwrap();
+        assert_eq!(merged.founder_aggregation, Some(0.0));
     }
 }
