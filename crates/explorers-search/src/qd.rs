@@ -51,6 +51,7 @@ use explorers_genesis::{
     BloomStop, EnsembleConfig, EnsembleResult, EvalConfig, FailureMode, FitnessBreakdown,
     RolloutBudget, RunConfig, RunResult, run_ensemble_within,
 };
+use explorers_genesis_eval::income::HeterotrophShares;
 use explorers_sim::WorldRecipe;
 
 use crate::bifurcation::{branching_distance, oscillation_distance};
@@ -153,6 +154,11 @@ pub struct ConfigEval {
     /// `decomposer_fraction`: never an axis, never a fitness term. It feeds the
     /// projection's robustness floor only (genesis-search.md).
     pub coexistence_fraction: f32,
+    /// Each seed's heterotroph shares of living energy and of income by
+    /// trophic role (#602), in seed order, over the seeds that read one. A
+    /// reported distribution under the same authority boundary as the guild
+    /// fractions: never an axis, never a fitness term.
+    pub heterotroph_shares: Vec<HeterotrophShares>,
     /// The per-cell sample count (the seed-ensemble size).
     pub sample_count: u32,
     /// Observed coexistence duration of the median seed
@@ -298,6 +304,12 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
     // the ensemble that lands in the coexisting regime. The projection's
     // robustness floor reads this; binning and fitness do not.
     let coexistence_fraction = CoexistenceFractions::of_seeds(&result.run_results).plain;
+    // Reported per-seed distribution under the same boundary (#602).
+    let heterotroph_shares: Vec<HeterotrophShares> = result
+        .run_results
+        .iter()
+        .filter_map(|r| r.breakdown.heterotroph_shares)
+        .collect();
 
     // Order the seeds by fitness; the lower-middle element is the representative
     // (the median seed). An empty ensemble degenerates to a zero-fitness extinct
@@ -321,6 +333,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
             decomposer_fraction: 0.0,
             consumer_fraction: 0.0,
             coexistence_fraction: 0.0,
+            heterotroph_shares: Vec::new(),
             sample_count: 0,
             coexistence_duration: 0.0,
             predicted_oscillation_distance: 0.0,
@@ -340,6 +353,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
         decomposer_fraction,
         consumer_fraction,
         coexistence_fraction,
+        heterotroph_shares,
         sample_count,
         coexistence_duration: rep.breakdown.coexistence_duration,
         // Predicted bifurcation coordinates are filled by the caller, which holds
@@ -364,6 +378,11 @@ pub struct CellRecord {
     /// [`ConfigEval::coexistence_fraction`]) — read by the projection's robustness
     /// floor only, never binned on nor summed into fitness.
     pub coexistence_fraction: f32,
+    /// The cell's per-seed heterotroph shares (see
+    /// [`ConfigEval::heterotroph_shares`]) — reported, never binned on nor
+    /// summed into fitness. Empty in a checkpoint written before #602.
+    #[serde(default)]
+    pub heterotroph_shares: Vec<HeterotrophShares>,
     pub sample_count: u32,
     /// Predicted bifurcation descriptors of the elite (see [`ConfigEval`]) —
     /// reported on the cell, never binned on nor summed into fitness.
@@ -440,6 +459,7 @@ impl Archive {
                                 decomposer_fraction: eval.decomposer_fraction,
                                 consumer_fraction: eval.consumer_fraction,
                                 coexistence_fraction: eval.coexistence_fraction,
+                                heterotroph_shares: eval.heterotroph_shares.clone(),
                                 sample_count: eval.sample_count,
                                 predicted_oscillation_distance: eval.predicted_oscillation_distance,
                                 predicted_branching_distance: eval.predicted_branching_distance,
@@ -464,6 +484,7 @@ impl Archive {
                                 rec.decomposer_fraction = eval.decomposer_fraction;
                                 rec.consumer_fraction = eval.consumer_fraction;
                                 rec.coexistence_fraction = eval.coexistence_fraction;
+                                rec.heterotroph_shares = eval.heterotroph_shares.clone();
                                 rec.sample_count = eval.sample_count;
                                 rec.predicted_oscillation_distance =
                                     eval.predicted_oscillation_distance;
@@ -749,6 +770,13 @@ pub struct AtlasCell {
     /// read only by the projection's robustness floor — never a binning axis nor a
     /// fitness term (genesis-search.md, the authority boundary).
     pub coexistence_fraction: f32,
+    /// Per-cell heterotroph-share distribution (#602): each seed's heterotroph
+    /// shares of living energy and of income by trophic role, over the seeds
+    /// that read one. Reported beside the guild fractions under the same
+    /// authority boundary — never a binning axis nor a fitness term. Empty on
+    /// an atlas written before it was recorded.
+    #[serde(default)]
+    pub heterotroph_shares: Vec<HeterotrophShares>,
     /// The seed-ensemble sample count behind that fraction.
     pub sample_count: u32,
     /// Predicted signed distance to the frozen↔oscillation (Hopf) boundary
@@ -1976,6 +2004,7 @@ impl<R> SearchState<R> {
                 decomposer_fraction: rec.decomposer_fraction,
                 consumer_fraction: rec.consumer_fraction,
                 coexistence_fraction: rec.coexistence_fraction,
+                heterotroph_shares: rec.heterotroph_shares.clone(),
                 sample_count: rec.sample_count,
                 predicted_oscillation_distance: rec.predicted_oscillation_distance,
                 predicted_branching_distance: rec.predicted_branching_distance,
@@ -2007,6 +2036,7 @@ impl<R> SearchState<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use explorers_genesis_eval::income::RoleShares;
 
     #[test]
     fn default_horizon_is_the_settled_community_working_value() {
@@ -2037,6 +2067,7 @@ mod tests {
             decomposer_fraction: 0.0,
             consumer_fraction: 0.0,
             coexistence_fraction: 1.0,
+            heterotroph_shares: Vec::new(),
             sample_count: 5,
             coexistence_duration: 0.0,
             predicted_oscillation_distance: 0.0,
@@ -2086,6 +2117,7 @@ mod tests {
             decomposer_fraction: 0.0,
             consumer_fraction: 0.0,
             coexistence_fraction: 1.0,
+            heterotroph_shares: Vec::new(),
             sample_count: 5,
             predicted_oscillation_distance: 0.0,
             predicted_branching_distance: 0.0,
@@ -3070,11 +3102,11 @@ mod tests {
             clustering_strength: clustering,
             coexistence_duration,
             turnover_score: 0.0,
-            trophic_balance_score: 0.0,
             ticks_survived: 0,
             carcass_locked_fraction: 0.0,
             has_decomposer_guild: false,
             has_consumer_guild: false,
+            heterotroph_shares: None,
         }
     }
 
@@ -3228,6 +3260,91 @@ mod tests {
         let eval = config_eval_from_ensemble(&result);
         assert_eq!(eval.consumer_fraction, 3.0 / 4.0);
         assert_eq!(eval.decomposer_fraction, 1.0 / 4.0);
+    }
+
+    fn shares(consumer: f32, decomposer: f32) -> HeterotrophShares {
+        HeterotrophShares {
+            energy: RoleShares {
+                consumer,
+                decomposer,
+            },
+            income: RoleShares {
+                consumer: consumer / 2.0,
+                decomposer: decomposer / 2.0,
+            },
+        }
+    }
+
+    #[test]
+    fn a_cell_records_its_seeds_heterotroph_shares_beside_the_guild_fractions() {
+        // Trophic structure is reported per seed (#602): the cell carries the
+        // distribution of its ensemble's heterotroph shares, in seed order,
+        // over the seeds that read one.
+        let mut run_results: Vec<RunResult> =
+            (0..3).map(|_| run_result(0.5, None, 0.5, 5.0)).collect();
+        run_results[0].breakdown.heterotroph_shares = Some(shares(0.25, 0.0));
+        run_results[2].breakdown.heterotroph_shares = Some(shares(0.5, 0.125));
+        let result = EnsembleResult {
+            median_fitness: 0.5,
+            run_results,
+            unfinished: 0,
+        };
+        let eval = config_eval_from_ensemble(&result);
+        let expected = vec![shares(0.25, 0.0), shares(0.5, 0.125)];
+        assert_eq!(eval.heterotroph_shares, expected);
+
+        let mut archive = Archive::new(0.0);
+        archive.insert(&[0.5; 3], &eval);
+        let (_, rec) = archive.cells().next().unwrap();
+        assert_eq!(rec.heterotroph_shares, expected);
+    }
+
+    #[test]
+    fn heterotroph_shares_feed_neither_binning_nor_fitness() {
+        // The authority boundary (#602): two configs differing only in their
+        // heterotroph shares bin alike and improve the archive alike.
+        let d = descr(0.5, 0.6, 0.2);
+        let none = live(0.4, d);
+        let mut heavy = live(0.4, d);
+        heavy.heterotroph_shares = vec![shares(0.9, 0.05); 5];
+        let (mut a0, mut a1) = (Archive::new(0.0), Archive::new(0.0));
+        assert_eq!(a0.insert(&[0.5; 3], &none), a1.insert(&[0.5; 3], &heavy));
+        assert_eq!(a0.qd_score(), a1.qd_score());
+        assert_eq!(a0.cells().next().unwrap().0, a1.cells().next().unwrap().0);
+    }
+
+    /// Remove every `heterotroph_shares` key, as an artifact written before
+    /// #602 lacks it.
+    fn strip_shares(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(map) => {
+                map.remove("heterotroph_shares");
+                map.values_mut().for_each(strip_shares);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip_shares),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn an_archive_and_an_atlas_cell_from_before_the_shares_read_back_with_none() {
+        // The checkpoint carries the archive whole; the atlas carries its
+        // cells. Both, written before #602, read back with no shares.
+        let mut eval = live(0.4, descr(0.5, 0.6, 0.2));
+        eval.heterotroph_shares = vec![shares(0.25, 0.0)];
+        let mut archive = Archive::new(0.0);
+        archive.insert(&[0.5; 3], &eval);
+        let mut old = serde_json::to_value(&archive).unwrap();
+        strip_shares(&mut old);
+        let back: Archive = serde_json::from_value(old).unwrap();
+        let (_, rec) = back.cells().next().unwrap();
+        assert!(rec.heterotroph_shares.is_empty());
+        assert_eq!(rec.fitness, 0.4);
+
+        let mut old = serde_json::to_value(atlas_cell(0.1)).unwrap();
+        strip_shares(&mut old);
+        let back: AtlasCell = serde_json::from_value(old).unwrap();
+        assert!(back.heterotroph_shares.is_empty());
     }
 
     #[test]

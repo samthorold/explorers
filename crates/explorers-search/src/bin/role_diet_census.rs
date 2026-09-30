@@ -326,7 +326,7 @@ fn print_pool(name: &str, p: &Pool) {
     };
     let b = &p.balance;
     println!(
-        "\nTrophic balance (the evaluator's producer share of living energy) at the horizon, {} live seeds: median by tag {:.3}, by diet {:.3}; median diet − tag {:+.3}; {} seeds move by more than 0.05.",
+        "\nTrophic balance (the producer share of living energy, the evaluator's fitness term until #602) at the horizon, {} live seeds: median by tag {:.3}, by diet {:.3}; median diet − tag {:+.3}; {} seeds move by more than 0.05.",
         b.len(),
         median(b.iter().map(|x| x.0 as f64).collect()),
         median(b.iter().map(|x| x.1 as f64).collect()),

@@ -16,8 +16,7 @@ fn recipe() -> WorldRecipe {
     serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {path}: {e}"))
 }
 
-/// `(seed, fitness, oscillation, clustering, coexistence, turnover, trophic,
-/// carcass)` as `f32` bits. First pinned on `main` at 9b51a01; re-captured
+/// `(seed, fitness, oscillation, clustering, coexistence, turnover, carcass)` as `f32` bits. First pinned on `main` at 9b51a01; re-captured
 /// under #503 (the evaluator reads oscillation and coexistence off the
 /// settled window `(T/2, T]`, and the grace became an absolute tick count) —
 /// only fitness, oscillation and coexistence moved, and the guild read still
@@ -31,25 +30,27 @@ fn recipe() -> WorldRecipe {
 /// different world, not a changed read). Re-pinned under #601: `recipe.json`
 /// omits founder aggregation, so it now founds at the aggregated default
 /// (`0.8`, one tight patch per cluster) instead of the well-mixed scatter —
-/// a different founding, not a changed read. Re-capture with
+/// a different founding, not a changed read. Re-pinned under #602: trophic
+/// balance left fitness, so the column is gone and only fitness moved (the
+/// mean of four criteria, not a weighted five). Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
-const GOLDEN: [(u64, [u32; 7]); 3] = [
+const GOLDEN: [(u64, [u32; 6]); 3] = [
     (
         1,
         [
-            1055207641, 1032831114, 1065353216, 0, 1043073073, 1065353216, 1041937521,
+            1050574095, 1032831114, 1065353216, 0, 1043073073, 1041937521,
         ],
     ),
     (
         2,
         [
-            1055760914, 1040989355, 1065353216, 1008981770, 1043509281, 1065339551, 1029899150,
+            1051272519, 1040989355, 1065353216, 1008981770, 1043509281, 1029899150,
         ],
     ),
-    (3, [1046039285, 0, 0, 0, 1031396131, 1065353216, 1028847174]),
+    (3, [1014618915, 0, 0, 0, 1031396131, 1028847174]),
 ];
 
-fn readings(seed: u64) -> [u32; 7] {
+fn readings(seed: u64) -> [u32; 6] {
     let recipe = recipe();
     let run_config = RunConfig {
         max_ticks: recipe.max_ticks,
@@ -68,7 +69,6 @@ fn readings(seed: u64) -> [u32; 7] {
         b.clustering_strength.to_bits(),
         b.coexistence_duration.to_bits(),
         b.turnover_score.to_bits(),
-        b.trophic_balance_score.to_bits(),
         b.carcass_locked_fraction.to_bits(),
     ]
 }

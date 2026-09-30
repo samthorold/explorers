@@ -167,9 +167,9 @@ fn eval_one(recipe: &WorldRecipe, seed: u64, config: &EvalConfig) -> SeedObserva
             clustering_strength: breakdown.clustering_strength,
             coexistence_duration: breakdown.coexistence_duration,
             turnover_score: breakdown.turnover_score,
-            trophic_balance_score: breakdown.trophic_balance_score,
             fitness: breakdown.fitness,
         },
+        heterotroph_shares: breakdown.heterotroph_shares,
     }
 }
 

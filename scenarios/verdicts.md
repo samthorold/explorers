@@ -7,6 +7,13 @@ each scenario's declared `probes` / `prediction` (in its `metadata`), grounded s
 *reading*, not a pass/fail test — precise numbers are evidence for the read, not the
 gate.
 
+**#602 note.** Trophic balance is no longer a fitness term: `observed.json` carries no
+`trophic_balance_score` and fitness is the mean of the four remaining criteria, so every
+fitness quoted below predates that regeneration and reads higher than today's. No failure
+mode, criterion or demographic count moved, so no verdict moved. The `trophic_balance_score`
+readings below are historical; the per-seed `heterotroph_shares` now report trophic
+structure by role.
+
 **The verdict is the majority/supermajority read of a *distribution*, and that read lives
 here, not in the binary (#314).** `eval_scenarios` runs each scenario over a
 deterministic seed ensemble (`base_seed=1 .. base_seed+32` since #475, mirroring genesis's

@@ -494,11 +494,11 @@ mod tests {
                 clustering_strength: 0.0,
                 coexistence_duration,
                 turnover_score: 0.0,
-                trophic_balance_score: 0.0,
                 ticks_survived: 2000,
                 carcass_locked_fraction: 0.0,
                 has_decomposer_guild: decomposer,
                 has_consumer_guild: consumer,
+                heterotroph_shares: None,
             },
             early_stop: None,
         }
