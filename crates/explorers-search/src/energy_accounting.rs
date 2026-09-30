@@ -28,6 +28,7 @@ use explorers_sim::energy_ledger::EnergyEndpoint;
 use explorers_sim::event::{Event, EventKind};
 use explorers_sim::{Agent, FUNCTIONAL_TRAIT_COUNT, TraitVector, World, WorldParameters};
 
+use crate::grazer_hunger::{GrazerHunger, PreStep, Satiation};
 use crate::invasion::Lineage;
 
 /// The same flows as the stepper's own energy ledger credits them, summed
@@ -149,6 +150,11 @@ pub struct EnergyAccount {
     /// their birth, and of those, the ones grazed to death.
     pub infant_deaths: u64,
     pub infant_deaths_grazed: u64,
+    /// The grazers of members grazed to death, each (grazer, member) pair
+    /// read at drain time: kin when the grazer is itself a member, by trait
+    /// distance and the grazer's satiation (#606).
+    #[serde(default)]
+    pub killers: GrazerHunger,
     pub death_to_carcass: f64,
     pub death_dissipated: f64,
     pub stranded_earmark: f64,
@@ -386,6 +392,7 @@ impl LineageAccountant {
             .map(|(id, m)| (*id, world.nutrient_grid().cell_index_for(m.position)))
             .collect();
 
+        let pre_step = PreStep::capture(world);
         world.step();
         let events: Vec<Event> = world.event_log().since(self.cursor).to_vec();
         self.cursor = world.event_log().len();
@@ -396,6 +403,7 @@ impl LineageAccountant {
         let mut tick: HashMap<u64, MemberTick> =
             pre.keys().map(|id| (*id, MemberTick::default())).collect();
         let mut eaters_per_carcass: HashMap<u64, u64> = HashMap::new();
+        let mut grazers_of: HashMap<u64, Vec<u64>> = HashMap::new();
         for ev in &events {
             if ev.kind == EventKind::Consumed && ev.target_was_carcass {
                 *eaters_per_carcass
@@ -407,6 +415,10 @@ impl LineageAccountant {
                 && let Some(t) = ev.target.and_then(|t| tick.get_mut(&t))
             {
                 t.grazed += ev.energy_delta as f64;
+                let grazers = grazers_of.entry(ev.target.expect("target")).or_default();
+                if !grazers.contains(&ev.source) {
+                    grazers.push(ev.source);
+                }
                 if pre.contains_key(&ev.source) {
                     t.grazed_by_kin += ev.energy_delta as f64;
                 }
@@ -500,6 +512,7 @@ impl LineageAccountant {
             .filter(|c| !carcasses.contains_key(&c.id))
             .map(|c| (c.id, c.energy as f64))
             .collect();
+        let mut drain_time: Option<HashMap<u64, Satiation>> = None;
         a.member_ticks += pre.len() as u64;
         for (id, m) in &pre {
             let t = &tick[id];
@@ -558,6 +571,20 @@ impl LineageAccountant {
                         a.deaths_starved += 1;
                     } else if grazed_to_death {
                         a.deaths_grazed += 1;
+                        let satiation = drain_time.get_or_insert_with(|| {
+                            pre_step
+                                .drain_time_agents(&p)
+                                .iter()
+                                .map(|x| (x.id, Satiation::of(x, &p)))
+                                .collect()
+                        });
+                        for g in grazers_of.get(id).into_iter().flatten() {
+                            a.killers.record(
+                                pre.contains_key(g),
+                                m.traits.distance(&agent_traits[g]),
+                                satiation[g],
+                            );
+                        }
                     }
                     if let Some(born) = self.born_at.get(id)
                         && world.tick() - born <= INFANT_TICKS
@@ -739,6 +766,11 @@ mod tests {
         assert!(a.deaths_starved + a.deaths_grazed <= a.deaths);
         assert!(a.infant_deaths_grazed <= a.infant_deaths && a.infant_deaths <= a.deaths);
         assert!(a.grazed_by_kin <= a.grazed);
+        let k = a.killers;
+        assert!(
+            k.total(true) + k.total(false) >= a.deaths_grazed,
+            "every grazed-to-death member has a killing grazer: {k:?}"
+        );
         let throughput = a.income() + a.outgo() + a.births_endowment;
         let tol = 1e-4 * throughput.max(1.0);
         assert!(
@@ -801,5 +833,34 @@ mod tests {
             dist.initial_energy_per_agent,
         );
         assert_account_reconciles(world, ids, 60);
+    }
+
+    /// The killing grazers of members grazed to death are read at drain time
+    /// (#606): a tight cohort of near-producers with raised heterotrophy
+    /// breeds and grazes its own young, and each such death books its
+    /// grazers by kinship (a lineage member), trait distance and satiation.
+    #[test]
+    fn account_reads_the_killing_grazers_of_members_grazed_to_death() {
+        let sampled = sampled_units(default_ranges().len());
+        let (params, dist) =
+            resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        let mut world = World::new(params, dist.clone(), 1000);
+        for _ in 0..120 {
+            world.step();
+        }
+        let traits = TraitVector {
+            heterotrophy: dist.mean_traits.heterotrophy + 0.3,
+            ..dist.mean_traits
+        };
+        let positions: Vec<(f32, f32)> = (0..8).map(|i| (0.2 * i as f32, 0.0)).collect();
+        let ids = place_cohort(
+            &mut world,
+            traits,
+            &positions,
+            dist.initial_energy_per_agent,
+        );
+        let a = assert_account_reconciles(world, ids, 300);
+        assert!(a.deaths_grazed > 0, "{a:#?}");
+        assert!(a.killers.total(true) > 0, "{:?}", a.killers);
     }
 }

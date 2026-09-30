@@ -88,6 +88,14 @@
 //! its own dispersal, next to the infant grazing and kin-grazed energy.
 //! Artifact `target/self-grazing-dispersal.json`.
 //!
+//! ## Killing grazers (#606)
+//!
+//! Both accounted modes also read, for every member grazed to death, each
+//! grazer's satiation in the drain pass (replayed exactly,
+//! [`explorers_search::grazer_hunger`]), its trait distance to the member,
+//! and whether it is itself a member (kin). Printed after the accounting
+//! tables.
+//!
 //! Run with:
 //!   cargo run --release -p explorers-search --bin reinvasion_barrier -- sample:31
 //!   cargo run --release -p explorers-search --bin reinvasion_barrier -- sample:31 --accounting
@@ -109,6 +117,7 @@ use explorers_search::config_source::{
     with_founder_aggregation,
 };
 use explorers_search::energy_accounting::{EnergyAccount, LineageAccountant};
+use explorers_search::grazer_hunger::{GrazerHunger, RECOGNITION_BANDS, SATIATION_EDGES};
 use explorers_search::invasion::{
     ConsumedCounts, DrainedEnergy, Lineage, RateSummary, SERIES_INTERVAL, WindowOutcome,
     growth_rate, median, place_cohort, run_window, summarise_rates,
@@ -1470,6 +1479,56 @@ fn print_accounting(a: &Artifact) {
             med(r, |x| x.stranded_earmark),
             max_residual,
             max_ledger,
+        );
+    }
+    println!(
+        "\n# Killing grazers (#606): (grazer, member) pairs of members grazed to death, summed over seeds, by the grazer's drain-time satiation (ticks of maintenance in its scarcer currency; < 10 is under half expression at c = 0.1: hungry). Kin = the grazer is a member."
+    );
+    let sat = SATIATION_EDGES
+        .iter()
+        .scan(0.0, |lo, e| {
+            let l = format!("s {lo}–{e}");
+            *lo = *e;
+            Some(l)
+        })
+        .chain(std::iter::once(format!(
+            "s ≥ {}",
+            SATIATION_EDGES[SATIATION_EDGES.len() - 1]
+        )))
+        .collect::<Vec<_>>();
+    println!(
+        "\n| row | kin pairs | hungry | within d < 0.5 | nutrient-limited | {} | non-kin pairs | hungry |",
+        sat.join(" | ")
+    );
+    println!(
+        "|---|---:|---:|---:|---:|{}---:|---:|",
+        "---:|".repeat(sat.len())
+    );
+    for r in &rows {
+        let mut k = GrazerHunger::default();
+        for x in &r.accounts {
+            k.merge(&x.killers);
+        }
+        let (kin, non) = (k.total(true), k.total(false));
+        let share = |n: u64, d: u64| {
+            if d == 0 {
+                "–".to_string()
+            } else {
+                format!("{:.0}%", 100.0 * n as f64 / d as f64)
+            }
+        };
+        println!(
+            "| {} | {kin} | {} | {} | {} | {} | {non} | {} |",
+            r.label,
+            share(k.hungry(true), kin),
+            share(k.within(true, RECOGNITION_BANDS), kin),
+            share(k.nutrient_limited[1].iter().sum(), kin),
+            k.by_satiation(true)
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(" | "),
+            share(k.hungry(false), non),
         );
     }
 }

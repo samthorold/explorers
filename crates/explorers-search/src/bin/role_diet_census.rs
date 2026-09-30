@@ -13,6 +13,10 @@
 //!   reads;
 //! - every death, attributed to trait producers, light-fed trait
 //!   heterotrophs and the rest, by infant / grazed / grazed by kin.
+//! - every grazed death's (grazer, victim) pairs, by kinship, trait
+//!   distance and the grazer's drain-time satiation
+//!   ([`explorers_search::grazer_hunger`], #606), and every birth's trait
+//!   distance to its parents.
 //!
 //! Configs and seeds as `guild_census`: the atlas cells (`--atlas PATH`),
 //! the LHS sample, or `--configs` (`sample@S:i` for another draw); the seed
@@ -39,6 +43,10 @@ use explorers_genesis::EvalConfig;
 use explorers_search::config_source::{
     ConfigSource, parse_founder_aggregation, parse_selector, resolve_config, sampled_units,
     with_founder_aggregation,
+};
+use explorers_search::grazer_hunger::{
+    DISTANCE_BANDS, DISTANCE_EDGES, GrazerHunger, HUNGRY_BANDS, RECOGNITION_BANDS, SATIATION_BANDS,
+    SATIATION_EDGES, TraitDistances,
 };
 use explorers_search::role_diet::{
     Confusion, DeathCounts, DeathTable, LIGHT_SHARE_BINS, PRODUCER_LIGHT_SHARE, SeedDiet, rollout,
@@ -103,6 +111,10 @@ struct Pool {
     guild_cross: [[usize; 3]; 3],
     /// Live seeds' terminal trophic balance, (tag read, diet read).
     balance: Vec<(f32, f32)>,
+    /// Killing grazers by kinship, distance and drain-time satiation (#606).
+    kills: GrazerHunger,
+    /// Parent–offspring trait distances (#606).
+    births: TraitDistances,
 }
 
 fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
@@ -129,6 +141,8 @@ fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
                 *a += b;
             }
             p.deaths.merge(&s.deaths);
+            p.kills.merge(&s.kills);
+            p.births.merge(&s.births);
             if let (None, Some(t), Some(d)) =
                 (&s.failure, s.trophic_balance_tag, s.trophic_balance_diet)
             {
@@ -370,6 +384,84 @@ fn print_pool(name: &str, p: &Pool) {
         "trait heterotrophs, no income yet",
         &p.deaths.trait_heterotroph_no_income,
     );
+    print_kills(&p.kills, &p.births);
+}
+
+/// Band labels from upper edges: `[0, e0)`, …, `≥ eN`.
+fn band_labels(edges: &[f32]) -> Vec<String> {
+    let mut out = Vec::with_capacity(edges.len() + 1);
+    let mut lo = 0.0;
+    for e in edges {
+        out.push(format!("{lo}–{e}"));
+        lo = *e;
+    }
+    out.push(format!("≥ {lo}"));
+    out
+}
+
+/// The killing grazers' hunger (#606): (grazer, victim) pairs of grazed
+/// deaths, by kinship and trait distance, against the grazer's satiation in
+/// the drain pass (ticks of maintenance in its scarcer currency).
+fn print_kills(k: &GrazerHunger, births: &TraitDistances) {
+    let sat = band_labels(&SATIATION_EDGES);
+    let dist = band_labels(&DISTANCE_EDGES);
+    println!(
+        "\nKilling grazers (#606): (grazer, victim) pairs of grazed deaths by the grazer's drain-time satiation, in ticks of maintenance in its scarcer currency (< 10 = under half expression at c = 0.1: hungry).\n"
+    );
+    println!(
+        "| pairs | total | hungry (< 10) | within d < 0.5 | {} | nutrient-limited |",
+        sat.iter()
+            .map(|l| format!("s {l}"))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+    println!(
+        "|---|---:|---:|---:|{}---:|",
+        "---:|".repeat(SATIATION_BANDS)
+    );
+    for (label, kin) in [("kin", true), ("non-kin", false)] {
+        let total = k.total(kin);
+        let by = k.by_satiation(kin);
+        let nl: u64 = k.nutrient_limited[usize::from(kin)].iter().sum();
+        println!(
+            "| {label} | {total} | {} ({}%) | {} ({}%) | {} | {} ({}%) |",
+            k.hungry(kin),
+            pct(k.hungry(kin), total),
+            k.within(kin, RECOGNITION_BANDS),
+            pct(k.within(kin, RECOGNITION_BANDS), total),
+            by.iter()
+                .map(|n| format!("{n}"))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            nl,
+            pct(nl, total),
+        );
+    }
+    println!("\n| pairs by trait distance | {} |", dist.join(" | "));
+    println!("|---|{}", "---:|".repeat(DISTANCE_BANDS));
+    for (label, kin) in [("kin", true), ("non-kin", false)] {
+        let by = k.by_distance(kin);
+        let hungry: Vec<String> = k.pairs[usize::from(kin)]
+            .iter()
+            .zip(by)
+            .map(|(row, n)| {
+                let h: u64 = row[..HUNGRY_BANDS].iter().sum();
+                format!("{n} ({}% hungry)", pct(h, n))
+            })
+            .collect();
+        println!("| {label} | {} |", hungry.join(" | "));
+    }
+    println!(
+        "\nParent–offspring trait distance over {} births: mean {}, rms {}; by band {}.",
+        births.count(),
+        births.mean().map_or("–".into(), |m| format!("{m:.4}")),
+        births.rms().map_or("–".into(), |m| format!("{m:.4}")),
+        dist.iter()
+            .zip(births.bands)
+            .map(|(l, n)| format!("{l}: {n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 }
 
 fn print_summary(rows: &[Row]) {
@@ -415,11 +507,33 @@ fn print_summary(rows: &[Row]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use explorers_search::grazer_hunger::Satiation;
+    use explorers_sim::TraitVector;
 
     fn seed(tag: [bool; 3], diet: [bool; 3], failure: Option<&str>) -> SeedDiet {
         let mut confusion = Confusion::default();
         confusion.0[1][0] = 3;
         confusion.0[1][1] = 1;
+        let mut kills = GrazerHunger::default();
+        kills.record(
+            true,
+            0.05,
+            Satiation {
+                energy: 2.0,
+                nutrient: 0.5,
+            },
+        );
+        let mut births = TraitDistances::default();
+        let t = TraitVector {
+            photosynthetic_absorption: 1.0,
+            heterotrophy: 0.0,
+            mobility: 0.0,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 0.5,
+            dispersal: 0.3,
+        };
+        births.record(&t, &t);
         SeedDiet {
             seed: 0,
             failure: failure.map(String::from),
@@ -431,6 +545,8 @@ mod tests {
             deaths: DeathTable::default(),
             trophic_balance_tag: Some(0.5),
             trophic_balance_diet: Some(0.9),
+            kills,
+            births,
         }
     }
 
@@ -465,6 +581,9 @@ mod tests {
         assert_eq!(p.light_share[9], 9);
         assert_eq!((p.configs, p.seeds), (1, 3));
         assert_eq!(p.balance, vec![(0.5, 0.9), (0.5, 0.9)], "live seeds only");
+        assert_eq!(p.kills.pairs[1][0][0], 3, "kills summed over seeds");
+        assert_eq!(p.kills.nutrient_limited[1][0], 3);
+        assert_eq!(p.births.count(), 3);
     }
 
     #[test]

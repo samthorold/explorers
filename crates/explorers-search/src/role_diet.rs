@@ -40,6 +40,8 @@ use explorers_sim::event::{Event, EventKind};
 use explorers_sim::topology::{DETRITAL_RELIANCE_THRESHOLD, TopologyProjection, TrophicRole};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 
+use crate::grazer_hunger::{GrazerHunger, PreStep, Satiation, TraitDistances};
+
 /// A death at or below this age (ticks from birth) is an infant death, as
 /// #591's accountant counts it.
 pub const INFANT_AGE: u64 = 50;
@@ -145,6 +147,8 @@ pub struct DietLedger {
     parents: HashMap<u64, [Option<u64>; 2]>,
     children: HashMap<u64, Vec<u64>>,
     deaths: DeathTable,
+    kills: GrazerHunger,
+    births: TraitDistances,
 }
 
 impl DietLedger {
@@ -165,8 +169,10 @@ impl DietLedger {
 
     /// Book one stepped tick: `events` are the log's events of that tick and
     /// `world` is the state after it. Births are recorded before deaths are
-    /// attributed, so a grazer born this tick still counts as kin.
-    pub fn ingest(&mut self, world: &World, events: &[Event]) {
+    /// attributed, so a grazer born this tick still counts as kin. With the
+    /// tick's [`PreStep`], every (grazer, victim) pair of a grazed death is
+    /// tallied by the grazer's drain-time satiation ([`DietLedger::kills`]).
+    pub fn ingest(&mut self, world: &World, events: &[Event], pre: Option<&PreStep>) {
         let mut grazers: HashMap<u64, Vec<u64>> = HashMap::new();
         let mut died: Vec<(u64, u64)> = Vec::new();
         for e in events {
@@ -197,6 +203,23 @@ impl DietLedger {
                 _ => {}
             }
         }
+        self.record_births(world, events);
+        let mut drain_time: Option<HashMap<u64, Satiation>> = None;
+        // Every kill is read before any death is attributed: a grazer that
+        // died this tick too is still on the ledger.
+        for &(id, _) in &died {
+            let by = grazers.get(&id).map(Vec::as_slice).unwrap_or(&[]);
+            if let (Some(pre), false) = (pre, by.is_empty()) {
+                let satiation = drain_time.get_or_insert_with(|| {
+                    let params = world.params();
+                    pre.drain_time_agents(params)
+                        .iter()
+                        .map(|a| (a.id, Satiation::of(a, params)))
+                        .collect()
+                });
+                self.record_kills(id, by, satiation);
+            }
+        }
         for (id, tick) in died {
             let by = grazers.get(&id).map(Vec::as_slice).unwrap_or(&[]);
             self.attribute_death(id, tick, by);
@@ -215,6 +238,49 @@ impl DietLedger {
                 .iter()
                 .flatten()
                 .any(|p| pb.iter().flatten().any(|q| p == q))
+    }
+
+    /// Each birth's trait distance to each of its parents.
+    fn record_births(&mut self, world: &World, events: &[Event]) {
+        let born: Vec<&Event> = events
+            .iter()
+            .filter(|e| e.kind == EventKind::Born)
+            .collect();
+        if born.is_empty() {
+            return;
+        }
+        let roster: HashMap<u64, TraitVector> =
+            world.agents().iter().map(|a| (a.id, a.traits)).collect();
+        for e in born {
+            let Some(child) = roster.get(&e.source) else {
+                continue;
+            };
+            for p in [e.target, e.second_parent].into_iter().flatten() {
+                if let Some(parent) = self.traits.get(&p) {
+                    self.births.record(parent, child);
+                }
+            }
+        }
+    }
+
+    /// Tally each grazer of a grazed death by kinship, trait distance to the
+    /// victim and drain-time satiation.
+    fn record_kills(&mut self, victim: u64, grazers: &[u64], satiation: &HashMap<u64, Satiation>) {
+        let Some(traits) = self.traits.get(&victim).copied() else {
+            return;
+        };
+        let mut seen: Vec<u64> = Vec::with_capacity(grazers.len());
+        for &g in grazers {
+            if seen.contains(&g) {
+                continue;
+            }
+            seen.push(g);
+            let (Some(s), Some(gt)) = (satiation.get(&g), self.traits.get(&g)) else {
+                continue;
+            };
+            self.kills
+                .record(self.is_kin(victim, g), traits.distance(gt), *s);
+        }
     }
 
     fn attribute_death(&mut self, id: u64, tick: u64, grazers: &[u64]) {
@@ -243,6 +309,18 @@ impl DietLedger {
 
     pub fn deaths(&self) -> &DeathTable {
         &self.deaths
+    }
+
+    /// (grazer, victim) pairs of grazed deaths by the grazer's drain-time
+    /// satiation (booked only when [`DietLedger::ingest`] had the tick's
+    /// [`PreStep`]).
+    pub fn kills(&self) -> &GrazerHunger {
+        &self.kills
+    }
+
+    /// Parent–offspring trait distances.
+    pub fn births(&self) -> &TraitDistances {
+        &self.births
     }
 }
 
@@ -294,6 +372,13 @@ pub struct SeedDiet {
     pub trophic_balance_tag: Option<f32>,
     #[serde(default)]
     pub trophic_balance_diet: Option<f32>,
+    /// Every grazed death's (grazer, victim) pairs, by kinship, trait
+    /// distance and the grazer's satiation in the drain pass (#606).
+    #[serde(default)]
+    pub kills: GrazerHunger,
+    /// Every birth's trait distance to each parent (#606).
+    #[serde(default)]
+    pub births: TraitDistances,
 }
 
 fn guild_flags(g: RoleGuilds) -> [bool; 3] {
@@ -348,10 +433,11 @@ pub fn rollout(
     let mut light_share = [0u64; LIGHT_SHARE_BINS];
     let mut stopped: Option<FailureMode> = None;
     for _ in 0..max_ticks {
+        let pre = PreStep::capture(&world);
         world.step();
         let tail: Vec<Event> = world.event_log().since(cursor).to_vec();
         cursor = world.event_log().len();
-        ledger.ingest(&world, &tail);
+        ledger.ingest(&world, &tail, Some(&pre));
         topology.update(world.event_log());
         let sampled_before = observations.role_snapshots.len();
         observations.observe(&world, interval);
@@ -445,6 +531,8 @@ pub fn rollout(
         deaths: *ledger.deaths(),
         trophic_balance_tag,
         trophic_balance_diet,
+        kills: *ledger.kills(),
+        births: *ledger.births(),
     }
 }
 
@@ -514,7 +602,7 @@ mod tests {
         let child = 10_000;
         let mut born = event(5, EventKind::Born, child, Some(parent), 0.0);
         born.second_parent = None;
-        ledger.ingest(&world, &[born]);
+        ledger.ingest(&world, &[born], None);
         ledger.traits.insert(child, world.agents()[0].traits);
         let mut carcass = event(6, EventKind::Consumed, parent, Some(99), 0.5);
         carcass.target_was_carcass = true;
@@ -527,6 +615,7 @@ mod tests {
                 event(6, EventKind::Consumed, stranger, Some(child), 0.25),
                 event(6, EventKind::Died, child, None, 0.0),
             ],
+            None,
         );
         assert_eq!(
             ledger.income(parent),
@@ -560,6 +649,7 @@ mod tests {
                 event(7, EventKind::Born, 10_001, Some(parent), 0.0),
                 event(7, EventKind::Born, 10_002, Some(parent), 0.0),
             ],
+            None,
         );
         assert!(ledger.is_kin(10_001, 10_002));
     }
@@ -616,5 +706,34 @@ mod tests {
             producer_guilds > 0,
             "a guild that holds is pinned, not only absences"
         );
+    }
+
+    /// The census reads each killing graze's grazer at drain time (#606):
+    /// every grazed death contributes at least one (grazer, victim) pair and
+    /// every kin-grazed death a kin pair; births are read against their
+    /// parents' traits; and the read is deterministic and leaves the rollout
+    /// untouched.
+    #[test]
+    fn rollout_tallies_killing_grazers_hunger_and_birth_distances() {
+        let (params, dist) = sample_31();
+        let eval = EvalConfig::default();
+        let ours = rollout(&params, &dist, 1000, 300, &eval);
+        let d = ours.deaths;
+        let all = [
+            d.trait_producer,
+            d.trait_heterotroph_light_fed,
+            d.trait_heterotroph_diet_fed,
+            d.trait_heterotroph_no_income,
+        ];
+        let grazed: u64 = all.iter().map(|c| c.grazed).sum();
+        let by_kin: u64 = all.iter().map(|c| c.grazed_by_kin).sum();
+        let k = ours.kills;
+        assert!(grazed > 0 && by_kin > 0, "{d:?}");
+        assert!(k.total(true) + k.total(false) >= grazed, "{k:?}");
+        assert!(k.total(true) >= by_kin, "{k:?}");
+        let births = ours.births;
+        assert!(births.count() > 0);
+        assert!(births.mean().unwrap() < 0.5, "{births:?}");
+        assert_eq!(ours, rollout(&params, &dist, 1000, 300, &eval));
     }
 }
