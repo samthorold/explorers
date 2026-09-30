@@ -18,7 +18,7 @@ How the crates divide responsibility (sim = pure deterministic stepper; genesis/
 
 ### Delivery workflow
 
-grill-with-docs → to-issues → one TDD slice per PR, squash-merged. Durable knowledge goes in committed docs, never only in agent memory. See `docs/agents/delivery-workflow.md`.
+grill-with-docs → to-issues → one TDD slice per PR, squash-merged. Iterate with `cargo test -p <crate> -- --skip slow_`; run the workspace before committing. Durable knowledge goes in committed docs, never only in agent memory. See `docs/agents/delivery-workflow.md`.
 
 ### Project vision
 
