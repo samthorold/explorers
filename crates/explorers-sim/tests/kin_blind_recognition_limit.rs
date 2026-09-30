@@ -1,10 +1,10 @@
-//! The flat limiting case of need-gated consumption (#600): at
-//! `satiation_sensitivity = 0` every consumer expresses its full heterotrophic
-//! capability, so worlds step exactly as they did before need-gating. The
-//! fingerprints below were taken from the pre-need-gating stepper (main at
-//! f6a1c1f) running the same scenarios, seeds and horizons; a flat gate must
-//! reproduce them bit for bit. That stepper also predates recognition (#604),
-//! so the flat run is kin-blind too (`recognition_distance = 0`).
+//! The kin-blind limiting case of recognition (#604): at
+//! `recognition_distance = 0` no living target resembles its consumer, so
+//! worlds step exactly as they did before recognition. The fingerprints below
+//! were taken from the pre-recognition stepper (main at c095f04, need-gated
+//! consumption at the default satiation sensitivity) running the same
+//! scenarios, seeds and horizons; a kin-blind world must reproduce them bit
+//! for bit.
 
 use explorers_sim::{World, WorldRecipe};
 
@@ -48,29 +48,35 @@ fn fingerprint(world: &World) -> u64 {
     h
 }
 
-/// The scenarios, seeds and horizons, with the pre-need-gating fingerprint of
+/// The scenarios, seeds and horizons, with the pre-recognition fingerprint of
 /// each.
-const PINNED: [(&str, u64, u64, u64); 3] = [
-    ("example4.json", 7, 200, 0x5b79_dab7_1a9d_0b82),
+const PINNED: [(&str, u64, u64, u64); 5] = [
+    ("example4.json", 7, 200, 0x6e9d_d215_9f72_ddb0),
     (
         "example9_detrital_pathway.json",
         11,
         200,
-        0x691b_a488_6ebf_7c69,
+        0x2fde_47d6_42f8_6ae4,
     ),
     (
         "example10_predator_prey_hopf.json",
         3,
         200,
-        0x8eae_0217_0bec_ce73,
+        0x2d39_3fb0_a74d_59a7,
+    ),
+    ("example13_closed_web.json", 5, 200, 0xaa58_bd9d_8728_d0f8),
+    (
+        "example11_branching_coexistence.json",
+        2,
+        200,
+        0xc92d_6164_6204_61c6,
     ),
 ];
 
-fn run(scenario: &str, seed: u64, ticks: u64, satiation_sensitivity: Option<f32>) -> u64 {
+fn run(scenario: &str, seed: u64, ticks: u64, recognition_distance: Option<f32>) -> u64 {
     let mut recipe = load_recipe(scenario);
-    if let Some(c) = satiation_sensitivity {
-        recipe.parameters.satiation_sensitivity = c;
-        recipe.parameters.recognition_distance = 0.0;
+    if let Some(d) = recognition_distance {
+        recipe.parameters.recognition_distance = d;
     }
     let mut world = World::from_recipe(&recipe, seed);
     for _ in 0..ticks {
@@ -80,23 +86,27 @@ fn run(scenario: &str, seed: u64, ticks: u64, satiation_sensitivity: Option<f32>
 }
 
 #[test]
-fn a_flat_satiation_response_reproduces_the_ungated_stepper() {
+fn a_zero_recognition_distance_reproduces_the_kin_blind_stepper() {
     for (scenario, seed, ticks, pinned) in PINNED {
         let got = run(scenario, seed, ticks, Some(0.0));
         assert_eq!(
             got, pinned,
-            "{scenario} seed {seed}: flat gate {got:#018x} != pre-need-gating {pinned:#018x}"
+            "{scenario} seed {seed}: kin-blind {got:#018x} != pre-recognition {pinned:#018x}"
         );
     }
 }
 
 #[test]
-fn the_default_satiation_response_gates_these_worlds() {
-    // The pin above has teeth only if these worlds feed: under the default
-    // (gated) response at least one of them must leave the ungated trajectory.
+fn the_default_recognition_distance_changes_these_worlds() {
+    // The pin above has teeth only if these worlds graze resembling targets:
+    // under the default recognition distance at least one of them must leave
+    // the kin-blind trajectory.
     let moved = PINNED
         .iter()
         .filter(|&&(scenario, seed, ticks, pinned)| run(scenario, seed, ticks, None) != pinned)
         .count();
-    assert!(moved > 0, "no pinned world is changed by the default gate");
+    assert!(
+        moved > 0,
+        "no pinned world is changed by default recognition"
+    );
 }

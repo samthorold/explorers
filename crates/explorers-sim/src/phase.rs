@@ -263,6 +263,48 @@ pub fn consumption_expression(agent: &Agent, params: &WorldParameters) -> f32 {
     need / (need + c * usable)
 }
 
+/// The share of its heterotrophic capability a consumer withholds from an
+/// identical living target (recognition; world-rules.md, "Recognition: living
+/// targets that resemble the consumer are spared"). Recognition subtracts
+/// `RECOGNITION_RESTRAINT × resemblance` from the consumer's expression toward
+/// a living target, floored at zero: a consumer whose expression is at or below
+/// that share spares the target entirely, and a starving one (expression 1)
+/// still drains an identical target at `1 − RECOGNITION_RESTRAINT` of
+/// capability — hunger relaxes the suppression, but only partially. At 0.5 an
+/// identical target is fully spared from the half-expression point on (`1 /
+/// satiation_sensitivity` ticks of maintenance held), so recognition and need
+/// share one satiation scale and add no search dimension.
+pub const RECOGNITION_RESTRAINT: f32 = 0.5;
+
+/// How closely a target resembles a consumer, for recognition: `1` at zero
+/// trait distance, falling smoothly to `0` at the `recognition_distance` (on
+/// the reproductive compatibility distance's metric, `TraitVector::distance`),
+/// and `0` beyond it or when the distance is zero (the kin-blind limit). The
+/// kernel `(1 − (d/D)²)²` is flat at identity and meets zero with zero slope,
+/// so neither end introduces a kink.
+pub fn resemblance(consumer: &TraitVector, target: &TraitVector, params: &WorldParameters) -> f32 {
+    let reach = params.recognition_distance;
+    if reach <= 0.0 {
+        return 0.0;
+    }
+    let x = consumer.distance(target) / reach;
+    if x >= 1.0 {
+        return 0.0;
+    }
+    let q = 1.0 - x * x;
+    q * q
+}
+
+/// The fraction of its capability a consumer expresses toward a **living**
+/// target: its need-gated expression less the recognition restraint the
+/// target's resemblance calls for, floored at zero. Carcasses are never
+/// spared — the carcass pass uses the need-gated expression alone. Exactly
+/// `expression` when the target does not resemble the consumer (including the
+/// kin-blind limit, `recognition_distance = 0`).
+fn living_target_expression(expression: f32, resemblance: f32) -> f32 {
+    (expression - RECOGNITION_RESTRAINT * resemblance).max(0.0)
+}
+
 /// The reserve energy an agent's free (unearmarked) nutrient can match when
 /// built into structure: `N / (growth_efficiency × ratio)`, the inverse of the
 /// grow phase's nutrient binding. Infinite when growth binds no nutrient.
@@ -804,14 +846,25 @@ pub fn resolve_drains(
                 // target's structural death threshold, not from contact duration.
                 // Drain in structure (energy) per tick: the heterotrophy
                 // anchor u_H (#459).
-                // Capability scaled by need-gated expression: the proportional
-                // split below operates on this expressed demand.
+                // Capability scaled by need-gated expression, less the
+                // recognition restraint toward a living target that resembles
+                // the consumer: the proportional split below operates on this
+                // expressed demand.
+                let expression = living_target_expression(
+                    consumer_expression[consumer_idx],
+                    resemblance(
+                        &agents[consumer_idx].traits,
+                        &agents[target_idx].traits,
+                        params,
+                    ),
+                );
                 let demand = eff_heterotrophy
                     * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK
-                    * consumer_expression[consumer_idx];
-                // A fully sated consumer expresses no drain: it is not a
-                // consumer of this target this tick (and must not enter the
-                // proportional split, where an all-zero demand would be 0/0).
+                    * expression;
+                // A fully sated consumer, or one sparing a resembling target,
+                // expresses no drain: it is not a consumer of this target this
+                // tick (and must not enter the proportional split, where an
+                // all-zero demand would be 0/0).
                 if demand <= 0.0 {
                     continue;
                 }
@@ -2042,6 +2095,9 @@ mod tests {
             // Flat (ungated) drain: these tests pin drain mechanics; need-gating
             // tests set the sensitivity explicitly.
             satiation_sensitivity: 0.0,
+            // Kin-blind: these tests pin drain mechanics; recognition tests
+            // set the distance explicitly.
+            recognition_distance: 0.0,
         }
     }
 
@@ -4497,6 +4553,185 @@ mod tests {
             drained_by(&result, 2),
             drained_by(&result, 1)
         );
+    }
+
+    // --- Recognition (world-rules.md, "Recognition: living targets that
+    // resemble the consumer are spared") ---
+
+    /// What `consumer_id` drained from `target_id` in one drain pass.
+    fn drained_from(result: &DrainResult, consumer_id: u64, target_id: u64) -> f32 {
+        result
+            .events
+            .iter()
+            .filter(|e| {
+                e.kind == EventKind::Consumed
+                    && e.source == consumer_id
+                    && e.target == Some(target_id)
+            })
+            .map(|e| e.energy_delta)
+            .sum()
+    }
+
+    /// A mixotroph parent's traits, and a newborn a small mutation from it.
+    fn parent_traits() -> TraitVector {
+        TraitVector {
+            photosynthetic_absorption: 0.5,
+            heterotrophy: 0.4,
+            ..zero_traits()
+        }
+    }
+
+    fn newborn_traits() -> TraitVector {
+        TraitVector {
+            photosynthetic_absorption: 0.52,
+            ..parent_traits()
+        }
+    }
+
+    /// A producer far from the parent in trait space (distance ~1.0, beyond
+    /// the default recognition distance).
+    fn stranger_traits() -> TraitVector {
+        TraitVector {
+            photosynthetic_absorption: 0.9,
+            mobility: 0.8,
+            ..zero_traits()
+        }
+    }
+
+    const PARENT: u64 = 1;
+    const NEWBORN: u64 = 2;
+    const STRANGER: u64 = 3;
+
+    /// Need-gated, recognising params (the defaults' shape).
+    fn recognition_params() -> WorldParameters {
+        let mut params = test_params();
+        params.satiation_sensitivity = 0.1;
+        params.recognition_distance = 0.5;
+        params
+    }
+
+    /// One drain pass: a parent holding `parent_reserve` beside its newborn
+    /// and a trait-distant living stranger, both within its reach. Carcasses
+    /// in reach may be supplied.
+    fn parent_among_kin_and_strangers(
+        parent_reserve: f32,
+        mut carcasses: Vec<Carcass>,
+        params: &WorldParameters,
+    ) -> DrainResult {
+        let mut newborn = make_agent(NEWBORN, (1.0, 0.0), 1.0, newborn_traits());
+        newborn.structure = 50.0;
+        let mut stranger = make_agent(STRANGER, (-1.0, 0.0), 1.0, stranger_traits());
+        stranger.structure = 50.0;
+        let mut agents = vec![
+            make_agent(PARENT, (0.0, 0.0), parent_reserve, parent_traits()),
+            newborn,
+            stranger,
+        ];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            params,
+            &mut nutrient_grid,
+        )
+    }
+
+    #[test]
+    fn a_sated_parent_spares_its_newborn_but_grazes_a_stranger() {
+        // Parent holds 500 ticks of maintenance: sated. Its newborn sits in
+        // reach, a small mutation away; a trait-distant producer sits in reach
+        // on the other side.
+        let result = parent_among_kin_and_strangers(50.0, Vec::new(), &recognition_params());
+        assert_eq!(
+            drained_from(&result, PARENT, NEWBORN),
+            0.0,
+            "a sated parent does not graze its near-identical newborn"
+        );
+        assert!(
+            drained_from(&result, PARENT, STRANGER) > 0.0,
+            "the same parent grazes a trait-distant living neighbour"
+        );
+    }
+
+    #[test]
+    fn a_starving_parent_grazes_its_newborn_at_a_reduced_but_nonzero_rate() {
+        // Hunger relaxes recognition, but only partially: an empty parent
+        // (full expression) still drains its newborn, less than it drains the
+        // stranger beside it.
+        let result = parent_among_kin_and_strangers(0.0, Vec::new(), &recognition_params());
+        let kin = drained_from(&result, PARENT, NEWBORN);
+        let stranger = drained_from(&result, PARENT, STRANGER);
+        assert!(kin > 0.0, "a starving parent still grazes its newborn");
+        assert!(
+            kin < stranger,
+            "but at a reduced rate: newborn {kin}, stranger {stranger}"
+        );
+    }
+
+    #[test]
+    fn hunger_relaxes_recognition_smoothly() {
+        // Sweeping the parent's reserve from empty to sated, its drain on the
+        // newborn falls continuously to zero — no step anywhere.
+        let params = recognition_params();
+        let capability = 0.4 * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+        let drains: Vec<f32> = (0..=2000)
+            .map(|i| {
+                let result = parent_among_kin_and_strangers(i as f32 * 0.01, Vec::new(), &params);
+                drained_from(&result, PARENT, NEWBORN)
+            })
+            .collect();
+        assert!(drains[0] > 0.0);
+        assert_eq!(drains[2000], 0.0);
+        for w in drains.windows(2) {
+            assert!(w[1] <= w[0], "kin drain never rises with satiation: {w:?}");
+            assert!(w[0] - w[1] < 0.01 * capability, "no jump: {w:?}");
+        }
+    }
+
+    #[test]
+    fn a_carcass_of_the_consumers_own_traits_is_not_spared() {
+        // Recognition spares living targets only. A sated parent beside a
+        // carcass of its own trait vector drains it at its need-gated
+        // expression, exactly as it would with recognition off.
+        let carcass = || {
+            vec![Carcass {
+                id: 50,
+                position: (0.0, 1.0),
+                energy: 1000.0,
+                nutrient: 0.0,
+                traits: parent_traits(),
+            }]
+        };
+        let recognising = parent_among_kin_and_strangers(50.0, carcass(), &recognition_params());
+        let mut kin_blind = recognition_params();
+        kin_blind.recognition_distance = 0.0;
+        let blind = parent_among_kin_and_strangers(50.0, carcass(), &kin_blind);
+        let spared = drained_from(&recognising, PARENT, 50);
+        assert!(spared > 0.0, "the parent eats its own kind's carcass");
+        assert_eq!(
+            spared.to_bits(),
+            drained_from(&blind, PARENT, 50).to_bits(),
+            "carcass drain is unsuppressed"
+        );
+    }
+
+    #[test]
+    fn resemblance_is_one_at_identity_and_none_at_the_recognition_distance() {
+        let params = recognition_params();
+        let a = parent_traits();
+        let at = |d: f32| resemblance(&a, &TraitVector { mobility: d, ..a }, &params);
+        assert_eq!(at(0.0), 1.0);
+        assert_eq!(at(0.5), 0.0);
+        assert_eq!(at(0.9), 0.0);
+        assert!(at(0.25) > 0.0 && at(0.25) < 1.0);
+        let mut blind = params;
+        blind.recognition_distance = 0.0;
+        assert_eq!(resemblance(&a, &a, &blind), 0.0, "distance 0 is kin-blind");
     }
 
     #[test]

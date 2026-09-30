@@ -524,6 +524,7 @@ fn default_recipe() -> WorldRecipe {
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
             satiation_sensitivity: 0.1,
+            recognition_distance: 0.5,
         },
         initial_distribution: Some(InitialDistribution {
             mean_traits: TraitVector {
@@ -1303,6 +1304,10 @@ impl ExplorersApp {
                 ui.add(
                     egui::Slider::new(&mut params.satiation_sensitivity, 0.0..=1.0)
                         .text("Satiation sensitivity (0 = ungated drain)"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.recognition_distance, 0.0..=2.0)
+                        .text("Recognition distance (0 = kin-blind drain)"),
                 );
                 ui.add(
                     egui::Slider::new(&mut params.reproduction_efficiency, 0.0..=1.0)

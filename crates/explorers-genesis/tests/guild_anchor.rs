@@ -35,22 +35,21 @@ fn recipe() -> WorldRecipe {
 /// mean of four criteria, not a weighted five). Re-pinned under #603:
 /// satiation is co-limited with nutrient, so nutrient-starved consumers keep
 /// feeding — a physics change, not a changed read (seeds 1 and 2 moved; the
-/// carcass-locked fraction fell on both). Re-capture with
+/// carcass-locked fraction fell on both). Re-pinned under #604: consumers
+/// spare living targets that resemble them (recognition) — a physics change,
+/// not a changed read (every seed moved; seed 1 lost its clustering and
+/// seed 2 its coexistence under a recipe found for the kin-blind physics).
+/// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
-    (
-        1,
-        [
-            1050750928, 1045507225, 1065353216, 0, 1029785518, 1025518829,
-        ],
-    ),
+    (1, [1026160578, 1034078362, 0, 0, 1035020009, 1033967238]),
     (
         2,
         [
-            1056403568, 1056666604, 1065353216, 1046562734, 1046696952, 1041735136,
+            1051128032, 1040705876, 1065353216, 0, 1043307954, 1028633812,
         ],
     ),
-    (3, [1014618915, 0, 0, 0, 1031396131, 1028828781]),
+    (3, [1014350479, 0, 0, 0, 1031127695, 1028005695]),
 ];
 
 fn readings(seed: u64) -> [u32; 6] {

@@ -105,10 +105,12 @@ fn reproject_keeps_the_fallback_warning_when_no_refined_cell_clears_the_floor() 
     atlas.cells.truncate(1);
     let dims = atlas.cells[0].unit.len();
     atlas.cells[0].unit = vec![0.5; dims];
-    // `light_competition_radius` at its floor. (`world_extent` at its floor
-    // was the knob until #600's need-gated consumption let that world clear
-    // the floor.)
-    atlas.cells[0].unit[13] = 0.0;
+    // `solar_flux_magnitude` at its floor: a light-starved world. (The
+    // knob was `world_extent` until #600's need-gated consumption, then
+    // `light_competition_radius` until #604's recognition, let each of those
+    // worlds clear the floor; starving the whole world of light does not
+    // depend on how consumers feed.)
+    atlas.cells[0].unit[0] = 0.0;
     let in_run = refined_best_recipe(
         &atlas,
         &default_ranges(),

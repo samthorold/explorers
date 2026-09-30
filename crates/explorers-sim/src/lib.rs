@@ -179,6 +179,9 @@ fn default_reserve_mobilisation_rate() -> f32 {
 fn default_satiation_sensitivity() -> f32 {
     0.1
 }
+fn default_recognition_distance() -> f32 {
+    0.5
+}
 fn default_offspring_structure_fraction() -> f32 {
     0.2
 }
@@ -569,6 +572,19 @@ pub struct WorldParameters {
     /// Default 0.1: half expression at ten ticks of maintenance in reserve.
     #[serde(default = "default_satiation_sensitivity")]
     pub satiation_sensitivity: f32,
+    /// Recognition distance (world-rules.md, "Recognition: living targets that
+    /// resemble the consumer are spared"): the trait-space distance — on the
+    /// same metric as `reproductive_compatibility_distance` — over which a
+    /// consumer spares living targets that resemble it. Suppression of the
+    /// expressed drain is strongest toward an identical target and falls
+    /// smoothly to none at this distance; it relaxes, only partially, with the
+    /// consumer's hunger. Carcasses are never spared. `0.0` is the kin-blind
+    /// limiting case — the pre-recognition drain — kept for comparison.
+    /// Dimensionless (a trait-space distance). Default 0.5: half a trait unit,
+    /// ten mutation steps from a parent yet well inside the producer–consumer
+    /// separation (~1.4), so it covers kin clusters without sparing prey.
+    #[serde(default = "default_recognition_distance")]
+    pub recognition_distance: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1896,6 +1912,7 @@ mod tests {
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
             satiation_sensitivity: 0.1,
+            recognition_distance: 0.5,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -3809,6 +3826,7 @@ mod tests {
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
             satiation_sensitivity: 0.1,
+            recognition_distance: 0.5,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,
