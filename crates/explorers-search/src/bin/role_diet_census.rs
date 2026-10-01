@@ -17,6 +17,10 @@
 //!   distance and the grazer's drain-time satiation
 //!   ([`explorers_search::grazer_hunger`], #606), and every birth's trait
 //!   distance to its parents.
+//! - every second-half sampled agent's surplus satiation, read after
+//!   metabolism and before growth, by recent-income role, with the light-fed
+//!   mixotrophs apart, and the default `satiation_sensitivity = 1 / s₂₅` it
+//!   proposes (#622).
 //!
 //! Configs and seeds as `guild_census`: the atlas cells (`--atlas PATH`),
 //! the LHS sample, or `--configs` (`sample@S:i` for another draw); the seed
@@ -46,12 +50,14 @@ use explorers_search::config_source::{
     ConfigSource, parse_founder_aggregation, parse_non_negative, parse_selector, resolve_config,
     sampled_units, with_consumption_scales, with_founder_aggregation,
 };
+use explorers_search::grazer_hunger::SurplusDistribution;
 use explorers_search::grazer_hunger::{
     DISTANCE_BANDS, DISTANCE_EDGES, GrazerHunger, HUNGRY_BANDS, RECOGNITION_BANDS, SATIATION_BANDS,
     SATIATION_EDGES, TraitDistances,
 };
 use explorers_search::role_diet::{
-    Confusion, DeathCounts, DeathTable, LIGHT_SHARE_BINS, PRODUCER_LIGHT_SHARE, SeedDiet, rollout,
+    Confusion, DeathCounts, DeathTable, LIGHT_SHARE_BINS, PRODUCER_LIGHT_SHARE, SeedDiet,
+    SurplusByRole, rollout,
 };
 use explorers_search::search::default_ranges;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
@@ -125,6 +131,8 @@ struct Pool {
     kills: GrazerHunger,
     /// Parent–offspring trait distances (#606).
     births: TraitDistances,
+    /// Surplus satiation before growth, by income role (#622).
+    surplus: SurplusByRole,
 }
 
 fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
@@ -153,6 +161,7 @@ fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
             p.deaths.merge(&s.deaths);
             p.kills.merge(&s.kills);
             p.births.merge(&s.births);
+            p.surplus.merge(&s.surplus);
             if let (None, Some(t), Some(d)) =
                 (&s.failure, s.trophic_balance_tag, s.trophic_balance_diet)
             {
@@ -414,6 +423,50 @@ fn print_pool(name: &str, p: &Pool) {
         &p.deaths.trait_heterotroph_no_income,
     );
     print_kills(&p.kills, &p.births);
+    print_surplus(&p.surplus);
+}
+
+/// Surplus satiation by income role (#622): ticks of maintenance above the
+/// retention buffer, co-limited by free nutrient, read before growth.
+fn print_surplus(sp: &SurplusByRole) {
+    println!(
+        "\nSurplus satiation (#622): s = max(0, min(reserve − buffer, N / (η·ratio))) / m, read after metabolism and before growth, over second-half agent-samples by recent-income role (#599). Light-fed mixotrophs: income producers with heterotrophy > 0. Proposed default c = 1 / s₂₅ of the light-fed mixotrophs.\n"
+    );
+    println!(
+        "| agents | samples | at s = 0 | of which no free nutrient | nutrient-limited | s₂₅ | median | s₇₅ | 1 / s₂₅ | 1 / median |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    let mut heterotrophs = sp.roles[1].clone();
+    heterotrophs.merge(&sp.roles[2]);
+    let rows: [(&str, &SurplusDistribution); 7] = [
+        ("light-fed mixotrophs", &sp.light_fed_mixotrophs),
+        (
+            "light-fed mixotrophs, energy side alone",
+            &sp.light_fed_mixotrophs_energy,
+        ),
+        ("producers by income", &sp.roles[0]),
+        ("consumers by income", &sp.roles[1]),
+        ("decomposers by income", &sp.roles[2]),
+        ("heterotrophs by income (both)", &heterotrophs),
+        ("no income role", &sp.roles[3]),
+    ];
+    let fmt = |v: Option<f64>| v.map_or("–".to_string(), |x| format!("{x:.3}"));
+    let inv = |v: Option<f64>| fmt(v.filter(|&x| x > 0.0).map(|x| 1.0 / x));
+    for (label, d) in rows {
+        let (s25, s50) = (d.percentile(0.25), d.percentile(0.5));
+        println!(
+            "| {label} | {} | {}% | {}% | {}% | {} | {} | {} | {} | {} |",
+            d.count(),
+            pct(d.zero, d.count()),
+            pct(d.zero_nutrient_limited, d.zero),
+            pct(d.nutrient_limited, d.count()),
+            fmt(s25),
+            fmt(s50),
+            fmt(d.percentile(0.75)),
+            inv(s25),
+            inv(s50),
+        );
+    }
 }
 
 /// Band labels from upper edges: `[0, e0)`, …, `≥ eN`.
@@ -536,7 +589,7 @@ fn print_summary(rows: &[Row]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use explorers_search::grazer_hunger::Satiation;
+    use explorers_search::grazer_hunger::{Satiation, Surplus};
     use explorers_sim::TraitVector;
 
     fn seed(tag: [bool; 3], diet: [bool; 3], failure: Option<&str>) -> SeedDiet {
@@ -563,6 +616,23 @@ mod tests {
             dispersal: 0.3,
         };
         births.record(&t, &t);
+        let mut surplus = SurplusByRole::default();
+        surplus.record(
+            Some(explorers_sim::topology::TrophicRole::Producer),
+            0.2,
+            &Surplus {
+                energy: 4.0,
+                nutrient: 9.0,
+            },
+        );
+        surplus.record(
+            None,
+            0.0,
+            &Surplus {
+                energy: 3.0,
+                nutrient: 0.0,
+            },
+        );
         SeedDiet {
             seed: 0,
             failure: failure.map(String::from),
@@ -576,6 +646,7 @@ mod tests {
             trophic_balance_diet: Some(0.9),
             kills,
             births,
+            surplus,
         }
     }
 
@@ -615,6 +686,9 @@ mod tests {
         assert_eq!(p.kills.pairs[1][0][0], 3, "kills summed over seeds");
         assert_eq!(p.kills.nutrient_limited[1][0], 3);
         assert_eq!(p.births.count(), 3);
+        assert_eq!(p.surplus.light_fed_mixotrophs.count(), 3, "surplus summed");
+        assert_eq!(p.surplus.roles[3].zero, 3);
+        assert_eq!(p.surplus.roles[3].zero_nutrient_limited, 3);
     }
 
     #[test]

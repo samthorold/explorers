@@ -17,6 +17,12 @@
 //! currencies from it, and [`GrazerHunger`] tallies (grazer, victim) pairs
 //! by kinship, trait distance and satiation.
 //!
+//! #621 redefined satiation as **surplus** above the grow phase's retention
+//! buffer, read after metabolism and before growth. The sim does not read it
+//! yet; [`PreStep::metabolised_agents`] replays the first three phases and
+//! [`Surplus`] reads it there, so #622 can measure its distribution
+//! ([`SurplusDistribution`]) and set the default sensitivity from it.
+//!
 //! Observer-side only: the world is never touched.
 
 use explorers_sim::phase;
@@ -40,9 +46,11 @@ impl PreStep {
         }
     }
 
-    /// The roster as the drain pass read it: the tick's first four phases
-    /// replayed, in the stepper's order, on a copy of the pre-step state.
-    pub fn drain_time_agents(&self, params: &WorldParameters) -> Vec<Agent> {
+    /// The roster as the grow phase reads it: the tick's first three phases
+    /// (photosynthesise, absorb nutrients, metabolise) replayed, in the
+    /// stepper's order, on a copy of the pre-step state. Where [`Surplus`] is
+    /// read (#622).
+    pub fn metabolised_agents(&self, params: &WorldParameters) -> Vec<Agent> {
         let mut agents = self.agents.clone();
         let mut nutrient_grid = self.nutrient_grid.clone();
         let cell_size = params.light_competition_radius.max(1.0);
@@ -53,8 +61,197 @@ impl PreStep {
         phase::photosynthesise(&mut agents, &grid, params);
         phase::absorb_nutrients(&mut agents, &mut nutrient_grid, params);
         phase::metabolise(&mut agents, params);
+        agents
+    }
+
+    /// The roster as the drain pass read it: [`PreStep::metabolised_agents`]
+    /// grown — the tick's first four phases.
+    pub fn drain_time_agents(&self, params: &WorldParameters) -> Vec<Agent> {
+        let mut agents = self.metabolised_agents(params);
         phase::grow(&mut agents, params);
         agents
+    }
+}
+
+/// An agent's maintenance need: its per-tick metabolic cost, floored at zero.
+/// Computed here rather than through the stepper so the reads work on a tree
+/// without the need gate (pinned against `phase::metabolic_cost` in the tests).
+fn maintenance_need(agent: &Agent, params: &WorldParameters) -> f32 {
+    let x = params.maintenance_cost_exponent;
+    let t = &agent.traits;
+    (params.base_metabolic_rate
+        + t.photosynthetic_absorption.powf(x) * params.photo_maintenance_cost
+        + t.heterotrophy.powf(x) * params.heterotrophy_maintenance_cost
+        + t.mobility.powf(x) * params.mobility_maintenance_cost
+        + t.asexual_propensity.powf(x) * params.asexual_propensity_maintenance_cost
+        + agent.structure * params.structure_maintenance_coefficient)
+        .max(0.0)
+}
+
+/// The reserve energy an agent's free nutrient can match when built into
+/// structure, `N / (growth_efficiency × demand ratio)`: infinite when growth
+/// binds no nutrient.
+fn nutrient_matched_energy(agent: &Agent, params: &WorldParameters) -> f32 {
+    let binding =
+        params.growth_efficiency * explorers_sim::stoichiometric_demand(&agent.traits, 1.0, params);
+    if binding > 0.0 {
+        agent.nutrient.max(0.0) / binding
+    } else {
+        f32::INFINITY
+    }
+}
+
+/// An agent's **surplus satiation** (world rules, *Capability and expression
+/// are decoupled*; settled in #621): the reserve above the grow phase's
+/// retention buffer, co-limited by the energy its free nutrient can match, in
+/// ticks of its own maintenance. Read after metabolism and before growth
+/// ([`PreStep::metabolised_agents`]): the surplus the tick's grow phase is
+/// about to mobilise. Only the energy side is shifted by the buffer, so
+/// `energy` is negative below it.
+///
+/// Computed here, not by the stepper, which does not read it yet (#622
+/// measures it to set the default `satiation_sensitivity`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Surplus {
+    /// `(reserve − buffer) / m`, with `buffer = growth_retention_multiplier × m`.
+    pub energy: f32,
+    /// `N / (growth_efficiency × ratio) / m`.
+    pub nutrient: f32,
+}
+
+impl Surplus {
+    pub fn of(agent: &Agent, params: &WorldParameters) -> Self {
+        let need = maintenance_need(agent, params);
+        let buffer = params.growth_retention_multiplier * need;
+        let ticks = |e: f32| if need > 0.0 { e / need } else { f32::INFINITY };
+        Surplus {
+            energy: ticks(agent.reserve - buffer),
+            nutrient: ticks(nutrient_matched_energy(agent, params)),
+        }
+    }
+
+    /// `s = max(0, min(energy, nutrient))`: the surplus the need gate would
+    /// read.
+    pub fn ticks(&self) -> f32 {
+        self.energy.min(self.nutrient).max(0.0)
+    }
+}
+
+/// Lower edge of the [`SurplusDistribution`]'s log bins, in ticks of
+/// maintenance; positive surplus below it is binned together.
+pub const SURPLUS_LOW: f64 = 1e-3;
+/// Log bins per decade.
+pub const SURPLUS_BINS_PER_DECADE: usize = 20;
+/// Decades the log bins span from [`SURPLUS_LOW`] (to 1e5 ticks); surplus at
+/// or above the top edge (an infinite one included) is binned together.
+pub const SURPLUS_DECADES: usize = 8;
+const SURPLUS_LOG_BINS: usize = SURPLUS_BINS_PER_DECADE * SURPLUS_DECADES;
+
+/// A distribution of [`Surplus::ticks`] over agent-samples: agents at
+/// exactly zero (at or below the buffer, or without free nutrient) counted
+/// apart, the rest in fine log bins, so percentiles read within a bin's
+/// width (~12 %). `bins` is `[below SURPLUS_LOW, log bins…, at or above the
+/// top]`, empty until something positive is recorded.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SurplusDistribution {
+    pub zero: u64,
+    pub bins: Vec<u64>,
+    /// Samples recorded with [`SurplusDistribution::record_surplus`] whose
+    /// nutrient side was the lesser.
+    #[serde(default)]
+    pub nutrient_limited: u64,
+    /// Of the zeros, those held at zero by nutrient (no free nutrient) rather
+    /// than by the buffer.
+    #[serde(default)]
+    pub zero_nutrient_limited: u64,
+}
+
+impl SurplusDistribution {
+    /// Record a surplus read, noting whether nutrient bound it.
+    pub fn record_surplus(&mut self, surplus: &Surplus) {
+        let s = surplus.ticks();
+        let nutrient = surplus.nutrient < surplus.energy;
+        self.nutrient_limited += u64::from(nutrient);
+        self.zero_nutrient_limited += u64::from(nutrient && s <= 0.0);
+        self.record(s);
+    }
+
+    pub fn record(&mut self, s: f32) {
+        if s <= 0.0 || s.is_nan() {
+            self.zero += 1;
+            return;
+        }
+        if self.bins.is_empty() {
+            self.bins = vec![0; SURPLUS_LOG_BINS + 2];
+        }
+        let s = s as f64;
+        let i = if s < SURPLUS_LOW {
+            0
+        } else {
+            let k = ((s / SURPLUS_LOW).log10() * SURPLUS_BINS_PER_DECADE as f64).floor();
+            (k as usize).min(SURPLUS_LOG_BINS) + 1
+        };
+        self.bins[i] += 1;
+    }
+
+    pub fn count(&self) -> u64 {
+        self.zero + self.bins.iter().sum::<u64>()
+    }
+
+    /// Share of samples at zero surplus; `None` when empty.
+    pub fn zero_share(&self) -> Option<f64> {
+        let n = self.count();
+        (n > 0).then(|| self.zero as f64 / n as f64)
+    }
+
+    /// The `q` quantile (`0 ≤ q ≤ 1`), interpolated geometrically within its
+    /// log bin; `None` when empty. The bottom bin interpolates linearly from
+    /// zero, and the top bin reads as its lower edge.
+    pub fn percentile(&self, q: f64) -> Option<f64> {
+        let n = self.count();
+        if n == 0 {
+            return None;
+        }
+        let mut rank = q.clamp(0.0, 1.0) * n as f64;
+        if rank < self.zero as f64 {
+            return Some(0.0);
+        }
+        rank -= self.zero as f64;
+        let step = 10f64.powf(1.0 / SURPLUS_BINS_PER_DECADE as f64);
+        let last = self.bins.len().saturating_sub(1);
+        for (i, &c) in self.bins.iter().enumerate() {
+            if c == 0 {
+                continue;
+            }
+            if rank < c as f64 || i == last {
+                let frac = (rank / c as f64).min(1.0);
+                return Some(match i {
+                    0 => SURPLUS_LOW * frac,
+                    i if i == last => SURPLUS_LOW * step.powi(SURPLUS_LOG_BINS as i32),
+                    i => SURPLUS_LOW * step.powf((i - 1) as f64 + frac),
+                });
+            }
+            rank -= c as f64;
+        }
+        // Only reachable at q = 1 with an empty top bin: the last occupied
+        // bin's upper edge.
+        let top = self.bins.iter().rposition(|&c| c > 0)?;
+        Some(SURPLUS_LOW * step.powi(top as i32))
+    }
+
+    pub fn merge(&mut self, other: &SurplusDistribution) {
+        self.zero += other.zero;
+        self.nutrient_limited += other.nutrient_limited;
+        self.zero_nutrient_limited += other.zero_nutrient_limited;
+        if other.bins.is_empty() {
+            return;
+        }
+        if self.bins.is_empty() {
+            self.bins = vec![0; other.bins.len()];
+        }
+        for (a, b) in self.bins.iter_mut().zip(&other.bins) {
+            *a += b;
+        }
     }
 }
 
@@ -75,26 +272,11 @@ pub struct Satiation {
 
 impl Satiation {
     pub fn of(agent: &Agent, params: &WorldParameters) -> Self {
-        let x = params.maintenance_cost_exponent;
-        let t = &agent.traits;
-        let need = (params.base_metabolic_rate
-            + t.photosynthetic_absorption.powf(x) * params.photo_maintenance_cost
-            + t.heterotrophy.powf(x) * params.heterotrophy_maintenance_cost
-            + t.mobility.powf(x) * params.mobility_maintenance_cost
-            + t.asexual_propensity.powf(x) * params.asexual_propensity_maintenance_cost
-            + agent.structure * params.structure_maintenance_coefficient)
-            .max(0.0);
-        let binding =
-            params.growth_efficiency * explorers_sim::stoichiometric_demand(t, 1.0, params);
-        let matched = if binding > 0.0 {
-            agent.nutrient.max(0.0) / binding
-        } else {
-            f32::INFINITY
-        };
+        let need = maintenance_need(agent, params);
         let ticks = |e: f32| if need > 0.0 { e / need } else { f32::INFINITY };
         Satiation {
             energy: ticks(agent.reserve.max(0.0)),
-            nutrient: ticks(matched),
+            nutrient: ticks(nutrient_matched_energy(agent, params)),
         }
     }
 
@@ -364,6 +546,171 @@ mod tests {
             }
         }
         assert!(energy_limited + nutrient_limited > 10);
+    }
+
+    fn lone_agent(reserve: f32, nutrient: f32) -> (Agent, WorldParameters) {
+        let params = sample_31_world(1000).params().clone();
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.8,
+            heterotrophy: 0.2,
+            mobility: 0.0,
+            kappa: 0.5,
+            fecundity: 1.0,
+            asexual_propensity: 0.5,
+            dispersal: 0.3,
+        };
+        (
+            Agent::new(0, (0.0, 0.0), reserve, 1.0, nutrient, traits),
+            params,
+        )
+    }
+
+    /// Surplus satiation (#621, #622) counts reserve above the grow phase's
+    /// retention buffer, in ticks of maintenance.
+    #[test]
+    fn surplus_counts_reserve_above_the_retention_buffer() {
+        let (probe, params) = lone_agent(0.0, 1e6);
+        let m = phase::metabolic_cost(&probe, &params);
+        let buffer = params.growth_retention_multiplier * m;
+        let (above, _) = lone_agent(buffer + 3.0 * m, 1e6);
+        let s = Surplus::of(&above, &params).ticks();
+        assert!((s - 3.0).abs() < 1e-4, "{s}");
+    }
+
+    /// An agent at or below its buffer has no surplus, however much reserve
+    /// it holds: `s` is floored at zero, and the energy side reads negative.
+    #[test]
+    fn surplus_is_zero_at_and_below_the_buffer() {
+        let (probe, params) = lone_agent(0.0, 1e6);
+        let m = phase::metabolic_cost(&probe, &params);
+        let buffer = params.growth_retention_multiplier * m;
+        assert!(buffer > m, "a buffer of several ticks: {buffer} vs {m}");
+        let (at, _) = lone_agent(buffer, 1e6);
+        assert!(Surplus::of(&at, &params).ticks().abs() < 1e-5);
+        let (below, _) = lone_agent(buffer - 0.5 * m, 1e6);
+        let s = Surplus::of(&below, &params);
+        assert_eq!(s.ticks(), 0.0);
+        assert!((s.energy + 0.5).abs() < 1e-4, "{s:?}");
+        let (empty, _) = lone_agent(0.0, 1e6);
+        assert_eq!(Surplus::of(&empty, &params).ticks(), 0.0);
+    }
+
+    /// Surplus energy counts only as far as free nutrient could match it in
+    /// growth, and the nutrient side is not shifted by the buffer: an agent
+    /// far above its buffer, holding nutrient to match 2 ticks of maintenance,
+    /// reads 2 ticks (not 2 minus the buffer's depth).
+    #[test]
+    fn surplus_is_co_limited_by_unbuffered_free_nutrient() {
+        let (probe, params) = lone_agent(0.0, 0.0);
+        let m = phase::metabolic_cost(&probe, &params);
+        let buffer = params.growth_retention_multiplier * m;
+        let binding = params.growth_efficiency
+            * explorers_sim::stoichiometric_demand(&probe.traits, 1.0, &params);
+        assert!(binding > 0.0 && params.growth_retention_multiplier > 2.0);
+        let (limited, _) = lone_agent(buffer + 10.0 * m, 2.0 * m * binding);
+        let s = Surplus::of(&limited, &params);
+        assert!((s.nutrient - 2.0).abs() < 1e-4, "{s:?}");
+        assert!((s.ticks() - 2.0).abs() < 1e-4, "{s:?}");
+        let (starved, _) = lone_agent(buffer + 10.0 * m, 0.0);
+        assert_eq!(Surplus::of(&starved, &params).ticks(), 0.0);
+    }
+
+    /// The surplus read sits between metabolism and growth: growing the
+    /// metabolised roster is the drain-time roster, bit for bit, and the
+    /// surplus read off it is the stepper's buffer arithmetic.
+    #[test]
+    fn metabolised_roster_is_the_drain_time_roster_before_growth() {
+        let mut world = sample_31_world(1002);
+        for _ in 0..60 {
+            world.step();
+        }
+        let params = world.params().clone();
+        let pre = PreStep::capture(&world);
+        let mut grown = pre.metabolised_agents(&params);
+        let metabolised = grown.clone();
+        phase::grow(&mut grown, &params);
+        let drain_time = pre.drain_time_agents(&params);
+        assert_eq!(grown.len(), drain_time.len());
+        let mut positive = 0;
+        for (a, b) in grown.iter().zip(&drain_time) {
+            assert_eq!(a.reserve.to_bits(), b.reserve.to_bits());
+            assert_eq!(a.structure.to_bits(), b.structure.to_bits());
+            assert_eq!(a.nutrient.to_bits(), b.nutrient.to_bits());
+        }
+        for a in &metabolised {
+            let m = phase::metabolic_cost(a, &params);
+            let s = Surplus::of(a, &params);
+            let want = (a.reserve - params.growth_retention_multiplier * m) / m;
+            assert!(
+                (s.energy - want).abs() <= 1e-4 * want.abs().max(1.0),
+                "{s:?}"
+            );
+            positive += usize::from(s.ticks() > 0.0);
+        }
+        assert!(positive > 0, "some agent holds a surplus before growth");
+    }
+
+    /// The surplus distribution counts agents at zero apart and reads
+    /// percentiles off fine log bins, within a bin's width; merging adds.
+    #[test]
+    fn surplus_distribution_reads_the_zero_share_and_percentiles() {
+        let mut d = SurplusDistribution::default();
+        assert_eq!(d.percentile(0.5), None);
+        for _ in 0..100 {
+            d.record(0.0);
+        }
+        for i in 1..=300 {
+            d.record(i as f32 * 0.1);
+        }
+        assert_eq!(d.count(), 400);
+        assert_eq!(d.zero, 100);
+        assert!((d.zero_share().unwrap() - 0.25).abs() < 1e-12);
+        assert_eq!(d.percentile(0.2), Some(0.0));
+        // The 50th percentile is the 100th positive value (10.0), the 75th the
+        // 200th (20.0); bins are 20 per decade, so within ~12 %.
+        let close = |got: f64, want: f64| (got / want - 1.0).abs() < 0.13;
+        assert!(close(d.percentile(0.5).unwrap(), 10.0), "{d:?}");
+        assert!(close(d.percentile(0.75).unwrap(), 20.0));
+        d.record(f32::INFINITY);
+        d.record(1e-6);
+        assert_eq!(d.count(), 402);
+        let mut sum = d.clone();
+        sum.merge(&d);
+        assert_eq!(sum.count(), 804);
+        assert_eq!(sum.zero, 200);
+        assert!(close(
+            sum.percentile(0.5).unwrap(),
+            d.percentile(0.5).unwrap()
+        ));
+    }
+
+    /// Recording a [`Surplus`] also counts which side bound it: samples
+    /// whose nutrient side is the lesser, and of the zeros, those held there
+    /// by nutrient rather than by the buffer.
+    #[test]
+    fn surplus_distribution_splits_nutrient_limited_samples() {
+        let mut d = SurplusDistribution::default();
+        d.record_surplus(&Surplus {
+            energy: 3.0,
+            nutrient: 1.0,
+        });
+        d.record_surplus(&Surplus {
+            energy: 3.0,
+            nutrient: 0.0,
+        });
+        d.record_surplus(&Surplus {
+            energy: -1.0,
+            nutrient: 5.0,
+        });
+        d.record_surplus(&Surplus {
+            energy: 2.0,
+            nutrient: 5.0,
+        });
+        assert_eq!((d.count(), d.zero), (4, 2));
+        assert_eq!((d.nutrient_limited, d.zero_nutrient_limited), (2, 1));
+        let mut sum = d.clone();
+        sum.merge(&d);
+        assert_eq!((sum.nutrient_limited, sum.zero_nutrient_limited), (4, 2));
     }
 
     fn sated(ticks: f32, nutrient_limited: bool) -> Satiation {

@@ -40,7 +40,9 @@ use explorers_sim::event::{Event, EventKind};
 use explorers_sim::topology::{DETRITAL_RELIANCE_THRESHOLD, TopologyProjection, TrophicRole};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 
-use crate::grazer_hunger::{GrazerHunger, PreStep, Satiation, TraitDistances};
+use crate::grazer_hunger::{
+    GrazerHunger, PreStep, Satiation, Surplus, SurplusDistribution, TraitDistances,
+};
 
 /// A death at or below this age (ticks from birth) is an infant death, as
 /// #591's accountant counts it.
@@ -343,6 +345,42 @@ impl Confusion {
     }
 }
 
+/// Surplus satiation ([`Surplus`], #622) over agent-samples, by recent-income
+/// role (#599): `roles` is producer, consumer, decomposer, no role (no income
+/// yet). The **light-fed mixotrophs** — income producers carrying
+/// heterotrophy above zero — are tallied again apart: the population whose
+/// 25th percentile sets the default `satiation_sensitivity` (world rules,
+/// *Capability and expression are decoupled*).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SurplusByRole {
+    pub roles: [SurplusDistribution; 4],
+    pub light_fed_mixotrophs: SurplusDistribution,
+    /// The light-fed mixotrophs' energy side alone, `max(0, reserve −
+    /// buffer) / m`: what the read would be without nutrient co-limitation.
+    #[serde(default)]
+    pub light_fed_mixotrophs_energy: SurplusDistribution,
+}
+
+impl SurplusByRole {
+    pub fn record(&mut self, role: Option<TrophicRole>, heterotrophy: f32, surplus: &Surplus) {
+        self.roles[role.map_or(3, role_index)].record_surplus(surplus);
+        if role == Some(TrophicRole::Producer) && heterotrophy > 0.0 {
+            self.light_fed_mixotrophs.record_surplus(surplus);
+            self.light_fed_mixotrophs_energy
+                .record(surplus.energy.max(0.0));
+        }
+    }
+
+    pub fn merge(&mut self, other: &SurplusByRole) {
+        for (a, b) in self.roles.iter_mut().zip(&other.roles) {
+            a.merge(b);
+        }
+        self.light_fed_mixotrophs.merge(&other.light_fed_mixotrophs);
+        self.light_fed_mixotrophs_energy
+            .merge(&other.light_fed_mixotrophs_energy);
+    }
+}
+
 /// One seed's census.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SeedDiet {
@@ -379,6 +417,12 @@ pub struct SeedDiet {
     /// Every birth's trait distance to each parent (#606).
     #[serde(default)]
     pub births: TraitDistances,
+    /// Every second-half sampled agent's surplus satiation, read after
+    /// metabolism and before growth in the step that led to the sample, by
+    /// the evaluator's recent-income role at the sample (#622). Agents born
+    /// in that step have no pre-growth state and are left out.
+    #[serde(default)]
+    pub surplus: SurplusByRole,
 }
 
 fn guild_flags(g: RoleGuilds) -> [bool; 3] {
@@ -431,6 +475,7 @@ pub fn rollout(
     let mut diet_snapshots: Vec<RoleSnapshot> = Vec::new();
     let mut confusion = Confusion::default();
     let mut light_share = [0u64; LIGHT_SHARE_BINS];
+    let mut surplus = SurplusByRole::default();
     let mut stopped: Option<FailureMode> = None;
     for _ in 0..max_ticks {
         let pre = PreStep::capture(&world);
@@ -466,6 +511,14 @@ pub fn rollout(
                     }
                 }
                 diet_snapshots.push((tick, diet));
+                if let Some((_, roles)) = observations.role_snapshots.last() {
+                    for a in pre.metabolised_agents(params) {
+                        if tags.contains_key(&a.id) {
+                            let s = Surplus::of(&a, params);
+                            surplus.record(roles.get(&a.id).copied(), a.traits.heterotrophy, &s);
+                        }
+                    }
+                }
                 tag_snapshots.push((tick, tags));
             }
         }
@@ -533,6 +586,7 @@ pub fn rollout(
         trophic_balance_diet,
         kills: *ledger.kills(),
         births: *ledger.births(),
+        surplus,
     }
 }
 
@@ -705,6 +759,46 @@ mod tests {
         assert!(
             producer_guilds > 0,
             "a guild that holds is pinned, not only absences"
+        );
+    }
+
+    /// The census reads every second-half sampled agent's surplus satiation
+    /// before growth (#622), by its recent-income role (#599), with the
+    /// light-fed mixotrophs — income producers with heterotrophy above zero —
+    /// apart; old rows without it still read back.
+    #[test]
+    fn rollout_records_surplus_by_income_role() {
+        let (params, dist) = sample_31();
+        let eval = EvalConfig::default();
+        let ours = rollout(&params, &dist, 1000, 300, &eval);
+        let sp = &ours.surplus;
+        let by_role: u64 = sp.roles.iter().map(|d| d.count()).sum();
+        let samples: u64 = ours.confusion.0.iter().flatten().sum();
+        assert!(by_role > 0 && by_role <= samples, "{by_role} of {samples}");
+        let producers = sp.roles[0].count();
+        let mixotrophs = sp.light_fed_mixotrophs.count();
+        assert!(
+            mixotrophs > 0 && mixotrophs <= producers,
+            "{mixotrophs} of {producers}"
+        );
+        assert!(sp.light_fed_mixotrophs.percentile(0.5).is_some());
+        // The energy side alone, for the same agents: never below the
+        // co-limited read.
+        let energy = &sp.light_fed_mixotrophs_energy;
+        assert_eq!(energy.count(), mixotrophs);
+        assert!(energy.zero <= sp.light_fed_mixotrophs.zero);
+        assert!(energy.percentile(0.5) >= sp.light_fed_mixotrophs.percentile(0.5));
+
+        let mut json: serde_json::Value = serde_json::to_value(&ours).unwrap();
+        json.as_object_mut().unwrap().remove("surplus");
+        let old: SeedDiet = serde_json::from_value(json).unwrap();
+        assert_eq!(old.surplus, SurplusByRole::default());
+        assert_eq!(
+            SeedDiet {
+                surplus: ours.surplus.clone(),
+                ..old
+            },
+            ours
         );
     }
 
