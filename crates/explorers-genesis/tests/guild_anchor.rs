@@ -39,17 +39,21 @@ fn recipe() -> WorldRecipe {
 /// spare living targets that resemble them (recognition) — a physics change,
 /// not a changed read (every seed moved; seed 1 lost its clustering and
 /// seed 2 its coexistence under a recipe found for the kin-blind physics).
+/// Re-pinned under #623: satiation is the surplus above the retention
+/// buffer, read before growth, at the default sensitivity 33 — a physics
+/// change, not a changed read (every seed moved; seed 3 now reads zero on
+/// every column, its world failing before it scores).
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
-    (1, [1026160578, 1034078362, 0, 0, 1035020009, 1033967238]),
+    (1, [1037008966, 1045306156, 0, 0, 1045488992, 1029446348]),
     (
         2,
         [
-            1051128032, 1040705876, 1065353216, 0, 1043307954, 1028633812,
+            1052079288, 1050660550, 1065353216, 0, 1037570146, 1032375789,
         ],
     ),
-    (3, [1014350479, 0, 0, 0, 1031127695, 1028005695]),
+    (3, [0, 0, 0, 0, 0, 0]),
 ];
 
 fn readings(seed: u64) -> [u32; 6] {

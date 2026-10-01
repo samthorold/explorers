@@ -209,7 +209,8 @@ pub fn starved_ids(agents: &[Agent]) -> HashSet<u64> {
 
 /// The reserve an agent holds back to cover near-future metabolism: its per-tick
 /// metabolic cost times `growth_retention_multiplier` (the same buffer the grow
-/// phase mobilises surplus above). Reserve above this is the agent's surplus.
+/// phase mobilises surplus above, and need-gated consumption reads surplus
+/// above). Reserve above this is the agent's surplus.
 fn retention_buffer(agent: &Agent, params: &WorldParameters) -> f32 {
     metabolic_cost(agent, params) * params.growth_retention_multiplier
 }
@@ -217,7 +218,7 @@ fn retention_buffer(agent: &Agent, params: &WorldParameters) -> f32 {
 /// An agent's per-tick metabolic cost — its maintenance need: base rate, trait
 /// maintenance and structure maintenance (what `metabolise` charges, before the
 /// cap at available reserve). The yardstick both the grow phase's retention
-/// buffer and consumption's energy satiation measure reserve against.
+/// buffer and consumption's surplus satiation are measured in.
 pub fn metabolic_cost(agent: &Agent, params: &WorldParameters) -> f32 {
     let exp = params.maintenance_cost_exponent;
     params.base_metabolic_rate
@@ -230,37 +231,38 @@ pub fn metabolic_cost(agent: &Agent, params: &WorldParameters) -> f32 {
 
 /// The fraction of its heterotrophic capability a consumer expresses this tick
 /// (need-gated consumption; world-rules.md, "Capability and expression are
-/// decoupled"): `1 / (1 + satiation_sensitivity × s)`, where the satiation `s`
-/// is **co-limited** across both currencies, like growth under Liebig's law:
+/// decoupled"): `1 / (1 + satiation_sensitivity × s)`, where the **surplus
+/// satiation** `s` is co-limited across both currencies, like growth under
+/// Liebig's law:
 ///
-/// - **energy satiation** — the reserve in ticks of the consumer's own
-///   metabolic cost, `R / m`;
-/// - **nutrient satiation** — free nutrient measured against what the reserve
-///   would bind into structure at the consumer's stoichiometric demand (the
-///   grow phase's conversion: energy × `growth_efficiency` → structure,
-///   structure × demand ratio → bound nutrient). Expressed on the same
-///   yardstick as the energy side: the energy the free nutrient can match,
-///   `N / (η · ratio)`, in ticks of maintenance.
+/// - **energy surplus** — the reserve above the grow phase's retention buffer
+///   (`growth_retention_multiplier × m`), `R − buffer`;
+/// - **nutrient side** — the energy free nutrient could match when built into
+///   structure at the consumer's stoichiometric demand (the grow phase's
+///   conversion: energy × `growth_efficiency` → structure, structure × demand
+///   ratio → bound nutrient), `N / (η · ratio)`. Not shifted by the buffer:
+///   free nutrient funds no per-tick cost.
 ///
-/// `s = min(R, N / (η · ratio)) / m` — the lesser of two continuous functions,
-/// so continuous where the limiting currency switches, and one sensitivity
-/// shapes both. When growth binds no nutrient (`η = 0` or a zero ratio) free
-/// nutrient cannot limit and the gate reads energy alone. Written as
-/// `m / (m + c·E)` so a body with no maintenance need is sated by any usable
-/// reserve rather than dividing by zero. `1` at zero reserve or zero free
-/// nutrient, and exactly `1` at sensitivity zero (the flat, ungated limiting
-/// case). Reads only the consumer, never the target.
+/// `s = max(0, min(R − buffer, N / (η · ratio))) / m`, in ticks of the
+/// consumer's own maintenance `m`. The lesser of two continuous functions,
+/// floored, so continuous where the limiting currency switches, with one kink
+/// at the buffer; one sensitivity shapes both. When growth binds no nutrient
+/// (`η = 0` or a zero ratio) free nutrient cannot limit and the gate reads the
+/// energy surplus alone. Written as `m / (m + c·E)` so a body with no
+/// maintenance need is sated by any surplus rather than dividing by zero. `1`
+/// at or below the buffer and at zero free nutrient, and exactly `1` at
+/// sensitivity zero (the flat, ungated limiting case). Reads only the
+/// consumer, never the target. The stepper reads it after metabolise and
+/// before grow ([`consumption_expressions`]).
 pub fn consumption_expression(agent: &Agent, params: &WorldParameters) -> f32 {
     let c = params.satiation_sensitivity;
-    let usable = agent
-        .reserve
-        .max(0.0)
-        .min(nutrient_matched_energy(agent, params));
-    if c <= 0.0 || usable <= 0.0 {
+    let need = metabolic_cost(agent, params).max(0.0);
+    let buffer = params.growth_retention_multiplier * need;
+    let surplus = (agent.reserve - buffer).min(nutrient_matched_energy(agent, params));
+    if c <= 0.0 || surplus <= 0.0 {
         return 1.0;
     }
-    let need = metabolic_cost(agent, params).max(0.0);
-    need / (need + c * usable)
+    need / (need + c * surplus)
 }
 
 /// The share of its heterotrophic capability a consumer withholds from an
@@ -272,7 +274,8 @@ pub fn consumption_expression(agent: &Agent, params: &WorldParameters) -> f32 {
 /// still drains an identical target at `1 − RECOGNITION_RESTRAINT` of
 /// capability — hunger relaxes the suppression, but only partially. At 0.5 an
 /// identical target is fully spared from the half-expression point on (`1 /
-/// satiation_sensitivity` ticks of maintenance held), so recognition and need
+/// satiation_sensitivity` ticks of maintenance carried as surplus above the
+/// retention buffer), so recognition and need
 /// share one satiation scale and add no search dimension.
 pub const RECOGNITION_RESTRAINT: f32 = 0.5;
 
@@ -747,6 +750,10 @@ fn sort_consumers_by_id(consumers: &mut [(usize, f32, f32)], agents: &[Agent]) {
 /// loss, transfer nutrient with stoichiometric mismatch. Check death thresholds
 /// on drained living agents. New carcasses from kills this tick are NOT available
 /// for decomposition (no re-entrant processing).
+///
+/// Each consumer's need-gated expression is read here, from `agents` as given:
+/// correct when nothing has moved reserve since metabolise. The stepper reads
+/// it before growth instead and calls [`resolve_drains_with_expression`].
 pub fn resolve_drains(
     agents: &mut [Agent],
     carcasses: &mut [Carcass],
@@ -754,6 +761,44 @@ pub fn resolve_drains(
     params: &WorldParameters,
     nutrient_grid: &mut crate::spatial::NutrientGrid,
 ) -> DrainResult {
+    let consumer_expression = consumption_expressions(agents, params);
+    resolve_drains_with_expression(
+        agents,
+        carcasses,
+        grid,
+        params,
+        nutrient_grid,
+        &consumer_expression,
+    )
+}
+
+/// Each agent's need-gated [`consumption_expression`], by slice index. The
+/// stepper reads it once per tick, after metabolise and before grow
+/// (execution-model.md, Pass 1): the surplus the grow phase is about to
+/// mobilise. Read after growth, a full mobilisation rate would leave every
+/// consumer at its bare buffer and the gate would never close.
+pub fn consumption_expressions(agents: &[Agent], params: &WorldParameters) -> Vec<f32> {
+    agents
+        .iter()
+        .map(|a| consumption_expression(a, params))
+        .collect()
+}
+
+/// [`resolve_drains`] with each consumer's expression supplied, by slice
+/// index — the snapshot [`consumption_expressions`] took before growth. One
+/// read per consumer, identical toward living and carcass targets: a
+/// consumer's reserve rises as it feeds in the living pass, so a live read
+/// would make its carcass drain depend on its living meals and on slice
+/// order.
+pub fn resolve_drains_with_expression(
+    agents: &mut [Agent],
+    carcasses: &mut [Carcass],
+    grid: &SpatialGrid,
+    params: &WorldParameters,
+    nutrient_grid: &mut crate::spatial::NutrientGrid,
+    consumer_expression: &[f32],
+) -> DrainResult {
+    debug_assert_eq!(consumer_expression.len(), agents.len());
     let mut events = Vec::new();
     let mut dissipated = 0.0_f32;
     let mut dead_agents: Vec<u64> = Vec::new();
@@ -780,17 +825,6 @@ pub fn resolve_drains(
     let consumer_stoichiometric_demand: Vec<f32> = agents
         .iter()
         .map(|a| crate::stoichiometric_demand(&a.traits, a.structure, params))
-        .collect();
-
-    // Each consumer's need-gated expression, likewise read once at tick-start
-    // state: a consumer's reserve rises as it feeds in the living pass, so a
-    // live read would make its carcass drain depend on its living meals and on
-    // slice order. One tick-start gate per consumer also makes the expression
-    // identical toward living and carcass targets (the gate reads only the
-    // consumer).
-    let consumer_expression: Vec<f32> = agents
-        .iter()
-        .map(|a| consumption_expression(a, params))
         .collect();
 
     // --- Pass over living targets ---
@@ -4291,11 +4325,13 @@ mod tests {
 
     #[test]
     fn co_limited_satiation_is_continuous_where_the_limiting_currency_switches() {
-        // Reserve 20 binds 20 × η 0.5 × ratio 0.18 = 1.8 nutrient, so sweeping
-        // free nutrient from 0 to 3.6 crosses from nutrient-limited to
-        // energy-limited at 1.8. The drain falls without jumps, then holds at
-        // the energy-limited value; sweeping reserve at fixed nutrient 0.9
-        // crosses the other way (switch at reserve 10) just as smoothly.
+        // Reserve 20 is a surplus of 19.8 above the 0.2 buffer, which binds
+        // 19.8 × η 0.5 × ratio 0.18 = 1.782 nutrient, so sweeping free
+        // nutrient from 0 to 3.6 crosses from nutrient-limited to
+        // energy-limited at 1.782. The drain falls without jumps, then holds
+        // at the energy-limited value; sweeping reserve at fixed nutrient 0.9
+        // crosses the other way (switch at surplus 10, reserve 10.2) just as
+        // smoothly. The nutrient side is not shifted by the buffer.
         let params = co_limited_params();
         let traits = TraitVector {
             heterotrophy: 0.4,
@@ -4331,8 +4367,8 @@ mod tests {
             );
         }
         // Past the switch the other way, more reserve no longer sates.
-        let nutrient_limited = by_reserve[2000];
-        for &d in &by_reserve[2001..] {
+        let nutrient_limited = by_reserve[2050];
+        for &d in &by_reserve[2051..] {
             assert!(
                 (d - nutrient_limited).abs() < 1e-6,
                 "nutrient-limited plateau {nutrient_limited}, got {d}"
@@ -4346,10 +4382,11 @@ mod tests {
 
     #[test]
     fn expressed_drain_falls_smoothly_and_monotonically_with_reserve() {
-        // The response has no threshold: sweeping reserve finely from empty to
-        // hundreds of ticks of maintenance, the drain starts at full
-        // capability, strictly decreases, and never jumps between neighbouring
-        // reserves.
+        // Sweeping reserve finely from empty to hundreds of ticks of
+        // maintenance: the drain holds at full capability up to the retention
+        // buffer (test_params: 0.2), then strictly decreases with the surplus
+        // above it — one kink at the buffer, no threshold, never a jump
+        // between neighbouring reserves.
         let mut params = test_params();
         params.satiation_sensitivity = 0.1;
         let traits = TraitVector {
@@ -4364,12 +4401,14 @@ mod tests {
                 drained_by(&result, 1)
             })
             .collect();
-        assert!(
-            (drains[0] - capability).abs() < 1e-6,
-            "an empty consumer drains at full capability: {} vs {capability}",
-            drains[0]
-        );
-        for w in drains.windows(2) {
+        for (i, &d) in drains[..=4].iter().enumerate() {
+            assert!(
+                (d - capability).abs() < 1e-6,
+                "a consumer at or below its buffer drains at full capability: reserve {}, {d} vs {capability}",
+                i as f32 * step
+            );
+        }
+        for w in drains[4..].windows(2) {
             assert!(w[1] < w[0], "drain must strictly decrease: {w:?}");
             assert!(
                 w[0] - w[1] < 0.05 * capability,
@@ -4399,12 +4438,12 @@ mod tests {
             photosynthetic_absorption: 0.5,
             ..zero_traits()
         };
-        // Hungry: no reserve → expression 1. Sated: 10 ticks of maintenance →
-        // expression 1/2. Capability 3.0 each, so expressed demand 3.0 and 1.5
+        // Hungry: no reserve → expression 1. Sated: 10 ticks of maintenance
+        // above its 2-tick buffer (reserve 12) → expression 1/2. Capability 3.0 each, so expressed demand 3.0 and 1.5
         // against 1.0 available: shares 2/3 and 1/3.
         let mut agents = vec![
             make_agent(1, (0.0, 0.0), 0.0, traits),
-            make_agent(2, (1.0, 0.0), 10.0, traits),
+            make_agent(2, (1.0, 0.0), 12.0, traits),
             make_agent(3, (0.5, 0.0), 10.0, target_traits),
         ];
         agents[2].structure = 1.0;
@@ -4527,6 +4566,66 @@ mod tests {
             result.events.iter().all(|e| e.kind != EventKind::Consumed),
             "a zero expressed drain is not a feeding event"
         );
+    }
+
+    // --- Surplus satiation (#621, #623): the gate reads reserve above the
+    // grow phase's retention buffer ---
+
+    #[test]
+    fn a_consumer_at_or_below_its_buffer_drains_at_full_capability() {
+        // Reserve up to `growth_retention_multiplier × m` is held back for
+        // near-future metabolism, not surplus: a consumer holding it is not
+        // sated at all. test_params: m = 0.1, multiplier 2 → buffer 0.2.
+        let mut params = test_params();
+        params.satiation_sensitivity = 0.1;
+        let traits = TraitVector {
+            heterotrophy: 0.4,
+            ..zero_traits()
+        };
+        let capability = 0.4 * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+        let (result, _) = drain_one_ample_target(
+            &[(1, 0.1, traits), (2, 0.2, traits), (3, 0.0, traits)],
+            &params,
+        );
+        for id in 1..=3 {
+            assert_eq!(
+                drained_by(&result, id).to_bits(),
+                capability.to_bits(),
+                "consumer {id} at or below its buffer drains at full capability"
+            );
+        }
+    }
+
+    #[test]
+    fn half_expression_at_one_over_c_ticks_of_surplus() {
+        // Growth binds no nutrient (η = 0), so the gate reads the energy
+        // surplus alone: reserve buffer + 10 ticks at c = 0.1 → expression ½.
+        let mut params = test_params();
+        params.satiation_sensitivity = 0.1;
+        let traits = TraitVector {
+            heterotrophy: 0.4,
+            ..zero_traits()
+        };
+        let agent = make_agent(1, (0.0, 0.0), 0.2 + 1.0, traits);
+        let e = consumption_expression(&agent, &params);
+        assert!((e - 0.5).abs() < 1e-5, "{e}");
+    }
+
+    #[test]
+    fn the_nutrient_side_is_not_shifted_by_the_buffer() {
+        // Far above its buffer in energy, holding free nutrient that matches
+        // exactly 2 ticks of maintenance (0.2 energy × η 0.5 × ratio 0.18):
+        // satiation is 2 ticks, not 2 minus the buffer's 2 → expression
+        // 1/(1 + 0.1 × 2).
+        let params = co_limited_params();
+        let traits = TraitVector {
+            heterotrophy: 0.4,
+            ..zero_traits()
+        };
+        let mut agent = make_agent(1, (0.0, 0.0), 50.0, traits);
+        agent.nutrient = 0.2 * 0.5 * 0.18;
+        let e = consumption_expression(&agent, &params);
+        assert!((e - 1.0 / 1.2).abs() < 1e-5, "{e}");
     }
 
     #[test]

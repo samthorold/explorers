@@ -72,14 +72,16 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// need-gated share of their heterotrophic capability (example8 feeds no
 /// consumer, so it is unchanged). example4 and example10 re-pinned for #604:
 /// consumers now spare living targets that resemble them (recognition).
+/// example4 and example10 re-pinned for #623: the need gate reads surplus
+/// above the retention buffer, before growth, at the default sensitivity 33.
 const GOLDEN: [(&str, u64, u64, u64); 3] = [
-    ("example4.json", 7, 300, 0x64b7da67e470dbe7),
+    ("example4.json", 7, 300, 0xbef95cdd90e63f5f),
     ("example8.json", 11, 300, 0x366aea7e88b3c291),
     (
         "example10_predator_prey_hopf.json",
         3,
         300,
-        0x1bd5182cd5f47952,
+        0xb6635fe7f12086f3,
     ),
 ];
 
@@ -101,14 +103,14 @@ fn naming_the_unit_anchors_leaves_every_trajectory_byte_identical() {
 /// config where all three couplings are live at once: example10's sessile
 /// producers capture energy while its lightly mobile consumers both drain
 /// structure and move. Digest pinned on `main` at 5a7bede, before the anchors
-/// were named; re-pinned for #600 (need-gated consumption) and #604
-/// (recognition).
+/// were named; re-pinned for #600 (need-gated consumption), #604
+/// (recognition) and #623 (surplus satiation read before growth).
 const USE_WEAR_GOLDEN: (&str, f32, u64, u64, u64) = (
     "example10_predator_prey_hopf.json",
     0.02,
     3,
     300,
-    0xbaf1acf492ba575d,
+    0x3d469d643a6b1f49,
 );
 
 #[test]
