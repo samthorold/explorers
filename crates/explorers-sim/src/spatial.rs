@@ -131,6 +131,56 @@ impl NutrientGrid {
         self.cells.iter().sum()
     }
 
+    /// Draw `amount` of nutrient out of the grid for something standing at
+    /// `pos`, never leaving a cell negative (#612). The cell at `pos` gives
+    /// first; whatever it cannot cover is taken from the nearest cells outward,
+    /// ring by ring (Chebyshev rings on the torus), each ring visited row by
+    /// row, column by column, and each cell emptied before the next is touched.
+    /// Where the cell at `pos` covers the draw this is exactly `cell -= amount`.
+    /// Returns the part of `amount` the whole grid could not cover (zero unless
+    /// every cell has been emptied).
+    pub fn draw_nearest(&mut self, pos: (f32, f32), amount: f32) -> f32 {
+        let home = self.cell_index(pos);
+        if self.cells[home] >= amount {
+            self.cells[home] -= amount;
+            return 0.0;
+        }
+        let cols = self.cols as isize;
+        let (home_col, home_row) = ((home % self.cols) as isize, (home / self.cols) as isize);
+        let mut visited = vec![false; self.cells.len()];
+        let mut remaining = amount;
+        // Ring `r` holds the cells at Chebyshev distance `r`; by `r = cols / 2`
+        // the rings have wrapped over the whole torus.
+        for r in 0..=cols / 2 {
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs().max(dy.abs()) != r {
+                        continue;
+                    }
+                    let col = (home_col + dx).rem_euclid(cols);
+                    let row = (home_row + dy).rem_euclid(cols);
+                    let idx = (row * cols + col) as usize;
+                    if visited[idx] {
+                        continue;
+                    }
+                    visited[idx] = true;
+                    let take = remaining.min(self.cells[idx]);
+                    self.cells[idx] -= take;
+                    remaining -= take;
+                    if remaining <= 0.0 {
+                        return 0.0;
+                    }
+                }
+            }
+        }
+        remaining
+    }
+
+    /// The available nutrient of every cell, row-major.
+    pub fn cells(&self) -> &[f32] {
+        &self.cells
+    }
+
     /// Returns the cell index for a given position (public for phase functions).
     pub fn cell_index_for(&self, pos: (f32, f32)) -> usize {
         self.cell_index(pos)

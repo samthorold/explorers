@@ -1187,7 +1187,9 @@ mod tests {
             light_competition_radius: 1000.0,
             photo_maintenance_cost: 0.0,
             heterotrophy_maintenance_cost: 0.0,
-            initial_nutrient_pool: 0.0,
+            // A pool that covers every fixture founding's seed bodies: a zero pool
+            // now co-limits founders to no structure at all (#612).
+            initial_nutrient_pool: 1000.0,
             growth_efficiency: 0.5,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
