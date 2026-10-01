@@ -133,6 +133,33 @@ pub fn with_founder_aggregation(
     (params, dist)
 }
 
+/// Pin a resolved world's **satiation sensitivity** and **recognition
+/// distance** (the need gate's and recognition's scales, #600/#604) when given,
+/// leaving everything else as decoded — #619's probe of whether those
+/// mechanisms fail on scale or by design.
+pub fn with_consumption_scales(
+    (mut params, dist): (WorldParameters, InitialDistribution),
+    satiation_sensitivity: Option<f32>,
+    recognition_distance: Option<f32>,
+) -> (WorldParameters, InitialDistribution) {
+    if let Some(c) = satiation_sensitivity {
+        params.satiation_sensitivity = c;
+    }
+    if let Some(d) = recognition_distance {
+        params.recognition_distance = d;
+    }
+    (params, dist)
+}
+
+/// Parse a `flag`'s value as a finite number `≥ 0` (`--satiation-sensitivity`,
+/// `--recognition-distance`; `0` is each mechanism's off limit).
+pub fn parse_non_negative(flag: &str, raw: &str) -> Result<f32, String> {
+    raw.parse::<f32>()
+        .ok()
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .ok_or_else(|| format!("{flag} {raw:?} must be a finite number ≥ 0"))
+}
+
 /// Parse a `--founder-aggregation` value: a number in `[0, 1]`.
 pub fn parse_founder_aggregation(raw: &str) -> Result<f32, String> {
     raw.parse::<f32>()
@@ -200,6 +227,41 @@ mod tests {
         let mut as_decoded = decoded.1.clone();
         as_decoded.founder_aggregation = 0.0;
         assert_eq!(dist, as_decoded);
+    }
+
+    /// #619 probes whether the need gate and recognition fail on scale: a
+    /// pinned satiation sensitivity or recognition distance overrides only
+    /// that parameter, and no pin leaves the world as decoded.
+    #[test]
+    fn pinned_consumption_scales_override_only_their_own_parameter() {
+        let sampled = sampled_units(default_ranges().len());
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        assert_eq!(
+            with_consumption_scales(decoded.clone(), None, None),
+            decoded
+        );
+
+        let (params, dist) = with_consumption_scales(decoded.clone(), Some(1.0), None);
+        assert_eq!(dist, decoded.1);
+        let mut want = decoded.0.clone();
+        want.satiation_sensitivity = 1.0;
+        assert_eq!(params, want);
+
+        let (params, dist) = with_consumption_scales(decoded.clone(), None, Some(1.5));
+        assert_eq!(dist, decoded.1);
+        let mut want = decoded.0.clone();
+        want.recognition_distance = 1.5;
+        assert_eq!(params, want);
+    }
+
+    #[test]
+    fn a_consumption_scale_flag_value_must_be_a_non_negative_number() {
+        assert_eq!(parse_non_negative("--x", "0"), Ok(0.0));
+        assert_eq!(parse_non_negative("--x", "3"), Ok(3.0));
+        assert!(parse_non_negative("--x", "-0.1").is_err());
+        assert!(parse_non_negative("--x", "NaN").is_err());
+        assert!(parse_non_negative("--x", "inf").is_err());
+        assert!(parse_non_negative("--x", "x").is_err());
     }
 
     #[test]

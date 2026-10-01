@@ -13,3 +13,7 @@ The usual real cause is a pair sitting exactly on a hard distance threshold (a s
 On macOS, `syspolicyd` (Gatekeeper/XProtect) scans each newly linked executable on its first launch. Every rebuild relinks the test binaries, so every test run after an edit pays the scan: once measured at ~85 s across the workspace, and 400 s for `-p explorers-sim` alone, against ~15 s of actual testing. The tell is a binary reporting `finished in 0.07s` after tens of seconds of wall-clock, and `syspolicyd` high in `ps -Ao pcpu,comm -r`.
 
 The fix is to add the terminal app to System Settings → Privacy & Security → Developer Tools. It applies only to processes started afterwards, so restart the terminal and any Claude Code session running in it.
+
+## `reinvasion_barrier`'s accounted artifacts are not byte-identical across runs
+
+In `--accounting` and `--dispersal` modes, the per-member `account` floats in the JSON differ in the last ulp between two runs of the same command. `LineageAccountant` sums over `HashMap`s, whose hasher is seeded randomly per process. Trajectories, counts and every printed table are identical (#619). To check that a change leaves a run unchanged, diff the `.md` summaries, or compare the JSON with the `account` fields stripped. Plain mode is byte-identical.

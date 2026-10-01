@@ -28,6 +28,8 @@
 //! `--founder-aggregation A` pins every world's founding placement (#601)
 //! and records the pin on each row; `0` is the pre-#601 well-mixed scatter,
 //! for comparing against an older tree (#605).
+//! `--satiation-sensitivity C` and `--recognition-distance D` pin every
+//! world's need-gate and recognition scales (#619), recorded likewise.
 //!
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --atlas atlas.json
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --configs sample:31,sample:110
@@ -41,8 +43,8 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_search::config_source::{
-    ConfigSource, parse_founder_aggregation, parse_selector, resolve_config, sampled_units,
-    with_founder_aggregation,
+    ConfigSource, parse_founder_aggregation, parse_non_negative, parse_selector, resolve_config,
+    sampled_units, with_consumption_scales, with_founder_aggregation,
 };
 use explorers_search::grazer_hunger::{
     DISTANCE_BANDS, DISTANCE_EDGES, GrazerHunger, HUNGRY_BANDS, RECOGNITION_BANDS, SATIATION_BANDS,
@@ -73,6 +75,14 @@ struct Row {
     /// (`--founder-aggregation`, #605); absent when worlds ran as decoded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     founder_aggregation: Option<f32>,
+    /// The satiation sensitivity every world was pinned to
+    /// (`--satiation-sensitivity`, #619); absent when worlds ran as decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    satiation_sensitivity: Option<f32>,
+    /// The recognition distance every world was pinned to
+    /// (`--recognition-distance`, #619); absent when worlds ran as decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recognition_distance: Option<f32>,
     seeds: Vec<SeedDiet>,
 }
 
@@ -167,6 +177,10 @@ struct Args {
     /// `None` runs worlds as decoded. `0` is the pre-#601 well-mixed scatter,
     /// for comparing against an older tree (#605).
     founder_aggregation: Option<f32>,
+    /// Pin every world's satiation sensitivity (#619); `None` as decoded.
+    satiation_sensitivity: Option<f32>,
+    /// Pin every world's recognition distance (#619); `None` as decoded.
+    recognition_distance: Option<f32>,
 }
 
 fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
@@ -180,6 +194,8 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
         configs: None,
         summary_only: false,
         founder_aggregation: None,
+        satiation_sensitivity: None,
+        recognition_distance: None,
     };
     let mut it = argv.into_iter();
     while let Some(flag) = it.next() {
@@ -199,6 +215,12 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
             "--summary" => args.summary_only = true,
             "--founder-aggregation" => {
                 args.founder_aggregation = Some(parse_founder_aggregation(&value()?)?)
+            }
+            "--satiation-sensitivity" => {
+                args.satiation_sensitivity = Some(parse_non_negative(&flag, &value()?)?)
+            }
+            "--recognition-distance" => {
+                args.recognition_distance = Some(parse_non_negative(&flag, &value()?)?)
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -220,6 +242,11 @@ fn run_row(
 ) -> Row {
     let eval = EvalConfig::default();
     let config = with_founder_aggregation(config.clone(), args.founder_aggregation);
+    let config = with_consumption_scales(
+        config,
+        args.satiation_sensitivity,
+        args.recognition_distance,
+    );
     let seeds = (0..args.ensemble)
         .into_par_iter()
         .map(|i| rollout(&config.0, &config.1, args.seed + i, args.horizon, &eval))
@@ -230,6 +257,8 @@ fn run_row(
         horizon: args.horizon,
         base_seed: args.seed,
         founder_aggregation: args.founder_aggregation,
+        satiation_sensitivity: args.satiation_sensitivity,
+        recognition_distance: args.recognition_distance,
         seeds,
     }
 }
@@ -560,6 +589,8 @@ mod tests {
             horizon: 2000,
             base_seed: 1000,
             founder_aggregation: None,
+            satiation_sensitivity: None,
+            recognition_distance: None,
             seeds: vec![
                 seed([true, true, false], [true, false, false], None),
                 seed([true, true, false], [true, false, false], None),
@@ -634,6 +665,61 @@ mod tests {
             pinned.seeds, unpinned.seeds,
             "the pin changes the founding placement the rollout sees"
         );
+        let back: Row = serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
+        assert_eq!(back, pinned);
+    }
+
+    /// `--satiation-sensitivity C` and `--recognition-distance D` pin every
+    /// resolved world's need-gate and recognition scales (#619), and each row
+    /// records them; unpinned rows read and write as before.
+    #[test]
+    fn consumption_scale_pins_reach_the_world_and_the_row() {
+        let parse = |a: &[&str]| parse_args(a.iter().map(|s| s.to_string()));
+        let a = parse(&[]).unwrap();
+        assert_eq!(
+            (a.satiation_sensitivity, a.recognition_distance),
+            (None, None)
+        );
+        assert!(parse(&["--satiation-sensitivity", "-1"]).is_err());
+        assert!(parse(&["--recognition-distance", "x"]).is_err());
+        let args = parse(&[
+            "--satiation-sensitivity",
+            "3",
+            "--recognition-distance",
+            "1.5",
+            "--founder-aggregation",
+            "0",
+            "--max-ticks",
+            "60",
+            "--ensemble",
+            "1",
+        ])
+        .unwrap();
+        assert_eq!(
+            (args.satiation_sensitivity, args.recognition_distance),
+            (Some(3.0), Some(1.5))
+        );
+
+        let sampled = sampled_units(default_ranges().len());
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        let pinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
+        assert_eq!(
+            (pinned.satiation_sensitivity, pinned.recognition_distance),
+            (Some(3.0), Some(1.5))
+        );
+        let unpinned_args = parse(&[
+            "--founder-aggregation",
+            "0",
+            "--max-ticks",
+            "60",
+            "--ensemble",
+            "1",
+        ])
+        .unwrap();
+        let unpinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &unpinned_args);
+        let json = serde_json::to_string(&unpinned).unwrap();
+        assert!(!json.contains("satiation_sensitivity") && !json.contains("recognition_distance"));
+        assert_ne!(pinned.seeds, unpinned.seeds, "the pins change the rollout");
         let back: Row = serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
         assert_eq!(back, pinned);
     }

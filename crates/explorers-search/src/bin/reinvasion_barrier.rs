@@ -53,13 +53,18 @@
 //! default; `sample@S:i`; `atlas:N` with `--atlas PATH`). Seeds are the
 //! fixed block `SEED_BASE + i`; cohort positions come from a stream keyed on
 //! (seed, arm); seeds run in parallel with an order-stable collect, so the
-//! artifact is byte-identical across runs. Chunking: `--seed-from A
+//! artifact is byte-identical across runs (in the accounted modes, up to
+//! last-ulp drift in the per-member account floats, which are summed over
+//! `HashMap`s; trajectories and printed tables are identical). Chunking: `--seed-from A
 //! --seeds N` runs seeds `A..A+N` and writes their records; `--merge F…`
 //! re-reads chunk files and prints the combined summary. Artifact
 //! `target/reinvasion-barrier.json` (`--out PATH`).
 //! `--founder-aggregation A` pins the world's founding placement (#601) and
 //! records the pin in the artifact; `0` is the pre-#601 well-mixed scatter,
 //! for comparing against an older tree (#605).
+//! `--satiation-sensitivity C` and `--recognition-distance D` pin the need
+//! gate's and recognition's scales (#619) and are recorded likewise; unset,
+//! the world runs as decoded.
 //!
 //! ## Accounting mode (#591)
 //!
@@ -113,8 +118,8 @@ use rayon::prelude::*;
 use explorers_genesis::EvalConfig;
 use explorers_genesis_eval::income::IncomeLedger;
 use explorers_search::config_source::{
-    parse_config_key, parse_founder_aggregation, resolve_config, sampled_units,
-    with_founder_aggregation,
+    parse_config_key, parse_founder_aggregation, parse_non_negative, resolve_config, sampled_units,
+    with_consumption_scales, with_founder_aggregation,
 };
 use explorers_search::energy_accounting::{EnergyAccount, LineageAccountant};
 use explorers_search::grazer_hunger::{GrazerHunger, RECOGNITION_BANDS, SATIATION_EDGES};
@@ -858,6 +863,14 @@ struct Artifact {
     /// (`--founder-aggregation`, #605); absent when the world ran as decoded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     founder_aggregation: Option<f32>,
+    /// The satiation sensitivity the world was pinned to
+    /// (`--satiation-sensitivity`, #619); absent when it ran as decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    satiation_sensitivity: Option<f32>,
+    /// The recognition distance the world was pinned to
+    /// (`--recognition-distance`, #619); absent when it ran as decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recognition_distance: Option<f32>,
     seeds: Vec<SeedRecord>,
     /// Derived from `seeds`: not read back from a file (an empty arm's
     /// medians are NaN, written as `null`); `merge` recomputes it.
@@ -905,6 +918,8 @@ impl Artifact {
             arms,
             accounting: false,
             founder_aggregation: None,
+            satiation_sensitivity: None,
+            recognition_distance: None,
             seeds,
             summary,
         }
@@ -922,16 +937,18 @@ impl Artifact {
                 a.arms.clone(),
                 a.accounting,
                 a.founder_aggregation.map(f32::to_bits),
+                a.satiation_sensitivity.map(f32::to_bits),
+                a.recognition_distance.map(f32::to_bits),
             )
         };
         let want = key(first);
         if let Some(bad) = chunks.iter().find(|a| key(a) != want) {
             return Err(format!(
-                "chunk {:?} t_inj {} window {} does not match {:?} t_inj {} window {}",
+                "chunk {:?} t_inj {} window {} does not match {:?} t_inj {} window {} (or its mode or pins differ)",
                 bad.reference, bad.t_inj, bad.window, want.0, want.1, want.2
             ));
         }
-        let (reference, t_inj, window, arms, accounting, pin) = want;
+        let (reference, t_inj, window, arms, accounting, pin, c, d) = want;
         let mut seeds: Vec<SeedRecord> = chunks.into_iter().flat_map(|a| a.seeds).collect();
         seeds.sort_by_key(|s| s.seed);
         if seeds.windows(2).any(|w| w[0].seed == w[1].seed) {
@@ -940,11 +957,13 @@ impl Artifact {
         let mut a = Artifact::from_seeds(reference, t_inj, window, arms, seeds);
         a.accounting = accounting;
         a.founder_aggregation = pin.map(f32::from_bits);
+        a.satiation_sensitivity = c.map(f32::from_bits);
+        a.recognition_distance = d.map(f32::from_bits);
         Ok(a)
     }
 }
 
-const USAGE: &str = "usage: reinvasion_barrier [CONFIG_KEY (default sample:31)] [--accounting | --dispersal] [--t-inj N] [--window N] [--seed-from A] [--seeds N] [--atlas PATH] [--founder-aggregation A] [--out PATH] | --merge FILE...";
+const USAGE: &str = "usage: reinvasion_barrier [CONFIG_KEY (default sample:31)] [--accounting | --dispersal] [--t-inj N] [--window N] [--seed-from A] [--seeds N] [--atlas PATH] [--founder-aggregation A] [--satiation-sensitivity C] [--recognition-distance D] [--out PATH] | --merge FILE...";
 
 #[derive(Debug)]
 struct Cli {
@@ -967,6 +986,12 @@ struct Cli {
     /// `[0, 1]`; `None` runs the world as decoded. `0` is the pre-#601
     /// well-mixed scatter, for comparing against an older tree (#605).
     founder_aggregation: Option<f32>,
+    /// Pin the world's satiation sensitivity (the need gate's scale, #619);
+    /// `None` runs it as decoded.
+    satiation_sensitivity: Option<f32>,
+    /// Pin the world's recognition distance (#619); `None` runs it as
+    /// decoded.
+    recognition_distance: Option<f32>,
 }
 
 impl Cli {
@@ -983,6 +1008,8 @@ impl Cli {
             accounting: false,
             dispersal: false,
             founder_aggregation: None,
+            satiation_sensitivity: None,
+            recognition_distance: None,
         };
         let mut it = argv.into_iter();
         let mut merging = false;
@@ -1006,6 +1033,14 @@ impl Cli {
                 "--founder-aggregation" => {
                     cli.founder_aggregation =
                         Some(parse_founder_aggregation(&value("--founder-aggregation")?)?)
+                }
+                flag @ ("--satiation-sensitivity" | "--recognition-distance") => {
+                    let v = Some(parse_non_negative(flag, &value(flag)?)?);
+                    if flag == "--satiation-sensitivity" {
+                        cli.satiation_sensitivity = v;
+                    } else {
+                        cli.recognition_distance = v;
+                    }
                 }
                 flag if flag.starts_with("--") => {
                     return Err(format!("unknown argument {flag:?}\n{USAGE}"));
@@ -1058,6 +1093,8 @@ fn main() {
             std::process::exit(2)
         });
         let config = with_founder_aggregation(config, cli.founder_aggregation);
+        let config =
+            with_consumption_scales(config, cli.satiation_sensitivity, cli.recognition_distance);
         let (arms, mode) = if cli.accounting {
             (accounting_arms(), Mode::Accounting)
         } else if cli.dispersal {
@@ -1066,14 +1103,16 @@ fn main() {
             (all_arms(), Mode::Plain)
         };
         eprintln!(
-            "reinvasion_barrier: {} × {} arms × seeds {}..{}; t_inj {}, window {}, cohort {INVADER_COHORT}, founder aggregation {}",
+            "reinvasion_barrier: {} × {} arms × seeds {}..{}; t_inj {}, window {}, cohort {INVADER_COHORT}, founder aggregation {}, satiation sensitivity {}, recognition distance {}",
             cli.reference,
             arms.len(),
             cli.seed_from,
             cli.seed_from + cli.seeds,
             cli.t_inj,
             cli.window,
-            config.1.founder_aggregation
+            config.1.founder_aggregation,
+            config.0.satiation_sensitivity,
+            config.0.recognition_distance
         );
         let start = std::time::Instant::now();
         let mut a = Artifact::run(
@@ -1091,6 +1130,8 @@ fn main() {
             start.elapsed().as_secs_f64()
         );
         a.founder_aggregation = cli.founder_aggregation;
+        a.satiation_sensitivity = cli.satiation_sensitivity;
+        a.recognition_distance = cli.recognition_distance;
         a
     } else {
         let chunks: Vec<Artifact> = cli
@@ -1837,6 +1878,33 @@ mod tests {
         assert!(parse(&["--founder-aggregation"]).is_err());
     }
 
+    /// `--satiation-sensitivity C` and `--recognition-distance D` pin the
+    /// need gate's and recognition's scales (#619); unset, the world is as
+    /// decoded.
+    #[test]
+    fn cli_pins_the_consumption_scales_only_when_asked() {
+        let parse = |args: &[&str]| Cli::parse(args.iter().map(|s| s.to_string()));
+        let cli = parse(&[]).unwrap();
+        assert_eq!(
+            (cli.satiation_sensitivity, cli.recognition_distance),
+            (None, None)
+        );
+        let cli = parse(&[
+            "--dispersal",
+            "--satiation-sensitivity",
+            "3",
+            "--recognition-distance",
+            "1.5",
+        ])
+        .unwrap();
+        assert_eq!(
+            (cli.satiation_sensitivity, cli.recognition_distance),
+            (Some(3.0), Some(1.5))
+        );
+        assert!(parse(&["--satiation-sensitivity", "-1"]).is_err());
+        assert!(parse(&["--recognition-distance"]).is_err());
+    }
+
     /// The pin is recorded in the artifact, is left out when unset (so
     /// earlier artifacts read back unchanged), and chunks with different pins
     /// do not merge.
@@ -1861,5 +1929,52 @@ mod tests {
         other.founder_aggregation = Some(0.0);
         let merged = Artifact::merge(vec![back, other]).unwrap();
         assert_eq!(merged.founder_aggregation, Some(0.0));
+    }
+
+    /// The consumption-scale pins (#619) are recorded in the artifact, left
+    /// out when unset, and chunks with different pins do not merge. A pin
+    /// changes the run: the world the arms see is the pinned one.
+    #[test]
+    fn the_artifact_records_the_consumption_scale_pins() {
+        let decoded = resolve_reference("sample:31", None).unwrap();
+        let arms = [Arm {
+            phenotype: Phenotype::Step(0),
+            placement: Placement::Uniform,
+            dispersal_centi: None,
+        }];
+        let unpinned = Artifact::run("sample:31", &decoded, 30, 10, 0, 1, &arms, Mode::Plain);
+        let json = serde_json::to_string(&unpinned).unwrap();
+        assert!(!json.contains("satiation_sensitivity"));
+        assert!(!json.contains("recognition_distance"));
+
+        let pinned_world = with_consumption_scales(decoded.clone(), Some(3.0), Some(1.5));
+        let mut pinned =
+            Artifact::run("sample:31", &pinned_world, 30, 10, 0, 1, &arms, Mode::Plain);
+        pinned.satiation_sensitivity = Some(3.0);
+        pinned.recognition_distance = Some(1.5);
+        assert_ne!(
+            serde_json::to_string(&pinned.seeds).unwrap(),
+            serde_json::to_string(&unpinned.seeds).unwrap(),
+            "the pinned scales reach the run"
+        );
+        let back: Artifact =
+            serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
+        assert_eq!(
+            (back.satiation_sensitivity, back.recognition_distance),
+            (Some(3.0), Some(1.5))
+        );
+
+        let mut other = Artifact::run("sample:31", &pinned_world, 30, 10, 1, 1, &arms, Mode::Plain);
+        other.satiation_sensitivity = Some(3.0);
+        assert!(
+            Artifact::merge(vec![back.clone(), other.clone()]).is_err(),
+            "a chunk with a different recognition distance does not merge"
+        );
+        other.recognition_distance = Some(1.5);
+        let merged = Artifact::merge(vec![back, other]).unwrap();
+        assert_eq!(
+            (merged.satiation_sensitivity, merged.recognition_distance),
+            (Some(3.0), Some(1.5))
+        );
     }
 }
