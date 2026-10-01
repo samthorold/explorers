@@ -430,12 +430,12 @@ fn print_pool(name: &str, p: &Pool) {
 /// retention buffer, co-limited by free nutrient, read before growth.
 fn print_surplus(sp: &SurplusByRole) {
     println!(
-        "\nSurplus satiation (#622): s = max(0, min(reserve − buffer, N / (η·ratio))) / m, read after metabolism and before growth, over second-half agent-samples by recent-income role (#599). Light-fed mixotrophs: income producers with heterotrophy > 0. Proposed default c = 1 / s₂₅ of the light-fed mixotrophs.\n"
+        "\nSurplus satiation (#622): s = max(0, min(reserve − buffer, N / (η·ratio))) / m, read after metabolism and before growth, over second-half agent-samples by recent-income role (#599). Light-fed mixotrophs: income producers with heterotrophy > 0. Proposed default c = 1 / s₂₅ over the light-fed mixotrophs with positive surplus (#622).\n"
     );
     println!(
-        "| agents | samples | at s = 0 | of which no free nutrient | nutrient-limited | s₂₅ | median | s₇₅ | 1 / s₂₅ | 1 / median |"
+        "| agents | samples | at s = 0 | of which no free nutrient | nutrient-limited | s₂₅ | median | s₇₅ | 1 / s₂₅ | 1 / median | s₂₅ (s > 0) | 1 / s₂₅ (s > 0) |"
     );
-    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     let mut heterotrophs = sp.roles[1].clone();
     heterotrophs.merge(&sp.roles[2]);
     let rows: [(&str, &SurplusDistribution); 7] = [
@@ -454,8 +454,9 @@ fn print_surplus(sp: &SurplusByRole) {
     let inv = |v: Option<f64>| fmt(v.filter(|&x| x > 0.0).map(|x| 1.0 / x));
     for (label, d) in rows {
         let (s25, s50) = (d.percentile(0.25), d.percentile(0.5));
+        let p25 = d.positive_percentile(0.25);
         println!(
-            "| {label} | {} | {}% | {}% | {}% | {} | {} | {} | {} | {} |",
+            "| {label} | {} | {}% | {}% | {}% | {} | {} | {} | {} | {} | {} | {} |",
             d.count(),
             pct(d.zero, d.count()),
             pct(d.zero_nutrient_limited, d.zero),
@@ -465,8 +466,14 @@ fn print_surplus(sp: &SurplusByRole) {
             fmt(d.percentile(0.75)),
             inv(s25),
             inv(s50),
+            fmt(p25),
+            inv(p25),
         );
     }
+    println!(
+        "\nProposed default satiation_sensitivity c = 1 / s₂₅ (light-fed mixotrophs, s > 0): {}",
+        fmt(sp.proposed_sensitivity())
+    );
 }
 
 /// Band labels from upper edges: `[0, e0)`, …, `≥ eN`.

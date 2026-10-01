@@ -239,6 +239,21 @@ impl SurplusDistribution {
         Some(SURPLUS_LOW * step.powi(top as i32))
     }
 
+    /// The `q` quantile of the positive samples alone (the zeros left out);
+    /// `None` when none is positive. The default-sensitivity criterion reads
+    /// this: `c = 1 / s₂₅` over light-fed mixotrophs with surplus (#622).
+    pub fn positive_percentile(&self, q: f64) -> Option<f64> {
+        if self.bins.iter().all(|&c| c == 0) {
+            return None;
+        }
+        SurplusDistribution {
+            zero: 0,
+            bins: self.bins.clone(),
+            ..Default::default()
+        }
+        .percentile(q)
+    }
+
     pub fn merge(&mut self, other: &SurplusDistribution) {
         self.zero += other.zero;
         self.nutrient_limited += other.nutrient_limited;
@@ -682,6 +697,25 @@ mod tests {
             sum.percentile(0.5).unwrap(),
             d.percentile(0.5).unwrap()
         ));
+    }
+
+    /// The positive-surplus percentile ignores the zeros: the criterion for
+    /// the default sensitivity (#622) reads only agents that can be sated.
+    #[test]
+    fn positive_percentile_reads_only_samples_above_zero() {
+        let mut d = SurplusDistribution::default();
+        assert_eq!(d.positive_percentile(0.25), None);
+        for _ in 0..1000 {
+            d.record(0.0);
+        }
+        assert_eq!(d.positive_percentile(0.25), None);
+        for i in 1..=400 {
+            d.record(i as f32 * 0.1);
+        }
+        assert_eq!(d.percentile(0.25), Some(0.0));
+        // The 100th of 400 positive values is 10.0.
+        let got = d.positive_percentile(0.25).unwrap();
+        assert!((got / 10.0 - 1.0).abs() < 0.13, "{got}");
     }
 
     /// Recording a [`Surplus`] also counts which side bound it: samples

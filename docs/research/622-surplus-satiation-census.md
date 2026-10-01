@@ -1,6 +1,6 @@
 # Issue #622: surplus satiation by role on the atlas
 
-**Status: measurement. Adds a surplus-satiation readout to `role_diet_census`
+**Status: measurement; proposes `satiation_sensitivity = 33` (set in #623). Adds a surplus-satiation readout to `role_diet_census`
 (`explorers_search::grazer_hunger::Surplus`, `SurplusDistribution`;
 `explorers_search::role_diet::SurplusByRole`). No trajectory changes: with the new `surplus` field
 removed, every atlas row is byte-identical to `main`'s (`f02b023`) at both founder-aggregation
@@ -13,40 +13,40 @@ expression are decoupled*):
 `s = max(0, min(reserve − buffer, free_nutrient / (growth_efficiency × ratio))) / metabolic_cost`,
 with `buffer = growth_retention_multiplier × metabolic_cost`.
 
-The design sets the default `satiation_sensitivity` to `c = 1 / s₂₅`, where `s₂₅` is the 25th
-percentile of the surplus of **light-fed mixotrophs** on the atlas: income-role producers (light ≥
-half of recent income, #599) with heterotrophy above zero. This note measures that distribution.
+The design (as first written) set the default `satiation_sensitivity` to `c = 1 / s₂₅`, where `s₂₅`
+is the 25th percentile of the surplus of **light-fed mixotrophs** on the atlas: income-role producers
+(light ≥ half of recent income, #599) with heterotrophy above zero. This note measures that
+distribution. The criterion as written gives `s₂₅ = 0`, so it was amended (§4) to read the 25th
+percentile over light-fed mixotrophs **with positive surplus**.
 
 ## TL;DR
 
-1. **`s₂₅` of light-fed mixotrophs is 0, so `c = 1 / s₂₅` has no finite value.** 29.0 % of their
-   agent-samples sit at `s = 0` (27.6 % on live configs; 26.5 % at `founder_aggregation = 0`).
-   The distribution leaves zero only at about the 33rd percentile.
+1. **Proposed default: `satiation_sensitivity = 33`** (`1 / s₂₅⁺`, `s₂₅⁺ = 0.030` ticks over the
+   light-fed mixotrophs with `s > 0`, decoded atlas; exact read 33.03). The cross-check at
+   `founder_aggregation = 0` gives `s₂₅⁺ = 0.074`, `c = 13.4`. Live configs only: 38.2 decoded, 13.8
+   at `founder_aggregation = 0`.
 
-   | light-fed mixotrophs | samples | at s = 0 | s₂₅ | median | s₇₅ | 1 / s₂₅ |
-   |---|---:|---:|---:|---:|---:|---:|
-   | atlas, decoded | 84,403 | 29.0 % | 0 | 0.049 | 0.48 | — (∞) |
-   | atlas, `founder_aggregation = 0` | 206,933 | 26.5 % | 0 | 0.134 | 0.94 | — (∞) |
+   | light-fed mixotrophs | samples | at s = 0 | s₂₅ | median | s₇₅ | s₂₅ (s > 0) | 1 / s₂₅ (s > 0) |
+   |---|---:|---:|---:|---:|---:|---:|---:|
+   | atlas, decoded | 84,403 | 29.0 % | 0 | 0.049 | 0.48 | 0.030 | **33.0** |
+   | atlas, `founder_aggregation = 0` | 206,933 | 26.5 % | 0 | 0.134 | 0.94 | 0.074 | 13.4 |
 
-2. **Nutrient, not the buffer, holds them at zero.** About 90 % of the zeros hold no free nutrient
-   before growth. On the energy side alone, only 2.7 % are at or below the buffer. Their energy
-   surplus is large: median 2.6 ticks, `s₇₅` 18.9. Nutrient is the scarcer currency for 45 % of
-   light-fed mixotroph samples (38 % at `founder_aggregation = 0`).
+2. **Why the criterion reads only positive surplus.** Over all light-fed mixotrophs `s₂₅ = 0`:
+   29.0 % sit at `s = 0` (26.5 % at `founder_aggregation = 0`), so `c = 1 / s₂₅` has no finite
+   value. About 90 % of those zeros hold no free nutrient before growth. Their energy above the
+   buffer is large: on the energy side alone only 2.7 % are at or below the buffer. They are
+   nutrient-short producers, which the design deliberately leaves at full capability at any `c` (the
+   carnivorous-plant case). They cannot be sated, so they cannot set the scale at which sated
+   agents half-express.
 3. **Light-fed mixotrophs read *less* sated than heterotrophs, not more.** Their median surplus is
    0.05–0.13 ticks. Consumers by income have a median of 0.8, and decomposers by income 0 (decoded)
-   or 1.0 (`founder_aggregation = 0`). Any `c` large enough to half-gate the median mixotroph
-   (`c ≈ 1 / 0.049 ≈ 20` decoded, `≈ 7.5` at `founder_aggregation = 0`) gates the median consumer
-   harder. So on the atlas the co-limited surplus does not separate a light-fed mixotroph from a
-   consumer in the direction the design needs.
-4. **Founder aggregation does not change the verdict.** At `founder_aggregation = 0` the zero share
-   is a little lower and the mixotrophs' positive tail is about twice as high. Neither setting
-   gives a finite `1 / s₂₅`. The heterotroph rows barely move.
-5. **No default `c` is proposed from this criterion.** The criterion assumes most light-fed
-   mixotrophs carry a positive surplus. On the atlas, a quarter or more have no free nutrient to
-   match one. The design says such an agent should feed at full capability (the
-   carnivorous-plant case), so the zeros are the gate working as designed. They are not a
-   measurement artefact. Settling the default needs a design call (§4); slice 2 should not take
-   `c = 1 / s₂₅` as written.
+   or 1.0 (`founder_aggregation = 0`). At `c = 33` the median consumer expresses about
+   `1 / (1 + 33 × 0.86) ≈ 0.03`. Only heterotrophs at `s = 0` (between meals, 26–57 % of their
+   samples) feed near full capability. Slice 2 should measure what that does to heterotroph
+   income.
+4. **Founder aggregation moves `c` by about 2.5×** (33 → 13): the mixotrophs' positive tail sits
+   about twice as high at `founder_aggregation = 0`. The zero share and the heterotroph rows barely
+   move.
 
 ## 1. What ran
 
@@ -66,13 +66,14 @@ C=$(seq -s, -f 'atlas:%g' 0 94)
 
 **Wall clock:**
 
-| run | `main` (no readout) | with the readout |
-|---|---:|---:|
-| atlas, decoded | 26.5 s | 26.3 s |
-| atlas, `founder_aggregation = 0` | 59.0 s | 58.2 s |
+| run | `main` (no readout) | with the readout | final re-run |
+|---|---:|---:|---:|
+| atlas, decoded | 26.5 s | 26.3 s | 40.9 s |
+| atlas, `founder_aggregation = 0` | 59.0 s | 58.2 s | 94.4 s |
 
 The readout costs nothing measurable. It replays three phases only on the evaluator's second-half
-sample ticks.
+sample ticks. The final re-run, which added only the positive-surplus percentile to the summary,
+was slower because the laptop was under other load. Its rows are identical.
 
 **Reproduction check.** The same commands ran on `main` (`f02b023`). The branch's rows with
 `.seeds[].surplus` deleted (`jq -c 'del(.seeds[].surplus)'`) are byte-identical to `main`'s, for
@@ -152,43 +153,51 @@ samples, mostly decomposers, so their percentiles are noisy. Half the decoded de
 sit at zero, and almost all of those are at or below the buffer. That is the "between meals"
 reading the design predicts.
 
-## 4. What this means for the default
+## 4. The default: `c = 1 / s₂₅` over light-fed mixotrophs with positive surplus
 
-The design picks `c = 1 / s₂₅` so that three quarters of light-fed mixotrophs sit at or past half
-expression, where recognition spares identical kin completely. On the atlas:
+The design picks `c = 1 / s₂₅` so that three quarters of the light-fed mixotrophs sit at or past
+half expression, where recognition spares identical kin completely. Read over all of them, that is
+unattainable:
 
-- **No finite `c` achieves that.** 26–29 % of light-fed mixotrophs have `s = 0` and express full
-  capability at any `c`. So at most 71–74 % can ever reach half expression.
+- **No finite `c` achieves it.** 26–29 % of light-fed mixotrophs have `s = 0` and express full
+  capability at any `c`, so at most 71–74 % can ever reach half expression.
 - **The zeros are nutrient-hungry producers.** They hold energy above the buffer but no free
   nutrient before growth. The design means them to feed at full capability: "a producer saturated
-  with light but short of nutrient has a real reason to drain". The population the criterion is
-  read over therefore includes agents the gate is meant to leave open.
-- **Even the positive part does not favour the mixotrophs.** Their nutrient-matched surplus is
-  small (median 0.05–0.13 ticks), below the consumers' median (0.8). A `c` that half-gates the
-  median light-fed mixotroph (about 7.5–20) half-gates the median consumer and decomposer more.
-- **The energy side alone would separate them a little.** Its median is 2.0–2.6 ticks for
-  mixotrophs, against a co-limited 0.8–1.0 for heterotrophs. `1 / s₂₅` would then be 13
-  (decoded) or 6 (`founder_aggregation = 0`). But the design deliberately co-limits, and an
-  energy-only gate would silence the carcass recycling the nutrient side exists to keep open.
+  with light but short of nutrient has a real reason to drain". *Inference:* they are
+  nutrient-limited growers. Each tick's growth binds their free nutrient into structure, so the
+  store they carry into the next grow phase is near zero whenever that tick's uptake was small.
 
-*Inference:* on the atlas, light-fed mixotrophs are mostly nutrient-limited growers. Each tick's
-growth binds their free nutrient into structure, so the store they carry into the next grow phase
-is near zero whenever uptake that tick was small. The co-limited surplus then reads them as
-hungry. Whether that is right is a design question, not a measurement one. Candidate calls for
-slice 2:
+**Chosen criterion (the owner's call, option 1 of three):** `c = 1 / s₂₅⁺`, the 25th percentile over
+light-fed mixotrophs with `s > 0`. These are the mixotrophs the gate can sate, and three quarters of
+them sit at or past half expression at that `c`. The census prints it as "Proposed default
+satiation_sensitivity" (`SurplusByRole::proposed_sensitivity`).
 
-1. Read the percentile over light-fed mixotrophs with a positive surplus. This sets `c` for the
-   agents that can be sated at all. The positive part's 25th percentile is 0.030 ticks decoded
-   and 0.074 at `founder_aggregation = 0`, so `c ≈ 33` or `≈ 13`. That would close the gate on
-   nearly every heterotroph holding any surplus.
-2. Anchor `c` on a different population or percentile (the mixotroph median gives `c ≈ 7.5–20`),
-   accepting that it gates consumers at least as hard.
-3. Revisit the nutrient side's yardstick before choosing `c`. For example, count nutrient against
-   this tick's uptake rather than the stored free nutrient, which growth empties.
+| | s₂₅⁺ | c = 1 / s₂₅⁺ |
+|---|---:|---:|
+| decoded atlas, all configs (**the default**) | 0.0303 | **33.0** |
+| decoded atlas, live configs | 0.0262 | 38.2 |
+| `founder_aggregation = 0`, all configs (cross-check) | 0.0744 | 13.4 |
+| `founder_aggregation = 0`, live configs | 0.0723 | 13.8 |
 
-This note proposes **no default `c`**. The criterion as written gives `s₂₅ = 0`, so `c = 1/s₂₅`
-is unbounded at both founder-aggregation settings. This needs a `grill-with-docs` pass before
-slice 2.
+**Proposed default `satiation_sensitivity = 33`.** It is read on the decoded atlas because that is
+the world as the search runs it. The `founder_aggregation = 0` value is 2.5× lower. The percentile
+read is accurate to about 12 % (one log bin), so 33 is as precise as the figure supports.
+
+The other options were not taken:
+- Anchor on the mixotroph median (`c ≈ 7.5–20`).
+- Revisit the nutrient side's yardstick, for example count nutrient against this tick's uptake
+  rather than the stored free nutrient, which growth empties.
+
+**What this costs heterotrophs** (for #623 to measure, not settled here):
+- **A consumer at its median surplus (0.86 ticks) expresses about 3 % of capability at `c = 33`.**
+  The positive surplus on this yardstick is small for every role, so a `c` set where mixotrophs
+  half-express gates any heterotroph holding a surplus hard.
+- **Feeding is left to heterotrophs between meals.** Those at `s = 0` (26–57 % of their samples)
+  still feed at full capability.
+- **The energy side alone would separate the roles better.** Its median is 2.0–2.6 ticks for
+  mixotrophs, against a co-limited 0.8–1.0 for heterotrophs. But the design deliberately
+  co-limits, and an energy-only gate would silence the carcass recycling the nutrient side exists
+  to keep open.
 
 ## 5. What this does not show
 
