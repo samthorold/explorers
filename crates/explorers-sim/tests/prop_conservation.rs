@@ -55,6 +55,44 @@ proptest! {
     fn stores_never_go_negative(case in world_case()) {
         check_stores_non_negative(&case)?;
     }
+
+    /// No cell of free nutrient is negative after creation (#612), over
+    /// aggregated foundings on pools from ample down to too small for every
+    /// founder's seed body, and nutrient at creation is still the pool.
+    #[test]
+    fn no_cell_is_negative_after_creation(
+        case in world_case(),
+        aggregation in 0.5f32..=1.0,
+        pool in 0.01f32..=2000.0,
+    ) {
+        let mut case = case;
+        case.dist.founder_aggregation = aggregation;
+        case.params.initial_nutrient_pool = pool;
+        check_creation_floor(&case)?;
+    }
+}
+
+fn check_creation_floor(case: &WorldCase) -> Result<(), TestCaseError> {
+    let world = World::new(case.params.clone(), case.dist.clone(), case.seed);
+    for (i, &c) in world.nutrient_grid().cells().iter().enumerate() {
+        prop_assert!(
+            c >= 0.0,
+            "cell {i} holds negative free nutrient after creation: {c}"
+        );
+    }
+    let n_total = case.params.initial_nutrient_pool;
+    let living: f32 = world
+        .agents()
+        .iter()
+        .map(|a| a.nutrient_total(world.params()))
+        .sum();
+    let total = world.nutrient_pool() + living;
+    let tolerance = n_total.abs().max(1.0) * NUTRIENT_REL_TOLERANCE;
+    prop_assert!(
+        (total - n_total).abs() <= tolerance,
+        "nutrient at creation {total} != pool {n_total} (tolerance {tolerance})"
+    );
+    Ok(())
 }
 
 fn check_energy_ledger_identity(case: &WorldCase) -> Result<(), TestCaseError> {

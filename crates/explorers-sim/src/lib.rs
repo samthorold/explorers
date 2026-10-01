@@ -202,7 +202,20 @@ pub fn provision_initial_reserve_structure(
     budget: f32,
     params: &WorldParameters,
 ) -> (f32, f32, f32) {
-    let frac = params.offspring_structure_fraction.clamp(0.0, 1.0);
+    provision_co_limited(budget, params, 1.0)
+}
+
+/// [`provision_initial_reserve_structure`] with the structure commitment
+/// scaled by `nutrient_share ∈ [0, 1]`: the share of its seed body the founder
+/// can bind nutrient for. The energy not committed stays in reserve, as growth
+/// leaves energy it cannot match with nutrient in reserve (#612). At
+/// `nutrient_share = 1` this is exactly the unscaled split.
+fn provision_co_limited(
+    budget: f32,
+    params: &WorldParameters,
+    nutrient_share: f32,
+) -> (f32, f32, f32) {
+    let frac = params.offspring_structure_fraction.clamp(0.0, 1.0) * nutrient_share;
     let structure_share = budget * frac;
     let structure = structure_share * params.growth_efficiency;
     let heat = structure_share - structure;
@@ -284,11 +297,6 @@ pub fn provision_offspring(
     }
 }
 
-/// Draw the nutrient bound in each seeded agent's birth structure from the
-/// available pool at the agent's location (ADR-0003 embodiment). Seeded agents
-/// are born with structure, which binds `structure × demand`; sourcing it from
-/// the pool keeps total system nutrient at world creation equal to the initial
-/// pool (nutrient is conserved, never conjured into the living system).
 /// The founding patch centres, one per cluster (#601), drawn deterministically
 /// from the world seed on their own keyed stream, so the main stream's founder
 /// draws (positions, then traits) are untouched. The centres sit on the cells
@@ -345,6 +353,13 @@ fn founder_position(
     )
 }
 
+/// Draw the nutrient bound in each seeded agent's birth structure from the
+/// available pool at the agent's location (ADR-0003 embodiment). Seeded agents
+/// are born with structure, which binds `structure × demand`; sourcing it from
+/// the pool keeps total system nutrient at world creation equal to the initial
+/// pool (nutrient is conserved, never conjured into the living system).
+/// A cell that cannot cover a founder's draw passes the shortfall to its
+/// nearest cells, ring by ring, so no cell goes negative (#612).
 fn bind_seed_structure_nutrient(
     agents: &[Agent],
     nutrient_grid: &mut spatial::NutrientGrid,
@@ -353,9 +368,41 @@ fn bind_seed_structure_nutrient(
     for agent in agents {
         let bound = agent.bound_nutrient(params);
         if bound > 0.0 {
-            *nutrient_grid.at_position(agent.position) -= bound;
+            // Founders draw in id order. After `co_limit_founder_structure`
+            // the pool covers every founder, so anything left undrawn is f32
+            // rounding, not missing nutrient.
+            nutrient_grid.draw_nearest(agent.position, bound);
         }
     }
+}
+
+/// Founding is co-limited by nutrient (#612). When the whole pool cannot bind
+/// every founder's seed body, each founder commits the same share
+/// `pool / Σ bound` of its structure budget, so the founders together bind the
+/// pool out exactly; the energy that structure would have taken stays in
+/// reserve. Sets each founder's reserve, structure and peak from its energy
+/// budget (`budgets[i]` for `agents[i]`) and returns the founders' total
+/// provisioning heat, or `None` (founders untouched) when the pool covers them.
+fn co_limit_founder_structure(
+    agents: &mut [Agent],
+    budgets: &[f32],
+    pool: f32,
+    params: &WorldParameters,
+) -> Option<f32> {
+    let wanted: f32 = agents.iter().map(|a| a.bound_nutrient(params)).sum();
+    if wanted <= pool {
+        return None;
+    }
+    let share = (pool.max(0.0) / wanted).clamp(0.0, 1.0);
+    let mut heat = 0.0_f32;
+    for (agent, &budget) in agents.iter_mut().zip(budgets) {
+        let (reserve, structure, h) = provision_co_limited(budget, params, share);
+        agent.reserve = reserve;
+        agent.structure = structure;
+        agent.peak_structure = structure;
+        heat += h;
+    }
+    Some(heat)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1026,7 +1073,7 @@ impl World {
 
         let (seed_reserve, seed_structure, seed_heat) =
             provision_initial_reserve_structure(distribution.initial_energy_per_agent, &params);
-        let agents: Vec<Agent> = (0..pop_size)
+        let mut agents: Vec<Agent> = (0..pop_size)
             .map(|id| {
                 let x = pos_dist.sample(&mut rng);
                 let y = pos_dist.sample(&mut rng);
@@ -1076,9 +1123,17 @@ impl World {
         // Seeded structure binds nutrient (ADR-0003 embodiment): draw each
         // agent's bound birth nutrient from the available pool at its location so
         // total system nutrient at creation equals the initial pool — nutrient is
-        // not conjured into the living system.
+        // not conjured into the living system. A pool too small for every seed
+        // body co-limits the founders' structure first (#612).
+        let budgets = vec![distribution.initial_energy_per_agent; pop_size];
+        let initial_dissipation = co_limit_founder_structure(
+            &mut agents,
+            &budgets,
+            params.initial_nutrient_pool,
+            &params,
+        )
+        .unwrap_or(seed_heat * pop_size as f32);
         bind_seed_structure_nutrient(&agents, &mut nutrient_grid, &params);
-        let initial_dissipation = seed_heat * pop_size as f32;
         Self {
             params,
             agents,
@@ -1106,7 +1161,7 @@ impl World {
             let rng = ChaCha8Rng::seed_from_u64(seed);
             let pop_size = agents.len();
             let mut initial_dissipation = 0.0_f32;
-            let sim_agents: Vec<Agent> = agents
+            let mut sim_agents: Vec<Agent> = agents
                 .iter()
                 .enumerate()
                 .map(|(i, spec)| {
@@ -1143,7 +1198,18 @@ impl World {
                 params.initial_nutrient_pool,
             );
             // Seeded structure binds nutrient (ADR-0003): draw it from the pool so
-            // total system nutrient at creation equals the initial pool.
+            // total system nutrient at creation equals the initial pool. A pool
+            // too small for every seed body co-limits the founders' structure
+            // first (#612).
+            let budgets: Vec<f32> = agents.iter().map(|spec| spec.reserve).collect();
+            if let Some(heat) = co_limit_founder_structure(
+                &mut sim_agents,
+                &budgets,
+                params.initial_nutrient_pool,
+                &params,
+            ) {
+                initial_dissipation = heat;
+            }
             bind_seed_structure_nutrient(&sim_agents, &mut nutrient_grid, &params);
             // Materialise any seeded carcasses (issue #311). Their ids come from a
             // high range disjoint from agent ids (current and future), so a seeded

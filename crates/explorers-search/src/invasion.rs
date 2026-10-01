@@ -43,7 +43,8 @@ pub fn growth_rate(cohort: usize, end: usize, ticks: u64) -> f64 {
 /// Add one agent with the given traits at each position, provisioned exactly
 /// as `World::new` provisions founders (`energy_per_agent` split by
 /// `provision_initial_reserve_structure`; the birth structure's bound nutrient
-/// drawn from the pool under the agent; free store empty). Returns the new
+/// drawn from the pool under the agent, its shortfall from the nearest cells
+/// when that cell cannot cover it; free store empty). Returns the new
 /// agents' ids, in position order.
 pub fn place_cohort(
     world: &mut World,
@@ -58,7 +59,7 @@ pub fn place_cohort(
         let agent = Agent::new(0, (x, y), reserve, structure, 0.0, traits);
         let bound = agent.bound_nutrient(world.params());
         if bound > 0.0 {
-            *world.nutrient_grid_mut().at_position((x, y)) -= bound;
+            world.nutrient_grid_mut().draw_nearest((x, y), bound);
         }
         world.add_agent(agent);
         ids.push(world.agents().last().expect("just added").id);
