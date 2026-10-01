@@ -523,7 +523,7 @@ fn default_recipe() -> WorldRecipe {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
-            satiation_sensitivity: 0.1,
+            satiation_sensitivity: 33.0,
             recognition_distance: 0.5,
         },
         initial_distribution: Some(InitialDistribution {
@@ -1302,7 +1302,8 @@ impl ExplorersApp {
                         .text("Base trophic efficiency"),
                 );
                 ui.add(
-                    egui::Slider::new(&mut params.satiation_sensitivity, 0.0..=1.0)
+                    egui::Slider::new(&mut params.satiation_sensitivity, 0.0..=100.0)
+                        .logarithmic(true)
                         .text("Satiation sensitivity (0 = ungated drain)"),
                 );
                 ui.add(

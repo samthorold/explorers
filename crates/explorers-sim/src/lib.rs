@@ -177,7 +177,7 @@ fn default_reserve_mobilisation_rate() -> f32 {
     1.0
 }
 fn default_satiation_sensitivity() -> f32 {
-    0.1
+    33.0
 }
 fn default_recognition_distance() -> f32 {
     0.5
@@ -605,18 +605,21 @@ pub struct WorldParameters {
     /// "Capability and expression are decoupled: consumption is need-gated").
     /// Heterotrophy is capability — the most a consumer can drain per tick; the
     /// drain it expresses is capability × `1 / (1 + c × s)`, where `s` is the
-    /// consumer's co-limited **satiation**: the lesser of its reserve and the
-    /// reserve energy its free nutrient could match in growth, measured in
-    /// ticks of its own per-tick metabolic cost (the yardstick the grow phase's
-    /// retention buffer uses). A consumer with no reserve, or no free nutrient,
-    /// drains at full capability; one holding `1/c` ticks of maintenance in its
-    /// scarcer currency drains half; the response falls smoothly, with no
-    /// threshold, toward zero as both grow. One `c` shapes both currencies,
-    /// which share that yardstick. The gate reads only the
-    /// consumer, so it applies identically to living and carcass targets.
-    /// `0.0` is the flat (ungated) limiting case — the pre-need-gating drain —
-    /// kept for comparison. Units `1/T` (per tick of maintenance held).
-    /// Default 0.1: half expression at ten ticks of maintenance in reserve.
+    /// consumer's co-limited **surplus satiation**: its reserve above the grow
+    /// phase's retention buffer (`growth_retention_multiplier` ticks of
+    /// maintenance), capped by the reserve energy its free nutrient could
+    /// match in growth (not shifted by the buffer), floored at zero and
+    /// measured in ticks of its own per-tick metabolic cost. Read once per
+    /// consumer after metabolise and before grow. A consumer at or below its
+    /// buffer, or with no free nutrient, drains at full capability; one
+    /// carrying `1/c` ticks of surplus drains half; the response falls
+    /// smoothly toward zero as the surplus grows, with one kink at the buffer.
+    /// The gate reads only the consumer, so it applies identically to living
+    /// and carcass targets. `0.0` is the flat (ungated) limiting case — the
+    /// pre-need-gating drain — kept for comparison. Units `1/T` (per tick of
+    /// maintenance carried as surplus). Default 33: `1 / s₂₅⁺`, the 25th
+    /// percentile of surplus over light-fed mixotrophs with positive surplus on
+    /// the decoded atlas (#622, `s₂₅⁺ = 0.030` ticks).
     #[serde(default = "default_satiation_sensitivity")]
     pub satiation_sensitivity: f32,
     /// Recognition distance (world-rules.md, "Recognition: living targets that
@@ -1343,6 +1346,9 @@ impl World {
         // Agents that could not fund this tick's metabolism have starved; they
         // die at the death check whatever later phases credit them (#540).
         let starved_ids = phase::starved_ids(&self.agents);
+        // Each consumer's need-gated expression, read once on the surplus
+        // the grow phase is about to mobilise (execution-model.md, Pass 1).
+        let consumer_expression = phase::consumption_expressions(&self.agents, &self.params);
 
         // 4. Grow
         let (grow_events, grow_dissipated) = phase::grow(&mut self.agents, &self.params);
@@ -1350,12 +1356,13 @@ impl World {
         events.extend(grow_events);
 
         // 5. Resolve drains (coordinated pass 1)
-        let drain_result = phase::resolve_drains(
+        let drain_result = phase::resolve_drains_with_expression(
             &mut self.agents,
             &mut self.carcasses,
             &grid,
             &self.params,
             &mut self.nutrient_grid,
+            &consumer_expression,
         );
         self.dissipated_energy += drain_result.dissipated;
         events.extend(drain_result.events);
@@ -2162,6 +2169,75 @@ mod tests {
         );
     }
 
+    /// The structure `consumer` drained from living targets in one step of
+    /// `world`, read off its `Consumed` events.
+    fn living_drain_in_one_step(world: &mut World, consumer: u64) -> f32 {
+        let cursor = world.event_log().len();
+        world.step();
+        world
+            .event_log()
+            .since(cursor)
+            .iter()
+            .filter(|e| {
+                e.kind == event::EventKind::Consumed
+                    && e.source == consumer
+                    && !e.target_was_carcass
+            })
+            .map(|e| e.energy_delta)
+            .sum()
+    }
+
+    #[test]
+    fn the_need_gate_reads_surplus_before_growth_mobilises_it() {
+        // Surplus satiation is read after metabolise and before grow
+        // (execution-model.md, Pass 1): at `reserve_mobilisation_rate = 1` the
+        // grow phase mobilises the whole surplus, so a gate read after growth
+        // would always see the bare buffer and never close. A pure consumer
+        // (kappa 0: its surplus goes to repro_reserve) holding, after paying
+        // this tick's metabolism, 10 ticks of maintenance above its 2-tick
+        // buffer expresses half its capability (c = 0.1).
+        let params = WorldParameters {
+            initial_population_size: 0,
+            reserve_mobilisation_rate: 1.0,
+            satiation_sensitivity: 0.1,
+            ..test_params()
+        };
+        let m = params.base_metabolic_rate;
+        let buffer = params.growth_retention_multiplier * m;
+        let consumer_traits = TraitVector {
+            heterotrophy: 0.6,
+            ..zero_traits()
+        };
+        let producer_traits = TraitVector {
+            photosynthetic_absorption: 0.8,
+            ..zero_traits()
+        };
+        let mut world = World::new(params, test_distribution(), 42);
+        world.add_agent(Agent::new(
+            0,
+            (50.0, 50.0),
+            m + buffer + 10.0 * m,
+            0.0,
+            0.0,
+            consumer_traits,
+        ));
+        world.add_agent(Agent::new(
+            0,
+            (51.0, 50.0),
+            10.0,
+            1000.0,
+            0.0,
+            producer_traits,
+        ));
+        let consumer = world.agents()[0].id;
+        let drained = living_drain_in_one_step(&mut world, consumer);
+        let capability = 0.6 * units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+        assert!(
+            (drained - 0.5 * capability).abs() < 1e-4 * capability,
+            "half capability at 10 ticks of surplus: drained {drained}, capability {capability}"
+        );
+    }
+
     #[test]
     fn producer_energy_share_is_energy_weighted_autotrophy_fraction() {
         // Mirror of free_energy on the trophic-rhythm side (issue #392): an
@@ -2899,6 +2975,9 @@ mod tests {
             trophic_distance_decay: 0.0,
             initial_population_size: 0,
             movement_cost_coefficient: 0.0,
+            // Ungated drain: this pins use-wear, and a 50-energy reserve is
+            // ample surplus, which the need gate (read before growth) damps.
+            satiation_sensitivity: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {

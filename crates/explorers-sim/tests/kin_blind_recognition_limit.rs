@@ -1,10 +1,14 @@
 //! The kin-blind limiting case of recognition (#604): at
 //! `recognition_distance = 0` no living target resembles its consumer, so
 //! worlds step exactly as they did before recognition. The fingerprints below
-//! were taken from the pre-recognition stepper (main at c095f04, need-gated
-//! consumption at the default satiation sensitivity) running the same
-//! scenarios, seeds and horizons; a kin-blind world must reproduce them bit
-//! for bit.
+//! were first taken from the pre-recognition stepper (main at c095f04,
+//! need-gated consumption at the default satiation sensitivity) running the
+//! same scenarios, seeds and horizons; a kin-blind world must reproduce them
+//! bit for bit. Re-pinned for #623, which changed the need gate itself
+//! (surplus above the retention buffer, read before growth, default
+//! sensitivity 33): the kin-blind world is the need-gated drain, so it moves
+//! with the gate. Recognition is unchanged and still subtracts nothing at
+//! `recognition_distance = 0`.
 
 use explorers_sim::{World, WorldRecipe};
 
@@ -51,25 +55,25 @@ fn fingerprint(world: &World) -> u64 {
 /// The scenarios, seeds and horizons, with the pre-recognition fingerprint of
 /// each.
 const PINNED: [(&str, u64, u64, u64); 5] = [
-    ("example4.json", 7, 200, 0x6e9d_d215_9f72_ddb0),
+    ("example4.json", 7, 200, 0x1f52_ce3d_b956_ae2d),
     (
         "example9_detrital_pathway.json",
         11,
         200,
-        0x2fde_47d6_42f8_6ae4,
+        0xf58d_1baa_03c2_bf08,
     ),
     (
         "example10_predator_prey_hopf.json",
         3,
         200,
-        0x2d39_3fb0_a74d_59a7,
+        0xe07e_6bb4_55e9_6e86,
     ),
-    ("example13_closed_web.json", 5, 200, 0xaa58_bd9d_8728_d0f8),
+    ("example13_closed_web.json", 5, 200, 0xcf9c_e2cc_8fdf_6575),
     (
         "example11_branching_coexistence.json",
         2,
         200,
-        0xc92d_6164_6204_61c6,
+        0x50bd_6686_fc83_e56d,
     ),
 ];
 

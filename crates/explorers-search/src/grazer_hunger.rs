@@ -18,10 +18,13 @@
 //! by kinship, trait distance and satiation.
 //!
 //! #621 redefined satiation as **surplus** above the grow phase's retention
-//! buffer, read after metabolism and before growth. The sim does not read it
-//! yet; [`PreStep::metabolised_agents`] replays the first three phases and
-//! [`Surplus`] reads it there, so #622 can measure its distribution
-//! ([`SurplusDistribution`]) and set the default sensitivity from it.
+//! buffer, read after metabolism and before growth, and #623 made the stepper
+//! read it. [`PreStep::metabolised_agents`] replays the first three phases
+//! and [`Surplus`] reads it there; its expression is the stepper's gate
+//! (pinned in the tests). #622 measured its distribution
+//! ([`SurplusDistribution`]) to set the default sensitivity. [`Satiation`]
+//! is the previous, reserve-based reading (#600–#619), which the
+//! [`GrazerHunger`] tallies still band by.
 //!
 //! Observer-side only: the world is never touched.
 
@@ -109,8 +112,9 @@ fn nutrient_matched_energy(agent: &Agent, params: &WorldParameters) -> f32 {
 /// about to mobilise. Only the energy side is shifted by the buffer, so
 /// `energy` is negative below it.
 ///
-/// Computed here, not by the stepper, which does not read it yet (#622
-/// measures it to set the default `satiation_sensitivity`).
+/// Computed here as well as by the stepper (#623) so the read works on the
+/// replayed roster and splits the two sides; [`Surplus::expression`] is
+/// pinned against `phase::consumption_expression` in the tests.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Surplus {
     /// `(reserve − buffer) / m`, with `buffer = growth_retention_multiplier × m`.
@@ -130,10 +134,22 @@ impl Surplus {
         }
     }
 
-    /// `s = max(0, min(energy, nutrient))`: the surplus the need gate would
-    /// read.
+    /// `s = max(0, min(energy, nutrient))`: the surplus the need gate
+    /// reads.
     pub fn ticks(&self) -> f32 {
         self.energy.min(self.nutrient).max(0.0)
+    }
+
+    /// The need-gated expression `1 / (1 + c·s)` at this surplus: the
+    /// stepper's gate (#623; pinned against `phase::consumption_expression`
+    /// in the tests).
+    pub fn expression(&self, params: &WorldParameters) -> f32 {
+        let c = params.satiation_sensitivity;
+        let s = self.ticks();
+        if c <= 0.0 || s <= 0.0 {
+            return 1.0;
+        }
+        1.0 / (1.0 + c * s)
     }
 }
 
@@ -274,11 +290,9 @@ impl SurplusDistribution {
 /// (its per-tick metabolic cost): `energy` is its reserve, `nutrient` the
 /// energy its free nutrient can match when built into structure
 /// (`N / (growth_efficiency × demand ratio)`), infinite when growth binds no
-/// nutrient. The need gate reads the lesser ([`Satiation::ticks`]).
-///
-/// Computed here rather than through the stepper so the same read works on a
-/// tree without the need gate (its formula is pinned against the stepper's in
-/// the tests).
+/// nutrient. The need gate read the lesser ([`Satiation::ticks`]) on the
+/// whole reserve, after growth, until #623 moved it to [`Surplus`]; kept for
+/// the #606 grazer-hunger tallies.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Satiation {
     pub energy: f32,
@@ -295,7 +309,7 @@ impl Satiation {
         }
     }
 
-    /// The co-limited satiation the need gate reads: the scarcer currency.
+    /// The co-limited satiation the pre-#623 need gate read: the scarcer currency.
     pub fn ticks(&self) -> f32 {
         self.energy.min(self.nutrient)
     }
@@ -305,7 +319,7 @@ impl Satiation {
         self.nutrient < self.energy
     }
 
-    /// The need-gated expression `1 / (1 + c·s)` at this satiation.
+    /// The pre-#623 need-gated expression `1 / (1 + c·s)` at this satiation.
     pub fn expression(&self, params: &WorldParameters) -> f32 {
         let c = params.satiation_sensitivity;
         let s = self.ticks();
@@ -327,11 +341,11 @@ pub const RECOGNITION_BANDS: usize = 3;
 
 /// Upper edges of the satiation bands, in ticks of maintenance:
 /// `[0, 1)`, `[1, 5)`, `[5, 10)`, `[10, 20)`, `[20, 50)`, `≥ 50`. At the
-/// default `satiation_sensitivity = 0.1`, 10 ticks is half expression, from
-/// which recognition spares an identical target entirely.
+/// pre-#623 default `satiation_sensitivity = 0.1`, 10 ticks was half
+/// expression, from which recognition spares an identical target entirely.
 pub const SATIATION_EDGES: [f32; 5] = [1.0, 5.0, 10.0, 20.0, 50.0];
 pub const SATIATION_BANDS: usize = SATIATION_EDGES.len() + 1;
-/// The bands under half expression (at the default sensitivity): hungry.
+/// The bands under half expression (at the pre-#623 default): hungry.
 pub const HUNGRY_BANDS: usize = 3;
 
 fn band(value: f32, edges: &[f32]) -> usize {
@@ -477,10 +491,11 @@ mod tests {
         World::new(params, dist, seed)
     }
 
-    /// Replaying the pre-step state to the drain pass recovers the state the
-    /// stepper drained from: every living drain a lone consumer took from a
-    /// target that could cover it equals `h_eff · u_H · max(0, E − r·w)` read
-    /// off the replayed roster, bit for bit.
+    /// Replaying the pre-step state recovers what the stepper drained with:
+    /// every living drain a lone consumer took from a target that could cover
+    /// it equals `h_eff · u_H · max(0, E − r·w)`, with `E` read off the
+    /// metabolised roster (before growth, #623) and the target's structure off
+    /// the drain-time roster, bit for bit.
     #[test]
     fn replayed_state_reproduces_the_stepper_s_living_drains() {
         let mut world = sample_31_world(1000);
@@ -504,6 +519,11 @@ mod tests {
             }
             let drain_time = pre.drain_time_agents(&params);
             let by_id: HashMap<u64, &Agent> = drain_time.iter().map(|a| (a.id, a)).collect();
+            let metabolised = pre.metabolised_agents(&params);
+            let gate_of: HashMap<u64, f32> = metabolised
+                .iter()
+                .map(|a| (a.id, phase::consumption_expression(a, &params)))
+                .collect();
             let mut consumers_of: HashMap<u64, usize> = HashMap::new();
             for e in &events {
                 *consumers_of.entry(e.target.unwrap()).or_default() += 1;
@@ -514,7 +534,7 @@ mod tests {
                     continue;
                 }
                 let (c, t) = (by_id[&e.source], by_id[&target]);
-                let expression = (phase::consumption_expression(c, &params)
+                let expression = (gate_of[&e.source]
                     - phase::RECOGNITION_RESTRAINT
                         * phase::resemblance(&c.traits, &t.traits, &params))
                 .max(0.0);
@@ -532,10 +552,11 @@ mod tests {
         assert!(checked > 10, "only {checked} drains checked");
     }
 
-    /// Satiation reads both currencies in ticks of maintenance, and its
-    /// expression is the stepper's need gate: `1 / (1 + c·min(s_E, s_N))`.
+    /// Satiation reads both currencies in ticks of maintenance, the reading
+    /// the need gate took before #623: `1 / (1 + c·min(s_E, s_N))` on the
+    /// whole reserve at drain time.
     #[test]
-    fn satiation_is_the_need_gate_s_co_limited_reading() {
+    fn satiation_is_the_reserve_based_co_limited_reading() {
         let mut world = sample_31_world(1001);
         for _ in 0..60 {
             world.step();
@@ -545,7 +566,7 @@ mod tests {
         let (mut energy_limited, mut nutrient_limited) = (0, 0);
         for a in &drain_time {
             let s = Satiation::of(a, &params);
-            let want = phase::consumption_expression(a, &params);
+            let want = 1.0 / (1.0 + params.satiation_sensitivity * s.ticks());
             let got = s.expression(&params);
             assert!(
                 (got - want).abs() <= 1e-6 * want.max(1e-6),
@@ -561,6 +582,31 @@ mod tests {
             }
         }
         assert!(energy_limited + nutrient_limited > 10);
+    }
+
+    /// The stepper reads surplus satiation itself (#623): on the metabolised
+    /// roster, [`Surplus`]'s expression `1 / (1 + c·s)` is the stepper's
+    /// need gate, and some agent is gated by it.
+    #[test]
+    fn surplus_expression_is_the_stepper_s_need_gate() {
+        let mut world = sample_31_world(1001);
+        for _ in 0..60 {
+            world.step();
+        }
+        let params = world.params().clone();
+        let metabolised = PreStep::capture(&world).metabolised_agents(&params);
+        let mut gated = 0;
+        for a in &metabolised {
+            let want = phase::consumption_expression(a, &params);
+            let got = Surplus::of(a, &params).expression(&params);
+            assert!(
+                (got - want).abs() <= 1e-5 * want.max(1e-6),
+                "{:?}: {got} vs {want}",
+                Surplus::of(a, &params)
+            );
+            gated += usize::from(want < 1.0);
+        }
+        assert!(gated > 0, "some agent carries a surplus the gate reads");
     }
 
     fn lone_agent(reserve: f32, nutrient: f32) -> (Agent, WorldParameters) {
