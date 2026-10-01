@@ -30,7 +30,7 @@ The tick fixes the time scale; `base_metabolic_rate` `B`, `world_extent` `L`, an
 
 - energy rates over `B`: `π_F = F/B`, `π_a`, `π_h`, `π_μ`, `π_x` (the four maintenance costs), `π_w` (wear), `π_nm` (network maintenance);
 - energy stocks over `ε`: `π_Er` (reproduction threshold), `π_E0` (founder endowment), `π_nc` (connection cost); inverse energies times `ε`: `π_k`, `π_rd`;
-- per-tick rates times `τ`: `π_s` (structure maintenance), `π_f` (mobilisation), `π_nr` (redistribution); `π_ret` (retention buffer, in ticks); `π_sat = satiation_sensitivity·τ` (need-gated consumption, per tick of maintenance held);
+- per-tick rates times `τ`: `π_s` (structure maintenance), `π_f` (mobilisation), `π_nr` (redistribution); `π_ret` (retention buffer, in ticks); `π_sat = satiation_sensitivity·τ` (need-gated consumption, per tick of maintenance carried as surplus above the retention buffer);
 - lengths over `L`: `π_r` (light radius), `π_c` (contact), `π_sn` (sensing), `π_dr` (dispersal reach), `π_cell` (nutrient cell); `π_mv = c_mv·L`; `π_body = body_reach·√ε/L`;
 - nutrient: `π_N = N_total/N_r`, `π_ρ = ρ_b·ε/N_r`, `π_ρs = ρ_s/ρ_b`.
 
