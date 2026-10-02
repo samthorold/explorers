@@ -27,6 +27,8 @@ Animal consumption is not a fixed rate — it is a behaviorally modulated flow. 
 - **Type II**: Decelerating — consumption saturates as handling time dominates. Most common for individual predators.
 - **Type III**: Sigmoidal — low consumption at low prey density (prey switching, search image formation), accelerating at intermediate density, then saturating. Creates a low-density refuge for prey.
 
+**Satiation is a ceiling on intake, set well above upkeep.** A consumer that has covered its maintenance is not yet sated: it keeps feeding, and the surplus goes into growth and reproduction, which is how a well-fed predator outbreeds a hungry one. What stops intake is capacity: handling time (the plateau of the Type II and III curves) and gut volume, which in turn track how much the animal can process and put to use. Hunger acts below that ceiling on *what* is eaten rather than on whether to eat at all: it triggers search, lowers attack thresholds and widens the range of acceptable prey ([cannibalism and kin](cannibalism-and-kin.md), *Drivers*). Dynamic Energy Budget theory makes the same separation. Ingestion follows the scaled functional response to food density, not the reserve held, and a well-fed organism's reserve funds maintenance, growth and reproduction together (Kooijman 2010).
+
 These functional responses are critical because they determine whether consumer-resource interactions stabilize or oscillate. Type II responses are inherently destabilizing (consumers overexploit rare prey), while Type III responses can stabilize dynamics by releasing prey from predation pressure at low density (Murdoch & Oaten 1975).
 
 ### Assimilation efficiency
