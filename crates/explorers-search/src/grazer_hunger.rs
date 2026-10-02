@@ -420,7 +420,7 @@ pub const EXPRESSION_EDGES: [f32; 3] = [0.1, 0.5, 0.9];
 pub const EXPRESSION_BANDS: usize = EXPRESSION_EDGES.len() + 1;
 /// Column headers after the row label for [`GrazerHunger::expression_cells`].
 pub const EXPRESSION_TABLE_HEADER: &str = "kin pairs | kin E ≥ 0.5 | kin s = 0 | kin E < 0.1 | kin E 0.1–0.5 | kin E 0.5–0.9 | kin E ≥ 0.9 | non-kin pairs | non-kin E ≥ 0.5";
-/// The first band at or past half expression.
+/// The first band at most half gated (`E ≥ 0.5`, the hungry side of half expression).
 pub const HALF_EXPRESSION_BAND: usize = 2;
 
 fn band(value: f32, edges: &[f32]) -> usize {
@@ -466,7 +466,7 @@ impl GrazerHunger {
         self.surplus_zero[k] += u64::from(reading.surplus.ticks() <= 0.0);
     }
 
-    /// Pairs of this kinship whose grazer was at or past half expression
+    /// Pairs of this kinship whose grazer was at most half gated
     /// (`E ≥ 0.5`) at its pre-growth surplus.
     pub fn at_half_expression(&self, kin: bool) -> u64 {
         self.expression[usize::from(kin)][HALF_EXPRESSION_BAND..]
@@ -493,9 +493,9 @@ impl GrazerHunger {
 
     /// The cells of a "killing grazers at the pre-growth surplus read" table
     /// row, after the row label, matching [`EXPRESSION_TABLE_HEADER`]: kin
-    /// pairs, their share at or past half expression and at zero surplus,
-    /// kin pairs by expression band, non-kin pairs and their share at or
-    /// past half expression.
+    /// pairs, their share at most half gated (`E ≥ 0.5`) and at zero surplus,
+    /// kin pairs by expression band, non-kin pairs and their share at most
+    /// half gated.
     pub fn expression_cells(&self) -> String {
         let share = |n: u64, d: u64| {
             if d == 0 {

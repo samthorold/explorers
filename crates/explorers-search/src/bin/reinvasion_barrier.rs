@@ -1576,7 +1576,7 @@ fn print_accounting(a: &Artifact) {
         );
     }
     println!(
-        "\n# Killing grazers at the pre-growth surplus read (#624): the same pairs by the grazer's surplus s (reserve above the retention buffer, co-limited by free nutrient, in ticks of maintenance) read after metabolism and before growth, and its expression E = 1/(1 + c·s) at the run's c (pinned or as decoded). E ≥ 0.5 = at or past half expression; s = 0 = no surplus (E = 1). Bands: E < 0.1, 0.1–0.5, 0.5–0.9, ≥ 0.9."
+        "\n# Killing grazers at the pre-growth surplus read (#624): the same pairs by the grazer's surplus s (reserve above the retention buffer, co-limited by free nutrient, in ticks of maintenance) read after metabolism and before growth, and its expression E = 1/(1 + c·s) at the run's c (pinned or as decoded). E ≥ 0.5 = at most half gated (hungry side); E < 0.5 = past half expression (sated side); s = 0 = no surplus (E = 1). Bands: E < 0.1, 0.1–0.5, 0.5–0.9, ≥ 0.9."
     );
     println!("\n| row | {EXPRESSION_TABLE_HEADER} |");
     println!(
