@@ -7,6 +7,7 @@ pub mod energy_accounting;
 pub mod gp;
 pub mod grazer_hunger;
 pub mod heterotroph_margin;
+pub mod intake_ceiling;
 pub mod invasion;
 pub mod lhs;
 pub mod prefilter;

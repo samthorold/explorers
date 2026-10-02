@@ -43,6 +43,8 @@ use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use crate::grazer_hunger::{
     GrazerHunger, KillerReading, PreStep, Surplus, SurplusDistribution, TraitDistances,
 };
+pub use crate::intake_ceiling::IntakeCensus;
+use crate::intake_ceiling::intake_readings;
 
 /// A death at or below this age (ticks from birth) is an infant death, as
 /// #591's accountant counts it.
@@ -237,9 +239,19 @@ pub struct DietLedger {
     kills: GrazerHunger,
     births: TraitDistances,
     reproduction: ReproductionTable,
+    /// The intake-ceiling multiple the killing grazers' predicted intake-gate
+    /// expression is read at (#629); `None` skips the read.
+    intake_ceiling_k: Option<f32>,
 }
 
 impl DietLedger {
+    /// Read each killing grazer's predicted intake-gate expression at
+    /// ceiling multiple `k` (#629).
+    pub fn with_intake_ceiling_k(mut self, k: Option<f32>) -> Self {
+        self.intake_ceiling_k = k;
+        self
+    }
+
     /// A ledger over a world's founders (born at tick 0, no parents).
     pub fn new(world: &World) -> Self {
         let mut ledger = Self::default();
@@ -298,7 +310,18 @@ impl DietLedger {
         for &(id, _) in &died {
             let by = grazers.get(&id).map(Vec::as_slice).unwrap_or(&[]);
             if let (Some(pre), false) = (pre, by.is_empty()) {
-                let reading = readings.get_or_insert_with(|| pre.killer_readings(world.params()));
+                let reading = readings.get_or_insert_with(|| {
+                    let params = world.params();
+                    let mut readings = pre.killer_readings(params);
+                    if let Some(k) = self.intake_ceiling_k {
+                        for (id, intake) in intake_readings(pre, params, events) {
+                            if let Some(r) = readings.get_mut(&id) {
+                                r.intake_expression = Some(intake.expression_at(k));
+                            }
+                        }
+                    }
+                    readings
+                });
                 self.record_kills(id, by, reading);
             }
         }
@@ -535,6 +558,13 @@ pub struct SeedDiet {
     /// agent-samples the surplus read takes (#624).
     #[serde(default)]
     pub reproduction: ReproductionTable,
+    /// The intake-ceiling window's populations (#629): every second-half
+    /// sampled agent's intake at the start of drain resolution in the step
+    /// that led to the sample, light-fed mixotrophs (by recent-income role,
+    /// as the surplus read) and heterotrophs by diet (as the reproduction
+    /// table's group). Agents born in that step are left out.
+    #[serde(default)]
+    pub intake: IntakeCensus,
 }
 
 fn guild_flags(g: RoleGuilds) -> [bool; 3] {
@@ -563,6 +593,19 @@ pub fn rollout(
     max_ticks: u64,
     eval_config: &EvalConfig,
 ) -> SeedDiet {
+    rollout_with(params, dist, seed, max_ticks, eval_config, None)
+}
+
+/// [`rollout`], with the killing grazers' predicted intake-gate expression
+/// read at ceiling multiple `intake_ceiling_k` when given (#629).
+pub fn rollout_with(
+    params: &WorldParameters,
+    dist: &InitialDistribution,
+    seed: u64,
+    max_ticks: u64,
+    eval_config: &EvalConfig,
+    intake_ceiling_k: Option<f32>,
+) -> SeedDiet {
     let mut world = World::new(params.clone(), dist.clone(), seed);
     let mut kinds = explorers_genesis_eval::EVALUATOR_EVENT_KINDS.to_vec();
     for k in [
@@ -580,7 +623,7 @@ pub fn rollout(
     let sustainable_stock = explorers_genesis_eval::sustainable_stock(params);
     let window_start = max_ticks / 2 + 1;
 
-    let mut ledger = DietLedger::new(&world);
+    let mut ledger = DietLedger::new(&world).with_intake_ceiling_k(intake_ceiling_k);
     let mut topology = TopologyProjection::new();
     let mut tag_snapshots: Vec<RoleSnapshot> = Vec::new();
     let mut cursor = 0;
@@ -589,6 +632,7 @@ pub fn rollout(
     let mut light_share = [0u64; LIGHT_SHARE_BINS];
     let mut surplus = SurplusByRole::default();
     let mut fills = ReproductionTable::default();
+    let mut intake = IntakeCensus::default();
     let mut stopped: Option<FailureMode> = None;
     for _ in 0..max_ticks {
         let pre = PreStep::capture(&world);
@@ -632,6 +676,16 @@ pub fn rollout(
                             let group = diet_group(&a.traits, &ledger.income(a.id));
                             fills.group_mut(group).record_fill(fill);
                         }
+                    }
+                    let traits: HashMap<u64, TraitVector> =
+                        world.agents().iter().map(|a| (a.id, a.traits)).collect();
+                    for (id, reading) in intake_readings(&pre, params, &tail) {
+                        if !tags.contains_key(&id) {
+                            continue;
+                        }
+                        let Some(t) = traits.get(&id) else { continue };
+                        let group = diet_group(t, &ledger.income(id));
+                        intake.record(roles.get(&id).copied(), t.heterotrophy, group, &reading);
                     }
                 }
                 tag_snapshots.push((tick, tags));
@@ -707,6 +761,7 @@ pub fn rollout(
             r.merge(&fills);
             r
         },
+        intake,
     }
 }
 
@@ -738,6 +793,7 @@ fn tracked(ledger: &DietLedger) -> std::collections::HashSet<u64> {
 mod tests {
     use super::*;
     use crate::config_source::{ConfigSource, resolve_config, sampled_units};
+    use crate::grazer_hunger::EXPRESSION_BANDS;
     use crate::search::default_ranges;
 
     fn event(tick: u64, kind: EventKind, source: u64, target: Option<u64>, e: f32) -> Event {
@@ -1020,6 +1076,73 @@ mod tests {
                 ..old
             },
             ours
+        );
+    }
+
+    /// The census reads each second-half sampled agent's intake at the
+    /// drain pass's start (#629): light-fed mixotrophs are the surplus read's
+    /// (the same agent-samples), heterotrophs by diet the reproduction
+    /// table's; old rows without it still read back.
+    #[test]
+    fn rollout_records_intake_by_population() {
+        let (params, dist) = sample_31();
+        let eval = EvalConfig::default();
+        let ours = rollout(&params, &dist, 1000, 300, &eval);
+        let ic = &ours.intake;
+        assert!(ic.mixotroph_light.count() > 0);
+        assert_eq!(
+            ic.mixotroph_light.count(),
+            ours.surplus.light_fed_mixotrophs.count()
+        );
+        assert_eq!(ic.mixotroph_uptake.count(), ic.mixotroph_light.count());
+        let diet_fed = ours.reproduction.trait_heterotroph_diet_fed.samples;
+        assert_eq!(ic.heterotroph_intake.count(), diet_fed);
+        assert_eq!(ic.heterotroph_potential.count(), diet_fed);
+
+        let mut json: serde_json::Value = serde_json::to_value(&ours).unwrap();
+        json.as_object_mut().unwrap().remove("intake");
+        let old: SeedDiet = serde_json::from_value(json).unwrap();
+        assert_eq!(old.intake, IntakeCensus::default());
+        assert_eq!(
+            SeedDiet {
+                intake: ours.intake.clone(),
+                ..old
+            },
+            ours
+        );
+    }
+
+    /// With an intake-ceiling `k` (#629), every killing pair is also banded
+    /// by the grazer's predicted intake-gate expression at that `k`; without
+    /// one, nothing is banded and the rollout is otherwise identical.
+    #[test]
+    fn rollout_bands_killing_grazers_by_predicted_intake_expression() {
+        let (params, dist) = sample_31();
+        let eval = EvalConfig::default();
+        let plain = rollout(&params, &dist, 1000, 300, &eval);
+        assert_eq!(plain.kills.intake_expression, [[0; EXPRESSION_BANDS]; 2]);
+        let at_k = rollout_with(&params, &dist, 1000, 300, &eval, Some(4.0));
+        let k = at_k.kills;
+        for kin in [false, true] {
+            let banded: u64 = k.intake_expression[usize::from(kin)].iter().sum();
+            assert_eq!(banded, k.total(kin), "{k:?}");
+        }
+        assert!(k.total(true) + k.total(false) > 0);
+        let tight = rollout_with(&params, &dist, 1000, 300, &eval, Some(1e-3)).kills;
+        assert!(
+            tight.intake_expression[0][0] + tight.intake_expression[1][0]
+                >= k.intake_expression[0][0] + k.intake_expression[1][0],
+            "a tighter ceiling gates no less"
+        );
+        assert_eq!(
+            SeedDiet {
+                kills: GrazerHunger {
+                    intake_expression: Default::default(),
+                    ..k
+                },
+                ..at_k
+            },
+            plain
         );
     }
 

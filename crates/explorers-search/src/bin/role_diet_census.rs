@@ -21,6 +21,13 @@
 //!   metabolism and before growth, by recent-income role, with the light-fed
 //!   mixotrophs apart, and the default `satiation_sensitivity = 1 / s₂₅` it
 //!   proposes (#622).
+//! - the intake-ceiling window (#629): light-fed mixotrophs' light and
+//!   heterotrophs-by-diet's realised intake and drain potential at the start
+//!   of drain resolution, in ticks of maintenance in both currencies
+//!   ([`explorers_search::intake_ceiling`]), with the bounds
+//!   `k ≤ 2 × p25(light / m)` and `k ≥ p75(intake / m)` and the default `k`
+//!   at the window's geometric midpoint. `--intake-ceiling-k K` also bands
+//!   the killing grazers by their predicted intake-gate expression at `K`.
 //!
 //! Configs and seeds as `guild_census`: the atlas cells (`--atlas PATH`),
 //! the LHS sample, or `--configs` (`sample@S:i` for another draw); the seed
@@ -52,12 +59,13 @@ use explorers_search::config_source::{
 };
 use explorers_search::grazer_hunger::SurplusDistribution;
 use explorers_search::grazer_hunger::{
-    DISTANCE_BANDS, DISTANCE_EDGES, EXPRESSION_TABLE_HEADER, GrazerHunger, HUNGRY_BANDS,
-    RECOGNITION_BANDS, SATIATION_BANDS, SATIATION_EDGES, TraitDistances,
+    DISTANCE_BANDS, DISTANCE_EDGES, EXPRESSION_TABLE_HEADER, GrazerHunger, HALF_EXPRESSION_BAND,
+    HUNGRY_BANDS, RECOGNITION_BANDS, SATIATION_BANDS, SATIATION_EDGES, TraitDistances,
 };
+use explorers_search::intake_ceiling::window_line;
 use explorers_search::role_diet::{
-    Confusion, DeathCounts, DeathTable, GroupReproduction, LIGHT_SHARE_BINS, PRODUCER_LIGHT_SHARE,
-    ReproductionTable, SeedDiet, SurplusByRole, rollout,
+    Confusion, DeathCounts, DeathTable, GroupReproduction, IntakeCensus, LIGHT_SHARE_BINS,
+    PRODUCER_LIGHT_SHARE, ReproductionTable, SeedDiet, SurplusByRole, rollout_with,
 };
 use explorers_search::search::default_ranges;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
@@ -89,6 +97,11 @@ struct Row {
     /// (`--recognition-distance`, #619); absent when worlds ran as decoded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     recognition_distance: Option<f32>,
+    /// The intake-ceiling multiple the killing grazers' predicted intake-gate
+    /// expression was read at (`--intake-ceiling-k`, #629); absent when not
+    /// read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    intake_ceiling_k: Option<f32>,
     seeds: Vec<SeedDiet>,
 }
 
@@ -135,12 +148,21 @@ struct Pool {
     surplus: SurplusByRole,
     /// Births and earmark fill by diet group (#624).
     reproduction: ReproductionTable,
+    /// The intake-ceiling window's populations (#629).
+    intake: IntakeCensus,
+    /// The distinct `--intake-ceiling-k` values the pooled rows read kills at.
+    intake_ks: Vec<f32>,
 }
 
 fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
     let mut p = Pool::default();
     for r in rows {
         p.configs += 1;
+        if let Some(k) = r.intake_ceiling_k
+            && !p.intake_ks.contains(&k)
+        {
+            p.intake_ks.push(k);
+        }
         let (tag, diet) = r.guild_fractions();
         for role in 0..3 {
             let (t, d) = (tag[role] >= HALF, diet[role] >= HALF);
@@ -165,6 +187,7 @@ fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
             p.births.merge(&s.births);
             p.surplus.merge(&s.surplus);
             p.reproduction.merge(&s.reproduction);
+            p.intake.merge(&s.intake);
             if let (None, Some(t), Some(d)) =
                 (&s.failure, s.trophic_balance_tag, s.trophic_balance_diet)
             {
@@ -193,6 +216,9 @@ struct Args {
     satiation_sensitivity: Option<f32>,
     /// Pin every world's recognition distance (#619); `None` as decoded.
     recognition_distance: Option<f32>,
+    /// Read the killing grazers' predicted intake-gate expression at this
+    /// ceiling multiple (#629); `None` skips it.
+    intake_ceiling_k: Option<f32>,
 }
 
 fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
@@ -208,6 +234,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
         founder_aggregation: None,
         satiation_sensitivity: None,
         recognition_distance: None,
+        intake_ceiling_k: None,
     };
     let mut it = argv.into_iter();
     while let Some(flag) = it.next() {
@@ -233,6 +260,9 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
             }
             "--recognition-distance" => {
                 args.recognition_distance = Some(parse_non_negative(&flag, &value()?)?)
+            }
+            "--intake-ceiling-k" => {
+                args.intake_ceiling_k = Some(parse_non_negative(&flag, &value()?)?)
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -261,7 +291,16 @@ fn run_row(
     );
     let seeds = (0..args.ensemble)
         .into_par_iter()
-        .map(|i| rollout(&config.0, &config.1, args.seed + i, args.horizon, &eval))
+        .map(|i| {
+            rollout_with(
+                &config.0,
+                &config.1,
+                args.seed + i,
+                args.horizon,
+                &eval,
+                args.intake_ceiling_k,
+            )
+        })
         .collect();
     Row {
         source,
@@ -271,6 +310,7 @@ fn run_row(
         founder_aggregation: args.founder_aggregation,
         satiation_sensitivity: args.satiation_sensitivity,
         recognition_distance: args.recognition_distance,
+        intake_ceiling_k: args.intake_ceiling_k,
         seeds,
     }
 }
@@ -446,6 +486,97 @@ fn print_pool(name: &str, p: &Pool) {
     );
     print_kills(&p.kills, &p.births);
     print_surplus(&p.surplus);
+    print_intake(&p.intake, &p.kills, &p.intake_ks);
+}
+
+/// The intake-ceiling window (#629): each population's supply or intake in
+/// ticks of maintenance at the start of drain resolution, in both
+/// currencies, with both bounds, the window and its default `k`; and the
+/// killing grazers' predicted intake-gate expression at `--intake-ceiling-k`.
+fn print_intake(ic: &IntakeCensus, kills: &GrazerHunger, ks: &[f32]) {
+    println!(
+        "\nIntake at the start of drain resolution (#629), over second-half agent-samples, in ticks of maintenance m (drain-time metabolic cost). Energy side: light / m, intake = (light + drain income as energy received) / m, P_E / m (drain potential: capability toward every target in reach before co-feeders split it, as energy received). Nutrient side, matched through growth: uptake / (η·ratio) / m, (uptake + bound nutrient drained) / (η·ratio) / m, P_N / (η·ratio) / m. Light-fed mixotrophs: income producers (#599) with heterotrophy > 0; heterotrophs by diet: the deaths table's group.\n"
+    );
+    println!(
+        "| population | reading | samples | p25 | median | p75 | nutrient samples | nutrient p25 | nutrient median | nutrient p75 |"
+    );
+    println!("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|");
+    let fmt = |v: Option<f64>| v.map_or("–".to_string(), |x| format!("{x:.3}"));
+    let quartiles = |d: &SurplusDistribution| {
+        format!(
+            "{} | {} | {} | {}",
+            d.count(),
+            fmt(d.percentile(0.25)),
+            fmt(d.percentile(0.5)),
+            fmt(d.percentile(0.75))
+        )
+    };
+    let rows: [(&str, &str, &SurplusDistribution, &SurplusDistribution); 3] = [
+        (
+            "light-fed mixotrophs",
+            "light (uptake)",
+            &ic.mixotroph_light,
+            &ic.mixotroph_uptake,
+        ),
+        (
+            "heterotrophs by diet",
+            "intake",
+            &ic.heterotroph_intake,
+            &ic.heterotroph_intake_nutrient,
+        ),
+        (
+            "heterotrophs by diet",
+            "drain potential P",
+            &ic.heterotroph_potential,
+            &ic.heterotroph_potential_nutrient,
+        ),
+    ];
+    for (population, reading, energy, nutrient) in rows {
+        println!(
+            "| {population} | {reading} | {} | {} |",
+            quartiles(energy),
+            quartiles(nutrient)
+        );
+    }
+    println!(
+        "\nIntake-ceiling window (#629): {}",
+        window_line(ic.energy_window(), "light", "intake")
+    );
+    println!(
+        "Intake-ceiling window, nutrient side (#629): {}",
+        window_line(ic.nutrient_window(), "uptake", "nutrient intake")
+    );
+    let k = if ks.is_empty() {
+        "–".to_string()
+    } else {
+        ks.iter()
+            .map(|k| format!("{k}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    println!(
+        "\nKilling grazers at the intake gate (#629): the same pairs by the grazer's predicted expression E = max(room_E/(room_E+P_E), room_N/(room_N+P_N)) at k = {k} (--intake-ceiling-k), read at the start of drain resolution. Bands: E < 0.1, 0.1–0.5, 0.5–0.9, ≥ 0.9.\n"
+    );
+    println!("| pairs | read | E < 0.1 | E 0.1–0.5 | E 0.5–0.9 | E ≥ 0.9 | E ≥ 0.5 |");
+    println!("|---|---:|---:|---:|---:|---:|---:|");
+    for (label, kin) in [("kin", true), ("non-kin", false)] {
+        let bands = kills.intake_expression[usize::from(kin)];
+        let read: u64 = bands.iter().sum();
+        if read == 0 {
+            println!("| {label} | – | – | – | – | – | – |");
+            continue;
+        }
+        let half: u64 = bands[HALF_EXPRESSION_BAND..].iter().sum();
+        println!(
+            "| {label} | {read} | {} | {} | {} | {} | {} ({}%) |",
+            bands[0],
+            bands[1],
+            bands[2],
+            bands[3],
+            half,
+            pct(half, read)
+        );
+    }
 }
 
 fn print_reproduction(label: &str, g: &GroupReproduction) {
@@ -688,6 +819,9 @@ mod tests {
                 nutrient: 0.0,
             },
         );
+        let mut intake = IntakeCensus::default();
+        intake.mixotroph_light.record(4.0);
+        intake.heterotroph_intake.record(1.0);
         SeedDiet {
             seed: 0,
             failure: failure.map(String::from),
@@ -703,6 +837,7 @@ mod tests {
             births,
             surplus,
             reproduction: ReproductionTable::default(),
+            intake,
         }
     }
 
@@ -718,6 +853,7 @@ mod tests {
             founder_aggregation: None,
             satiation_sensitivity: None,
             recognition_distance: None,
+            intake_ceiling_k: None,
             seeds: vec![
                 seed([true, true, false], [true, false, false], None),
                 seed([true, true, false], [true, false, false], None),
@@ -745,6 +881,41 @@ mod tests {
         assert_eq!(p.surplus.light_fed_mixotrophs.count(), 3, "surplus summed");
         assert_eq!(p.surplus.roles[3].zero, 3);
         assert_eq!(p.surplus.roles[3].zero_nutrient_limited, 3);
+        assert_eq!(p.intake.mixotroph_light.count(), 3, "intake summed");
+        assert_eq!(p.intake.heterotroph_intake.count(), 3);
+    }
+
+    /// `--intake-ceiling-k K` reads the killing grazers' predicted
+    /// intake-gate expression at `K` (#629) and records it on the row; rows
+    /// without it read and write as before.
+    #[test]
+    fn an_intake_ceiling_k_reaches_the_kills_and_the_row() {
+        let parse = |a: &[&str]| parse_args(a.iter().map(|s| s.to_string()));
+        assert_eq!(parse(&[]).unwrap().intake_ceiling_k, None);
+        assert!(parse(&["--intake-ceiling-k", "-1"]).is_err());
+        let args = parse(&[
+            "--intake-ceiling-k",
+            "4",
+            "--max-ticks",
+            "300",
+            "--ensemble",
+            "1",
+        ])
+        .unwrap();
+        assert_eq!(args.intake_ceiling_k, Some(4.0));
+        let sampled = sampled_units(default_ranges().len());
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        let row = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
+        assert_eq!(row.intake_ceiling_k, Some(4.0));
+        let kills = &row.seeds[0].kills;
+        let banded: u64 = kills.intake_expression.iter().flatten().sum();
+        assert_eq!(banded, kills.total(true) + kills.total(false));
+        let back: Row = serde_json::from_str(&serde_json::to_string(&row).unwrap()).unwrap();
+        assert_eq!(back, row);
+        let mut json: serde_json::Value = serde_json::to_value(&row).unwrap();
+        json.as_object_mut().unwrap().remove("intake_ceiling_k");
+        let old: Row = serde_json::from_value(json).unwrap();
+        assert_eq!(old.intake_ceiling_k, None);
     }
 
     #[test]
