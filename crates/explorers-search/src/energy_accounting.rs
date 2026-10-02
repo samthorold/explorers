@@ -28,7 +28,7 @@ use explorers_sim::energy_ledger::EnergyEndpoint;
 use explorers_sim::event::{Event, EventKind};
 use explorers_sim::{Agent, FUNCTIONAL_TRAIT_COUNT, TraitVector, World, WorldParameters};
 
-use crate::grazer_hunger::{GrazerHunger, PreStep, Satiation};
+use crate::grazer_hunger::{GrazerHunger, KillerReading, PreStep};
 use crate::invasion::Lineage;
 
 /// The same flows as the stepper's own energy ledger credits them, summed
@@ -512,7 +512,7 @@ impl LineageAccountant {
             .filter(|c| !carcasses.contains_key(&c.id))
             .map(|c| (c.id, c.energy as f64))
             .collect();
-        let mut drain_time: Option<HashMap<u64, Satiation>> = None;
+        let mut readings: Option<HashMap<u64, KillerReading>> = None;
         a.member_ticks += pre.len() as u64;
         for (id, m) in &pre {
             let t = &tick[id];
@@ -571,18 +571,12 @@ impl LineageAccountant {
                         a.deaths_starved += 1;
                     } else if grazed_to_death {
                         a.deaths_grazed += 1;
-                        let satiation = drain_time.get_or_insert_with(|| {
-                            pre_step
-                                .drain_time_agents(&p)
-                                .iter()
-                                .map(|x| (x.id, Satiation::of(x, &p)))
-                                .collect()
-                        });
+                        let reading = readings.get_or_insert_with(|| pre_step.killer_readings(&p));
                         for g in grazers_of.get(id).into_iter().flatten() {
                             a.killers.record(
                                 pre.contains_key(g),
                                 m.traits.distance(&agent_traits[g]),
-                                satiation[g],
+                                reading[g],
                             );
                         }
                     }

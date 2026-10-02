@@ -41,7 +41,7 @@ use explorers_sim::topology::{DETRITAL_RELIANCE_THRESHOLD, TopologyProjection, T
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 
 use crate::grazer_hunger::{
-    GrazerHunger, PreStep, Satiation, Surplus, SurplusDistribution, TraitDistances,
+    GrazerHunger, KillerReading, PreStep, Surplus, SurplusDistribution, TraitDistances,
 };
 
 /// A death at or below this age (ticks from birth) is an infant death, as
@@ -139,6 +139,91 @@ impl DeathTable {
     }
 }
 
+/// The deaths table's groups (and the reproduction table's): a producer by
+/// trait, or a heterotroph by trait split by its diet — lived on light, lived
+/// on drained energy, or no income yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DietGroup {
+    TraitProducer,
+    TraitHeterotrophLightFed,
+    TraitHeterotrophDietFed,
+    TraitHeterotrophNoIncome,
+}
+
+/// The group of an agent with these traits and this lifetime income.
+pub fn diet_group(traits: &TraitVector, income: &Income) -> DietGroup {
+    if traits.photosynthetic_absorption >= traits.heterotrophy {
+        return DietGroup::TraitProducer;
+    }
+    match diet_role(income) {
+        Some(TrophicRole::Producer) => DietGroup::TraitHeterotrophLightFed,
+        Some(_) => DietGroup::TraitHeterotrophDietFed,
+        None => DietGroup::TraitHeterotrophNoIncome,
+    }
+}
+
+/// Reproduction in one diet group (#624).
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GroupReproduction {
+    /// Births with a parent in this group at the birth, counted once per
+    /// parent (a two-parent birth books to each parent's group).
+    pub births: u64,
+    /// Second-half agent-samples whose earmark fill was read.
+    pub samples: u64,
+    /// Summed earmark fill over those samples: the energy the grow phase
+    /// moved into the reproductive earmark in the step that led to the
+    /// sample (the accounting's earmark fill).
+    pub earmark_fill: f64,
+}
+
+impl GroupReproduction {
+    pub fn record_fill(&mut self, fill: f32) {
+        self.samples += 1;
+        self.earmark_fill += fill as f64;
+    }
+
+    /// Mean earmark fill per agent-sample (energy per tick).
+    pub fn mean_earmark_fill(&self) -> Option<f64> {
+        (self.samples > 0).then(|| self.earmark_fill / self.samples as f64)
+    }
+
+    pub fn merge(&mut self, other: &GroupReproduction) {
+        self.births += other.births;
+        self.samples += other.samples;
+        self.earmark_fill += other.earmark_fill;
+    }
+}
+
+/// Births and earmark fill by [`DietGroup`], the deaths table's rows (#624).
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReproductionTable {
+    pub trait_producer: GroupReproduction,
+    pub trait_heterotroph_light_fed: GroupReproduction,
+    pub trait_heterotroph_diet_fed: GroupReproduction,
+    pub trait_heterotroph_no_income: GroupReproduction,
+}
+
+impl ReproductionTable {
+    pub fn group_mut(&mut self, group: DietGroup) -> &mut GroupReproduction {
+        match group {
+            DietGroup::TraitProducer => &mut self.trait_producer,
+            DietGroup::TraitHeterotrophLightFed => &mut self.trait_heterotroph_light_fed,
+            DietGroup::TraitHeterotrophDietFed => &mut self.trait_heterotroph_diet_fed,
+            DietGroup::TraitHeterotrophNoIncome => &mut self.trait_heterotroph_no_income,
+        }
+    }
+
+    pub fn merge(&mut self, other: &ReproductionTable) {
+        self.trait_producer.merge(&other.trait_producer);
+        self.trait_heterotroph_light_fed
+            .merge(&other.trait_heterotroph_light_fed);
+        self.trait_heterotroph_diet_fed
+            .merge(&other.trait_heterotroph_diet_fed);
+        self.trait_heterotroph_no_income
+            .merge(&other.trait_heterotroph_no_income);
+    }
+}
+
 /// The per-agent ledger: income by source, descent, age, and the living
 /// grazers of the current tick. Fed one tick's events at a time.
 #[derive(Clone, Debug, Default)]
@@ -151,6 +236,7 @@ pub struct DietLedger {
     deaths: DeathTable,
     kills: GrazerHunger,
     births: TraitDistances,
+    reproduction: ReproductionTable,
 }
 
 impl DietLedger {
@@ -206,20 +292,14 @@ impl DietLedger {
             }
         }
         self.record_births(world, events);
-        let mut drain_time: Option<HashMap<u64, Satiation>> = None;
+        let mut readings: Option<HashMap<u64, KillerReading>> = None;
         // Every kill is read before any death is attributed: a grazer that
         // died this tick too is still on the ledger.
         for &(id, _) in &died {
             let by = grazers.get(&id).map(Vec::as_slice).unwrap_or(&[]);
             if let (Some(pre), false) = (pre, by.is_empty()) {
-                let satiation = drain_time.get_or_insert_with(|| {
-                    let params = world.params();
-                    pre.drain_time_agents(params)
-                        .iter()
-                        .map(|a| (a.id, Satiation::of(a, params)))
-                        .collect()
-                });
-                self.record_kills(id, by, satiation);
+                let reading = readings.get_or_insert_with(|| pre.killer_readings(world.params()));
+                self.record_kills(id, by, reading);
             }
         }
         for (id, tick) in died {
@@ -242,7 +322,8 @@ impl DietLedger {
                 .any(|p| pb.iter().flatten().any(|q| p == q))
     }
 
-    /// Each birth's trait distance to each of its parents.
+    /// Each birth's trait distance to each of its parents, and the birth
+    /// booked to each parent's diet group.
     fn record_births(&mut self, world: &World, events: &[Event]) {
         let born: Vec<&Event> = events
             .iter()
@@ -250,6 +331,14 @@ impl DietLedger {
             .collect();
         if born.is_empty() {
             return;
+        }
+        for e in &born {
+            for p in [e.target, e.second_parent].into_iter().flatten() {
+                if let Some(traits) = self.traits.get(&p) {
+                    let group = diet_group(traits, &self.income(p));
+                    self.reproduction.group_mut(group).births += 1;
+                }
+            }
         }
         let roster: HashMap<u64, TraitVector> =
             world.agents().iter().map(|a| (a.id, a.traits)).collect();
@@ -266,8 +355,13 @@ impl DietLedger {
     }
 
     /// Tally each grazer of a grazed death by kinship, trait distance to the
-    /// victim and drain-time satiation.
-    fn record_kills(&mut self, victim: u64, grazers: &[u64], satiation: &HashMap<u64, Satiation>) {
+    /// victim, drain-time satiation and pre-growth surplus expression.
+    fn record_kills(
+        &mut self,
+        victim: u64,
+        grazers: &[u64],
+        reading: &HashMap<u64, KillerReading>,
+    ) {
         let Some(traits) = self.traits.get(&victim).copied() else {
             return;
         };
@@ -277,11 +371,11 @@ impl DietLedger {
                 continue;
             }
             seen.push(g);
-            let (Some(s), Some(gt)) = (satiation.get(&g), self.traits.get(&g)) else {
+            let (Some(r), Some(gt)) = (reading.get(&g), self.traits.get(&g)) else {
                 continue;
             };
             self.kills
-                .record(self.is_kin(victim, g), traits.distance(gt), *s);
+                .record(self.is_kin(victim, g), traits.distance(gt), *r);
         }
     }
 
@@ -293,14 +387,11 @@ impl DietLedger {
         let grazed = !grazers.is_empty();
         let by_kin = grazers.iter().any(|&g| self.is_kin(id, g));
         let income = self.income.remove(&id).unwrap_or_default();
-        let bucket = if traits.photosynthetic_absorption >= traits.heterotrophy {
-            &mut self.deaths.trait_producer
-        } else {
-            match diet_role(&income) {
-                Some(TrophicRole::Producer) => &mut self.deaths.trait_heterotroph_light_fed,
-                Some(_) => &mut self.deaths.trait_heterotroph_diet_fed,
-                None => &mut self.deaths.trait_heterotroph_no_income,
-            }
+        let bucket = match diet_group(&traits, &income) {
+            DietGroup::TraitProducer => &mut self.deaths.trait_producer,
+            DietGroup::TraitHeterotrophLightFed => &mut self.deaths.trait_heterotroph_light_fed,
+            DietGroup::TraitHeterotrophDietFed => &mut self.deaths.trait_heterotroph_diet_fed,
+            DietGroup::TraitHeterotrophNoIncome => &mut self.deaths.trait_heterotroph_no_income,
         };
         bucket.add(age <= INFANT_AGE, grazed, by_kin);
     }
@@ -323,6 +414,12 @@ impl DietLedger {
     /// Parent–offspring trait distances.
     pub fn births(&self) -> &TraitDistances {
         &self.births
+    }
+
+    /// Births by the parent's diet group at the birth (earmark fill is
+    /// sampled by the rollout, not the ledger).
+    pub fn reproduction(&self) -> &ReproductionTable {
+        &self.reproduction
     }
 }
 
@@ -433,6 +530,11 @@ pub struct SeedDiet {
     /// in that step have no pre-growth state and are left out.
     #[serde(default)]
     pub surplus: SurplusByRole,
+    /// Births by the parent's diet group at the birth (every birth of the
+    /// run), and earmark fill by diet group over the second-half
+    /// agent-samples the surplus read takes (#624).
+    #[serde(default)]
+    pub reproduction: ReproductionTable,
 }
 
 fn guild_flags(g: RoleGuilds) -> [bool; 3] {
@@ -486,6 +588,7 @@ pub fn rollout(
     let mut confusion = Confusion::default();
     let mut light_share = [0u64; LIGHT_SHARE_BINS];
     let mut surplus = SurplusByRole::default();
+    let mut fills = ReproductionTable::default();
     let mut stopped: Option<FailureMode> = None;
     for _ in 0..max_ticks {
         let pre = PreStep::capture(&world);
@@ -522,10 +625,12 @@ pub fn rollout(
                 }
                 diet_snapshots.push((tick, diet));
                 if let Some((_, roles)) = observations.role_snapshots.last() {
-                    for a in pre.metabolised_agents(params) {
+                    for (a, fill) in pre.earmark_fills(params) {
                         if tags.contains_key(&a.id) {
                             let s = Surplus::of(&a, params);
                             surplus.record(roles.get(&a.id).copied(), a.traits.heterotrophy, &s);
+                            let group = diet_group(&a.traits, &ledger.income(a.id));
+                            fills.group_mut(group).record_fill(fill);
                         }
                     }
                 }
@@ -597,6 +702,11 @@ pub fn rollout(
         kills: *ledger.kills(),
         births: *ledger.births(),
         surplus,
+        reproduction: {
+            let mut r = *ledger.reproduction();
+            r.merge(&fills);
+            r
+        },
     }
 }
 
@@ -716,6 +826,107 @@ mod tests {
             None,
         );
         assert!(ledger.is_kin(10_001, 10_002));
+    }
+
+    /// Births are booked to each parent's diet group at the birth — the
+    /// deaths table's classification (trait producer; trait heterotroph fed
+    /// on light, on drained energy, or with no income yet) — once per parent.
+    #[test]
+    fn ledger_books_births_by_the_parent_s_diet_group() {
+        let (params, dist) = sample_31();
+        let world = World::new(params, dist, 1000);
+        let mut ledger = DietLedger::new(&world);
+        let ids: Vec<u64> = world.agents().iter().map(|a| a.id).collect();
+        let base = world.agents()[0].traits;
+        let producer = TraitVector {
+            photosynthetic_absorption: 0.9,
+            heterotrophy: 0.1,
+            ..base
+        };
+        let heterotroph = TraitVector {
+            photosynthetic_absorption: 0.1,
+            heterotrophy: 0.9,
+            ..base
+        };
+        let (p, fed, lit, unfed) = (ids[0], ids[1], ids[2], ids[3]);
+        ledger.traits.insert(p, producer);
+        for h in [fed, lit, unfed] {
+            ledger.traits.insert(h, heterotroph);
+        }
+        ledger.ingest(
+            &world,
+            &[
+                event(5, EventKind::Consumed, fed, Some(ids[4]), 1.0),
+                event(5, EventKind::Photosynthesized, lit, None, 1.0),
+            ],
+            None,
+        );
+        let mut sexual = event(6, EventKind::Born, 20_003, Some(fed), 0.0);
+        sexual.second_parent = Some(unfed);
+        ledger.ingest(
+            &world,
+            &[
+                event(6, EventKind::Born, 20_000, Some(p), 0.0),
+                event(6, EventKind::Born, 20_001, Some(fed), 0.0),
+                event(6, EventKind::Born, 20_002, Some(lit), 0.0),
+                sexual,
+            ],
+            None,
+        );
+        let r = ledger.reproduction();
+        assert_eq!(
+            [
+                r.trait_producer.births,
+                r.trait_heterotroph_light_fed.births,
+                r.trait_heterotroph_diet_fed.births,
+                r.trait_heterotroph_no_income.births,
+            ],
+            [1, 1, 2, 1]
+        );
+    }
+
+    /// Earmark fill by diet group is a mean over agent-samples; merging adds
+    /// births, samples and fill; rows written before #624 read back empty.
+    #[test]
+    fn reproduction_by_diet_means_earmark_fill_over_samples() {
+        let mut r = ReproductionTable::default();
+        assert_eq!(r.trait_heterotroph_diet_fed.mean_earmark_fill(), None);
+        r.trait_heterotroph_diet_fed.record_fill(0.5);
+        r.trait_heterotroph_diet_fed.record_fill(0.0);
+        r.trait_producer.record_fill(2.0);
+        assert_eq!(r.trait_heterotroph_diet_fed.mean_earmark_fill(), Some(0.25));
+        let mut sum = r;
+        sum.merge(&r);
+        assert_eq!(sum.trait_heterotroph_diet_fed.samples, 4);
+        assert_eq!(sum.trait_producer.mean_earmark_fill(), Some(2.0));
+    }
+
+    /// On a real seed the rollout books every birth to a diet group (one per
+    /// parent, so at least the parent–offspring distances recorded), samples
+    /// earmark fill on the same agents as the surplus read, and rows written
+    /// before #624 read back with an empty table.
+    #[test]
+    fn rollout_records_reproduction_by_diet_group() {
+        let (params, dist) = sample_31();
+        let eval = EvalConfig::default();
+        let ours = rollout(&params, &dist, 1000, 300, &eval);
+        let r = ours.reproduction;
+        let groups = [
+            r.trait_producer,
+            r.trait_heterotroph_light_fed,
+            r.trait_heterotroph_diet_fed,
+            r.trait_heterotroph_no_income,
+        ];
+        let births: u64 = groups.iter().map(|g| g.births).sum();
+        assert!(births >= ours.births.count() && births > 0, "{r:?}");
+        let samples: u64 = groups.iter().map(|g| g.samples).sum();
+        let surplus: u64 = ours.surplus.roles.iter().map(|d| d.count()).sum();
+        assert_eq!(samples, surplus);
+        assert!(groups.iter().any(|g| g.earmark_fill > 0.0), "{r:?}");
+        let mut json: serde_json::Value = serde_json::to_value(&ours).unwrap();
+        json.as_object_mut().unwrap().remove("reproduction");
+        let old: SeedDiet = serde_json::from_value(json).unwrap();
+        assert_eq!(old.reproduction, ReproductionTable::default());
     }
 
     /// The census's rollout is the genesis rollout: on real seeds it reaches

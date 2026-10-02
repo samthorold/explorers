@@ -99,7 +99,8 @@
 //! grazer's satiation in the drain pass (replayed exactly,
 //! [`explorers_search::grazer_hunger`]), its trait distance to the member,
 //! and whether it is itself a member (kin). Printed after the accounting
-//! tables.
+//! tables, then again by the grazer's pre-growth surplus and its expression
+//! `E = 1/(1 + c·s)` at the run's `c` (#624).
 //!
 //! Run with:
 //!   cargo run --release -p explorers-search --bin reinvasion_barrier -- sample:31
@@ -122,7 +123,9 @@ use explorers_search::config_source::{
     with_consumption_scales, with_founder_aggregation,
 };
 use explorers_search::energy_accounting::{EnergyAccount, LineageAccountant};
-use explorers_search::grazer_hunger::{GrazerHunger, RECOGNITION_BANDS, SATIATION_EDGES};
+use explorers_search::grazer_hunger::{
+    EXPRESSION_TABLE_HEADER, GrazerHunger, RECOGNITION_BANDS, SATIATION_EDGES,
+};
 use explorers_search::invasion::{
     ConsumedCounts, DrainedEnergy, Lineage, RateSummary, SERIES_INTERVAL, WindowOutcome,
     growth_rate, median, place_cohort, run_window, summarise_rates,
@@ -1571,6 +1574,21 @@ fn print_accounting(a: &Artifact) {
                 .join(" | "),
             share(k.hungry(false), non),
         );
+    }
+    println!(
+        "\n# Killing grazers at the pre-growth surplus read (#624): the same pairs by the grazer's surplus s (reserve above the retention buffer, co-limited by free nutrient, in ticks of maintenance) read after metabolism and before growth, and its expression E = 1/(1 + c·s) at the run's c (pinned or as decoded). E ≥ 0.5 = at most half gated (hungry side); E < 0.5 = past half expression (sated side); s = 0 = no surplus (E = 1). Bands: E < 0.1, 0.1–0.5, 0.5–0.9, ≥ 0.9."
+    );
+    println!("\n| row | {EXPRESSION_TABLE_HEADER} |");
+    println!(
+        "|---|{}",
+        "---:|".repeat(EXPRESSION_TABLE_HEADER.matches('|').count() + 1)
+    );
+    for r in &rows {
+        let mut k = GrazerHunger::default();
+        for x in &r.accounts {
+            k.merge(&x.killers);
+        }
+        println!("| {} | {} |", r.label, k.expression_cells());
     }
 }
 
