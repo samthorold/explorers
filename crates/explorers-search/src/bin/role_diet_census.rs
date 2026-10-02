@@ -52,12 +52,12 @@ use explorers_search::config_source::{
 };
 use explorers_search::grazer_hunger::SurplusDistribution;
 use explorers_search::grazer_hunger::{
-    DISTANCE_BANDS, DISTANCE_EDGES, GrazerHunger, HUNGRY_BANDS, RECOGNITION_BANDS, SATIATION_BANDS,
-    SATIATION_EDGES, TraitDistances,
+    DISTANCE_BANDS, DISTANCE_EDGES, EXPRESSION_TABLE_HEADER, GrazerHunger, HUNGRY_BANDS,
+    RECOGNITION_BANDS, SATIATION_BANDS, SATIATION_EDGES, TraitDistances,
 };
 use explorers_search::role_diet::{
-    Confusion, DeathCounts, DeathTable, LIGHT_SHARE_BINS, PRODUCER_LIGHT_SHARE, SeedDiet,
-    SurplusByRole, rollout,
+    Confusion, DeathCounts, DeathTable, GroupReproduction, LIGHT_SHARE_BINS, PRODUCER_LIGHT_SHARE,
+    ReproductionTable, SeedDiet, SurplusByRole, rollout,
 };
 use explorers_search::search::default_ranges;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
@@ -133,6 +133,8 @@ struct Pool {
     births: TraitDistances,
     /// Surplus satiation before growth, by income role (#622).
     surplus: SurplusByRole,
+    /// Births and earmark fill by diet group (#624).
+    reproduction: ReproductionTable,
 }
 
 fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
@@ -162,6 +164,7 @@ fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
             p.kills.merge(&s.kills);
             p.births.merge(&s.births);
             p.surplus.merge(&s.surplus);
+            p.reproduction.merge(&s.reproduction);
             if let (None, Some(t), Some(d)) =
                 (&s.failure, s.trophic_balance_tag, s.trophic_balance_diet)
             {
@@ -422,8 +425,37 @@ fn print_pool(name: &str, p: &Pool) {
         "trait heterotrophs, no income yet",
         &p.deaths.trait_heterotroph_no_income,
     );
+    println!(
+        "\nReproduction by diet group (#624): births over whole runs, booked to each parent's group at the birth (a two-parent birth counts for each parent); earmark fill = energy the grow phase moved into the reproductive earmark in the step before each second-half agent-sample (the accounting's earmark fill), mean per agent-sample.\n"
+    );
+    println!("| agents | births | agent-samples | mean earmark fill |");
+    println!("|---|---:|---:|---:|");
+    let r = &p.reproduction;
+    print_reproduction("trait producers", &r.trait_producer);
+    print_reproduction(
+        "trait heterotrophs, light-fed",
+        &r.trait_heterotroph_light_fed,
+    );
+    print_reproduction(
+        "trait heterotrophs, heterotroph by diet",
+        &r.trait_heterotroph_diet_fed,
+    );
+    print_reproduction(
+        "trait heterotrophs, no income yet",
+        &r.trait_heterotroph_no_income,
+    );
     print_kills(&p.kills, &p.births);
     print_surplus(&p.surplus);
+}
+
+fn print_reproduction(label: &str, g: &GroupReproduction) {
+    println!(
+        "| {label} | {} | {} | {} |",
+        g.births,
+        g.samples,
+        g.mean_earmark_fill()
+            .map_or("–".to_string(), |m| format!("{m:.4}")),
+    );
 }
 
 /// Surplus satiation by income role (#622): ticks of maintenance above the
@@ -541,6 +573,15 @@ fn print_kills(k: &GrazerHunger, births: &TraitDistances) {
         println!("| {label} | {} |", hungry.join(" | "));
     }
     println!(
+        "\nKilling grazers at the pre-growth surplus read (#624): the same pairs by the grazer's surplus s (reserve above the retention buffer, co-limited by free nutrient, in ticks of maintenance) read after metabolism and before growth, and its expression E = 1/(1 + c·s) at each run's c (pinned or as decoded). E ≥ 0.5 = at or past half expression; s = 0 = no surplus (E = 1). Bands: E < 0.1, 0.1–0.5, 0.5–0.9, ≥ 0.9.\n"
+    );
+    println!("| pairs | {EXPRESSION_TABLE_HEADER} |");
+    println!(
+        "|---|{}",
+        "---:|".repeat(EXPRESSION_TABLE_HEADER.matches('|').count() + 1)
+    );
+    println!("| all | {} |", k.expression_cells());
+    println!(
         "\nParent–offspring trait distance over {} births: mean {}, rms {}; by band {}.",
         births.count(),
         births.mean().map_or("–".into(), |m| format!("{m:.4}")),
@@ -596,7 +637,7 @@ fn print_summary(rows: &[Row]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use explorers_search::grazer_hunger::{Satiation, Surplus};
+    use explorers_search::grazer_hunger::{KillerReading, Satiation, Surplus};
     use explorers_sim::TraitVector;
 
     fn seed(tag: [bool; 3], diet: [bool; 3], failure: Option<&str>) -> SeedDiet {
@@ -607,10 +648,17 @@ mod tests {
         kills.record(
             true,
             0.05,
-            Satiation {
-                energy: 2.0,
-                nutrient: 0.5,
-            },
+            KillerReading::at(
+                Satiation {
+                    energy: 2.0,
+                    nutrient: 0.5,
+                },
+                Surplus {
+                    energy: 0.0,
+                    nutrient: 0.5,
+                },
+                33.0,
+            ),
         );
         let mut births = TraitDistances::default();
         let t = TraitVector {
@@ -654,6 +702,7 @@ mod tests {
             kills,
             births,
             surplus,
+            reproduction: ReproductionTable::default(),
         }
     }
 
