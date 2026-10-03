@@ -12,4 +12,6 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
+This repo also uses `deferred`: a known gap or future work, not currently scheduled. It is not a sixth role — it only records that the issue is not `ready-for-agent`. Agents don't pick it up, and triage leaves it alone unless the owner asks to revisit it.
+
 Edit the right-hand column to match whatever vocabulary you actually use.
