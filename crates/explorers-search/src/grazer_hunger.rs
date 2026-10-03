@@ -26,11 +26,16 @@
 //! is the previous, reserve-based reading (#600–#619), which the
 //! [`GrazerHunger`] tallies still band by.
 //!
+//! #629 reads intake at the same point: [`PreStep::drain_start`] keeps what
+//! the replayed photosynthesis and uptake credited each agent, for
+//! `crate::intake_ceiling`.
+//!
 //! Observer-side only: the world is never touched.
 
+use explorers_sim::event::EventKind;
 use explorers_sim::phase;
 use explorers_sim::spatial::{NutrientGrid, SpatialGrid};
-use explorers_sim::{Agent, TraitVector, World, WorldParameters};
+use explorers_sim::{Agent, Carcass, TraitVector, World, WorldParameters};
 use std::collections::HashMap;
 
 /// The roster and nutrient grid before a step: enough to replay the tick's
@@ -39,6 +44,18 @@ use std::collections::HashMap;
 pub struct PreStep {
     agents: Vec<Agent>,
     nutrient_grid: NutrientGrid,
+    carcasses: Vec<Carcass>,
+}
+
+/// The state at the start of drain resolution (#629): the drain-time roster
+/// ([`PreStep::drain_time_agents`]) with each agent's photosynthesis and
+/// nutrient uptake this tick, by id (absent = none). Carcasses are untouched
+/// by the phases before the drain pass, so [`PreStep::carcasses`] is theirs.
+#[derive(Clone, Debug)]
+pub struct DrainStart {
+    pub agents: Vec<Agent>,
+    pub light: HashMap<u64, f32>,
+    pub uptake: HashMap<u64, f32>,
 }
 
 impl PreStep {
@@ -47,6 +64,47 @@ impl PreStep {
         PreStep {
             agents: world.agents().to_vec(),
             nutrient_grid: world.nutrient_grid().clone(),
+            carcasses: world.carcasses().to_vec(),
+        }
+    }
+
+    /// The carcasses before the step: those the drain pass reads.
+    pub fn carcasses(&self) -> &[Carcass] {
+        &self.carcasses
+    }
+
+    /// The tick's first four phases replayed as [`PreStep::drain_time_agents`]
+    /// does, keeping what photosynthesis and uptake credited each agent (their
+    /// events' `energy_delta`).
+    pub fn drain_start(&self, params: &WorldParameters) -> DrainStart {
+        let mut agents = self.agents.clone();
+        let mut nutrient_grid = self.nutrient_grid.clone();
+        let cell_size = params.light_competition_radius.max(1.0);
+        let mut grid = SpatialGrid::new(params.world_extent, cell_size);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        let by_source = |events: Vec<explorers_sim::event::Event>, kind: EventKind| {
+            let mut out: HashMap<u64, f32> = HashMap::new();
+            for e in events.into_iter().filter(|e| e.kind == kind) {
+                *out.entry(e.source).or_default() += e.energy_delta;
+            }
+            out
+        };
+        let light = by_source(
+            phase::photosynthesise(&mut agents, &grid, params),
+            EventKind::Photosynthesized,
+        );
+        let uptake = by_source(
+            phase::absorb_nutrients(&mut agents, &mut nutrient_grid, params),
+            EventKind::NutrientAbsorbed,
+        );
+        phase::metabolise(&mut agents, params);
+        phase::grow(&mut agents, params);
+        DrainStart {
+            agents,
+            light,
+            uptake,
         }
     }
 
@@ -71,9 +129,7 @@ impl PreStep {
     /// The roster as the drain pass read it: [`PreStep::metabolised_agents`]
     /// grown — the tick's first four phases.
     pub fn drain_time_agents(&self, params: &WorldParameters) -> Vec<Agent> {
-        let mut agents = self.metabolised_agents(params);
-        phase::grow(&mut agents, params);
-        agents
+        self.drain_start(params).agents
     }
 
     /// The metabolised roster ([`PreStep::metabolised_agents`]), each agent
@@ -125,6 +181,9 @@ pub struct KillerReading {
     pub satiation: Satiation,
     pub surplus: Surplus,
     pub expression: f32,
+    /// The intake gate's predicted expression at a given ceiling multiple
+    /// `k` (#629; `IntakeReading::expression_at`), when one was given.
+    pub intake_expression: Option<f32>,
 }
 
 impl KillerReading {
@@ -134,6 +193,7 @@ impl KillerReading {
             satiation,
             surplus,
             expression: surplus.expression_at(c),
+            intake_expression: None,
         }
     }
 }
@@ -451,6 +511,11 @@ pub struct GrazerHunger {
     /// expression).
     #[serde(default)]
     pub surplus_zero: [u64; 2],
+    /// `[kin][expression band]`: pairs by the grazer's predicted intake-gate
+    /// expression at the census's `--intake-ceiling-k` (#629). Empty without
+    /// one, and on rows written before #629.
+    #[serde(default)]
+    pub intake_expression: [[u64; EXPRESSION_BANDS]; 2],
 }
 
 impl GrazerHunger {
@@ -464,6 +529,9 @@ impl GrazerHunger {
         }
         self.expression[k][band(reading.expression, &EXPRESSION_EDGES)] += 1;
         self.surplus_zero[k] += u64::from(reading.surplus.ticks() <= 0.0);
+        if let Some(e) = reading.intake_expression {
+            self.intake_expression[k][band(e, &EXPRESSION_EDGES)] += 1;
+        }
     }
 
     /// Pairs of this kinship whose grazer was at most half gated
@@ -486,6 +554,7 @@ impl GrazerHunger {
             }
             for e in 0..EXPRESSION_BANDS {
                 self.expression[k][e] += other.expression[k][e];
+                self.intake_expression[k][e] += other.intake_expression[k][e];
             }
             self.surplus_zero[k] += other.surplus_zero[k];
         }
