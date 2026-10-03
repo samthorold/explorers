@@ -36,6 +36,16 @@
 //!   and prints both outcomes per cell, the feasible-cell count, and the
 //!   largest-margin default, or "region EMPTY"
 //!   ([`explorers_search::intake_ceiling::region_report`]).
+//! - the fullness-gate region (#637): with `--fullness`, every seed keeps
+//!   each agent's fullness bank online (one fullness per currency per
+//!   clearance time `τ` on a fixed grid) and accumulates, per `(n, k, τ)`,
+//!   the sated light-fed mixotroph kin kills and the production heterotrophs
+//!   by diet keep ([`explorers_search::fullness`]). `--fullness-region`
+//!   (with or without `--summary`) pools the counters and prints, per
+//!   exponent n ∈ {2, 4, 8}, both outcomes over the `(k, τ)` grid, the
+//!   feasible region and the largest-margin default, or "region EMPTY"; the
+//!   energy-alone sated split; and the per-agent lifetime mean intake / m of
+//!   both populations ([`explorers_search::fullness::fullness_report`]).
 //!
 //! Configs and seeds as `guild_census`: the atlas cells (`--atlas PATH`),
 //! the LHS sample, or `--configs` (`sample@S:i` for another draw); the seed
@@ -54,6 +64,8 @@
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --configs sample:31,sample:110
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --summary
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --summary --region
+//!   cargo run --release -p explorers-search --bin role_diet_census -- --atlas atlas.json --fullness
+//!   cargo run --release -p explorers-search --bin role_diet_census -- --summary --fullness-region
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -66,6 +78,7 @@ use explorers_search::config_source::{
     ConfigSource, parse_founder_aggregation, parse_non_negative, parse_selector, resolve_config,
     sampled_units, with_consumption_scales, with_founder_aggregation,
 };
+use explorers_search::fullness::{FullnessGrid, fullness_report};
 use explorers_search::grazer_hunger::SurplusDistribution;
 use explorers_search::grazer_hunger::{
     DISTANCE_BANDS, DISTANCE_EDGES, EXPRESSION_TABLE_HEADER, GrazerHunger, HALF_EXPRESSION_BAND,
@@ -74,7 +87,7 @@ use explorers_search::grazer_hunger::{
 use explorers_search::intake_ceiling::{GateSamples, Region, log_grid, region_report, window_line};
 use explorers_search::role_diet::{
     Confusion, DeathCounts, DeathTable, GroupReproduction, IntakeCensus, LIGHT_SHARE_BINS,
-    PRODUCER_LIGHT_SHARE, ReproductionTable, SeedDiet, SurplusByRole, rollout_with,
+    PRODUCER_LIGHT_SHARE, ReproductionTable, SeedDiet, SurplusByRole, rollout_with_fullness,
 };
 use explorers_search::search::default_ranges;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
@@ -163,6 +176,8 @@ struct Pool {
     intake_ks: Vec<f32>,
     /// Per-sample gate records for the `(k_a, k_h)` region (#634).
     gates: GateSamples,
+    /// The fullness-gate region's counters, summed (#637).
+    fullness: FullnessGrid,
 }
 
 fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
@@ -200,6 +215,9 @@ fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
             p.reproduction.merge(&s.reproduction);
             p.intake.merge(&s.intake);
             p.gates.merge(&s.gates);
+            if let Some(f) = &s.fullness {
+                p.fullness.merge(f);
+            }
             if let (None, Some(t), Some(d)) =
                 (&s.failure, s.trophic_balance_tag, s.trophic_balance_diet)
             {
@@ -234,6 +252,11 @@ struct Args {
     /// Evaluate the `(k_a, k_h)` ceiling region over the rows' gate samples
     /// and print it after the summary (#634).
     region: bool,
+    /// Run the fullness readout into every seed (#637).
+    fullness: bool,
+    /// Evaluate the fullness-gate region over the rows' counters and print
+    /// it after the summary (#637).
+    fullness_region: bool,
 }
 
 fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
@@ -251,6 +274,8 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
         recognition_distance: None,
         intake_ceiling_k: None,
         region: false,
+        fullness: false,
+        fullness_region: false,
     };
     let mut it = argv.into_iter();
     while let Some(flag) = it.next() {
@@ -269,6 +294,8 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
             "--configs" => args.configs = Some(parse_selector(&value()?, "--configs", None)),
             "--summary" => args.summary_only = true,
             "--region" => args.region = true,
+            "--fullness" => args.fullness = true,
+            "--fullness-region" => args.fullness_region = true,
             "--founder-aggregation" => {
                 args.founder_aggregation = Some(parse_founder_aggregation(&value()?)?)
             }
@@ -309,13 +336,14 @@ fn run_row(
     let seeds = (0..args.ensemble)
         .into_par_iter()
         .map(|i| {
-            rollout_with(
+            rollout_with_fullness(
                 &config.0,
                 &config.1,
                 args.seed + i,
                 args.horizon,
                 &eval,
                 args.intake_ceiling_k,
+                args.fullness,
             )
         })
         .collect();
@@ -386,6 +414,31 @@ fn main() {
     if args.region {
         print!("{}", region_text(&rows));
     }
+    if args.fullness_region {
+        print!("{}", fullness_text(&rows));
+    }
+}
+
+/// The fullness-gate region over each source's pooled counters, all
+/// configs (#637).
+fn fullness_text(rows: &[Row]) -> String {
+    let mut out = String::new();
+    for (name, sample) in [("atlas", false), ("sample", true)] {
+        let of = || rows.iter().filter(move |r| r.source.is_sample() == sample);
+        if of().next().is_none() {
+            continue;
+        }
+        let p = pool(of());
+        out.push_str(&format!(
+            "\n## Fullness-gate region (#637): {name}, all configs\n\n"
+        ));
+        if p.fullness.k.is_empty() {
+            out.push_str("No fullness counters on these rows (run with --fullness).\n");
+            continue;
+        }
+        out.push_str(&fullness_report(&p.fullness));
+    }
+    out
 }
 
 /// The `(k_a, k_h)` grid the region is read on (#634): each over
@@ -886,6 +939,7 @@ mod tests {
             surplus,
             reproduction: ReproductionTable::default(),
             intake,
+            fullness: None,
             gates: GateSamples {
                 mixotroph_kin_kills: vec![GateSample {
                     h_eff: 0.05,
@@ -942,6 +996,47 @@ mod tests {
             text.contains("k_h = 0 (the body-only ceiling of #629"),
             "{text}"
         );
+    }
+
+    /// `--fullness` runs the fullness readout (#637) into every seed;
+    /// `--fullness-region` pools the rows' counters (a sum) and prints the
+    /// region per exponent, the energy-alone split and the per-agent
+    /// separation. Rows without the readout pool as empty.
+    #[test]
+    fn fullness_runs_the_readout_and_its_region_pools_the_rows() {
+        let parse = |a: &[&str]| parse_args(a.iter().map(|s| s.to_string()));
+        let a = parse(&[]).unwrap();
+        assert!(!a.fullness && !a.fullness_region);
+        let args = parse(&["--fullness", "--max-ticks", "120", "--ensemble", "2"]).unwrap();
+        assert!(args.fullness);
+        assert!(
+            parse(&["--summary", "--fullness-region"])
+                .unwrap()
+                .fullness_region
+        );
+        let sampled = sampled_units(default_ranges().len());
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        let row = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
+        let grids: Vec<_> = row
+            .seeds
+            .iter()
+            .map(|s| s.fullness.clone().unwrap())
+            .collect();
+        let mut old = row.clone();
+        old.seeds.iter_mut().for_each(|s| s.fullness = None);
+        let p = pool([&row, &old].into_iter());
+        assert_eq!(p.fullness.kills, grids[0].kills + grids[1].kills);
+        assert_eq!(
+            p.fullness.consumer_ticks,
+            grids[0].consumer_ticks + grids[1].consumer_ticks
+        );
+        let text = fullness_text(&[row, old]);
+        assert!(
+            text.contains("## Fullness-gate region (#637): sample, all configs"),
+            "{text}"
+        );
+        assert!(text.contains("### n = 4"), "{text}");
+        assert!(text.contains("heterotrophs by diet |"), "{text}");
     }
 
     /// A config holds a guild at ≥ half its seeds; the pool crosses the tag

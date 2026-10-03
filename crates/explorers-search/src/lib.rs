@@ -4,6 +4,7 @@ pub mod bifurcation;
 pub mod checkpoint;
 pub mod config_source;
 pub mod energy_accounting;
+pub mod fullness;
 pub mod gp;
 pub mod grazer_hunger;
 pub mod heterotroph_margin;

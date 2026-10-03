@@ -221,7 +221,43 @@ pub fn intake_readings(
         r.potential_nutrient = p_n;
     }
 
-    // Realised drains.
+    for (id, d) in realised_drains(agents, carcasses, params, events) {
+        let r = readings.get_mut(&id).expect("every agent has a reading");
+        r.drained_energy = d.energy;
+        r.drained_nutrient = d.bound_nutrient;
+    }
+    readings
+}
+
+/// One consumer's realised drains in a tick, from its `Consumed` events.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Drained {
+    /// Energy received: the structure drained times the transfer efficiency.
+    pub energy: f32,
+    /// The nutrient bound in what was drained, before the retention cap.
+    pub bound_nutrient: f32,
+    /// The nutrient retained: each bite's released nutrient capped at the
+    /// consumer's stoichiometric demand on the energy it gained
+    /// (`demand(traits, drain-time structure) × gained`), as the drain pass
+    /// caps it (#637).
+    pub retained_nutrient: f32,
+}
+
+/// Every consumer's [`Drained`] for a tick: `agents` is the drain-time
+/// roster, `carcasses` the carcasses before the step, `events` the tick's
+/// events. A carcass already spent of energy hands its nutrient to its
+/// consumers in proportion to demand; that is split here by effective
+/// heterotrophy, exact when the gate is off (expression 1).
+pub fn realised_drains(
+    agents: &[Agent],
+    carcasses: &[Carcass],
+    params: &WorldParameters,
+    events: &[Event],
+) -> HashMap<u64, Drained> {
+    let k = params.wear_degradation_steepness;
+    let eff_het = |a: &Agent| a.effective_trait_with_steepness(1, k);
+    let ratio = |t: &TraitVector| explorers_sim::stoichiometric_demand(t, 1.0, params);
+    let mut out: HashMap<u64, Drained> = HashMap::new();
     let living: HashMap<u64, &Agent> = agents.iter().map(|a| (a.id, a)).collect();
     let dead: HashMap<u64, &Carcass> = carcasses.iter().map(|c| (c.id, c)).collect();
     let consumed = || {
@@ -258,12 +294,15 @@ pub fn intake_readings(
             };
             (t.traits, drained * ratio(&t.traits))
         };
-        let r = readings.get_mut(&c.id).expect("every agent has a reading");
-        r.drained_energy +=
+        let gained =
             drained * explorers_sim::trophic_transfer_efficiency(&c.traits, &target_traits, params);
-        r.drained_nutrient += nutrient;
+        let need = explorers_sim::stoichiometric_demand(&c.traits, c.structure, params) * gained;
+        let d = out.entry(c.id).or_default();
+        d.energy += gained;
+        d.bound_nutrient += nutrient;
+        d.retained_nutrient += nutrient.min(need);
     }
-    readings
+    out
 }
 
 /// One agent-sample at the intake gate's read point, compact and exact

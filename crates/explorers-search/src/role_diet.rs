@@ -40,6 +40,7 @@ use explorers_sim::event::{Event, EventKind};
 use explorers_sim::topology::{DETRITAL_RELIANCE_THRESHOLD, TopologyProjection, TrophicRole};
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 
+use crate::fullness::{FullnessGrid, FullnessTracker, tick_intakes};
 use crate::grazer_hunger::{
     GrazerHunger, KillerReading, PreStep, Surplus, SurplusDistribution, TraitDistances,
 };
@@ -606,6 +607,12 @@ pub struct SeedDiet {
     /// [`SeedDiet::intake`].
     #[serde(default)]
     pub gates: GateSamples,
+    /// The fullness-gate region's counters (#637), when the readout ran:
+    /// the same kin kills as [`SeedDiet::gates`], read against every agent's
+    /// online fullness bank, and heterotrophs by diet on every second-half
+    /// tick. Absent otherwise, and on older rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fullness: Option<FullnessGrid>,
 }
 
 fn guild_flags(g: RoleGuilds) -> [bool; 3] {
@@ -647,6 +654,30 @@ pub fn rollout_with(
     eval_config: &EvalConfig,
     intake_ceiling_k: Option<f32>,
 ) -> SeedDiet {
+    rollout_with_fullness(
+        params,
+        dist,
+        seed,
+        max_ticks,
+        eval_config,
+        intake_ceiling_k,
+        false,
+    )
+}
+
+/// [`rollout_with`], with the fullness readout (#637) when `fullness`:
+/// every agent's fullness bank kept online from each tick's intake
+/// ([`crate::fullness`]), observer-only.
+pub fn rollout_with_fullness(
+    params: &WorldParameters,
+    dist: &InitialDistribution,
+    seed: u64,
+    max_ticks: u64,
+    eval_config: &EvalConfig,
+    intake_ceiling_k: Option<f32>,
+    fullness: bool,
+) -> SeedDiet {
+    let mut fullness = fullness.then(FullnessTracker::new);
     let mut world = World::new(params.clone(), dist.clone(), seed);
     let mut kinds = explorers_genesis_eval::EVALUATOR_EVENT_KINDS.to_vec();
     for k in [
@@ -686,10 +717,30 @@ pub fn rollout_with(
         ledger.ingest(&world, &tail, Some(&pre));
         // The killer's role as of the start of the kill's tick: the income
         // ledger has not yet walked this tick.
+        let mut kin_killers = Vec::new();
         for (g, heterotrophy, r) in ledger.take_kin_kill_readings() {
             if heterotrophy > 0.0 && observations.income().role(g) == Some(TrophicRole::Producer) {
                 gates.mixotroph_kin_kills.push(GateSample::of(&r));
+                kin_killers.push(g);
             }
+        }
+        if let Some(tracker) = fullness.as_mut() {
+            let intakes = tick_intakes(&pre, params, &tail);
+            let consumers: Vec<u64> = if world.tick() >= window_start {
+                world
+                    .agents()
+                    .iter()
+                    .filter(|a| {
+                        intakes.contains_key(&a.id)
+                            && diet_group(&a.traits, &ledger.income(a.id))
+                                == DietGroup::TraitHeterotrophDietFed
+                    })
+                    .map(|a| a.id)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            tracker.observe(&intakes, &tail, &kin_killers, &consumers);
         }
         topology.update(world.event_log());
         let sampled_before = observations.role_snapshots.len();
@@ -817,6 +868,7 @@ pub fn rollout_with(
         },
         intake,
         gates,
+        fullness: fullness.map(FullnessTracker::finish),
     }
 }
 
@@ -1206,6 +1258,41 @@ mod tests {
             },
             ours
         );
+    }
+
+    /// The fullness readout (#637) is observer-only: turning it on leaves
+    /// every other field of the rollout identical. It counts exactly the
+    /// kin kills the gate samples keep (the same #634 classification), reads
+    /// heterotrophs by diet on every window tick (at least the sampled
+    /// ones), and old rows without it read back.
+    #[test]
+    fn the_fullness_readout_leaves_the_rollout_identical() {
+        let (params, dist) = sample_31();
+        let eval = EvalConfig::default();
+        let off = rollout_with(&params, &dist, 1000, 300, &eval, None);
+        let on = rollout_with_fullness(&params, &dist, 1000, 300, &eval, None, true);
+        assert_eq!(off.fullness, None);
+        let f = on.fullness.clone().expect("the readout ran");
+        assert_eq!(
+            SeedDiet {
+                fullness: None,
+                ..on.clone()
+            },
+            off
+        );
+        assert_eq!(f.kills, on.gates.mixotroph_kin_kills.len() as u64);
+        assert!(f.kills > 0);
+        assert!(f.consumer_ticks >= on.gates.diet_fed.len() as u64);
+        assert!(f.killers.agents > 0 && f.killers.agents <= f.kills);
+
+        let json = serde_json::to_string(&off).unwrap();
+        assert!(
+            !json.contains("fullness"),
+            "rows without it write as before"
+        );
+        assert_eq!(serde_json::from_str::<SeedDiet>(&json).unwrap(), off);
+        let back: SeedDiet = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back.fullness.map(|g| g.kills), Some(f.kills));
     }
 
     /// With an intake-ceiling `k` (#629), every killing pair is also banded
