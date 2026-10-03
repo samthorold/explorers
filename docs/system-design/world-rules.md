@@ -375,7 +375,7 @@ Expression is read once per consumer, at the start of drain resolution. Photosyn
 - **The lower bound** keeps consumers producing. The plateau must rarely bind on what diet-fed heterotrophs take in ungated, so `k` is at least the 75th percentile of their intake (light plus realised drain) in ticks of maintenance.
 - **The default** is the geometric midpoint of the window, since `k` is a scale.
 
-*(Value to be measured.)* An empty window would mean no single ceiling serves both populations. The ungated drain, with expression always 1, is kept as a limiting case for comparison, not a setting the defaults use.
+*(Value to be measured.)* *Measured (#629): by this criterion the window is open, 1.05 ≤ k ≤ 2.76 decoded (midpoint 1.70). But at that midpoint consumers keep only about 3 % of their production, so the criterion is under revision. See [629-intake-ceiling-window.md](../research/629-intake-ceiling-window.md).* An empty window would mean no single ceiling serves both populations. The ungated drain, with expression always 1, is kept as a limiting case for comparison, not a setting the defaults use.
 
 One `k` sets both currencies. On the maintenance yardstick, a tick's worth of nutrient-matched intake and a tick's worth of energy intake are the same quantity, so a second parameter would add a search dimension without a distinct meaning.
 
