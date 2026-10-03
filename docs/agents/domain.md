@@ -22,7 +22,7 @@ Single-context repo (most repos):
 ├── docs/
 │   ├── ecology/              ← domain ground truth
 │   └── system-design/        ← the design (self-justifying)
-└── src/                       ← implementation (the code)
+└── crates/                    ← implementation (the code: the explorers-* workspace crates)
 ```
 
 ## Use the glossary's vocabulary
