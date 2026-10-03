@@ -72,8 +72,8 @@ An agent draining structure and nutrient from a living agent over time through s
 _Avoid_: eating, attacking, harvesting
 
 **Satiation**:
-How close a consumer's intake this tick comes to its **intake ceiling**. Intake counts every route: what light already supplies, and what its capability would drain from everything in reach. Satiation is a flow, not a holding. A consumer that has covered its upkeep is not sated; one whose intake nears what it can process is. The ceiling not already filled by light (or, on the nutrient side, by uptake) is the consumer's room. Its drain saturates toward that room as more is in reach, which is Holling's Type II plateau. Satiation is co-limited, so hunger follows whichever currency has more room: a well-lit producer short of nutrient is still hungry. It is the state that gates how much of its heterotrophic capability a consumer expresses: a sated consumer drains little, and a hungry one drains at full capability.
-_Avoid_: fullness, appetite (appetite suggests a trait; satiation is state), reserve level and surplus (satiation reads intake flow, not any reserve stock), earmark fill (the reproductive allocation empties at every birth, so it measures the reproductive cycle, not how well fed the agent is)
+How **full** a consumer is: its recent intake per tick, from every route (light as well as what it drains), accumulated and cleared over a few ticks and read against its **intake ceiling**. Satiation is nutritional status built from recent flow, not a holding. A consumer that has just covered its upkeep is not sated, and one fresh from a feast is, until the meal clears. It is co-limited, so hunger follows the emptier currency: a well-lit producer short of nutrient is still hungry. It is the state that gates how much of its heterotrophic capability a consumer expresses: a sated consumer drains little, and a hungry one drains at full capability.
+_Avoid_: appetite (appetite suggests a trait; satiation is state), reserve level and surplus (satiation reads recent intake, not any reserve stock), this tick's intake (feasts would read like a mixotroph's steady light), earmark fill (the reproductive allocation empties at every birth, so it measures the reproductive cycle, not how well fed the agent is)
 
 **Carcass**:
 An inert agent. A living agent becomes a carcass on death — it retains its structure (embodied biomass energy), all its nutrient (free store, reproductive earmark, and the nutrient that was bound in its structure), position, and trait vector, but no longer acts. Structure and nutrient stay locked until another agent consumes the carcass. No passive decay. A carcass's energy content reflects the agent's accumulated structure at death — old, well-fed agents leave energy-rich carcasses; heavily grazed or starved agents leave energy-poor ones.
@@ -238,8 +238,12 @@ The fraction of an agent's mobilisable reserve (the reserve above the metabolic 
 _Avoid_: energy conductance (the DEB term is the grounding, but "mobilisation rate" names its role here), reserve drain rate (drain conflates with metabolism, which is a separate outflow)
 
 **Intake ceiling**:
-The most a consumer can take in per tick, the analogue of gut and handling capacity. It scales with the body, as a multiple of the consumer's maintenance, and with its feeding apparatus, rising with its heterotrophy. A producer's ceiling is small and light fills it. A consumer's is wide. Its two coefficients (a base and a per-heterotrophy share) are world parameters searched by genesis on a log scale, and the one ceiling sets both currencies. Its nutrient counterpart is the nutrient that would match the energy ceiling in growth. **Satiation** is read against it. The ceiling is not the consumer's capability, which applies to each target in reach and so sets no plateau of its own.
+The fullness at which a consumer reads half sated: a fixed multiple of its own maintenance, so a large, costly body processes more, as gut and handling capacity scale in the domain. The multiple is a world parameter searched by genesis on a log scale, and one ceiling sets both currencies.
 _Avoid_: satiation sensitivity (the former name for the shape of a reserve-based gate, which this replaces), gut capacity (the domain analogue, not the physics)
+
+**Fullness**:
+A consumer's recent intake per tick in one currency, a moving average that each tick's intake fills and that clears over the **clearance time**. Satiation reads it against the intake ceiling. A newborn inherits its parent's fullness, as it inherits provisioned reserve and nutrient.
+_Avoid_: gut content (light counts toward fullness, and no gut holds light), reserve (fullness is a flow average, not stored energy)
 _Avoid_: appetite (a trait word; this is world physics), hunger threshold (there is no threshold)
 
 **Reproduction efficiency**:
