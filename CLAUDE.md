@@ -34,4 +34,4 @@ Diagnoses that have cost time before (e.g. translation proptest failures). See `
 
 ## Code style
 
-The committed code is rustfmt-clean (`cargo fmt --check` passes on HEAD). Run `cargo fmt` freely and keep it clean — it no longer produces unrelated churn, so a focused diff stays focused. fmt is not enforced in CI, so it's on you to run it before committing.
+The committed code is rustfmt-clean (`cargo fmt --check` passes on HEAD). Run `cargo fmt` freely and keep it clean; on a clean tree it touches only what you changed, so a focused diff stays focused. fmt is not enforced in CI, so it's on you to run it before committing.
