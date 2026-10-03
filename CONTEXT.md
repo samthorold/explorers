@@ -238,7 +238,7 @@ The fraction of an agent's mobilisable reserve (the reserve above the metabolic 
 _Avoid_: energy conductance (the DEB term is the grounding, but "mobilisation rate" names its role here), reserve drain rate (drain conflates with metabolism, which is a separate outflow)
 
 **Intake ceiling**:
-The most a consumer can take in per tick: a fixed multiple of its own maintenance, so a large, costly body processes more, as gut and handling capacity scale in the domain. The multiple is a world parameter, searched by genesis on a log scale, and one multiple sets both currencies. Its nutrient counterpart is the nutrient that would match the energy ceiling in growth. **Satiation** is read against it. The ceiling is not the consumer's capability, which applies to each target in reach and so sets no plateau of its own.
+The most a consumer can take in per tick, the analogue of gut and handling capacity. It scales with the body, as a multiple of the consumer's maintenance, and with its feeding apparatus, rising with its heterotrophy. A producer's ceiling is small and light fills it. A consumer's is wide. Its two coefficients (a base and a per-heterotrophy share) are world parameters searched by genesis on a log scale, and the one ceiling sets both currencies. Its nutrient counterpart is the nutrient that would match the energy ceiling in growth. **Satiation** is read against it. The ceiling is not the consumer's capability, which applies to each target in reach and so sets no plateau of its own.
 _Avoid_: satiation sensitivity (the former name for the shape of a reserve-based gate, which this replaces), gut capacity (the domain analogue, not the physics)
 _Avoid_: appetite (a trait word; this is world physics), hunger threshold (there is no threshold)
 
