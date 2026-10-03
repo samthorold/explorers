@@ -488,6 +488,11 @@ fn band(value: f32, edges: &[f32]) -> usize {
 }
 
 /// Band index of a trait distance.
+/// The [`EXPRESSION_EDGES`] band an expression falls in.
+pub fn expression_band(e: f32) -> usize {
+    band(e, &EXPRESSION_EDGES)
+}
+
 pub fn distance_band(d: f32) -> usize {
     band(d, &DISTANCE_EDGES)
 }
