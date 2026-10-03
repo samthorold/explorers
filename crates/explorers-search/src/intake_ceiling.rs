@@ -10,6 +10,12 @@
 //! [`intake_readings`] reads a tick from its [`PreStep`] and events, and
 //! [`IntakeCensus`] pools the distributions and the [`Window`].
 //!
+//! The body-only window failed by outcome (#629), so the ceiling became
+//! `C = m × (k_a + k_h × h_eff)` (#633). [`GateSample`] keeps, per relevant
+//! agent-sample, everything that gate reads, so [`Region`] can evaluate both
+//! outcomes (sated mixotrophs, producing consumers) over a `(k_a, k_h)` grid
+//! after the run and [`region_report`] can print it (#634).
+//!
 //! Units: "ticks of maintenance" divides by the agent's drain-time metabolic
 //! cost `m`. Nutrient is first converted to the energy it would match in
 //! growth (`÷ η·ratio`), so both currencies share the yardstick.
@@ -54,6 +60,14 @@ pub struct IntakeReading {
     /// consumer's stoichiometric demand per unit structure): nutrient ÷ this
     /// is the energy it would match. Zero when growth binds no nutrient.
     pub nutrient_per_energy: f32,
+    /// Effective heterotrophy `h_eff` (wear included), which scales the
+    /// ceiling's apparatus term (#634).
+    pub h_eff: f32,
+    /// Stoichiometric demand per unit structure, `ratio`.
+    pub ratio: f32,
+    /// The world's growth efficiency `η` (so `η · ratio` is
+    /// `nutrient_per_energy`).
+    pub growth_efficiency: f32,
 }
 
 impl IntakeReading {
@@ -148,6 +162,9 @@ pub fn intake_readings(
                 light: start.light.get(&a.id).copied().unwrap_or(0.0),
                 uptake: start.uptake.get(&a.id).copied().unwrap_or(0.0),
                 nutrient_per_energy: params.growth_efficiency.max(0.0) * ratio(&a.traits),
+                h_eff: eff_het(a),
+                ratio: ratio(&a.traits),
+                growth_efficiency: params.growth_efficiency,
                 ..Default::default()
             };
             (a.id, reading)
@@ -247,6 +264,355 @@ pub fn intake_readings(
         r.drained_nutrient += nutrient;
     }
     readings
+}
+
+/// One agent-sample at the intake gate's read point, compact and exact
+/// (#634): everything the gate reads, so its expression and the sample's
+/// gated intake can be evaluated at any ceiling `C = m × (k_a + k_h × h_eff)`
+/// after the run. Energies are absolute (per tick); [`GateSample::ceiling_ticks`]
+/// and the evaluation convert to ticks of maintenance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GateSample {
+    /// Effective heterotrophy `h_eff`.
+    #[serde(rename = "h")]
+    pub h_eff: f32,
+    /// Maintenance `m`, the drain-time metabolic cost.
+    #[serde(rename = "m")]
+    pub maintenance: f32,
+    /// Photosynthesis this tick.
+    pub light: f32,
+    /// Pool uptake this tick.
+    pub uptake: f32,
+    /// Stoichiometric demand per unit structure.
+    pub ratio: f32,
+    /// Growth efficiency `η`.
+    #[serde(rename = "eta")]
+    pub growth_efficiency: f32,
+    /// Drain potential `P_E`.
+    #[serde(rename = "pe")]
+    pub potential_energy: f32,
+    /// Drain potential `P_N`.
+    #[serde(rename = "pn")]
+    pub potential_nutrient: f32,
+    /// Realised energy intake, light plus drain income.
+    pub intake: f32,
+}
+
+impl GateSample {
+    pub fn of(r: &IntakeReading) -> Self {
+        Self {
+            h_eff: r.h_eff,
+            maintenance: r.maintenance,
+            light: r.light,
+            uptake: r.uptake,
+            ratio: r.ratio,
+            growth_efficiency: r.growth_efficiency,
+            potential_energy: r.potential_energy,
+            potential_nutrient: r.potential_nutrient,
+            intake: r.light + r.drained_energy,
+        }
+    }
+
+    /// The ceiling in ticks of maintenance, `k_a + k_h × h_eff`.
+    pub fn ceiling_ticks(&self, k_a: f32, k_h: f32) -> f32 {
+        k_a + k_h * self.h_eff
+    }
+
+    /// The reading the gate sees, rebuilt from the sample.
+    fn reading(&self) -> IntakeReading {
+        IntakeReading {
+            maintenance: self.maintenance,
+            light: self.light,
+            uptake: self.uptake,
+            drained_energy: self.intake - self.light,
+            drained_nutrient: 0.0,
+            potential_energy: self.potential_energy,
+            potential_nutrient: self.potential_nutrient,
+            nutrient_per_energy: self.growth_efficiency.max(0.0) * self.ratio,
+            h_eff: self.h_eff,
+            ratio: self.ratio,
+            growth_efficiency: self.growth_efficiency,
+        }
+    }
+
+    /// The gate's predicted expression at `(k_a, k_h)`: #629's
+    /// [`IntakeReading::expression_at`] at ceiling multiple
+    /// `k_a + k_h × h_eff`.
+    pub fn expression(&self, k_a: f32, k_h: f32) -> f32 {
+        self.reading().expression_at(self.ceiling_ticks(k_a, k_h))
+    }
+}
+
+impl GateSample {
+    /// Realised intake in ticks of maintenance, `x = intake / m`.
+    pub fn intake_ticks(&self) -> f32 {
+        self.intake / self.maintenance
+    }
+
+    /// The energy room in ticks of maintenance at `(k_a, k_h)`:
+    /// `max(0, k_a + k_h·h_eff − light / m)`.
+    pub fn room_ticks(&self, k_a: f32, k_h: f32) -> f32 {
+        (self.ceiling_ticks(k_a, k_h) - self.light / self.maintenance).max(0.0)
+    }
+
+    /// The static gated intake in ticks of maintenance, `x·room / (x + room)`:
+    /// the disk equation ([`predicted_expression`]) with the realised intake
+    /// `x` as the potential (energy side).
+    pub fn gated_intake_ticks(&self, k_a: f32, k_h: f32) -> f32 {
+        let x = self.intake_ticks();
+        x * predicted_expression((self.room_ticks(k_a, k_h), x), None)
+    }
+}
+
+/// Outcome 1, sated mixotrophs (#634): the share of `kills` (kin-kill
+/// samples of light-fed mixotroph killers, one per pair) whose predicted
+/// expression at `(k_a, k_h)` is below one half. `None` without samples.
+pub fn sated_share(kills: &[GateSample], k_a: f32, k_h: f32) -> Option<f64> {
+    (!kills.is_empty()).then(|| {
+        let sated = kills
+            .iter()
+            .filter(|s| s.expression(k_a, k_h) < 0.5)
+            .count();
+        sated as f64 / kills.len() as f64
+    })
+}
+
+/// Outcome 2, producing consumers (#634), energy side: pooled production
+/// kept, `Σ max(0, g − 1) / Σ max(0, x − 1)` over heterotroph-by-diet
+/// samples, with `x` the realised intake and `g` the static gated intake
+/// ([`GateSample::gated_intake_ticks`]), in ticks of maintenance. `None`
+/// when no sample produces ungated.
+pub fn production_kept(diet: &[GateSample], k_a: f32, k_h: f32) -> Option<f64> {
+    let produced = |x: f32| f64::from((x - 1.0).max(0.0));
+    let ungated: f64 = diet.iter().map(|s| produced(s.intake_ticks())).sum();
+    let gated: f64 = diet
+        .iter()
+        .map(|s| produced(s.gated_intake_ticks(k_a, k_h)))
+        .sum();
+    (ungated > 0.0).then(|| gated / ungated)
+}
+
+/// The bar on sated mixotrophs: at least this share of the light-fed
+/// mixotroph killers' kin-killing pairs below half expression.
+pub const SATED_BAR: f64 = 0.60;
+/// The bar on producing consumers: heterotrophs by diet keep at least this
+/// share of their ungated production.
+pub const KEPT_BAR: f64 = 0.75;
+
+/// The per-sample records the `(k_a, k_h)` region is evaluated from (#634),
+/// both read on the ungated world at the intake gate's read point:
+///
+/// - **`mixotroph_kin_kills`**: one sample per kin-killing (killer, victim)
+///   pair whose killer is a light-fed mixotroph (income-role producer with
+///   heterotrophy above zero, as #629's population), the killer read on the
+///   tick of the kill;
+/// - **`diet_fed`**: one per second-half agent-sample of a heterotroph by
+///   diet, as #629's intake population.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GateSamples {
+    #[serde(default)]
+    pub mixotroph_kin_kills: Vec<GateSample>,
+    #[serde(default)]
+    pub diet_fed: Vec<GateSample>,
+}
+
+impl GateSamples {
+    pub fn merge(&mut self, other: &GateSamples) {
+        self.mixotroph_kin_kills
+            .extend_from_slice(&other.mixotroph_kin_kills);
+        self.diet_fed.extend_from_slice(&other.diet_fed);
+    }
+}
+
+/// One `(k_a, k_h)` point of the region: both outcomes there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RegionCell {
+    pub k_a: f32,
+    pub k_h: f32,
+    /// [`sated_share`].
+    pub sated: Option<f64>,
+    /// [`production_kept`].
+    pub kept: Option<f64>,
+}
+
+impl RegionCell {
+    /// The margin on both outcomes, `min(sated − 0.60, kept − 0.75)`:
+    /// non-negative exactly where the point is feasible. `None` where an
+    /// outcome has no samples.
+    pub fn margin(&self) -> Option<f64> {
+        Some((self.sated? - SATED_BAR).min(self.kept? - KEPT_BAR))
+    }
+
+    /// Whether both bars are met.
+    pub fn feasible(&self) -> bool {
+        self.margin().is_some_and(|m| m >= 0.0)
+    }
+}
+
+/// Both outcomes over a `(k_a, k_h)` grid, rows `k_a`, columns `k_h`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Region {
+    pub k_a: Vec<f32>,
+    pub k_h: Vec<f32>,
+    /// Row-major: `cells[i * k_h.len() + j]` is `(k_a[i], k_h[j])`.
+    pub cells: Vec<RegionCell>,
+    /// Samples behind each outcome.
+    pub n_kills: usize,
+    pub n_diet: usize,
+}
+
+impl Region {
+    pub fn evaluate(samples: &GateSamples, k_a: &[f32], k_h: &[f32]) -> Self {
+        let n_kills = samples.mixotroph_kin_kills.len();
+        let n_diet = samples.diet_fed.len();
+        let cells = k_a
+            .iter()
+            .flat_map(|&a| {
+                k_h.iter().map(move |&h| RegionCell {
+                    k_a: a,
+                    k_h: h,
+                    sated: sated_share(&samples.mixotroph_kin_kills, a, h),
+                    kept: production_kept(&samples.diet_fed, a, h),
+                })
+            })
+            .collect();
+        Self {
+            k_a: k_a.to_vec(),
+            k_h: k_h.to_vec(),
+            cells,
+            n_kills,
+            n_diet,
+        }
+    }
+
+    pub fn feasible_count(&self) -> usize {
+        self.cells.iter().filter(|c| c.feasible()).count()
+    }
+
+    /// The feasible cell of largest margin (the first in grid order on a
+    /// tie); `None` when the region is empty.
+    pub fn default_point(&self) -> Option<RegionCell> {
+        let mut best: Option<RegionCell> = None;
+        for c in self.cells.iter().filter(|c| c.feasible()) {
+            if best.is_none_or(|b| c.margin() > b.margin()) {
+                best = Some(*c);
+            }
+        }
+        best
+    }
+}
+
+/// A grid value, at most three decimals, trailing zeros dropped.
+fn grid_label(k: f32) -> String {
+    let s = format!("{k:.3}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn percent(v: Option<f64>, decimals: usize) -> String {
+    v.map_or("–".to_string(), |v| format!("{:.*}", decimals, 100.0 * v))
+}
+
+/// The region as the census summary prints it (#634): a map of both
+/// outcomes over the grid (cells `sated/kept` in %, `*` where feasible),
+/// the feasible-cell count, the default with both outcomes and its margin
+/// or "region EMPTY", and the `k_h = 0` column for comparison with #629.
+pub fn region_report(r: &Region) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Cells: sated / kept, in %. Sated: share of kin-killing pairs whose killer is a light-fed mixotroph with predicted E < 0.5 (bar ≥ {:.0} %, n = {} kin-kill pairs). Kept: heterotrophs by diet's production kept, energy side, static: Σ max(0, x·room/(x+room) − 1) / Σ max(0, x − 1), x = intake/m, room = max(0, k_a + k_h·h_eff − light/m) (bar ≥ {:.0} %, n = {} samples). * = feasible. Margin = min(sated − {SATED_BAR:.2}, kept − {KEPT_BAR:.2}).\n",
+        100.0 * SATED_BAR,
+        r.n_kills,
+        100.0 * KEPT_BAR,
+        r.n_diet
+    );
+    let heads: Vec<String> = r.k_h.iter().map(|&k| grid_label(k)).collect();
+    let _ = writeln!(out, "| k_a \\ k_h | {} |", heads.join(" | "));
+    let _ = writeln!(out, "|---|{}", "---:|".repeat(r.k_h.len()));
+    for (i, &a) in r.k_a.iter().enumerate() {
+        let row: Vec<String> = r.cells[i * r.k_h.len()..(i + 1) * r.k_h.len()]
+            .iter()
+            .map(|c| {
+                format!(
+                    "{}/{}{}",
+                    percent(c.sated, 0),
+                    percent(c.kept, 0),
+                    if c.feasible() { "*" } else { "" }
+                )
+            })
+            .collect();
+        let _ = writeln!(out, "| {} | {} |", grid_label(a), row.join(" | "));
+    }
+    let _ = writeln!(
+        out,
+        "\nfeasible cells: {} of {}",
+        r.feasible_count(),
+        r.cells.len()
+    );
+    match r.default_point() {
+        Some(d) => {
+            let _ = writeln!(
+                out,
+                "default (largest margin): k_a = {}, k_h = {}: sated {} %, kept {} %, margin {:.3}",
+                grid_label(d.k_a),
+                grid_label(d.k_h),
+                percent(d.sated, 1),
+                percent(d.kept, 1),
+                d.margin().unwrap_or(f64::NAN)
+            );
+        }
+        None => {
+            let best = r
+                .cells
+                .iter()
+                .filter(|c| c.margin().is_some())
+                .max_by(|a, b| a.margin().partial_cmp(&b.margin()).unwrap());
+            let _ = write!(
+                out,
+                "region EMPTY: no (k_a, k_h) on the grid meets both bars"
+            );
+            if let Some(b) = best {
+                let _ = write!(
+                    out,
+                    " (closest: k_a = {}, k_h = {}: sated {} %, kept {} %, margin {:.3})",
+                    grid_label(b.k_a),
+                    grid_label(b.k_h),
+                    percent(b.sated, 1),
+                    percent(b.kept, 1),
+                    b.margin().unwrap_or(f64::NAN)
+                );
+            }
+            let _ = writeln!(out);
+        }
+    }
+    if let Some(j) = r.k_h.iter().position(|&k| k == 0.0) {
+        let _ = writeln!(
+            out,
+            "\nk_h = 0 (the body-only ceiling of #629, k = k_a):\n\n| k_a | sated | kept |\n|---|---:|---:|"
+        );
+        for (i, &a) in r.k_a.iter().enumerate() {
+            let c = r.cells[i * r.k_h.len() + j];
+            let _ = writeln!(
+                out,
+                "| {} | {} % | {} % |",
+                grid_label(a),
+                percent(c.sated, 1),
+                percent(c.kept, 1)
+            );
+        }
+    }
+    out
+}
+
+/// A geometric grid from `lo` to `hi` inclusive with at least `per_decade`
+/// points per decade.
+pub fn log_grid(lo: f32, hi: f32, per_decade: f32) -> Vec<f32> {
+    let decades = (hi / lo).log10();
+    let steps = (decades * per_decade).ceil().max(1.0) as usize;
+    (0..=steps)
+        .map(|i| lo * (hi / lo).powf(i as f32 / steps as f32))
+        .collect()
 }
 
 /// The intake gate's expression (world rules, *Capability and expression are
@@ -828,5 +1194,315 @@ mod tests {
         assert!(close(e, 0.25), "{e}");
         let e = predicted_expression((1.0, 1.0), Some((3.0, 1.0)));
         assert!(close(e, 0.75), "{e}");
+    }
+
+    /// The gate sample (#634) keeps everything the intake gate reads at any
+    /// `(k_a, k_h)`: a lone producer has no effective heterotrophy, nothing
+    /// in reach, and its intake is its light; its ceiling is `k_a` ticks of
+    /// maintenance whatever `k_h`.
+    #[test]
+    fn a_light_only_producer_samples_its_light_and_a_ceiling_of_k_a() {
+        let params = params();
+        let (readings, events, world) = one_tick(
+            &params,
+            vec![spec((10.0, 10.0), 50.0, traits(0.8, 0.0))],
+            vec![],
+        );
+        let s = GateSample::of(&readings[&0]);
+        let light = income(&events, 0, EventKind::Photosynthesized);
+        assert!(light > 0.0);
+        let a = &world.agents()[0];
+        assert_eq!(s.h_eff, 0.0);
+        assert_eq!((s.light, s.intake), (light, light));
+        assert!(close(s.maintenance, phase::metabolic_cost(a, &params)));
+        assert_eq!((s.potential_energy, s.potential_nutrient), (0.0, 0.0));
+        assert_eq!(s.growth_efficiency, params.growth_efficiency);
+        let ratio = explorers_sim::stoichiometric_demand(&a.traits, 1.0, &params);
+        assert!(close(s.ratio, ratio), "{s:?}");
+        assert_eq!(s.uptake, readings[&0].uptake);
+        let k = 0.5 * s.light / s.maintenance;
+        for k_h in [0.0, 3.0, 20.0] {
+            assert_eq!(s.ceiling_ticks(k, k_h), k);
+            assert_eq!(
+                s.expression(k, k_h),
+                readings[&0].expression_at(k),
+                "the same gate"
+            );
+        }
+    }
+
+    /// A mixotroph with a little heterotrophy: its sample carries its
+    /// effective heterotrophy, so its ceiling sits just above `k_a`, and its
+    /// expression at `(k_a, k_h)` is the disk equation on that ceiling in
+    /// both currencies.
+    #[test]
+    fn a_mixotroph_with_small_heterotrophy_has_a_ceiling_just_above_k_a() {
+        let params = params();
+        let mixo = traits(0.8, 0.05);
+        let (readings, events, world) = one_tick(
+            &params,
+            vec![
+                spec((10.0, 10.0), 50.0, mixo),
+                spec((10.01, 10.0), 400.0, traits(1.0, 0.0)),
+            ],
+            vec![],
+        );
+        let s = GateSample::of(&readings[&0]);
+        let a = &world.agents()[0];
+        let h = a.effective_trait_with_steepness(1, params.wear_degradation_steepness);
+        assert!(h > 0.0 && h < 0.1 && close(s.h_eff, h), "{s:?} vs {h}");
+        let light = income(&events, 0, EventKind::Photosynthesized);
+        assert!(
+            s.potential_energy > 0.0 && s.intake > light && light > 0.0,
+            "{s:?}"
+        );
+        let (k_a, k_h) = (1.0, 10.0);
+        let c = k_a + k_h * s.h_eff;
+        assert!(close(s.ceiling_ticks(k_a, k_h), c) && c > k_a && c < k_a + 1.0);
+        let m = s.maintenance;
+        let room_e = (c * m - s.light).max(0.0);
+        let side = |room: f32, p: f32| if room > 0.0 { room / (room + p) } else { 0.0 };
+        let room_n = (c * m * s.growth_efficiency * s.ratio - s.uptake).max(0.0);
+        let want = side(room_e, s.potential_energy).max(side(room_n, s.potential_nutrient));
+        assert!(close(s.expression(k_a, k_h), want), "{s:?}");
+    }
+
+    /// A pure consumer: no light, its intake is its drain income, and its
+    /// ceiling is `k_a + k_h` ticks at full heterotrophy.
+    #[test]
+    fn a_pure_consumer_samples_its_drain_income_as_intake() {
+        let params = params();
+        let (readings, events, _) = one_tick(
+            &params,
+            vec![
+                spec((10.0, 10.0), 50.0, traits(0.0, 1.0)),
+                spec((10.01, 10.0), 400.0, traits(1.0, 0.0)),
+            ],
+            vec![],
+        );
+        let r = readings[&0];
+        let s = GateSample::of(&r);
+        assert!(income(&events, 0, EventKind::Consumed) > 0.0);
+        assert_eq!(s.light, 0.0);
+        assert!(s.intake > 0.0 && close(s.intake, r.drained_energy), "{s:?}");
+        assert!(
+            close(s.h_eff, 1.0),
+            "a fresh founder carries no wear: {s:?}"
+        );
+        assert!(close(s.ceiling_ticks(2.0, 5.0), 7.0));
+        let room = 7.0 * s.maintenance;
+        let e_side = room / (room + s.potential_energy);
+        assert!(s.expression(2.0, 5.0) >= e_side - 1e-6);
+    }
+
+    /// A well-lit mixotroph on a starved pool: where light fills the energy
+    /// ceiling, the sample's nutrient side (`η · ratio`, uptake, `P_N`)
+    /// keeps it feeding, exactly as the #629 reading does.
+    #[test]
+    fn a_nutrient_limited_sample_is_kept_hungry_by_its_nutrient_room() {
+        let mut params = params();
+        params.initial_nutrient_pool = 1e-3;
+        let (readings, _, _) = one_tick(
+            &params,
+            vec![
+                spec((10.0, 10.0), 50.0, traits(0.8, 0.3)),
+                spec((10.01, 10.0), 400.0, traits(1.0, 0.0)),
+            ],
+            vec![],
+        );
+        let r = readings[&0];
+        let s = GateSample::of(&r);
+        let k_a = 0.5 * s.light / s.maintenance - 0.3 * s.h_eff;
+        let (k_h, c) = (0.3, 0.5 * s.light / s.maintenance);
+        assert!(k_a > 0.0 && close(s.ceiling_ticks(k_a, k_h), c), "{s:?}");
+        let room_n = c * s.maintenance * s.growth_efficiency * s.ratio - s.uptake;
+        assert!(room_n > 0.0 && s.potential_nutrient > 0.0, "{s:?}");
+        let e = s.expression(k_a, k_h);
+        assert!(close(e, room_n / (room_n + s.potential_nutrient)), "{e}");
+        assert!(close(e, r.expression_at(c)), "{e}");
+    }
+
+    /// Where growth binds no nutrient the sample has no nutrient side: the
+    /// gate reads energy alone.
+    #[test]
+    fn without_growth_efficiency_a_sample_reads_energy_alone() {
+        let (readings, _, _) = one_tick_then(
+            &params(),
+            vec![
+                spec((10.0, 10.0), 50.0, traits(0.5, 0.5)),
+                spec((10.01, 10.0), 400.0, traits(1.0, 0.0)),
+            ],
+            vec![],
+            |p| p.growth_efficiency = 0.0,
+        );
+        let s = GateSample::of(&readings[&0]);
+        assert_eq!(s.growth_efficiency, 0.0);
+        let c = 0.5 * s.light / s.maintenance;
+        let k_a = c - 0.2 * s.h_eff;
+        assert_eq!(s.expression(k_a, 0.2), 0.0, "light fills it: {s:?}");
+        let (k_a, k_h) = (2.0 * s.light / s.maintenance, 1.0);
+        let room = s.ceiling_ticks(k_a, k_h) * s.maintenance - s.light;
+        let want = room / (room + s.potential_energy);
+        assert!(close(s.expression(k_a, k_h), want));
+    }
+
+    /// A synthetic sample on the energy side alone (`η = 0`).
+    fn gate(m: f32, h: f32, light: f32, p_e: f32, intake: f32) -> GateSample {
+        GateSample {
+            h_eff: h,
+            maintenance: m,
+            light,
+            potential_energy: p_e,
+            intake,
+            ..Default::default()
+        }
+    }
+
+    fn near(a: Option<f64>, b: f64) -> bool {
+        a.is_some_and(|a| (a - b).abs() < 1e-5)
+    }
+
+    /// Both outcomes against hand-computed values. Sated mixotrophs: the
+    /// share of kin-kill samples predicted below half expression. Producing
+    /// consumers: pooled gated production `max(0, x·room/(x+room) − 1)`
+    /// over ungated `max(0, x − 1)`, with `x = intake / m` and the sample's
+    /// own `room = max(0, k_a + k_h·h_eff − light / m)`.
+    #[test]
+    fn both_outcomes_match_hand_computed_values() {
+        let kills = [
+            // c = 2: room 0, E = 0. c = 3: room 1, E = 1 / 1.5.
+            gate(1.0, 0.1, 2.0, 0.5, 2.5),
+            // c = 2: room 1, E = 0.5, not below half.
+            gate(1.0, 0.0, 1.0, 1.0, 1.0),
+        ];
+        assert!(near(sated_share(&kills, 2.0, 0.0), 0.5));
+        assert!(near(sated_share(&kills, 2.0, 10.0), 0.0));
+        assert_eq!(sated_share(&[], 2.0, 0.0), None);
+        let diet = [
+            // x = 4, ungated production 3.
+            gate(1.0, 1.0, 0.0, 4.0, 4.0),
+            // x = 1: no production either way.
+            gate(2.0, 1.0, 0.0, 2.0, 2.0),
+            // x = 3 with light 0.5: room shrinks by the light.
+            gate(1.0, 0.5, 0.5, 2.5, 3.0),
+        ];
+        // (2, 0): rooms 2, 2, 1.5 → gated 4/3, 2/3, 4.5/4.5 = 1.
+        let ungated = 3.0 + 2.0;
+        let gated = 4.0 * 2.0 / 6.0 - 1.0;
+        assert!(near(production_kept(&diet, 2.0, 0.0), gated / ungated));
+        // (2, 10): rooms 12, 12, 6.5 → gated 3, 12/13, 19.5/9.5.
+        let gated = 2.0 + (19.5 / 9.5 - 1.0);
+        assert!(near(production_kept(&diet, 2.0, 10.0), gated / ungated));
+        assert_eq!(
+            production_kept(&diet[1..2], 2.0, 0.0),
+            None,
+            "nothing to keep"
+        );
+    }
+
+    /// The two populations of the region tests: one killer with a little
+    /// heterotrophy that light nearly fills, one consumer eating 4 ticks.
+    fn region_samples() -> GateSamples {
+        GateSamples {
+            mixotroph_kin_kills: vec![gate(1.0, 0.01, 2.0, 0.5, 2.5)],
+            diet_fed: vec![gate(1.0, 1.0, 0.0, 4.0, 4.0)],
+        }
+    }
+
+    /// Feasible cells meet both bars (sated ≥ 60 %, production kept
+    /// ≥ 75 %); the default is the feasible cell of largest margin
+    /// `min(sated − 0.60, kept − 0.75)`. Hand-computed: the killer is sated
+    /// wherever `c = k_a + 0.01·k_h < 3`; the consumer keeps
+    /// `(4·c/(4 + c) − 1) / 3`, 0.787 at c = 21 and 0.795 at c = 22.
+    #[test]
+    fn the_region_is_the_feasible_cells_and_the_default_its_largest_margin() {
+        let r = Region::evaluate(&region_samples(), &[1.0, 2.0], &[0.0, 10.0, 20.0]);
+        let cell = |k_a: f32, k_h: f32| {
+            *r.cells
+                .iter()
+                .find(|c| c.k_a == k_a && c.k_h == k_h)
+                .unwrap()
+        };
+        assert!(near(cell(2.0, 10.0).sated, 1.0));
+        assert!(near(cell(2.0, 10.0).kept, 2.0 / 3.0));
+        assert!(!cell(2.0, 10.0).feasible());
+        assert!(near(cell(1.0, 20.0).kept, (84.0 / 25.0 - 1.0) / 3.0));
+        assert!(cell(1.0, 20.0).feasible());
+        assert_eq!(r.feasible_count(), 2);
+        let d = r.default_point().unwrap();
+        assert_eq!((d.k_a, d.k_h), (2.0, 20.0));
+        let margin = (88.0 / 26.0 - 1.0) / 3.0 - 0.75;
+        assert!(near(d.margin(), margin), "{d:?}");
+
+        let empty = Region::evaluate(&region_samples(), &[1.0, 2.0], &[0.0, 10.0]);
+        assert_eq!(empty.feasible_count(), 0);
+        assert_eq!(empty.default_point(), None);
+    }
+
+    /// The log grid spans its ends at no fewer points per decade than asked.
+    #[test]
+    fn the_log_grid_spans_its_ends_geometrically() {
+        let g = log_grid(0.25, 20.0, 8.0);
+        assert_eq!(g.len(), 17);
+        assert!(
+            (g[0] - 0.25).abs() < 1e-6 && (g[16] - 20.0).abs() < 1e-4,
+            "{g:?}"
+        );
+        let step = g[1] / g[0];
+        assert!(g.windows(2).all(|w| (w[1] / w[0] - step).abs() < 1e-4));
+        assert!(step <= 10f32.powf(1.0 / 8.0));
+    }
+
+    /// At `k_h = 0` the ceiling is #629's body-only `k × m`: the predicted
+    /// expression is #629's for the same inputs, and a lightless consumer's
+    /// gated intake is #629's static `x·k / (x + k)`.
+    #[test]
+    fn at_k_h_zero_the_gate_reduces_to_the_body_only_ceiling() {
+        for (light, drained, uptake) in [(1.0, 0.0, 0.2), (3.0, 2.0, 0.0), (0.5, 6.0, 1.5)] {
+            let mut r = reading(light, drained, uptake);
+            r.potential_energy = 1.5;
+            r.potential_nutrient = 0.4;
+            r.h_eff = 0.7;
+            r.ratio = 0.25;
+            r.growth_efficiency = 2.0;
+            let s = GateSample::of(&r);
+            for k in [0.25, 1.0, 1.704, 5.0, 20.0] {
+                assert_eq!(s.expression(k, 0.0), r.expression_at(k), "{r:?} at {k}");
+            }
+        }
+        let s = gate(2.0, 0.9, 0.0, 6.0, 6.0);
+        for k in [1.7_f32, 5.0, 10.0] {
+            let x = 3.0;
+            assert!(close(s.gated_intake_ticks(k, 0.0), x * k / (x + k)));
+        }
+    }
+
+    /// The report maps both outcomes over the grid, marks feasible cells,
+    /// names the default with both outcomes and its margin, or says plainly
+    /// that the region is empty; it repeats the `k_h = 0` column for #629.
+    #[test]
+    fn the_region_report_names_the_default_or_says_empty() {
+        let r = Region::evaluate(&region_samples(), &[1.0, 2.0], &[0.0, 10.0, 20.0]);
+        let text = region_report(&r);
+        assert!(text.contains("| k_a \\ k_h | 0 | 10 | 20 |"), "{text}");
+        assert!(text.contains("| 2 | 100/11 | 100/67 | 100/79* |"), "{text}");
+        assert!(text.contains("feasible cells: 2 of 6"), "{text}");
+        assert!(
+            text.contains(
+                "default (largest margin): k_a = 2, k_h = 20: sated 100.0 %, kept 79.5 %, margin 0.045"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("n = 1 kin-kill pairs") && text.contains("n = 1 samples"));
+        assert!(
+            text.contains("| 1 | 100.0 % | 0.0 % |"),
+            "k_h = 0 column: {text}"
+        );
+        assert!(!text.contains("region EMPTY"));
+
+        let empty = Region::evaluate(&region_samples(), &[1.0, 2.0], &[0.0, 10.0]);
+        let text = region_report(&empty);
+        assert!(text.contains("region EMPTY"), "{text}");
+        assert!(!text.contains("default (largest margin)"), "{text}");
     }
 }

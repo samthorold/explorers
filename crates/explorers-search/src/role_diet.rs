@@ -43,8 +43,8 @@ use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use crate::grazer_hunger::{
     GrazerHunger, KillerReading, PreStep, Surplus, SurplusDistribution, TraitDistances,
 };
-pub use crate::intake_ceiling::IntakeCensus;
-use crate::intake_ceiling::intake_readings;
+use crate::intake_ceiling::{GateSample, IntakeReading, intake_readings};
+pub use crate::intake_ceiling::{GateSamples, IntakeCensus};
 
 /// A death at or below this age (ticks from birth) is an infant death, as
 /// #591's accountant counts it.
@@ -242,9 +242,28 @@ pub struct DietLedger {
     /// The intake-ceiling multiple the killing grazers' predicted intake-gate
     /// expression is read at (#629); `None` skips the read.
     intake_ceiling_k: Option<f32>,
+    /// Whether to keep each kin-killing pair's killer intake reading for
+    /// [`DietLedger::take_kin_kill_readings`] (#634).
+    keep_kin_kills: bool,
+    /// Kin-killing pairs' killers since the last take: (killer, its
+    /// heterotrophy trait, its intake reading at the kill).
+    kin_kills: Vec<(u64, f32, IntakeReading)>,
 }
 
 impl DietLedger {
+    /// Keep every kin-killing pair's killer intake reading at the start of
+    /// drain resolution, one per pair, until taken (#634).
+    pub fn with_kin_kill_readings(mut self) -> Self {
+        self.keep_kin_kills = true;
+        self
+    }
+
+    /// The kin-killing pairs' killer readings kept since the last take:
+    /// (killer id, heterotrophy trait, intake reading).
+    pub fn take_kin_kill_readings(&mut self) -> Vec<(u64, f32, IntakeReading)> {
+        std::mem::take(&mut self.kin_kills)
+    }
+
     /// Read each killing grazer's predicted intake-gate expression at
     /// ceiling multiple `k` (#629).
     pub fn with_intake_ceiling_k(mut self, k: Option<f32>) -> Self {
@@ -304,25 +323,32 @@ impl DietLedger {
             }
         }
         self.record_births(world, events);
-        let mut readings: Option<HashMap<u64, KillerReading>> = None;
+        type Readings = (HashMap<u64, KillerReading>, HashMap<u64, IntakeReading>);
+        let mut readings: Option<Readings> = None;
+        let (ceiling_k, keep) = (self.intake_ceiling_k, self.keep_kin_kills);
         // Every kill is read before any death is attributed: a grazer that
         // died this tick too is still on the ledger.
         for &(id, _) in &died {
             let by = grazers.get(&id).map(Vec::as_slice).unwrap_or(&[]);
             if let (Some(pre), false) = (pre, by.is_empty()) {
-                let reading = readings.get_or_insert_with(|| {
+                let (reading, intake) = readings.get_or_insert_with(|| {
                     let params = world.params();
                     let mut readings = pre.killer_readings(params);
-                    if let Some(k) = self.intake_ceiling_k {
-                        for (id, intake) in intake_readings(pre, params, events) {
-                            if let Some(r) = readings.get_mut(&id) {
-                                r.intake_expression = Some(intake.expression_at(k));
+                    let intake = if ceiling_k.is_some() || keep {
+                        intake_readings(pre, params, events)
+                    } else {
+                        HashMap::new()
+                    };
+                    if let Some(k) = ceiling_k {
+                        for (id, i) in &intake {
+                            if let Some(r) = readings.get_mut(id) {
+                                r.intake_expression = Some(i.expression_at(k));
                             }
                         }
                     }
-                    readings
+                    (readings, intake)
                 });
-                self.record_kills(id, by, reading);
+                self.record_kills(id, by, reading, intake);
             }
         }
         for (id, tick) in died {
@@ -384,6 +410,7 @@ impl DietLedger {
         victim: u64,
         grazers: &[u64],
         reading: &HashMap<u64, KillerReading>,
+        intake: &HashMap<u64, IntakeReading>,
     ) {
         let Some(traits) = self.traits.get(&victim).copied() else {
             return;
@@ -397,8 +424,14 @@ impl DietLedger {
             let (Some(r), Some(gt)) = (reading.get(&g), self.traits.get(&g)) else {
                 continue;
             };
-            self.kills
-                .record(self.is_kin(victim, g), traits.distance(gt), *r);
+            let kin = self.is_kin(victim, g);
+            self.kills.record(kin, traits.distance(gt), *r);
+            if kin
+                && self.keep_kin_kills
+                && let Some(i) = intake.get(&g)
+            {
+                self.kin_kills.push((g, gt.heterotrophy, *i));
+            }
         }
     }
 
@@ -565,6 +598,14 @@ pub struct SeedDiet {
     /// table's group). Agents born in that step are left out.
     #[serde(default)]
     pub intake: IntakeCensus,
+    /// Per-sample gate records for the `(k_a, k_h)` region (#634): every
+    /// kin-killing pair whose killer is a light-fed mixotroph (income-role
+    /// producer, as of the start of the kill's tick, with heterotrophy above
+    /// zero), the killer read at the start of drain resolution, over the
+    /// whole run as the kill bands; and every heterotroph-by-diet sample of
+    /// [`SeedDiet::intake`].
+    #[serde(default)]
+    pub gates: GateSamples,
 }
 
 fn guild_flags(g: RoleGuilds) -> [bool; 3] {
@@ -623,7 +664,9 @@ pub fn rollout_with(
     let sustainable_stock = explorers_genesis_eval::sustainable_stock(params);
     let window_start = max_ticks / 2 + 1;
 
-    let mut ledger = DietLedger::new(&world).with_intake_ceiling_k(intake_ceiling_k);
+    let mut ledger = DietLedger::new(&world)
+        .with_intake_ceiling_k(intake_ceiling_k)
+        .with_kin_kill_readings();
     let mut topology = TopologyProjection::new();
     let mut tag_snapshots: Vec<RoleSnapshot> = Vec::new();
     let mut cursor = 0;
@@ -633,6 +676,7 @@ pub fn rollout_with(
     let mut surplus = SurplusByRole::default();
     let mut fills = ReproductionTable::default();
     let mut intake = IntakeCensus::default();
+    let mut gates = GateSamples::default();
     let mut stopped: Option<FailureMode> = None;
     for _ in 0..max_ticks {
         let pre = PreStep::capture(&world);
@@ -640,6 +684,13 @@ pub fn rollout_with(
         let tail: Vec<Event> = world.event_log().since(cursor).to_vec();
         cursor = world.event_log().len();
         ledger.ingest(&world, &tail, Some(&pre));
+        // The killer's role as of the start of the kill's tick: the income
+        // ledger has not yet walked this tick.
+        for (g, heterotrophy, r) in ledger.take_kin_kill_readings() {
+            if heterotrophy > 0.0 && observations.income().role(g) == Some(TrophicRole::Producer) {
+                gates.mixotroph_kin_kills.push(GateSample::of(&r));
+            }
+        }
         topology.update(world.event_log());
         let sampled_before = observations.role_snapshots.len();
         observations.observe(&world, interval);
@@ -686,6 +737,9 @@ pub fn rollout_with(
                         let Some(t) = traits.get(&id) else { continue };
                         let group = diet_group(t, &ledger.income(id));
                         intake.record(roles.get(&id).copied(), t.heterotrophy, group, &reading);
+                        if group == DietGroup::TraitHeterotrophDietFed {
+                            gates.diet_fed.push(GateSample::of(&reading));
+                        }
                     }
                 }
                 tag_snapshots.push((tick, tags));
@@ -762,6 +816,7 @@ pub fn rollout_with(
             r
         },
         intake,
+        gates,
     }
 }
 
@@ -1106,6 +1161,47 @@ mod tests {
         assert_eq!(
             SeedDiet {
                 intake: ours.intake.clone(),
+                ..old
+            },
+            ours
+        );
+    }
+
+    /// The census keeps a gate sample (#634) per heterotroph-by-diet
+    /// agent-sample (the #629 intake population, one for one) and per
+    /// kin-killing pair whose killer is a light-fed mixotroph: a subset of
+    /// the kin pairs, read exactly as the #629 killer bands read them. Old
+    /// rows without them still read back.
+    #[test]
+    fn rollout_keeps_gate_samples_for_both_populations() {
+        let (params, dist) = sample_31();
+        let eval = EvalConfig::default();
+        let k = 1.7;
+        let ours = rollout_with(&params, &dist, 1000, 300, &eval, Some(k));
+        let g = &ours.gates;
+        assert_eq!(
+            g.diet_fed.len() as u64,
+            ours.intake.heterotroph_intake.count()
+        );
+        let kills = &g.mixotroph_kin_kills;
+        assert!(!kills.is_empty(), "sample:31's mixotrophs kill kin");
+        assert!(kills.len() as u64 <= ours.kills.total(true));
+        assert!(kills.iter().all(|s| s.maintenance > 0.0));
+        let mut bands = [0u64; EXPRESSION_BANDS];
+        for s in kills {
+            bands[crate::grazer_hunger::expression_band(s.expression(k, 0.0))] += 1;
+        }
+        for (b, n) in bands.iter().enumerate() {
+            assert!(*n <= ours.kills.intake_expression[1][b], "{bands:?}");
+        }
+
+        let mut json: serde_json::Value = serde_json::to_value(&ours).unwrap();
+        json.as_object_mut().unwrap().remove("gates");
+        let old: SeedDiet = serde_json::from_value(json).unwrap();
+        assert_eq!(old.gates, GateSamples::default());
+        assert_eq!(
+            SeedDiet {
+                gates: ours.gates.clone(),
                 ..old
             },
             ours

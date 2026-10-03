@@ -28,6 +28,14 @@
 //!   `k ≤ 2 × p25(light / m)` and `k ≥ p75(intake / m)` and the default `k`
 //!   at the window's geometric midpoint. `--intake-ceiling-k K` also bands
 //!   the killing grazers by their predicted intake-gate expression at `K`.
+//! - per-sample gate records (#634): every kin-killing pair whose killer is a
+//!   light-fed mixotroph, and every heterotroph-by-diet sample, each with
+//!   what the intake gate reads. `--region` (with or without `--summary`)
+//!   evaluates the ceiling `C = m × (k_a + k_h × h_eff)` over a log grid
+//!   (k_a, k_h each over [0.25, 20] at ≥ 8 points per decade, k_h also 0)
+//!   and prints both outcomes per cell, the feasible-cell count, and the
+//!   largest-margin default, or "region EMPTY"
+//!   ([`explorers_search::intake_ceiling::region_report`]).
 //!
 //! Configs and seeds as `guild_census`: the atlas cells (`--atlas PATH`),
 //! the LHS sample, or `--configs` (`sample@S:i` for another draw); the seed
@@ -45,6 +53,7 @@
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --atlas atlas.json
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --configs sample:31,sample:110
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --summary
+//!   cargo run --release -p explorers-search --bin role_diet_census -- --summary --region
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -62,7 +71,7 @@ use explorers_search::grazer_hunger::{
     DISTANCE_BANDS, DISTANCE_EDGES, EXPRESSION_TABLE_HEADER, GrazerHunger, HALF_EXPRESSION_BAND,
     HUNGRY_BANDS, RECOGNITION_BANDS, SATIATION_BANDS, SATIATION_EDGES, TraitDistances,
 };
-use explorers_search::intake_ceiling::window_line;
+use explorers_search::intake_ceiling::{GateSamples, Region, log_grid, region_report, window_line};
 use explorers_search::role_diet::{
     Confusion, DeathCounts, DeathTable, GroupReproduction, IntakeCensus, LIGHT_SHARE_BINS,
     PRODUCER_LIGHT_SHARE, ReproductionTable, SeedDiet, SurplusByRole, rollout_with,
@@ -152,6 +161,8 @@ struct Pool {
     intake: IntakeCensus,
     /// The distinct `--intake-ceiling-k` values the pooled rows read kills at.
     intake_ks: Vec<f32>,
+    /// Per-sample gate records for the `(k_a, k_h)` region (#634).
+    gates: GateSamples,
 }
 
 fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
@@ -188,6 +199,7 @@ fn pool<'a>(rows: impl Iterator<Item = &'a Row>) -> Pool {
             p.surplus.merge(&s.surplus);
             p.reproduction.merge(&s.reproduction);
             p.intake.merge(&s.intake);
+            p.gates.merge(&s.gates);
             if let (None, Some(t), Some(d)) =
                 (&s.failure, s.trophic_balance_tag, s.trophic_balance_diet)
             {
@@ -219,6 +231,9 @@ struct Args {
     /// Read the killing grazers' predicted intake-gate expression at this
     /// ceiling multiple (#629); `None` skips it.
     intake_ceiling_k: Option<f32>,
+    /// Evaluate the `(k_a, k_h)` ceiling region over the rows' gate samples
+    /// and print it after the summary (#634).
+    region: bool,
 }
 
 fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
@@ -235,6 +250,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
         satiation_sensitivity: None,
         recognition_distance: None,
         intake_ceiling_k: None,
+        region: false,
     };
     let mut it = argv.into_iter();
     while let Some(flag) = it.next() {
@@ -252,6 +268,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
             "--atlas" => args.atlas = Some(PathBuf::from(value()?)),
             "--configs" => args.configs = Some(parse_selector(&value()?, "--configs", None)),
             "--summary" => args.summary_only = true,
+            "--region" => args.region = true,
             "--founder-aggregation" => {
                 args.founder_aggregation = Some(parse_founder_aggregation(&value()?)?)
             }
@@ -366,6 +383,36 @@ fn main() {
     }
     let rows: Vec<Row> = read_rows(&args.out);
     print_summary(&rows);
+    if args.region {
+        print!("{}", region_text(&rows));
+    }
+}
+
+/// The `(k_a, k_h)` grid the region is read on (#634): each over
+/// [0.25, 20] on a log grid at ≥ 8 points per decade, `k_h` also at 0.
+fn region_grid() -> (Vec<f32>, Vec<f32>) {
+    let k_a = log_grid(0.25, 20.0, 8.0);
+    let k_h = std::iter::once(0.0).chain(k_a.iter().copied()).collect();
+    (k_a, k_h)
+}
+
+/// The ceiling region over each source's pooled gate samples, all configs
+/// (#634).
+fn region_text(rows: &[Row]) -> String {
+    let (k_a, k_h) = region_grid();
+    let mut out = String::new();
+    for (name, sample) in [("atlas", false), ("sample", true)] {
+        let of = || rows.iter().filter(move |r| r.source.is_sample() == sample);
+        if of().next().is_none() {
+            continue;
+        }
+        let p = pool(of());
+        out.push_str(&format!(
+            "\n## Ceiling region (#634): {name}, all configs\n\nIntake ceiling C = m × (k_a + k_h × h_eff), read on the ungated world.\n"
+        ));
+        out.push_str(&region_report(&Region::evaluate(&p.gates, &k_a, &k_h)));
+    }
+    out
 }
 
 fn pct(n: u64, d: u64) -> String {
@@ -769,6 +816,7 @@ fn print_summary(rows: &[Row]) {
 mod tests {
     use super::*;
     use explorers_search::grazer_hunger::{KillerReading, Satiation, Surplus};
+    use explorers_search::intake_ceiling::GateSample;
     use explorers_sim::TraitVector;
 
     fn seed(tag: [bool; 3], diet: [bool; 3], failure: Option<&str>) -> SeedDiet {
@@ -838,7 +886,62 @@ mod tests {
             surplus,
             reproduction: ReproductionTable::default(),
             intake,
+            gates: GateSamples {
+                mixotroph_kin_kills: vec![GateSample {
+                    h_eff: 0.05,
+                    maintenance: 1.0,
+                    light: 2.0,
+                    potential_energy: 0.2,
+                    intake: 2.2,
+                    ..Default::default()
+                }],
+                diet_fed: vec![GateSample {
+                    h_eff: 1.0,
+                    maintenance: 1.0,
+                    potential_energy: 4.0,
+                    intake: 4.0,
+                    ..Default::default()
+                }],
+            },
         }
+    }
+
+    /// `--region` evaluates the `(k_a, k_h)` grid (#634) over every row's
+    /// pooled gate samples: k_a and k_h on a log grid over [0.25, 20] at
+    /// ≥ 8 points per decade, k_h also at 0 (the body-only ceiling of #629).
+    #[test]
+    fn region_evaluates_the_grid_over_pooled_gate_samples() {
+        let parse = |a: &[&str]| parse_args(a.iter().map(|s| s.to_string()));
+        assert!(!parse(&[]).unwrap().region);
+        assert!(parse(&["--summary", "--region"]).unwrap().region);
+        let row = Row {
+            source: ConfigSource::Atlas,
+            config_index: 0,
+            horizon: 2000,
+            base_seed: 1000,
+            founder_aggregation: None,
+            satiation_sensitivity: None,
+            recognition_distance: None,
+            intake_ceiling_k: None,
+            seeds: vec![
+                seed([true; 3], [true; 3], None),
+                seed([true; 3], [true; 3], None),
+            ],
+        };
+        let p = pool(std::iter::once(&row));
+        assert_eq!(p.gates.mixotroph_kin_kills.len(), 2, "gates pooled");
+        let text = region_text(&[row]);
+        assert!(
+            text.contains("## Ceiling region (#634): atlas, all configs"),
+            "{text}"
+        );
+        assert!(text.contains("n = 2 kin-kill pairs") && text.contains("n = 2 samples"));
+        assert!(text.contains("| k_a \\ k_h | 0 | 0.25 |"), "{text}");
+        assert!(text.contains("| 20 | "), "{text}");
+        assert!(
+            text.contains("k_h = 0 (the body-only ceiling of #629"),
+            "{text}"
+        );
     }
 
     /// A config holds a guild at ≥ half its seeds; the pool crosses the tag
