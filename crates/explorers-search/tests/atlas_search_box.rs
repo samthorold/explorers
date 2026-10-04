@@ -88,20 +88,57 @@ fn sample_keys_stay_draws_over_the_sample_box() {
     );
 }
 
-/// The committed atlas predates #559 and records no box: it reads as the box
-/// it was searched under — the full box before #653, the size-blind box — so
-/// every existing `atlas:i` names the world it always named, with `b = 0`.
+const COMMITTED_ATLAS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
+
+/// The committed atlas (#663) was searched with `b` in the box and records
+/// it: the 33-dimension box, so every `atlas:i` decodes with its own `b`.
+#[test]
+fn the_committed_atlas_records_its_33_dimension_box() {
+    let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
+    let read = read_atlas_units(std::path::Path::new(COMMITTED_ATLAS));
+    assert_eq!(read.search_box(), default_ranges().as_slice());
+    assert_eq!(read.search_box().len(), 33);
+    // #663's atlas, the one #656 searched and read (`656-fresh-atlas-verdict.md`).
+    assert_eq!(format!("{:016x}", read.fingerprint()), "9c79856550a0151e");
+    let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    for i in 0..read.len() {
+        let unit: Vec<f64> = serde_json::from_value(raw["cells"][i]["unit"].clone()).unwrap();
+        assert_eq!(unit.len(), 33);
+        assert_eq!(
+            read.decode(i),
+            decode(&unit, &default_ranges()),
+            "atlas:{i}"
+        );
+    }
+}
+
+/// A legacy atlas (before #559, as the committed atlas was until #663): the
+/// committed atlas with its box, its 33rd coordinate and its heterotroph
+/// shares (#602) stripped, written to scratch.
+fn legacy_atlas(name: &str) -> PathBuf {
+    let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
+    let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    raw.as_object_mut().unwrap().remove("search_box");
+    for cell in raw["cells"].as_array_mut().unwrap() {
+        cell["unit"].as_array_mut().unwrap().truncate(32);
+        cell.as_object_mut().unwrap().remove("heterotroph_shares");
+    }
+    let path = scratch(name).join("atlas.json");
+    std::fs::write(&path, raw.to_string()).unwrap();
+    path
+}
+
+/// An atlas that records no box reads as the box it was searched under — the
+/// full box before #653, the size-blind box — so every `atlas:i` of a legacy
+/// atlas names the world it always named, with `b = 0`.
 #[test]
 fn a_legacy_atlas_reads_as_the_size_blind_box() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
-    let text = std::fs::read_to_string(path).unwrap();
-    assert!(
-        !text.contains("search_box"),
-        "the committed atlas is legacy"
-    );
-    let read = read_atlas_units(std::path::Path::new(path));
+    let path = legacy_atlas("legacy-box");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let read = read_atlas_units(&path);
     assert_eq!(read.search_box(), size_blind_ranges().as_slice());
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(!read.is_empty());
     for i in 0..read.len() {
         let unit: Vec<f64> = serde_json::from_value(raw["cells"][i]["unit"].clone()).unwrap();
         assert_eq!(unit.len(), 32);
@@ -111,18 +148,12 @@ fn a_legacy_atlas_reads_as_the_size_blind_box() {
     }
 }
 
-/// The committed atlas predates #602: its fitnesses were scored with trophic
-/// balance and its cells record no heterotroph shares. It still reads back,
-/// every cell with an empty share distribution.
+/// An atlas from before #602 records no heterotroph shares. It still reads
+/// back, every cell with an empty share distribution.
 #[test]
 fn a_legacy_atlas_reads_back_with_no_heterotroph_shares() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
-    let text = std::fs::read_to_string(path).unwrap();
-    assert!(
-        !text.contains("heterotroph_shares"),
-        "the committed atlas is legacy"
-    );
-    let atlas = explorers_search::atlas_file::read_atlas(std::path::Path::new(path)).unwrap();
+    let path = legacy_atlas("legacy-shares");
+    let atlas = explorers_search::atlas_file::read_atlas(&path).unwrap();
     assert!(!atlas.cells.is_empty());
     assert!(atlas.cells.iter().all(|c| c.heterotroph_shares.is_empty()));
 }
