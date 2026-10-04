@@ -1414,6 +1414,7 @@ impl World {
                     position: Some(agent.position),
                     target_was_carcass: false,
                     second_parent: None,
+                    nutrient_delta: 0.0,
                 });
                 agent.reserve = 0.0; // mark for removal
                 agent.repro_reserve = 0.0;
@@ -1486,6 +1487,7 @@ impl World {
                 position: Some(child.position),
                 target_was_carcass: false,
                 second_parent,
+                nutrient_delta: 0.0,
             });
             self.agents.push(child);
         }
@@ -1982,6 +1984,7 @@ impl World {
             position,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         });
     }
 }
@@ -2740,6 +2743,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         };
         let (src, dst, amount) = redistribution_flow(&ev);
         assert_eq!(src, EnergyEndpoint::Agent(7));
@@ -3495,6 +3499,76 @@ mod tests {
         assert!(
             (post_nutrient - pre_nutrient).abs() < 1e-3,
             "nutrient conserved: {pre_nutrient} -> {post_nutrient}"
+        );
+    }
+
+    #[test]
+    fn redistributed_events_read_out_the_nutrient_leg_through_a_step() {
+        // #646: in a hand-built network world the nutrient transfer is visible to
+        // an observer as its own `Redistributed` event — source the nutrient
+        // donor, target the recipient, `nutrient_delta` the amount moved,
+        // `energy_delta` zero. The energy leg carries no nutrient. A raw fact: the
+        // nutrient-poor agent's whole nutrient gain is the event's amount.
+        let mut params = test_params();
+        params.network_connection_cap = 4;
+        params.network_redistribution_rate = 0.5;
+        params.network_transfer_efficiency = 0.8;
+        let recipe = WorldRecipe {
+            parameters: params,
+            initial_distribution: None,
+            agents: Some(vec![
+                AgentSpec {
+                    position: (0.0, 0.0),
+                    reserve: 50.0, // energy-rich
+                    traits: zero_traits(),
+                    nutrient: 0.0, // nutrient-poor
+                },
+                AgentSpec {
+                    position: (1.0, 0.0),
+                    reserve: 10.0, // energy-poor
+                    traits: zero_traits(),
+                    nutrient: 8.0, // nutrient-rich
+                },
+            ]),
+            carcasses: None,
+            max_ticks: 100,
+        };
+        let mut world = World::from_recipe(&recipe, 42);
+        world.seed_connection(0, 1);
+
+        world.step();
+        world.energy_ledger().assert_balanced();
+
+        let redistributed = world.event_log().by_kind(&event::EventKind::Redistributed);
+        let energy: Vec<_> = redistributed
+            .iter()
+            .filter(|e| e.energy_delta > 0.0)
+            .collect();
+        let nutrient: Vec<_> = redistributed
+            .iter()
+            .filter(|e| e.nutrient_delta > 0.0)
+            .collect();
+        assert_eq!(redistributed.len(), 2, "one event per currency");
+        assert_eq!(energy.len(), 1);
+        assert_eq!((energy[0].source, energy[0].target), (0, Some(1)));
+        assert_eq!(energy[0].nutrient_delta, 0.0);
+        assert_eq!(nutrient.len(), 1);
+        assert_eq!(
+            (nutrient[0].source, nutrient[0].target),
+            (1, Some(0)),
+            "nutrient flows the other way along the same connection"
+        );
+        assert_eq!(nutrient[0].energy_delta, 0.0);
+        let gained = world
+            .agents()
+            .iter()
+            .find(|a| a.id == 0)
+            .unwrap()
+            .nutrient_total(world.params());
+        assert!(
+            (nutrient[0].nutrient_delta - gained).abs() < 1e-4,
+            "event amount {} = recipient's gain {gained}",
+            nutrient[0].nutrient_delta
         );
     }
 

@@ -354,6 +354,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: mate,
+            nutrient_delta: 0.0,
         }
     }
 
@@ -368,6 +369,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         }
     }
 
@@ -469,6 +471,7 @@ mod tests {
             position: None,
             target_was_carcass: carcass,
             second_parent: None,
+            nutrient_delta: 0.0,
         }
     }
 
@@ -504,6 +507,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         };
         let mut lineage = Lineage::new([10, 11, 12]);
         // 10 is drained on tick 3 and dies on tick 3; 11 is drained on tick 3
