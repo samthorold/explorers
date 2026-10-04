@@ -224,7 +224,7 @@ The domain vocabulary serves as the observation language. Events are produced by
 
 - **Consumed** — consumer drained target's structure (living or carcass)
 - **Reproduced** — parents produced offspring
-- **Redistributed** — resource transfer through network (implemented; default-disabled, so it fires only when the connection cap is above 0)
+- **Redistributed** — resource transfer through network (implemented; default-disabled, so it fires only when the connection cap is above 0). One event per currency per connection per tick, sourced at that currency's donor and targeted at its recipient: the energy leg records the energy received in `energy_delta`; the nutrient leg records the nutrient moved in `nutrient_delta`, with `energy_delta` 0 (#646). The two legs can run in opposite directions along the same connection.
 
 ## What events are not
 

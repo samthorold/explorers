@@ -221,6 +221,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         }
     }
 

@@ -169,6 +169,51 @@ pub fn with_uptake_scaling(
     (params, dist)
 }
 
+/// Pins for the five **network** parameters (flow 5); `None` keeps the
+/// decoded value (every decoded world has the network off: cap 0).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NetworkPins {
+    pub connection_cap: Option<u32>,
+    pub creation_cost: Option<f32>,
+    pub maintenance_cost: Option<f32>,
+    pub redistribution_rate: Option<f32>,
+    pub transfer_efficiency: Option<f32>,
+}
+
+/// Pin a resolved world's **network** parameters (flow 5) where given,
+/// leaving everything else as decoded: #646's probe of whether a mycorrhizal
+/// route changes who processes detritus.
+pub fn with_network(
+    (mut params, dist): (WorldParameters, InitialDistribution),
+    pins: &NetworkPins,
+) -> (WorldParameters, InitialDistribution) {
+    if let Some(v) = pins.connection_cap {
+        params.network_connection_cap = v;
+    }
+    if let Some(v) = pins.creation_cost {
+        params.network_creation_cost = v;
+    }
+    if let Some(v) = pins.maintenance_cost {
+        params.network_maintenance_cost = v;
+    }
+    if let Some(v) = pins.redistribution_rate {
+        params.network_redistribution_rate = v;
+    }
+    if let Some(v) = pins.transfer_efficiency {
+        params.network_transfer_efficiency = v;
+    }
+    (params, dist)
+}
+
+/// Parse a `flag`'s value as a finite number in `[0, 1]`
+/// (`--network-transfer-efficiency`).
+pub fn parse_unit_interval(flag: &str, raw: &str) -> Result<f32, String> {
+    raw.parse::<f32>()
+        .ok()
+        .filter(|v| (0.0..=1.0).contains(v))
+        .ok_or_else(|| format!("{flag} {raw:?} must be a number in [0, 1]"))
+}
+
 /// Parse a `flag`'s value as a finite number `> 0` (`--uptake-reference-structure`).
 pub fn parse_positive(flag: &str, raw: &str) -> Result<f32, String> {
     raw.parse::<f32>()
@@ -307,6 +352,58 @@ mod tests {
         let mut want = decoded.0.clone();
         want.uptake_reference_structure = 40.0;
         assert_eq!(params, want);
+    }
+
+    /// #646 measures the network (flow 5) on the atlas: each pinned network
+    /// parameter overrides only itself, and no pin leaves the world as decoded
+    /// (connection cap 0, the network off).
+    #[test]
+    fn pinned_network_settings_override_only_their_own_parameters() {
+        let sampled = sampled_units(default_ranges().len());
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        assert_eq!(decoded.0.network_connection_cap, 0);
+        assert_eq!(
+            with_network(decoded.clone(), &NetworkPins::default()),
+            decoded
+        );
+
+        let pins = NetworkPins {
+            connection_cap: Some(4),
+            creation_cost: Some(1.0),
+            maintenance_cost: Some(0.05),
+            redistribution_rate: Some(0.2),
+            transfer_efficiency: Some(0.9),
+        };
+        let (params, dist) = with_network(decoded.clone(), &pins);
+        assert_eq!(dist, decoded.1);
+        let mut want = decoded.0.clone();
+        want.network_connection_cap = 4;
+        want.network_creation_cost = 1.0;
+        want.network_maintenance_cost = 0.05;
+        want.network_redistribution_rate = 0.2;
+        want.network_transfer_efficiency = 0.9;
+        assert_eq!(params, want);
+
+        let (params, _) = with_network(
+            decoded.clone(),
+            &NetworkPins {
+                redistribution_rate: Some(0.5),
+                ..Default::default()
+            },
+        );
+        let mut want = decoded.0.clone();
+        want.network_redistribution_rate = 0.5;
+        assert_eq!(params, want);
+    }
+
+    #[test]
+    fn a_transfer_efficiency_flag_value_must_lie_in_the_unit_interval() {
+        assert_eq!(parse_unit_interval("--x", "0.9"), Ok(0.9));
+        assert_eq!(parse_unit_interval("--x", "0"), Ok(0.0));
+        assert_eq!(parse_unit_interval("--x", "1"), Ok(1.0));
+        assert!(parse_unit_interval("--x", "1.1").is_err());
+        assert!(parse_unit_interval("--x", "-0.1").is_err());
+        assert!(parse_unit_interval("--x", "NaN").is_err());
     }
 
     #[test]

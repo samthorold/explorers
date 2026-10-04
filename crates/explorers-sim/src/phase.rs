@@ -86,6 +86,7 @@ pub fn photosynthesise(
             position: Some(agents[i].position),
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         });
     }
     events
@@ -168,6 +169,7 @@ pub fn absorb_nutrients(
                 position: Some(agents[i].position),
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             });
         }
     }
@@ -203,6 +205,7 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
             position: Some(agent.position),
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         });
     }
     (events, total_dissipated)
@@ -518,6 +521,7 @@ pub fn redistribute(
                 position: Some(agents[donor].position),
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             });
         }
 
@@ -539,6 +543,21 @@ pub fn redistribute(
         if n_sent > 0.0 {
             agents[n_donor].nutrient -= n_sent;
             agents[n_recipient].nutrient += n_sent;
+            // #646: the nutrient leg is its own event (source = nutrient donor),
+            // since it may run against the energy leg on the same connection.
+            // A raw readout fact; `energy_delta` 0 keeps the energy ledger exact.
+            events.push(Event {
+                tick: 0,
+                seq: 0,
+                kind: EventKind::Redistributed,
+                source: agents[n_donor].id,
+                target: Some(agents[n_recipient].id),
+                energy_delta: 0.0,
+                position: Some(agents[n_donor].position),
+                target_was_carcass: false,
+                second_parent: None,
+                nutrient_delta: n_sent,
+            });
         }
     }
     (events, dissipated)
@@ -656,6 +675,7 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
                     position: Some(agent.position),
                     target_was_carcass: false,
                     second_parent: None,
+                    nutrient_delta: 0.0,
                 });
             }
         } else if growth_budget > 0.0 {
@@ -716,6 +736,7 @@ pub fn apply_wear(
                 position: Some(agent.position),
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             });
         }
     }
@@ -998,6 +1019,7 @@ pub fn resolve_drains_with_expression(
                 position: Some(agents[drain.target_idx].position),
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             });
         }
     }
@@ -1163,6 +1185,7 @@ pub fn resolve_drains_with_expression(
                 position: Some(carcass_pos),
                 target_was_carcass: true,
                 second_parent: None,
+                nutrient_delta: 0.0,
             });
         }
 
@@ -1220,6 +1243,7 @@ pub fn check_death_thresholds(
                 position: Some(agent.position),
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             });
             carcasses.push(Carcass {
                 id: agent.id,
@@ -1409,6 +1433,7 @@ pub fn move_agents(
             position: Some(new_pos),
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         });
     }
 
@@ -1568,6 +1593,7 @@ pub fn resolve_reproduction(
                 position: Some(parent_pos),
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             });
             continue;
         }
@@ -1687,6 +1713,7 @@ pub fn resolve_reproduction(
             position: Some(parent_pos),
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         });
     }
 
@@ -1874,6 +1901,7 @@ pub fn resolve_reproduction(
                 position: Some(mid_pos),
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             });
             continue;
         }
@@ -2044,6 +2072,7 @@ pub fn resolve_reproduction(
             position: Some(seed_pos),
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         });
     }
 
@@ -2445,10 +2474,14 @@ mod tests {
             agents[1].nutrient
         );
         assert_eq!(agents[0].reserve, 5.0, "no energy moves at equal reserve");
-        assert!(
-            events.is_empty(),
-            "no energy event when only nutrient flows"
-        );
+        // #646: the nutrient leg is its own Redistributed event (no energy leg
+        // fires at equal reserve), naming the nutrient donor and recipient.
+        assert_eq!(events.len(), 1, "one nutrient event, no energy event");
+        assert_eq!(events[0].kind, EventKind::Redistributed);
+        assert_eq!(events[0].source, 1);
+        assert_eq!(events[0].target, Some(2));
+        assert_eq!(events[0].energy_delta, 0.0);
+        assert!((events[0].nutrient_delta - 4.0).abs() < 1e-5);
         assert!(
             dissipated.abs() < 1e-5,
             "nutrient is conserved, no dissipation"
@@ -2486,6 +2519,20 @@ mod tests {
         assert!((agents[1].nutrient - 5.0).abs() < 1e-5);
         assert_eq!(events[0].source, 1, "energy donor is the energy-rich agent");
         assert_eq!(events[0].target, Some(2));
+        // #646: each currency is its own event, so direction is unambiguous: the
+        // energy leg carries no nutrient, the nutrient leg no energy, and the
+        // nutrient leg runs the other way along the same connection.
+        assert_eq!(events.len(), 2);
+        assert!((events[0].energy_delta - 5.0).abs() < 1e-5);
+        assert_eq!(events[0].nutrient_delta, 0.0);
+        assert_eq!(events[1].kind, EventKind::Redistributed);
+        assert_eq!(
+            events[1].source, 2,
+            "nutrient donor is the nutrient-rich agent"
+        );
+        assert_eq!(events[1].target, Some(1));
+        assert_eq!(events[1].energy_delta, 0.0);
+        assert!((events[1].nutrient_delta - 5.0).abs() < 1e-5);
     }
 
     // --- Photosynthesise ---

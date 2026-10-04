@@ -45,6 +45,17 @@
 //! 100). E. reads whether the worlds still persist: the census's verdict per
 //! seed (`role_diet::census_failure`), per config and pooled, and the kin
 //! kills per Producer-role agent-tick.
+//!
+//! #646 switches the network (flow 5) on: `--network-connection-cap <n>`,
+//! `--network-creation-cost <e>`, `--network-maintenance-cost <e>`,
+//! `--network-redistribution-rate <f>` and `--network-transfer-efficiency
+//! <f>` pin those parameters on every decoded config (unset, each keeps its
+//! decoded value: the network off). C. then also reads the network as a route
+//! of nutrient (and energy) into living agents, per recipient and in each
+//! direction, off the `Redistributed` events (one per currency, #646), and F.
+//! counts live connections by endpoint roles and kinship. Both print only
+//! when some seed ran with the network on, so an off run's tables are
+//! unchanged.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -54,9 +65,9 @@ use rayon::prelude::*;
 
 use explorers_genesis_eval::{EvalConfig, RolloutObservations};
 use explorers_search::config_source::{
-    ConfigSource, parse_founder_aggregation, parse_non_negative, parse_positive, parse_selector,
-    resolve_config, sampled_units, with_consumption_scales, with_founder_aggregation,
-    with_uptake_scaling,
+    ConfigSource, NetworkPins, parse_founder_aggregation, parse_non_negative, parse_positive,
+    parse_selector, parse_unit_interval, resolve_config, sampled_units, with_consumption_scales,
+    with_founder_aggregation, with_network, with_uptake_scaling,
 };
 use explorers_search::fullness::{FullnessBank, FullnessTracker, k_grid, tau_grid, tick_intakes};
 use explorers_search::grazer_hunger::PreStep;
@@ -427,6 +438,37 @@ struct Routes {
     carcass_energy: Vec<f64>,
     carcass_bound: Vec<f64>,
     carcass_retained: Vec<f64>,
+    /// Network (flow 5, #646), per [`RECIPIENTS`] bucket: free nutrient
+    /// received / given, and energy received / given (net of the transfer
+    /// loss: the `Redistributed` event's received amount, on both sides).
+    #[serde(default = "recipient_zeros")]
+    network_n_in: Vec<f64>,
+    #[serde(default = "recipient_zeros")]
+    network_n_out: Vec<f64>,
+    #[serde(default = "recipient_zeros")]
+    network_e_in: Vec<f64>,
+    #[serde(default = "recipient_zeros")]
+    network_e_out: Vec<f64>,
+    /// Network flow donor bucket → recipient bucket, `[donor * MEMO +
+    /// recipient]` over the primary buckets (no memo), nutrient and energy.
+    #[serde(default = "flow_zeros")]
+    network_n_flow: Vec<f64>,
+    #[serde(default = "flow_zeros")]
+    network_e_flow: Vec<f64>,
+    /// Network nutrient / energy on an event an endpoint of which is not on
+    /// the drain-time roster (should be zero).
+    #[serde(default)]
+    network_n_unattributed: f64,
+    #[serde(default)]
+    network_e_unattributed: f64,
+}
+
+fn recipient_zeros() -> Vec<f64> {
+    vec![0.0; RECIPIENTS.len()]
+}
+
+fn flow_zeros() -> Vec<f64> {
+    vec![0.0; MEMO * MEMO]
 }
 
 impl Default for Routes {
@@ -441,6 +483,14 @@ impl Default for Routes {
             carcass_energy: z.clone(),
             carcass_bound: z.clone(),
             carcass_retained: z,
+            network_n_in: recipient_zeros(),
+            network_n_out: recipient_zeros(),
+            network_e_in: recipient_zeros(),
+            network_e_out: recipient_zeros(),
+            network_n_flow: flow_zeros(),
+            network_e_flow: flow_zeros(),
+            network_n_unattributed: 0.0,
+            network_e_unattributed: 0.0,
         }
     }
 }
@@ -462,6 +512,71 @@ impl Routes {
         add(&mut self.carcass_energy, &o.carcass_energy);
         add(&mut self.carcass_bound, &o.carcass_bound);
         add(&mut self.carcass_retained, &o.carcass_retained);
+        add(&mut self.network_n_in, &o.network_n_in);
+        add(&mut self.network_n_out, &o.network_n_out);
+        add(&mut self.network_e_in, &o.network_e_in);
+        add(&mut self.network_e_out, &o.network_e_out);
+        add(&mut self.network_n_flow, &o.network_n_flow);
+        add(&mut self.network_e_flow, &o.network_e_flow);
+        self.network_n_unattributed += o.network_n_unattributed;
+        self.network_e_unattributed += o.network_e_unattributed;
+    }
+}
+
+/// F's endpoint-role pairs, unordered over [`ROLES`]' slots: `pair(i, j)`.
+const PAIRS: [&str; 10] = [
+    "producer–producer",
+    "producer–consumer",
+    "producer–decomposer",
+    "producer–no income",
+    "consumer–consumer",
+    "consumer–decomposer",
+    "consumer–no income",
+    "decomposer–decomposer",
+    "decomposer–no income",
+    "no income–no income",
+];
+
+fn pair(a: usize, b: usize) -> usize {
+    let (i, j) = if a <= b { (a, b) } else { (b, a) };
+    // Row i of the upper triangle starts after the rows above it.
+    i * ROLES.len() - i * (i.saturating_sub(1)) / 2 + (j - i)
+}
+
+/// F (#646): live network connections on sample ticks, by endpoint roles
+/// (the sample's recent-income role) and kinship (`DietLedger::is_kin`).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+struct NetCensus {
+    sample_ticks: u64,
+    /// Living agents on those sample ticks (the per-agent denominator).
+    agent_samples: u64,
+    /// Σ live connections over sample ticks.
+    connections: u64,
+    /// `pairs[pair] = [non-kin, kin]`.
+    pairs: Vec<[u64; 2]>,
+    /// Connections with an endpoint that died later in the tick (pruned at
+    /// the next tick's network phase).
+    dangling: u64,
+    /// Connections formed / dissolved, from tick-to-tick set differences.
+    formed: u64,
+    dissolved: u64,
+}
+
+impl NetCensus {
+    fn merge(&mut self, o: &NetCensus) {
+        if self.pairs.is_empty() {
+            self.pairs = vec![[0; 2]; PAIRS.len()];
+        }
+        self.sample_ticks += o.sample_ticks;
+        self.agent_samples += o.agent_samples;
+        self.connections += o.connections;
+        for (a, b) in self.pairs.iter_mut().zip(&o.pairs) {
+            a[0] += b[0];
+            a[1] += b[1];
+        }
+        self.dangling += o.dangling;
+        self.formed += o.formed;
+        self.dissolved += o.dissolved;
     }
 }
 
@@ -492,6 +607,11 @@ struct Ext {
     network_enabled_seeds: u64,
     /// D: `quarters[q][pop]` over [`D_POPS`].
     quarters: Vec<Vec<EffHist>>,
+    /// F (#646): whole run and second half.
+    #[serde(default)]
+    network: NetCensus,
+    #[serde(default)]
+    network_second_half: NetCensus,
 }
 
 impl Ext {
@@ -528,6 +648,8 @@ impl Ext {
                 x.merge(y);
             }
         }
+        self.network.merge(&o.network);
+        self.network_second_half.merge(&o.network_second_half);
     }
 }
 
@@ -651,6 +773,7 @@ fn rollout(
         EventKind::Photosynthesized,
         EventKind::Born,
         EventKind::Died,
+        EventKind::Redistributed,
     ] {
         if !kinds.contains(&k) {
             kinds.push(k);
@@ -676,6 +799,8 @@ fn rollout(
     let mut birth_tick: HashMap<u64, u64> = HashMap::new();
     let mut last_bin: HashMap<u64, usize> = HashMap::new();
     let mut stopped = None;
+    let network_on = params.network_connection_cap > 0;
+    let mut live_connections: HashSet<(u64, u64)> = HashSet::new();
     for _ in 0..max_ticks {
         let tick_before = world.tick();
         let second_half_tick = tick_before + 1 >= window_start;
@@ -731,6 +856,22 @@ fn rollout(
         }
         let tick = world.tick();
         let second_half = tick >= window_start;
+        if network_on {
+            let now: HashSet<(u64, u64)> = world
+                .connections()
+                .iter()
+                .map(|c| (c.builder, c.partner))
+                .collect();
+            let formed = now.difference(&live_connections).count() as u64;
+            let dissolved = live_connections.difference(&now).count() as u64;
+            tally.ext.network.formed += formed;
+            tally.ext.network.dissolved += dissolved;
+            if second_half {
+                tally.ext.network_second_half.formed += formed;
+                tally.ext.network_second_half.dissolved += dissolved;
+            }
+            live_connections = now;
+        }
         let intakes = tick_intakes(&pre, params, &tail);
         let start = pre.drain_start(params);
         let bites = realised_bites(&start.agents, pre.carcasses(), params, &tail);
@@ -773,6 +914,31 @@ fn rollout(
                             r.uptake[MEMO] += f64::from(u);
                         }
                     }
+                }
+                // The network (flow 5): one `Redistributed` event per currency,
+                // source = donor, target = recipient.
+                for e in tail.iter().filter(|e| e.kind == EventKind::Redistributed) {
+                    let (n, en) = (f64::from(e.nutrient_delta), f64::from(e.energy_delta));
+                    let (Some(donor), Some(to)) =
+                        (bucket_of(e.source), e.target.and_then(bucket_of))
+                    else {
+                        r.network_n_unattributed += n;
+                        r.network_e_unattributed += en;
+                        continue;
+                    };
+                    for (b, memo, inflow) in [(to.0, to.1, true), (donor.0, donor.1, false)] {
+                        for b in std::iter::once(b).chain(memo.then_some(MEMO)) {
+                            if inflow {
+                                r.network_n_in[b] += n;
+                                r.network_e_in[b] += en;
+                            } else {
+                                r.network_n_out[b] += n;
+                                r.network_e_out[b] += en;
+                            }
+                        }
+                    }
+                    r.network_n_flow[donor.0 * MEMO + to.0] += n;
+                    r.network_e_flow[donor.0 * MEMO + to.0] += en;
                 }
                 for (e, d) in &bites {
                     let Some((b, memo)) = bucket_of(e.source) else {
@@ -961,6 +1127,29 @@ fn rollout(
         {
             // Every living agent, read by the sample's role (the income
             // ledger as of this tick, as the census reads it).
+            if network_on {
+                let alive: HashSet<u64> = world.agents().iter().map(|a| a.id).collect();
+                let mut census = NetCensus {
+                    sample_ticks: 1,
+                    agent_samples: alive.len() as u64,
+                    connections: world.connections().len() as u64,
+                    pairs: vec![[0; 2]; PAIRS.len()],
+                    ..Default::default()
+                };
+                for c in world.connections() {
+                    if !alive.contains(&c.builder) || !alive.contains(&c.partner) {
+                        census.dangling += 1;
+                        continue;
+                    }
+                    let slot = |id: u64| role_slot(sample_roles.get(&id).copied());
+                    let kin = usize::from(ledger.is_kin(c.builder, c.partner));
+                    census.pairs[pair(slot(c.builder), slot(c.partner))][kin] += 1;
+                }
+                tally.ext.network.merge(&census);
+                if second_half {
+                    tally.ext.network_second_half.merge(&census);
+                }
+            }
             let quarter = (((tick.max(1) - 1) * 4) / max_ticks.max(1)).min(3) as usize;
             let fills: HashMap<u64, (f32, explorers_search::grazer_hunger::Surplus)> =
                 if second_half {
@@ -1064,10 +1253,49 @@ struct Row {
     uptake_structure_exponent: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     uptake_reference_structure: Option<f32>,
+    /// The network settings the rows ran at (#646): the config's effective
+    /// five network parameters. Absent on older rows (network off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network: Option<NetworkRecord>,
     /// Kin kills per seed (for the cross-check).
     seed_kin_kills: Vec<u64>,
     /// Summed over the seeds.
     tally: Tally,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+struct NetworkRecord {
+    connection_cap: u32,
+    creation_cost: f32,
+    maintenance_cost: f32,
+    redistribution_rate: f32,
+    transfer_efficiency: f32,
+}
+
+impl NetworkRecord {
+    fn of(p: &WorldParameters) -> Self {
+        Self {
+            connection_cap: p.network_connection_cap,
+            creation_cost: p.network_creation_cost,
+            maintenance_cost: p.network_maintenance_cost,
+            redistribution_rate: p.network_redistribution_rate,
+            transfer_efficiency: p.network_transfer_efficiency,
+        }
+    }
+
+    fn label(&self) -> String {
+        if self.connection_cap == 0 {
+            return "off (connection cap 0)".into();
+        }
+        format!(
+            "connection cap {}, creation cost {}, maintenance cost {}, redistribution rate {}, transfer efficiency {}",
+            self.connection_cap,
+            self.creation_cost,
+            self.maintenance_cost,
+            self.redistribution_rate,
+            self.transfer_efficiency
+        )
+    }
 }
 
 struct Args {
@@ -1083,6 +1311,7 @@ struct Args {
     satiation_sensitivity: Option<f32>,
     uptake_structure_exponent: Option<f32>,
     uptake_reference_structure: Option<f32>,
+    network: NetworkPins,
     crosscheck: bool,
 }
 
@@ -1100,6 +1329,7 @@ fn parse_args() -> Result<Args, String> {
         satiation_sensitivity: Some(0.0),
         uptake_structure_exponent: None,
         uptake_reference_structure: None,
+        network: NetworkPins::default(),
         crosscheck: false,
     };
     let mut it = std::env::args().skip(1);
@@ -1130,6 +1360,25 @@ fn parse_args() -> Result<Args, String> {
             }
             "--uptake-reference-structure" => {
                 args.uptake_reference_structure = Some(parse_positive(&flag, &value()?)?)
+            }
+            "--network-connection-cap" => {
+                args.network.connection_cap = Some(
+                    number(value()?)?
+                        .try_into()
+                        .map_err(|_| format!("{flag} is out of range"))?,
+                )
+            }
+            "--network-creation-cost" => {
+                args.network.creation_cost = Some(parse_non_negative(&flag, &value()?)?)
+            }
+            "--network-maintenance-cost" => {
+                args.network.maintenance_cost = Some(parse_non_negative(&flag, &value()?)?)
+            }
+            "--network-redistribution-rate" => {
+                args.network.redistribution_rate = Some(parse_unit_interval(&flag, &value()?)?)
+            }
+            "--network-transfer-efficiency" => {
+                args.network.transfer_efficiency = Some(parse_unit_interval(&flag, &value()?)?)
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -1179,6 +1428,7 @@ fn main() {
                 args.uptake_structure_exponent,
                 args.uptake_reference_structure,
             );
+            let config = with_network(config, &args.network);
             let tallies: Vec<Tally> = (0..args.ensemble)
                 .into_par_iter()
                 .map(|i| rollout(&config.0, &config.1, args.seed + i, args.horizon, &eval))
@@ -1225,6 +1475,7 @@ fn main() {
                     satiation_sensitivity: args.satiation_sensitivity,
                     uptake_structure_exponent: Some(config.0.uptake_structure_exponent),
                     uptake_reference_structure: Some(config.0.uptake_reference_structure),
+                    network: Some(NetworkRecord::of(&config.0)),
                     seed_kin_kills,
                     tally,
                 },
@@ -1416,6 +1667,7 @@ fn summary(rows: &[Row]) {
         rows.len()
     );
     println!("{}\n", uptake_label(rows));
+    println!("{}\n", network_label(rows));
     println!(
         "Population: heterotrophy > 0 and recent-income role Producer at the start of the tick. Fullness state at k = {k}, τ = {:.2} (index {j}), n = {N}: (i) E_E < 0.5 ≤ E_N; (ii) E_E ≥ 0.5; (iii) both < 0.5; from the fullness carried into the tick. Kin = parent, offspring or sibling (`DietLedger::is_kin`). Non-kin targets by recent-income role at the start of the tick.\n",
         tau_grid()[j]
@@ -1463,6 +1715,9 @@ fn summary(rows: &[Row]) {
     }
     ext_summary(&t.ext);
     persistence(rows, &t);
+    if t.ext.network_enabled_seeds > 0 {
+        network_census(rows, &t.ext);
+    }
 }
 
 /// The uptake scaling the rows ran at, each distinct value listed.
@@ -1485,6 +1740,27 @@ fn uptake_label(rows: &[Row]) -> String {
         "Uptake scaling (#644): b = uptake_structure_exponent = **{}**, s_ref = uptake_reference_structure = **{}**",
         distinct(&|r| r.uptake_structure_exponent),
         distinct(&|r| r.uptake_reference_structure)
+    )
+}
+
+/// The network settings the rows ran at, each distinct setting listed.
+fn network_label(rows: &[Row]) -> String {
+    let mut v: Vec<String> = Vec::new();
+    for r in rows {
+        let s = r
+            .network
+            .map_or("unrecorded (pre-#646 row: off)".into(), |n| n.label());
+        if !v.contains(&s) {
+            v.push(s);
+        }
+    }
+    format!(
+        "Network (flow 5, #646): **{}**",
+        if v.is_empty() {
+            "–".into()
+        } else {
+            v.join(" / ")
+        }
     )
 }
 
@@ -1708,7 +1984,7 @@ fn ext_summary(x: &Ext) {
         if x.network_enabled_seeds == 0 {
             " — so no network route"
         } else {
-            " — its nutrient transfer emits no event and is not counted here"
+            " — read off its `Redistributed` events (one per currency, source = donor) in the network tables below each C table; the main C table leaves it out"
         }
     );
     println!(
@@ -1716,7 +1992,16 @@ fn ext_summary(x: &Ext) {
         x.carcass_events, x.carcass_events_second_half
     );
     routes_table("C. Whole run", &x.routes);
+    if x.network_enabled_seeds > 0 {
+        network_routes_table("C. Whole run, with the network route", &x.routes);
+    }
     routes_table("C. Second half", &x.routes_second_half);
+    if x.network_enabled_seeds > 0 {
+        network_routes_table(
+            "C. Second half, with the network route",
+            &x.routes_second_half,
+        );
+    }
 
     println!(
         "\n### D. Appetite over time: h_eff of Producer-role agents by quarter of the run (on sample ticks, every living agent, the sample's role)\n"
@@ -1738,6 +2023,144 @@ fn ext_summary(x: &Ext) {
                 pct(h.above[2], h.n),
             );
         }
+    }
+}
+
+/// C's network route (#646): nutrient and energy each recipient bucket took
+/// in and gave out along connections, the nutrient acquired by route with the
+/// network's share, and the donor → recipient flow.
+fn network_routes_table(title: &str, r: &Routes) {
+    println!("\n#### {title}\n");
+    println!(
+        "Network N in / out: free nutrient received / given along connections (conserved). Network E in / out: energy received along connections, on the recipient's and the donor's side (net of the transfer loss). N acquired = pool uptake + living-drain + carcass-drain retained + network N in. Unattributed (an endpoint off the drain-time roster): N {:.2}, E {:.2}.\n",
+        r.network_n_unattributed, r.network_e_unattributed
+    );
+    println!(
+        "| recipient (role at start of tick) | pool uptake N | living-drain N | carcass-drain N | network N in | network N out | net network N | N acquired | % N from pool / living / carcass / network | network E in | network E out | net network E |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|");
+    let primary = |v: &Vec<f64>| -> f64 { v[..MEMO].iter().sum() };
+    let mut rows: Vec<(String, usize)> = RECIPIENTS
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != MEMO)
+        .map(|(i, n)| (n.to_string(), i))
+        .collect();
+    rows.push(("**all**".into(), usize::MAX));
+    rows.push((RECIPIENTS[MEMO].into(), MEMO));
+    for (name, i) in rows {
+        let get = |v: &Vec<f64>| if i == usize::MAX { primary(v) } else { v[i] };
+        let (u, l, c, n_in, n_out) = (
+            get(&r.uptake),
+            get(&r.living_retained),
+            get(&r.carcass_retained),
+            get(&r.network_n_in),
+            get(&r.network_n_out),
+        );
+        let (e_in, e_out) = (get(&r.network_e_in), get(&r.network_e_out));
+        let tot = u + l + c + n_in;
+        println!(
+            "| {name} | {u:.2} | {l:.2} | {c:.2} | {n_in:.2} | {n_out:.2} | {:.2} | {tot:.2} | {} / {} / {} / {} | {e_in:.1} | {e_out:.1} | {:.1} |",
+            n_in - n_out,
+            share(u, tot),
+            share(l, tot),
+            share(c, tot),
+            share(n_in, tot),
+            e_in - e_out,
+        );
+    }
+    for (what, flow) in [
+        ("nutrient", &r.network_n_flow),
+        ("energy (received)", &r.network_e_flow),
+    ] {
+        let total: f64 = flow.iter().sum();
+        println!("\nNetwork {what} flow, donor (row) → recipient (column), % of all {total:.2}:\n");
+        print!("| donor \\ recipient |");
+        for name in &RECIPIENTS[..MEMO] {
+            print!(" {name} |");
+        }
+        println!();
+        println!("|---|{}", "---:|".repeat(MEMO));
+        for (d, name) in RECIPIENTS[..MEMO].iter().enumerate() {
+            print!("| {name} |");
+            for t in 0..MEMO {
+                print!(" {} |", share(flow[d * MEMO + t], total));
+            }
+            println!();
+        }
+    }
+}
+
+/// F (#646): live connections by endpoint roles and kinship, and turnover.
+fn network_census(rows: &[Row], x: &Ext) {
+    println!(
+        "\n### F. Network connections (sample ticks, endpoint roles = the sample's recent-income role, kin = `DietLedger::is_kin`)\n"
+    );
+    println!(
+        "Mean live connections per agent-sample = 2 × connections / living agents (each connection has two endpoints). Formed / dissolved: tick-to-tick differences of the live set (a connection shed and rebuilt within one tick is not seen). Dangling: an endpoint died after the network phase (pruned next tick).\n"
+    );
+    println!(
+        "| window | sample ticks | agent-samples | connections | mean live connections per agent-sample | connections per sample tick | dangling | formed | dissolved |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for (name, n) in [
+        ("whole run", &x.network),
+        ("second half", &x.network_second_half),
+    ] {
+        println!(
+            "| {name} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            n.sample_ticks,
+            n.agent_samples,
+            n.connections,
+            per(2.0 * n.connections as f64, n.agent_samples),
+            per(n.connections as f64, n.sample_ticks),
+            n.dangling,
+            n.formed,
+            n.dissolved,
+        );
+    }
+    println!("\nBy endpoint roles, second half (connections summed over sample ticks):\n");
+    println!("| endpoint roles | non-kin | kin | all | % of classified |");
+    println!("|---|---:|---:|---:|---:|");
+    let n = &x.network_second_half;
+    let classified: u64 = n.pairs.iter().map(|p| p[0] + p[1]).sum();
+    for (name, p) in PAIRS.iter().zip(&n.pairs) {
+        println!(
+            "| {name} | {} | {} | {} | {} |",
+            p[0],
+            p[1],
+            p[0] + p[1],
+            pct(p[0] + p[1], classified)
+        );
+    }
+    let kin: u64 = n.pairs.iter().map(|p| p[1]).sum();
+    println!(
+        "| **all** | {} | {kin} | {classified} | {} kin |",
+        classified - kin,
+        pct(kin, classified)
+    );
+    println!("\nPer config (whole run):\n");
+    println!(
+        "| config | connections | mean live connections per agent-sample | formed | dissolved | % producer–decomposer | % producer–producer | % kin |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|");
+    for r in rows {
+        let n = &r.tally.ext.network;
+        let classified: u64 = n.pairs.iter().map(|p| p[0] + p[1]).sum();
+        let at = |i: usize| n.pairs.get(i).map_or(0, |p| p[0] + p[1]);
+        let kin: u64 = n.pairs.iter().map(|p| p[1]).sum();
+        println!(
+            "| {}:{} | {} | {} | {} | {} | {} | {} | {} |",
+            r.source,
+            r.config_index,
+            n.connections,
+            per(2.0 * n.connections as f64, n.agent_samples),
+            n.formed,
+            n.dissolved,
+            pct(at(pair(0, 2)), classified),
+            pct(at(pair(0, 0)), classified),
+            pct(kin, classified),
+        );
     }
 }
 

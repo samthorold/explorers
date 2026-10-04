@@ -11,8 +11,12 @@ pub enum EventKind {
     Moved,
     /// Network redistribution (flow 5): cooperative transfer of energy or
     /// nutrient from `source` (the donor) to `target` (the recipient) along a
-    /// network connection. `energy_delta` is the net amount received by the
-    /// recipient. Emitted only when the network is enabled; inert by default.
+    /// network connection. One event per currency per connection per tick, as
+    /// the two legs can run in opposite directions: the energy leg carries
+    /// `energy_delta` (net received by the recipient) and `nutrient_delta` 0;
+    /// the nutrient leg (#646) carries `nutrient_delta` (conserved, sent =
+    /// received) and `energy_delta` 0. Emitted only when the network is
+    /// enabled; inert by default.
     Redistributed,
     /// A birth (#443): `source` is the offspring's world id, `target` the
     /// parent — for a sexual birth the seed parent, with the mate in
@@ -41,6 +45,12 @@ pub struct Event {
     /// Set only on `Born` events: the second parent of a sexual birth. `None`
     /// for asexual births and every other event kind.
     pub second_parent: Option<u64>,
+    /// Set only on `Redistributed` events that carry nutrient (flow 5): the free
+    /// nutrient moved from `source` (the nutrient donor) to `target` (the
+    /// nutrient recipient). Nutrient is conserved, so this is both the amount
+    /// sent and received. A raw event fact with no effect on state; `0.0` for
+    /// every other event, including the energy leg of a redistribution.
+    pub nutrient_delta: f32,
 }
 
 /// Append-only event log with observer-side compaction. Indices are
@@ -177,6 +187,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         }
     }
 
@@ -245,6 +256,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         })
         .unwrap();
         log.append(Event {
@@ -257,6 +269,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         })
         .unwrap();
         log.append(Event {
@@ -269,6 +282,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         })
         .unwrap();
 

@@ -251,6 +251,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             // Heterotroph 1 drains carcass 99 — the detrital (brown) pathway.
             Event {
@@ -263,6 +264,7 @@ mod tests {
                 position: None,
                 target_was_carcass: true,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
         ]);
 
@@ -285,6 +287,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -305,6 +308,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -327,6 +331,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 2,
@@ -338,6 +343,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
         ]);
 
@@ -360,6 +366,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 1,
@@ -371,6 +378,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 2,
@@ -382,6 +390,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 3,
@@ -393,6 +402,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
         ]);
 
@@ -417,6 +427,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 2,
@@ -428,6 +439,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 2,
@@ -439,6 +451,7 @@ mod tests {
                 position: None,
                 target_was_carcass: true,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
         ]);
 
@@ -461,6 +474,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 2,
@@ -472,6 +486,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 2,
@@ -483,6 +498,7 @@ mod tests {
                 position: None,
                 target_was_carcass: true,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
         ]);
 
@@ -504,6 +520,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         }]);
 
         let mut proj = TopologyProjection::new();
@@ -526,6 +543,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 1,
@@ -537,6 +555,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
         ]);
 
@@ -560,6 +579,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 2,
@@ -571,6 +591,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 3,
@@ -582,6 +603,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 4,
@@ -593,6 +615,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
         ]);
 
@@ -620,6 +643,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 1,
@@ -631,6 +655,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             // Agent 1 and 2 mate -> child 3
             Event {
@@ -643,6 +668,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             Event {
                 tick: 2,
@@ -654,6 +680,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
             // Agent 4 born independently (separate lineage)
             Event {
@@ -666,6 +693,7 @@ mod tests {
                 position: None,
                 target_was_carcass: false,
                 second_parent: None,
+                nutrient_delta: 0.0,
             },
         ]);
 
@@ -693,6 +721,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         })
         .unwrap();
 
@@ -710,6 +739,7 @@ mod tests {
             position: None,
             target_was_carcass: false,
             second_parent: None,
+            nutrient_delta: 0.0,
         })
         .unwrap();
         proj.update(&log);
