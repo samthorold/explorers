@@ -10,7 +10,7 @@ use explorers_sim::{
     Agent, AgentSpec, World, WorldRecipe, phase, toroidal_distance, wrap_position,
 };
 use proptest::prelude::*;
-use support::{WorldCase, world_case};
+use support::{WorldCase, world_case, world_case_with_size_scaled_uptake};
 
 /// Relative tolerance for *summed* world totals under a permutation. The
 /// execution model commits every RNG-derived quantity and every agent's
@@ -178,6 +178,45 @@ proptest! {
         case in world_case_without_reproduction()
     ) {
         check_order_permutation_invariance(&case)?;
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Determinism with size-scaled uptake on (#644): the same case stepped
+    /// twice is bit-identical.
+    #[test]
+    fn trajectory_is_deterministic_with_size_scaled_uptake(
+        case in world_case_with_size_scaled_uptake()
+    ) {
+        let a = run(&case, false);
+        let b = run(&case, false);
+        let bits = |w: &World| {
+            population_by_id(w)
+                .iter()
+                .map(|a| (AgentExactBits::of(a), stores(a).map(|(_, v)| v.to_bits())))
+                .collect::<Vec<_>>()
+        };
+        prop_assert_eq!(bits(&a), bits(&b));
+        prop_assert_eq!(a.nutrient_pool().to_bits(), b.nutrient_pool().to_bits());
+    }
+
+    /// Agent-order permutation with size-scaled uptake on (#644): demand reads
+    /// only the agent's own body, so the uptake pass stays order-invariant.
+    #[test]
+    fn trajectory_is_invariant_under_agent_order_permutation_with_size_scaled_uptake(
+        case in world_case_with_size_scaled_uptake()
+    ) {
+        check_order_permutation_invariance(&case)?;
+    }
+
+    /// Toroidal translation with size-scaled uptake on (#644).
+    #[test]
+    fn trajectory_is_covariant_under_toroidal_translation_with_size_scaled_uptake(
+        tc in translation_case_from(world_case_with_size_scaled_uptake())
+    ) {
+        check_translation_covariance(&tc)?;
     }
 }
 
@@ -481,8 +520,10 @@ fn mate_on_reach_boundary(world: &World) -> Option<(u64, u64)> {
 ///   for a producer); drains credit reserve only after `grow`.
 /// - Nutrient: `repro_nutrient` gains the `(1 − kappa)` share of every
 ///   nutrient credit. A non-heterotroph's only credit is pool uptake, at most
-///   its effective photosynthesis × `AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK`; a
-///   heterotroph's ingested nutrient is not bounded here.
+///   its uptake demand (`phase::nutrient_uptake_demand`: effective
+///   photosynthesis × `AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK`, size-scaled when
+///   the uptake structure exponent is on, #644); a heterotroph's ingested
+///   nutrient is not bounded here.
 ///
 /// The 1e-3 relative slack covers the stepper's summation rounding.
 fn could_reach_reproduction_threshold(a: &Agent, params: &explorers_sim::WorldParameters) -> bool {
@@ -499,10 +540,7 @@ fn could_reach_reproduction_threshold(a: &Agent, params: &explorers_sim::WorldPa
     let nutrient_ceiling = if a.effective_trait_with_steepness(1, k) > 0.0 {
         f32::INFINITY
     } else {
-        a.repro_nutrient.max(0.0)
-            + repro_share
-                * eff_photo.max(0.0)
-                * explorers_sim::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK
+        a.repro_nutrient.max(0.0) + repro_share * phase::nutrient_uptake_demand(a, params).max(0.0)
     };
     let slack = 1.0 - 1e-3;
     energy_ceiling >= params.reproduction_energy_threshold * slack

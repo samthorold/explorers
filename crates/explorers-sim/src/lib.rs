@@ -635,6 +635,36 @@ pub struct WorldParameters {
     /// separation (~1.4), so it covers kin clusters without sparing prey.
     #[serde(default = "default_recognition_distance")]
     pub recognition_distance: f32,
+    /// Uptake structure exponent `b` (#644; world-rules.md flow 2): pool
+    /// uptake demand grows with the body as root mass grows with shoot mass,
+    /// `effective autotrophy × u_A × (structure / uptake_reference_structure)^b`.
+    /// Light share already scales with structure; this lets uptake follow it.
+    /// Dimensionless. Default `0.0` disables it — demand is effective
+    /// autotrophy × `u_A` exactly as before, whatever the structure — so every
+    /// existing recipe, pin and the atlas are bit-unchanged.
+    #[serde(default)]
+    pub uptake_structure_exponent: f32,
+    /// Reference structure `s_ref` of size-scaled uptake (#644): the body at
+    /// which demand equals the size-blind demand, whatever the exponent. Units
+    /// of structure. Inert while `uptake_structure_exponent` is 0. Default
+    /// [`DEFAULT_UPTAKE_REFERENCE_STRUCTURE`].
+    #[serde(default = "default_uptake_reference_structure")]
+    pub uptake_reference_structure: f32,
+}
+
+/// Design default reference structure for size-scaled uptake (#644). Chosen
+/// so that switching the exponent on leaves total producer uptake demand of
+/// the order it is today: over the atlas (b = 0, ticks 1000–2000, producers
+/// with effective autotrophy > 0.05, autotrophy-weighted) the structure that
+/// leaves total demand unchanged is 40 at b = 1/3, 85 at b = 2/3 and 140 at
+/// b = 1. At 100, total demand moves by 0.74×, 0.90× and 1.40× across those
+/// exponents. The structure distribution is heavy-tailed (median 8, 90th
+/// percentile 460; founders about 1.8), so a reference near the typical
+/// *individual* would multiply total demand several-fold.
+pub const DEFAULT_UPTAKE_REFERENCE_STRUCTURE: f32 = 100.0;
+
+fn default_uptake_reference_structure() -> f32 {
+    DEFAULT_UPTAKE_REFERENCE_STRUCTURE
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1984,6 +2014,8 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
+            uptake_structure_exponent: 0.0,
+            uptake_reference_structure: DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             satiation_sensitivity: 0.1,
             recognition_distance: 0.5,
             solar_flux_magnitude: 10.0,
@@ -2629,6 +2661,30 @@ mod tests {
         assert_eq!(without.network_maintenance_cost, 0.0);
         assert_eq!(without.network_redistribution_rate, 0.0);
         assert_eq!(without.network_transfer_efficiency, 0.0);
+    }
+
+    #[test]
+    fn size_scaled_uptake_parameters_round_trip_and_default_off() {
+        // #644: the two uptake-scaling parameters round-trip, and a recipe or
+        // checkpoint that predates them loads size-blind (b = 0) with the
+        // design-default reference structure.
+        let mut params = test_params();
+        params.uptake_structure_exponent = 2.0 / 3.0;
+        params.uptake_reference_structure = 40.0;
+        let json = serde_json::to_string(&params).unwrap();
+        let back: WorldParameters = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, params);
+
+        let mut value = serde_json::to_value(test_params()).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        obj.remove("uptake_structure_exponent");
+        obj.remove("uptake_reference_structure");
+        let without: WorldParameters = serde_json::from_value(value).unwrap();
+        assert_eq!(without.uptake_structure_exponent, 0.0);
+        assert_eq!(
+            without.uptake_reference_structure,
+            DEFAULT_UPTAKE_REFERENCE_STRUCTURE
+        );
     }
 
     #[test]
@@ -3970,6 +4026,8 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
+            uptake_structure_exponent: 0.0,
+            uptake_reference_structure: DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             satiation_sensitivity: 0.1,
             recognition_distance: 0.5,
             solar_flux_magnitude: 10.0,
