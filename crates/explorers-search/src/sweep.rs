@@ -162,6 +162,32 @@ impl AtlasUnits {
     pub fn check_search_box(&self, ranges: &[ParameterRange]) -> Result<(), SearchBoxMismatch> {
         check_search_box(&self.search_box, ranges)
     }
+
+    /// A stable 64-bit FNV-1a digest of the box (names and bounds) and every
+    /// cell's unit vector, in file order (#656): rows record it so a readout
+    /// can tell which atlas they ran on. Two atlases share it exactly when
+    /// they decode the same worlds at the same indices.
+    pub fn fingerprint(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |bytes: &[u8]| {
+            for &b in bytes {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        for r in &self.search_box {
+            eat(r.name.as_bytes());
+            eat(&r.min.to_bits().to_le_bytes());
+            eat(&r.max.to_bits().to_le_bytes());
+        }
+        for u in &self.units {
+            eat(&(u.len() as u64).to_le_bytes());
+            for x in u {
+                eat(&x.to_bits().to_le_bytes());
+            }
+        }
+        h
+    }
 }
 
 /// The atlas's live cells, in file order, with the search box they decode
@@ -271,6 +297,30 @@ pub fn append_row<R: serde::Serialize>(path: &Path, row: &R) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #656: an atlas's fingerprint changes with any cell or with the box,
+    /// and not otherwise.
+    #[test]
+    fn the_atlas_fingerprint_names_the_cells_and_the_box() {
+        let b = size_blind_ranges();
+        let cells = vec![vec![0.5; b.len()], vec![0.25; b.len()]];
+        let a = AtlasUnits::new(b.clone(), cells.clone());
+        assert_eq!(
+            a.fingerprint(),
+            AtlasUnits::new(b.clone(), cells.clone()).fingerprint()
+        );
+        let mut moved = cells.clone();
+        moved[1][3] = 0.2500001;
+        assert_ne!(
+            a.fingerprint(),
+            AtlasUnits::new(b.clone(), moved).fingerprint()
+        );
+        let fewer = AtlasUnits::new(b.clone(), cells[..1].to_vec());
+        assert_ne!(a.fingerprint(), fewer.fingerprint());
+        let full = default_ranges();
+        let wide = AtlasUnits::new(full.clone(), vec![vec![0.5; full.len()]; 2]);
+        assert_ne!(a.fingerprint(), wide.fingerprint());
+    }
 
     /// A filter may name configs of another LHS draw (`sample@S:i`): they
     /// are planned after the default order, by draw and index, and are
