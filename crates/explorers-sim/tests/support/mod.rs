@@ -82,6 +82,8 @@ pub fn viable_baseline() -> WorldParameters {
         network_maintenance_cost: 0.0,
         network_redistribution_rate: 0.0,
         network_transfer_efficiency: 0.0,
+        uptake_structure_exponent: 0.0,
+        uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
         satiation_sensitivity: 0.1,
         recognition_distance: 0.5,
     }
@@ -221,4 +223,17 @@ pub fn world_case() -> impl Strategy<Value = WorldCase> {
             seed,
             ticks,
         })
+}
+
+/// A stepper case with size-scaled uptake switched on (#644): the C1 domain
+/// with the uptake structure exponent drawn from `(0, 1]` and the reference
+/// structure from founder-sized bodies to the design default and beyond. A
+/// separate strategy, so `world_case()` — and every default-path property —
+/// draws exactly the inputs it always has.
+pub fn world_case_with_size_scaled_uptake() -> impl Strategy<Value = WorldCase> {
+    (world_case(), 0.05f32..=1.0, 0.5f32..=200.0).prop_map(|(mut case, b, s_ref)| {
+        case.params.uptake_structure_exponent = b;
+        case.params.uptake_reference_structure = s_ref;
+        case
+    })
 }

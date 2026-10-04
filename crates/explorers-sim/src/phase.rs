@@ -91,6 +91,24 @@ pub fn photosynthesise(
     events
 }
 
+/// An agent's pool-uptake demand in nutrient per tick (world-rules.md flow 2):
+/// effective autotrophy × the autotrophy anchor `u_A` (#459), scaled by
+/// `(structure / uptake_reference_structure)^b` when the uptake structure
+/// exponent `b` is nonzero (#644). It reads structure where the light share
+/// does: uptake runs after photosynthesis and before growth, and neither moves
+/// structure. At `b = 0` the size term is skipped, not evaluated, so demand is
+/// bit-identical to the size-blind rule at every structure, including zero.
+pub fn nutrient_uptake_demand(agent: &Agent, params: &WorldParameters) -> f32 {
+    let k = params.wear_degradation_steepness;
+    let demand = agent.effective_trait_with_steepness(0, k)
+        * crate::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK;
+    let b = params.uptake_structure_exponent;
+    if b == 0.0 {
+        return demand;
+    }
+    demand * (agent.structure / params.uptake_reference_structure).powf(b)
+}
+
 /// Absorb nutrients: uptake from the local nutrient grid cell at each agent's
 /// position, proportional sharing within each cell when demand exceeds supply.
 pub fn absorb_nutrients(
@@ -100,16 +118,12 @@ pub fn absorb_nutrients(
 ) -> Vec<Event> {
     let mut events = Vec::new();
 
-    let k = params.wear_degradation_steepness;
-
     // Group agents by nutrient grid cell, with their demand.
     let mut cell_agents: std::collections::HashMap<usize, Vec<(usize, f32)>> =
         std::collections::HashMap::new();
 
     for (i, agent) in agents.iter().enumerate() {
-        // Uptake demand in nutrient per tick: the autotrophy anchor u_A (#459).
-        let demand = agent.effective_trait_with_steepness(0, k)
-            * crate::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK;
+        let demand = nutrient_uptake_demand(agent, params);
         if demand <= 0.0 {
             continue;
         }
@@ -2126,6 +2140,8 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
+            uptake_structure_exponent: 0.0,
+            uptake_reference_structure: crate::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             // Flat (ungated) drain: these tests pin drain mechanics; need-gating
             // tests set the sensitivity explicitly.
             satiation_sensitivity: 0.0,
@@ -2715,6 +2731,117 @@ mod tests {
         assert!(
             (agents[0].nutrient_total(&params) - agents[1].nutrient_total(&params)).abs() < 1e-3
         );
+    }
+
+    // --- Size-scaled uptake (#644) ---
+
+    #[test]
+    fn size_scaled_uptake_gives_a_larger_producer_proportionally_more_from_a_rich_cell() {
+        // #644: at b = 1, uptake demand is effective autotrophy × u_A ×
+        // structure / s_ref, so a producer three times the reference body takes
+        // three times what one at the reference takes, when the cell can serve
+        // them both.
+        let mut params = test_params();
+        params.uptake_structure_exponent = 1.0;
+        params.uptake_reference_structure = 2.0;
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            Agent::new(1, (0.0, 0.0), 10.0, 2.0, 0.0, traits),
+            Agent::new(2, (1.0, 0.0), 10.0, 6.0, 0.0, traits),
+        ];
+        // 100 per cell: ample for both.
+        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 10_000.0);
+
+        absorb_nutrients(&mut agents, &mut grid, &params);
+
+        // Uptake is credited to the free store and the earmark (bodies carry
+        // bound nutrient of their own, which uptake does not touch).
+        let small = agents[0].nutrient + agents[0].repro_nutrient;
+        let large = agents[1].nutrient + agents[1].repro_nutrient;
+        assert!((small - 0.5).abs() < 1e-5, "reference body: {small}");
+        assert!((large - 1.5).abs() < 1e-5, "three references: {large}");
+    }
+
+    #[test]
+    fn size_scaled_uptake_shares_a_depleted_cell_in_proportion_to_scaled_demand() {
+        // #644: when the cell cannot meet total demand, each agent's share is
+        // proportional to its size-scaled demand. At b = 1/2, s_ref = 1, bodies
+        // of 1 and 9 demand 1 and 3 (same autotrophy), so a pool of 0.4 splits
+        // 0.1 : 0.3 and is exhausted.
+        let mut params = test_params();
+        params.uptake_structure_exponent = 0.5;
+        params.uptake_reference_structure = 1.0;
+        let traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            Agent::new(1, (0.0, 0.0), 10.0, 1.0, 0.0, traits),
+            Agent::new(2, (1.0, 0.0), 10.0, 9.0, 0.0, traits),
+        ];
+        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        *grid.at_position((0.0, 0.0)) = 0.4;
+
+        absorb_nutrients(&mut agents, &mut grid, &params);
+
+        let small = agents[0].nutrient + agents[0].repro_nutrient;
+        let large = agents[1].nutrient + agents[1].repro_nutrient;
+        assert!((small - 0.1).abs() < 1e-6, "small body share: {small}");
+        assert!((large - 0.3).abs() < 1e-6, "large body share: {large}");
+        assert!(
+            grid.total().abs() < 1e-6,
+            "pool exhausted: {}",
+            grid.total()
+        );
+    }
+
+    #[test]
+    fn size_scaled_uptake_gives_a_zero_structure_agent_nothing() {
+        // #644: at b > 0 a body with no structure has no roots: it demands
+        // nothing, emits no uptake event and leaves the pool untouched.
+        let mut params = test_params();
+        params.uptake_structure_exponent = 1.0 / 3.0;
+        let traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![Agent::new(1, (0.0, 0.0), 10.0, 0.0, 0.0, traits)];
+        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 10_000.0);
+
+        let events = absorb_nutrients(&mut agents, &mut grid, &params);
+
+        assert!(events.is_empty(), "no uptake event: {events:?}");
+        assert_eq!(agents[0].nutrient + agents[0].repro_nutrient, 0.0);
+        assert_eq!(grid.total(), 10_000.0);
+    }
+
+    #[test]
+    fn size_blind_uptake_at_b_zero_ignores_structure_bit_for_bit() {
+        // #644: at the default b = 0 the size term is skipped, so demand is
+        // effective autotrophy × u_A exactly — at zero structure, at the
+        // reference and far from it — whatever the reference structure.
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.37,
+            ..zero_traits()
+        };
+        for s_ref in [0.0, 1.0, crate::DEFAULT_UPTAKE_REFERENCE_STRUCTURE] {
+            let mut params = test_params();
+            params.uptake_reference_structure = s_ref;
+            for structure in [0.0, 1.0, 7.3, 1234.5] {
+                let agent = Agent::new(1, (0.0, 0.0), 10.0, structure, 0.0, traits);
+                let size_blind = agent
+                    .effective_trait_with_steepness(0, params.wear_degradation_steepness)
+                    * crate::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK;
+                assert_eq!(
+                    nutrient_uptake_demand(&agent, &params).to_bits(),
+                    size_blind.to_bits(),
+                    "structure {structure}, s_ref {s_ref}"
+                );
+            }
+        }
     }
 
     #[test]

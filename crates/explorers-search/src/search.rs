@@ -487,6 +487,8 @@ fn viable_baseline() -> WorldParameters {
         network_maintenance_cost: 0.0,
         network_redistribution_rate: 0.0,
         network_transfer_efficiency: 0.0,
+        uptake_structure_exponent: 0.0,
+        uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
         satiation_sensitivity: 33.0,
         recognition_distance: 0.5,
     }
