@@ -73,7 +73,6 @@ use explorers_search::fullness::{FullnessBank, FullnessTracker, k_grid, tau_grid
 use explorers_search::grazer_hunger::PreStep;
 use explorers_search::intake_ceiling::realised_bites;
 use explorers_search::role_diet::{DietLedger, Outcomes, census_failure, rollout_with_fullness};
-use explorers_search::search::default_ranges;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
 use explorers_sim::event::{Event, EventKind};
 use explorers_sim::topology::TrophicRole;
@@ -1397,7 +1396,7 @@ fn main() {
             .as_deref()
             .map(read_atlas_units)
             .unwrap_or_default();
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let done = done_configs(&args.out);
         let tasks = plan_tasks(
             atlas_units.len(),

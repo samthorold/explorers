@@ -19,7 +19,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use crate::lhs;
-use crate::search::{decode, default_ranges};
+use crate::search::{ParameterRange, decode, size_blind_ranges};
 use crate::sweep::AtlasUnits;
 
 /// Low-discrepancy configs drawn in addition to the atlas cells — same count
@@ -89,33 +89,44 @@ impl std::str::FromStr for ConfigSource {
     }
 }
 
-/// The seed-421 LHS draw of `SAMPLE_CONFIGS` unit vectors over `dims`.
-pub fn sampled_units(dims: usize) -> Vec<Vec<f64>> {
-    sample_draw(SAMPLE_SEED, dims)
+/// The box the LHS draws sample and decode over: the full box as it stood
+/// before the uptake structure exponent joined it ([`size_blind_ranges`],
+/// #653). The draws are instruments whose `sample:i` keys name worlds in
+/// recorded rows and research notes; drawing them over a box with another
+/// coordinate would give every one of those worlds a nonzero exponent, so
+/// they keep the size-blind box and every sample world keeps `b = 0`.
+pub fn sample_box() -> Vec<ParameterRange> {
+    size_blind_ranges()
 }
 
-/// The seed-`seed` LHS draw of `SAMPLE_CONFIGS` unit vectors over `dims`.
-pub fn sample_draw(seed: u64, dims: usize) -> Vec<Vec<f64>> {
+/// The seed-421 LHS draw of `SAMPLE_CONFIGS` unit vectors over [`sample_box`].
+pub fn sampled_units() -> Vec<Vec<f64>> {
+    sample_draw(SAMPLE_SEED)
+}
+
+/// The seed-`seed` LHS draw of `SAMPLE_CONFIGS` unit vectors over
+/// [`sample_box`].
+pub fn sample_draw(seed: u64) -> Vec<Vec<f64>> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    lhs::sample(dims, SAMPLE_CONFIGS, &mut rng)
+    lhs::sample(sample_box().len(), SAMPLE_CONFIGS, &mut rng)
 }
 
 /// The world a `(source, index)` key names (#559): an atlas cell decoded over
 /// the atlas's own search box, or a config of an LHS draw — the caller's
 /// seed-421 copy `sampled`, or a fresh draw of any other seed — decoded over
-/// the full box (`default_ranges`). The LHS draws are instruments over the
-/// whole box, not the search's, whatever box the atlas was drawn under.
+/// [`sample_box`]. The LHS draws are instruments over that whole box, not the
+/// search's, whatever box the atlas was drawn under.
 pub fn resolve_config(
     source: ConfigSource,
     index: usize,
     atlas: &AtlasUnits,
     sampled: &[Vec<f64>],
 ) -> (WorldParameters, InitialDistribution) {
-    let full = default_ranges();
+    let box_ = sample_box();
     match source {
         ConfigSource::Atlas => atlas.decode(index),
-        ConfigSource::SAMPLE => decode(&sampled[index], &full),
-        ConfigSource::Sample(seed) => decode(&sample_draw(seed, full.len())[index], &full),
+        ConfigSource::SAMPLE => decode(&sampled[index], &box_),
+        ConfigSource::Sample(seed) => decode(&sample_draw(seed)[index], &box_),
     }
 }
 
@@ -282,7 +293,7 @@ mod tests {
     /// against a pre-#601 tree pins it back to the well-mixed scatter (#605).
     #[test]
     fn a_pinned_founder_aggregation_overrides_the_decoded_default() {
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         assert_eq!(
             decoded.1.founder_aggregation,
@@ -305,7 +316,7 @@ mod tests {
     /// that parameter, and no pin leaves the world as decoded.
     #[test]
     fn pinned_consumption_scales_override_only_their_own_parameter() {
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         assert_eq!(
             with_consumption_scales(decoded.clone(), None, None),
@@ -330,7 +341,7 @@ mod tests {
     /// no pin leaves the world as decoded (b = 0, the size-blind rule).
     #[test]
     fn pinned_uptake_scaling_overrides_only_its_own_parameter() {
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         assert_eq!(decoded.0.uptake_structure_exponent, 0.0);
         assert_eq!(with_uptake_scaling(decoded.clone(), None, None), decoded);
@@ -359,7 +370,7 @@ mod tests {
     /// (connection cap 0, the network off).
     #[test]
     fn pinned_network_settings_override_only_their_own_parameters() {
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         assert_eq!(decoded.0.network_connection_cap, 0);
         assert_eq!(
@@ -487,38 +498,58 @@ mod tests {
         assert_eq!(ConfigSource::Sample(9421).to_string(), "sample@9421");
     }
 
-    /// A sample key resolves to its own draw's world, over the full box: the
-    /// caller's seed-421 copy for `sample:i`, a fresh draw for `sample@S:i`.
-    /// An atlas key resolves over the atlas's own box.
+    /// A sample key resolves to its own draw's world, over the sample box:
+    /// the caller's seed-421 copy for `sample:i`, a fresh draw for
+    /// `sample@S:i`. An atlas key resolves over the atlas's own box.
     #[test]
     fn a_key_resolves_to_the_world_of_its_own_draw_and_box() {
-        let full = crate::search::default_ranges();
-        let sampled = sampled_units(full.len());
-        let other = sample_draw(9421, full.len());
+        let box_ = sample_box();
+        let sampled = sampled_units();
+        let other = sample_draw(9421);
         assert_ne!(other[12], sampled[12], "an independent draw");
         let world = |source, i| resolve_config(source, i, &AtlasUnits::default(), &sampled);
         assert_eq!(
             world(ConfigSource::Sample(9421), 12),
-            decode(&other[12], &full)
+            decode(&other[12], &box_)
         );
-        assert_eq!(world(ConfigSource::SAMPLE, 12), decode(&sampled[12], &full));
+        assert_eq!(world(ConfigSource::SAMPLE, 12), decode(&sampled[12], &box_));
         let narrowed = crate::search::narrowed_ranges();
-        let atlas = AtlasUnits::new(narrowed.clone(), vec![vec![0.25; full.len()]]);
+        let atlas = AtlasUnits::new(narrowed.clone(), vec![vec![0.25; narrowed.len()]]);
         let cell = resolve_config(ConfigSource::Atlas, 0, &atlas, &sampled);
         assert_eq!(
             cell,
-            decode(&[0.25; 32], &narrowed),
+            decode(&vec![0.25; narrowed.len()], &narrowed),
             "atlas cells: their own box"
         );
+    }
+
+    /// #653: the uptake structure exponent joined the full box, but the LHS
+    /// draws stay over the size-blind box, so `sample:i` and `sample@S:i` keep
+    /// naming the worlds every recorded row names, all with `b = 0`.
+    #[test]
+    fn sample_keys_keep_naming_their_size_blind_worlds() {
+        assert_eq!(sample_box(), crate::search::size_blind_ranges());
+        let sampled = sampled_units();
+        assert_eq!(sampled[0].len(), 32);
+        for (source, units) in [
+            (ConfigSource::SAMPLE, sampled.clone()),
+            (ConfigSource::Sample(9421), sample_draw(9421)),
+        ] {
+            for i in [0, 31, 199] {
+                let world = resolve_config(source, i, &AtlasUnits::default(), &sampled);
+                assert_eq!(world, decode(&units[i], &sample_box()));
+                assert_eq!(world.0.uptake_structure_exponent, 0.0);
+            }
+        }
     }
 
     /// The seed-421 draw is the one every row on disk names as `sample:i`:
     /// pinned to the vectors it produced before the seed became selectable.
     #[test]
     fn the_seed_421_draw_is_unchanged() {
-        let units = sample_draw(SAMPLE_SEED, 32);
+        let units = sample_draw(SAMPLE_SEED);
         assert_eq!(units.len(), SAMPLE_CONFIGS);
-        assert_eq!(units, sampled_units(32));
+        assert_eq!(units, sampled_units());
         assert_eq!(
             units[0][..3],
             [0.39506597665000004, 0.8860893027283057, 0.14197006724157732]

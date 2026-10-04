@@ -677,7 +677,7 @@ impl TraitDistances {
 mod tests {
     use super::*;
     use crate::config_source::{ConfigSource, resolve_config, sampled_units};
-    use crate::search::default_ranges;
+
     use explorers_sim::event::EventKind;
 
     fn sample_31_world(seed: u64) -> World {
@@ -685,7 +685,7 @@ mod tests {
             ConfigSource::SAMPLE,
             31,
             &Default::default(),
-            &sampled_units(default_ranges().len()),
+            &sampled_units(),
         );
         World::new(params, dist, seed)
     }

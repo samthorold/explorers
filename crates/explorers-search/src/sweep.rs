@@ -29,7 +29,9 @@ use explorers_genesis_eval::{RolloutObservations, evaluate_from_log_within};
 use explorers_genesis::{InitialDistribution, WorldParameters};
 
 use crate::config_source::ConfigSource;
-use crate::search::{ParameterRange, SearchBoxMismatch, check_search_box, decode, default_ranges};
+use crate::search::{
+    ParameterRange, SearchBoxMismatch, check_search_box, decode, default_ranges, size_blind_ranges,
+};
 
 /// The mode a run records when its step loop exhausted the simulation budget
 /// (`--run-timeout-secs`).
@@ -144,7 +146,8 @@ impl AtlasUnits {
     }
 
     /// The search box the cells decode over: the one the atlas records, or
-    /// the full box `default_ranges()` for an atlas from before #559.
+    /// the size-blind box `size_blind_ranges()` for an atlas from before
+    /// #559, which was searched under the full box as it then stood (#653).
     pub fn search_box(&self) -> &[ParameterRange] {
         &self.search_box
     }
@@ -162,7 +165,7 @@ impl AtlasUnits {
 }
 
 /// The atlas's live cells, in file order, with the search box they decode
-/// over (legacy atlas: the full box). Panics if it cannot be read or parsed,
+/// over (legacy atlas: the size-blind box it was searched under). Panics if it cannot be read or parsed,
 /// or if a cell's unit vector does not span the box.
 pub fn read_atlas_units(path: &Path) -> AtlasUnits {
     let contents =
@@ -170,7 +173,7 @@ pub fn read_atlas_units(path: &Path) -> AtlasUnits {
     let atlas: AtlasFile =
         serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
     AtlasUnits::new(
-        atlas.search_box.unwrap_or_else(default_ranges),
+        atlas.search_box.unwrap_or_else(size_blind_ranges),
         atlas.cells.into_iter().map(|c| c.unit).collect(),
     )
 }

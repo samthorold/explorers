@@ -79,7 +79,6 @@ use explorers_genesis_eval::{
 use explorers_search::config_source::{
     ConfigSource, parse_selector, resolve_config, sampled_units,
 };
-use explorers_search::search::default_ranges;
 use explorers_search::sweep::{
     DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
     done_configs, evaluate_within_budget, plan_tasks, read_atlas_units, read_rows,
@@ -573,7 +572,7 @@ fn main() {
     let args = parse_args(std::env::args().skip(1));
     if !args.summary_only {
         let atlas_units = read_atlas_units(&args.atlas);
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let done = done_configs(&args.out);
         let tasks = plan_tasks(
             atlas_units.len(),

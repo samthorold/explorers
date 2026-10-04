@@ -965,7 +965,6 @@ mod tests {
     use super::*;
     use crate::config_source::{ConfigSource, resolve_config, sampled_units};
     use crate::grazer_hunger::EXPRESSION_BANDS;
-    use crate::search::default_ranges;
 
     fn event(tick: u64, kind: EventKind, source: u64, target: Option<u64>, e: f32) -> Event {
         Event {
@@ -987,7 +986,7 @@ mod tests {
             ConfigSource::SAMPLE,
             31,
             &Default::default(),
-            &sampled_units(default_ranges().len()),
+            &sampled_units(),
         )
     }
 

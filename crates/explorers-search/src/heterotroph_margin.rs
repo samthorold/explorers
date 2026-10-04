@@ -208,7 +208,7 @@ mod tests {
             ConfigSource::SAMPLE,
             31,
             &AtlasUnits::default(),
-            &sampled_units(32),
+            &sampled_units(),
         )
     }
 

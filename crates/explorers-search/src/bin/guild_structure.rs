@@ -40,9 +40,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use explorers_genesis::{Rollout, RunConfig, rollout};
-use explorers_search::config_source::{ConfigSource, parse_selector, sampled_units};
+use explorers_search::config_source::{ConfigSource, parse_selector, sample_box, sampled_units};
 use explorers_search::qd::Cliff;
-use explorers_search::search::{decode, default_ranges};
+use explorers_search::search::decode;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_rows};
 use rayon::prelude::*;
 
@@ -402,10 +402,10 @@ struct StructureRow {
 }
 
 /// Roll one listed seed out on the census's path (`decode` over
-/// `default_ranges`, `EvalConfig::default()`, horizon `horizon`, no early-stop
+/// `sample_box`, `EvalConfig::default()`, horizon `horizon`, no early-stop
 /// carry) and read its structure.
 fn measure(unit: &[f64], guild_seed: &GuildSeed, horizon: u64) -> SeedStructure {
-    let (params, dist) = decode(unit, &default_ranges());
+    let (params, dist) = decode(unit, &sample_box());
     let run_config = RunConfig {
         max_ticks: horizon,
         eval_config: EvalConfig::default(),
@@ -503,7 +503,7 @@ fn main() {
             .map(|s| (ConfigSource::SAMPLE, s.config))
             .filter(|key| args.configs.as_ref().is_none_or(|f| f.contains(key)))
             .collect();
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let done = done_configs(&args.out);
         let tasks = plan_tasks(0, sampled.len(), Some(&listed), &done, args.limit);
         eprintln!(

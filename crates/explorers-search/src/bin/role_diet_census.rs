@@ -89,7 +89,6 @@ use explorers_search::role_diet::{
     Confusion, DeathCounts, DeathTable, GroupReproduction, IntakeCensus, LIGHT_SHARE_BINS,
     PRODUCER_LIGHT_SHARE, ReproductionTable, SeedDiet, SurplusByRole, rollout_with_fullness,
 };
-use explorers_search::search::default_ranges;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
 
 const DEFAULT_HORIZON: u64 = 2000;
@@ -371,7 +370,7 @@ fn main() {
             .as_deref()
             .map(read_atlas_units)
             .unwrap_or_default();
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let done = done_configs(&args.out);
         let tasks = plan_tasks(
             atlas_units.len(),
@@ -1014,7 +1013,7 @@ mod tests {
                 .unwrap()
                 .fullness_region
         );
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         let row = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
         let grids: Vec<_> = row
@@ -1101,7 +1100,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(args.intake_ceiling_k, Some(4.0));
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         let row = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
         assert_eq!(row.intake_ceiling_k, Some(4.0));
@@ -1148,7 +1147,7 @@ mod tests {
         assert_eq!(args.founder_aggregation, Some(0.0));
         assert!(parse(&["--founder-aggregation", "1.2"]).is_err());
 
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         let pinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
         assert_eq!(pinned.founder_aggregation, Some(0.0));
@@ -1199,7 +1198,7 @@ mod tests {
             (Some(3.0), Some(1.5))
         );
 
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         let pinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
         assert_eq!(

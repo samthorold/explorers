@@ -57,7 +57,6 @@ use explorers_search::config_source::{
     ConfigSource, parse_selector, resolve_config, sampled_units,
 };
 use explorers_search::qd::{CoexistenceFractions, config_eval_from_ensemble};
-use explorers_search::search::default_ranges;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
 
 /// A guild fraction counts as "held" at or above this share of the ensemble.
@@ -388,7 +387,7 @@ fn main() {
             .as_deref()
             .map(read_atlas_units)
             .unwrap_or_default();
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let done = done_configs(&args.out);
         let tasks = plan_tasks(
             atlas_units.len(),

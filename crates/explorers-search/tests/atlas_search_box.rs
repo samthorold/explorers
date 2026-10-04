@@ -3,14 +3,18 @@
 //! through `sweep::read_atlas_units` and resolve a `source:index` key with
 //! `config_source::resolve_config`; these tests pin that an atlas drawn under
 //! the narrowed box decodes, in a research bin, to exactly the worlds the
-//! search evaluated, while `sample:i` / `sample@S:i` stay draws over the full
-//! box.
+//! search evaluated, while `sample:i` / `sample@S:i` stay draws over the
+//! instruments' own box (`sample_box`, the size-blind box since #653).
 
 use std::path::PathBuf;
 
 use explorers_search::atlas_file::write_atlas;
-use explorers_search::config_source::{ConfigSource, resolve_config, sample_draw, sampled_units};
-use explorers_search::search::{SearchConfig, decode, default_ranges, narrowed_ranges, run_search};
+use explorers_search::config_source::{
+    ConfigSource, resolve_config, sample_box, sample_draw, sampled_units,
+};
+use explorers_search::search::{
+    SearchConfig, decode, default_ranges, narrowed_ranges, run_search, size_blind_ranges,
+};
 use explorers_search::sweep::read_atlas_units;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -48,7 +52,7 @@ fn a_research_bin_decodes_a_narrowed_atlas_to_the_worlds_the_search_evaluated() 
     write_atlas(&atlas, &path).unwrap();
 
     let read = read_atlas_units(&path);
-    let sampled = sampled_units(default_ranges().len());
+    let sampled = sampled_units();
     assert_eq!(read.len(), atlas.cells.len());
     for (i, cell) in atlas.cells.iter().enumerate() {
         let evaluated = decode(&cell.unit, &config.ranges);
@@ -67,28 +71,28 @@ fn a_research_bin_decodes_a_narrowed_atlas_to_the_worlds_the_search_evaluated() 
 }
 
 #[test]
-fn sample_keys_stay_draws_over_the_full_box() {
+fn sample_keys_stay_draws_over_the_sample_box() {
     let path = scratch("samples").join("atlas.json");
     let atlas = run_search(&tiny_search(), 7, &mut ChaCha8Rng::seed_from_u64(7));
     write_atlas(&atlas, &path).unwrap();
     let read = read_atlas_units(&path);
-    let full = default_ranges();
-    let sampled = sampled_units(full.len());
+    let full = sample_box();
+    let sampled = sampled_units();
     assert_eq!(
         resolve_config(ConfigSource::SAMPLE, 12, &read, &sampled),
         decode(&sampled[12], &full)
     );
     assert_eq!(
         resolve_config(ConfigSource::Sample(9421), 12, &read, &sampled),
-        decode(&sample_draw(9421, full.len())[12], &full)
+        decode(&sample_draw(9421)[12], &full)
     );
 }
 
-/// The committed atlas predates #559 and records no box: it reads as the full
-/// box it was searched under, so every existing `atlas:i` names the world it
-/// always named.
+/// The committed atlas predates #559 and records no box: it reads as the box
+/// it was searched under — the full box before #653, the size-blind box — so
+/// every existing `atlas:i` names the world it always named, with `b = 0`.
 #[test]
-fn a_legacy_atlas_reads_as_the_full_box() {
+fn a_legacy_atlas_reads_as_the_size_blind_box() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
     let text = std::fs::read_to_string(path).unwrap();
     assert!(
@@ -96,10 +100,15 @@ fn a_legacy_atlas_reads_as_the_full_box() {
         "the committed atlas is legacy"
     );
     let read = read_atlas_units(std::path::Path::new(path));
-    assert_eq!(read.search_box(), default_ranges().as_slice());
+    assert_eq!(read.search_box(), size_blind_ranges().as_slice());
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let unit: Vec<f64> = serde_json::from_value(raw["cells"][0]["unit"].clone()).unwrap();
-    assert_eq!(read.decode(0), decode(&unit, &default_ranges()));
+    for i in 0..read.len() {
+        let unit: Vec<f64> = serde_json::from_value(raw["cells"][i]["unit"].clone()).unwrap();
+        assert_eq!(unit.len(), 32);
+        let world = read.decode(i);
+        assert_eq!(world, decode(&unit, &size_blind_ranges()));
+        assert_eq!(world.0.uptake_structure_exponent, 0.0, "atlas:{i}");
+    }
 }
 
 /// The committed atlas predates #602: its fitnesses were scored with trophic

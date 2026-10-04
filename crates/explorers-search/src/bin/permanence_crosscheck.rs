@@ -127,7 +127,7 @@ use explorers_genesis_eval::{
 use explorers_search::config_source::{
     ConfigSource, parse_selector, resolve_config, sampled_units,
 };
-use explorers_search::search::{SearchConfig, default_ranges};
+use explorers_search::search::SearchConfig;
 use explorers_search::sweep::{
     AtlasUnits, DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE,
     append_row, done_configs, evaluate_within_budget, is_unfinished, plan_tasks, read_atlas_units,
@@ -1328,7 +1328,7 @@ fn main() {
     let args = parse_args(std::env::args().skip(1));
     if !args.summary_only {
         let atlas_units = read_atlas_units(&args.atlas);
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         sweep(&args, &atlas_units, &sampled);
     }
     let records: Vec<ConfigRecord> = read_rows(&args.out);
@@ -1420,6 +1420,7 @@ fn print_summary(s: &Summary) {
 mod tests {
     use super::*;
     use explorers_search::search::decode;
+    use explorers_search::search::default_ranges;
     use explorers_sim::WorldRecipe;
 
     fn example10() -> (TraitVector, TraitVector, WorldParameters) {
@@ -1856,8 +1857,9 @@ mod tests {
 #[cfg(test)]
 mod resume_tests {
     use super::*;
-    use explorers_search::config_source::sample_draw;
+    use explorers_search::config_source::{sample_box, sample_draw};
     use explorers_search::search::decode;
+    use explorers_search::search::default_ranges;
 
     fn tmp(name: &str) -> PathBuf {
         let dir =
@@ -1936,7 +1938,7 @@ mod resume_tests {
         let expected = evaluate_config(
             ConfigSource::Sample(9421),
             4,
-            &decode(&sample_draw(9421, dims)[4], &default_ranges()),
+            &decode(&sample_draw(9421)[4], &sample_box()),
             1,
             20,
             Duration::MAX,
@@ -2071,8 +2073,8 @@ mod resume_tests {
     /// #623: under the surplus need gate the peak holds to tick 7, not 5.)
     #[test]
     fn peak_tick_is_the_first_tick_reaching_the_peak_population() {
-        let ranges = default_ranges();
-        let (params, dist) = decode(&sampled_units(ranges.len())[14], &ranges);
+        let ranges = sample_box();
+        let (params, dist) = decode(&sampled_units()[14], &ranges);
         let horizon = 40;
         let outcome = run_seed(
             &params,
@@ -2135,8 +2137,8 @@ mod resume_tests {
     /// are not recorded.
     #[test]
     fn cutoffs_record_the_population_and_running_peak_at_each_reached_cutoff() {
-        let ranges = default_ranges();
-        let (params, dist) = decode(&sampled_units(ranges.len())[14], &ranges);
+        let ranges = sample_box();
+        let (params, dist) = decode(&sampled_units()[14], &ranges);
         let horizon = 60;
         let outcome = run_seed(
             &params,
@@ -2187,8 +2189,8 @@ mod resume_tests {
     /// still fires, at the same tick, and runs on to the horizon).
     #[test]
     fn early_stop_records_where_the_search_would_have_stopped_without_stopping() {
-        let ranges = default_ranges();
-        let (params, dist) = decode(&sample_draw(9421, ranges.len())[110], &ranges);
+        let ranges = sample_box();
+        let (params, dist) = decode(&sample_draw(9421)[110], &ranges);
         let seed = 1008;
         let horizon = 400;
         let outcome = run_seed(&params, &dist, seed, horizon, Duration::MAX, Duration::MAX);

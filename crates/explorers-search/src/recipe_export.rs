@@ -14,9 +14,9 @@ use std::path::Path;
 
 use explorers_sim::WorldRecipe;
 
-use crate::config_source::{ConfigSource, parse_config_key, sample_draw};
+use crate::config_source::{ConfigSource, parse_config_key, sample_box, sample_draw};
 use crate::qd::Atlas;
-use crate::search::{SearchConfig, decode, default_ranges};
+use crate::search::{SearchConfig, decode};
 
 /// A reference to the config a recipe is exported for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,8 +91,8 @@ pub fn export_recipe(
                 })?
             }
             RecipeRef::Config(ConfigSource::Sample(seed), index) => {
-                let full = default_ranges();
-                let units = sample_draw(seed, full.len());
+                let full = sample_box();
+                let units = sample_draw(seed);
                 let unit = units
                     .get(index)
                     .ok_or_else(|| fail(format!("a sample draw has {} configs", units.len())))?;
@@ -125,7 +125,7 @@ mod tests {
     use super::*;
     use crate::config_source::{parse_selector, resolve_config, sampled_units};
     use crate::qd::{AtlasCell, AtlasProvenance};
-    use crate::search::{default_ranges, narrowed_ranges};
+    use crate::search::narrowed_ranges;
     use crate::sweep::AtlasUnits;
     use explorers_sim::World;
 
@@ -198,7 +198,7 @@ mod tests {
 
         let keys = parse_selector(reference, "--configs", None);
         let &(source, index) = keys.iter().next().unwrap();
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let (parameters, initial) = resolve_config(source, index, &AtlasUnits::default(), &sampled);
         assert_eq!(recipe.parameters, parameters);
         assert_eq!(recipe.initial_distribution, Some(initial));

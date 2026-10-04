@@ -265,8 +265,32 @@ pub fn default_ranges() -> Vec<ParameterRange> {
             min: 0.05,
             max: 1.0,
         }, // 31
+        ParameterRange {
+            name: "uptake_structure_exponent".into(),
+            // Uptake structure exponent `b` (flow 2, #653), linear over [0, 1]:
+            // the range must hold `b = 0` exactly — the size-blind rule every
+            // world before #653 ran — so a log scale is out. Above 1 a large
+            // body would take up more per unit structure than a small one,
+            // which no domain evidence supports. The reference structure
+            // `s_ref` stays out of the box at its default, 100.
+            min: 0.0,
+            max: 1.0,
+        }, // 32
     ]
 }
+
+/// The full box as it stood before the uptake structure exponent joined it
+/// (#653): the first 32 [`default_ranges`] dims, with uptake size-blind
+/// (`b = 0`, which [`decode`] gives any box without `b`'s coordinate). An
+/// atlas from before #559 records no box and was searched under this one.
+pub fn size_blind_ranges() -> Vec<ParameterRange> {
+    let mut ranges = default_ranges();
+    ranges.truncate(SIZE_BLIND_DIMS);
+    ranges
+}
+
+/// The raw coordinates of [`size_blind_ranges`].
+const SIZE_BLIND_DIMS: usize = 32;
 
 /// The dims the narrowed search box keeps at their full [`default_ranges`]
 /// width (#559). The first eight are the raw core both LHS draws select on
@@ -298,7 +322,7 @@ pub const NARROWED_BAND_FRACTION: f64 = 0.25;
 /// bound is slid back inside it, so every band keeps its full width, lies
 /// within the full range, and contains its centre.
 ///
-/// The raw32 `decode` coordinates are kept (the held-out check rejects a
+/// The raw `decode` coordinates are kept (the held-out check rejects a
 /// reduced decode); only the box they span changes. A unit vector therefore
 /// names a world only together with the box it is decoded over — which is why
 /// the atlas records its box ([`crate::qd::Atlas::search_box`]).
@@ -343,6 +367,7 @@ pub fn narrowed_ranges() -> Vec<ParameterRange> {
 /// | `growth_retention_multiplier` | 2.0 |
 /// | `offspring_structure_fraction` | 0.2 |
 /// | `reserve_mobilisation_rate` | 1.0 (the full range's top, so the band is its top quarter) |
+/// | `uptake_structure_exponent` | 0.0 (size-blind uptake, the range's bottom, so the band is its bottom quarter) |
 ///
 /// The founder-distribution dims have no inherited value — `decode` sets the
 /// whole `InitialDistribution` from the unit vector — so their centre is the
@@ -371,6 +396,7 @@ pub fn band_centre(range: &ParameterRange) -> f64 {
         "growth_retention_multiplier" => b.growth_retention_multiplier,
         "offspring_structure_fraction" => b.offspring_structure_fraction,
         "reserve_mobilisation_rate" => b.reserve_mobilisation_rate,
+        "uptake_structure_exponent" => b.uptake_structure_exponent,
         _ => return (range.min + range.max) / 2.0,
     };
     // The baseline holds f32; read it back at the decimal it was written as,
@@ -526,6 +552,13 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         growth_retention_multiplier: v(29) as f32,
         offspring_structure_fraction: v(30) as f32,
         reserve_mobilisation_rate: v(31) as f32,
+        // A box from before #653 has no coordinate for `b`: its worlds keep
+        // the baseline's size-blind uptake, `b = 0`.
+        uptake_structure_exponent: if ranges.len() > SIZE_BLIND_DIMS {
+            v(32) as f32
+        } else {
+            0.0
+        },
         ..viable_baseline()
     };
 
@@ -661,7 +694,7 @@ mod tests {
         }
     }
 
-    /// #559: the narrowed box names the same 32 dims in the same order (so a
+    /// #559: the narrowed box names the same dims (33 since #653) in the same order (so a
     /// unit vector has the same length and axis meaning under either box), and
     /// keeps the ten core dims at exactly their full-box bounds.
     #[test]
@@ -712,7 +745,8 @@ mod tests {
             .zip(&full)
             .filter(|(n, _)| !FULL_WIDTH_DIMS.contains(&n.name.as_str()))
             .collect();
-        assert_eq!(shrunk.len(), 22);
+        // 22 dims at #559, plus the uptake structure exponent (#653).
+        assert_eq!(shrunk.len(), 23);
         for (n, f) in shrunk {
             let centre = band_centre(f);
             assert!(f.min <= n.min && n.max <= f.max, "{} outside", f.name);
@@ -767,6 +801,11 @@ mod tests {
         );
         close(p.mutation_rate, b.mutation_rate, "mr");
         close(p.mutation_magnitude, b.mutation_magnitude, "mm");
+        close(
+            p.uptake_structure_exponent,
+            b.uptake_structure_exponent,
+            "use",
+        );
         close(p.photo_maintenance_cost, b.photo_maintenance_cost, "pmc");
         close(
             p.heterotrophy_maintenance_cost,
@@ -892,6 +931,54 @@ mod tests {
         let ones = vec![1.0; ranges.len()];
         let (params_hi, _) = decode(&ones, &ranges);
         assert!((params_hi.solar_flux_magnitude - 20.0).abs() < 1e-5);
+    }
+
+    /// #653: the uptake structure exponent `b` is searched linearly over
+    /// `[0, 1]` (the range must hold `b = 0` exactly, so every size-blind
+    /// world stays reachable), while the uptake reference structure is not
+    /// searched and decodes to 100 wherever the raw coordinate sits.
+    #[test]
+    fn decode_spans_the_uptake_structure_exponent_over_zero_to_one() {
+        let ranges = default_ranges();
+        let idx = ranges
+            .iter()
+            .position(|r| r.name == "uptake_structure_exponent")
+            .expect("uptake_structure_exponent must be a searched parameter");
+        assert!(
+            !ranges
+                .iter()
+                .any(|r| r.name == "uptake_reference_structure"),
+            "s_ref stays out of the box"
+        );
+        let mut unit = vec![0.5; ranges.len()];
+        for (u, want) in [(0.0, 0.0), (0.25, 0.25), (0.5, 0.5), (1.0, 1.0)] {
+            unit[idx] = u;
+            let (params, _) = decode(&unit, &ranges);
+            assert_eq!(params.uptake_structure_exponent, want, "unit {u}");
+            assert_eq!(params.uptake_reference_structure, 100.0, "unit {u}");
+        }
+    }
+
+    /// #653: a unit vector drawn under the size-blind box (the full box before
+    /// `b` joined it, 32 raw coordinates) still decodes to the world it named,
+    /// with `b = 0` — the same world as the full box at `b`'s raw coordinate 0.
+    #[test]
+    fn a_size_blind_box_still_decodes_its_worlds_with_b_zero() {
+        let old = size_blind_ranges();
+        let full = default_ranges();
+        assert_eq!(old.len(), 32);
+        assert_eq!(old[..], full[..32]);
+        for u in [0.0, 0.3, 1.0] {
+            let unit: Vec<f64> = (0..32).map(|i| (u + i as f64 * 0.017) % 1.0).collect();
+            let (params, dist) = decode(&unit, &old);
+            assert_eq!(params.uptake_structure_exponent, 0.0);
+            assert_eq!(params.uptake_reference_structure, 100.0);
+            let mut extended = unit.clone();
+            extended.push(0.0);
+            let (p33, d33) = decode(&extended, &full);
+            assert_eq!(format!("{params:?}"), format!("{p33:?}"));
+            assert_eq!(format!("{dist:?}"), format!("{d33:?}"));
+        }
     }
 
     #[test]
