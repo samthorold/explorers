@@ -59,6 +59,9 @@
 //! for comparing against an older tree (#605).
 //! `--satiation-sensitivity C` and `--recognition-distance D` pin every
 //! world's need-gate and recognition scales (#619), recorded likewise.
+//! `--uptake-structure-exponent b` and `--uptake-reference-structure s_ref`
+//! pin every world's size-scaled uptake (#644; for re-reading the region at
+//! b = 1, #655), recorded likewise.
 //!
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --atlas atlas.json
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --configs sample:31,sample:110
@@ -75,8 +78,9 @@ use rayon::prelude::*;
 
 use explorers_genesis::EvalConfig;
 use explorers_search::config_source::{
-    ConfigSource, parse_founder_aggregation, parse_non_negative, parse_selector, resolve_config,
-    sampled_units, with_consumption_scales, with_founder_aggregation,
+    ConfigSource, parse_founder_aggregation, parse_non_negative, parse_positive, parse_selector,
+    resolve_config, sampled_units, with_consumption_scales, with_founder_aggregation,
+    with_uptake_scaling,
 };
 use explorers_search::fullness::{FullnessGrid, fullness_report};
 use explorers_search::grazer_hunger::SurplusDistribution;
@@ -123,6 +127,13 @@ struct Row {
     /// read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     intake_ceiling_k: Option<f32>,
+    /// The size-scaled uptake every world was pinned to
+    /// (`--uptake-structure-exponent`, `--uptake-reference-structure`, #644,
+    /// #655); absent when worlds ran as decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uptake_structure_exponent: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uptake_reference_structure: Option<f32>,
     seeds: Vec<SeedDiet>,
 }
 
@@ -248,6 +259,10 @@ struct Args {
     /// Read the killing grazers' predicted intake-gate expression at this
     /// ceiling multiple (#629); `None` skips it.
     intake_ceiling_k: Option<f32>,
+    /// Pin every world's uptake structure exponent `b` and reference
+    /// structure `s_ref` (#644, #655); `None` as decoded.
+    uptake_structure_exponent: Option<f32>,
+    uptake_reference_structure: Option<f32>,
     /// Evaluate the `(k_a, k_h)` ceiling region over the rows' gate samples
     /// and print it after the summary (#634).
     region: bool,
@@ -272,6 +287,8 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
         satiation_sensitivity: None,
         recognition_distance: None,
         intake_ceiling_k: None,
+        uptake_structure_exponent: None,
+        uptake_reference_structure: None,
         region: false,
         fullness: false,
         fullness_region: false,
@@ -307,6 +324,12 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
             "--intake-ceiling-k" => {
                 args.intake_ceiling_k = Some(parse_non_negative(&flag, &value()?)?)
             }
+            "--uptake-structure-exponent" => {
+                args.uptake_structure_exponent = Some(parse_non_negative(&flag, &value()?)?)
+            }
+            "--uptake-reference-structure" => {
+                args.uptake_reference_structure = Some(parse_positive(&flag, &value()?)?)
+            }
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -332,6 +355,11 @@ fn run_row(
         args.satiation_sensitivity,
         args.recognition_distance,
     );
+    let config = with_uptake_scaling(
+        config,
+        args.uptake_structure_exponent,
+        args.uptake_reference_structure,
+    );
     let seeds = (0..args.ensemble)
         .into_par_iter()
         .map(|i| {
@@ -355,6 +383,8 @@ fn run_row(
         satiation_sensitivity: args.satiation_sensitivity,
         recognition_distance: args.recognition_distance,
         intake_ceiling_k: args.intake_ceiling_k,
+        uptake_structure_exponent: args.uptake_structure_exponent,
+        uptake_reference_structure: args.uptake_reference_structure,
         seeds,
     }
 }
@@ -976,6 +1006,8 @@ mod tests {
             satiation_sensitivity: None,
             recognition_distance: None,
             intake_ceiling_k: None,
+            uptake_structure_exponent: None,
+            uptake_reference_structure: None,
             seeds: vec![
                 seed([true; 3], [true; 3], None),
                 seed([true; 3], [true; 3], None),
@@ -1051,6 +1083,8 @@ mod tests {
             satiation_sensitivity: None,
             recognition_distance: None,
             intake_ceiling_k: None,
+            uptake_structure_exponent: None,
+            uptake_reference_structure: None,
             seeds: vec![
                 seed([true, true, false], [true, false, false], None),
                 seed([true, true, false], [true, false, false], None),
@@ -1217,6 +1251,54 @@ mod tests {
         let unpinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &unpinned_args);
         let json = serde_json::to_string(&unpinned).unwrap();
         assert!(!json.contains("satiation_sensitivity") && !json.contains("recognition_distance"));
+        assert_ne!(pinned.seeds, unpinned.seeds, "the pins change the rollout");
+        let back: Row = serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
+        assert_eq!(back, pinned);
+    }
+
+    /// `--uptake-structure-exponent b` and `--uptake-reference-structure
+    /// s_ref` pin every resolved world's size-scaled uptake (#644, #655), and
+    /// each row records them; unpinned rows read and write as before.
+    #[test]
+    fn uptake_scaling_pins_reach_the_world_and_the_row() {
+        let parse = |a: &[&str]| parse_args(a.iter().map(|s| s.to_string()));
+        let a = parse(&[]).unwrap();
+        assert_eq!(
+            (a.uptake_structure_exponent, a.uptake_reference_structure),
+            (None, None)
+        );
+        assert!(parse(&["--uptake-structure-exponent", "-1"]).is_err());
+        assert!(parse(&["--uptake-reference-structure", "0"]).is_err());
+        let base = ["--max-ticks", "60", "--ensemble", "1"];
+        let pinned_flags = [
+            "--uptake-structure-exponent",
+            "1",
+            "--uptake-reference-structure",
+            "100",
+        ];
+        let args = parse(&[&pinned_flags[..], &base[..]].concat()).unwrap();
+        assert_eq!(
+            (
+                args.uptake_structure_exponent,
+                args.uptake_reference_structure
+            ),
+            (Some(1.0), Some(100.0))
+        );
+
+        let sampled = sampled_units();
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        let pinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
+        assert_eq!(
+            (
+                pinned.uptake_structure_exponent,
+                pinned.uptake_reference_structure
+            ),
+            (Some(1.0), Some(100.0))
+        );
+        let unpinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &parse(&base).unwrap());
+        let json = serde_json::to_string(&unpinned).unwrap();
+        assert!(!json.contains("uptake_structure_exponent"));
+        assert!(!json.contains("uptake_reference_structure"));
         assert_ne!(pinned.seeds, unpinned.seeds, "the pins change the rollout");
         let back: Row = serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
         assert_eq!(back, pinned);
