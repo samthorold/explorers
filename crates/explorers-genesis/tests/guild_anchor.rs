@@ -47,19 +47,19 @@ fn recipe() -> WorldRecipe {
 /// a bite gains it, not its whole-body demand × that energy — a physics
 /// change, not a changed read (seeds 1 and 2 moved; seed 1 regained its
 /// clustering; seed 3 still reads zero).
+/// Re-pinned under #663 on the recipe of the atlas searched under ratio
+/// retention with `b` in the box: `recipe.json` itself was replaced (atlas:39,
+/// cell [5, 19, 7], `b` ≈ 0.67), so every value is new — a different world,
+/// not a changed read. Seeds 1 and 3 lock up (ticks 1600 and 1800) and read
+/// zero; seed 2 reaches the horizon and carries the pin.
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
-    (
-        1,
-        [
-            1051957666, 1044994138, 1065353216, 0, 1045656764, 1030349268,
-        ],
-    ),
+    (1, [0, 0, 0, 0, 0, 0]),
     (
         2,
         [
-            1052341607, 1050015326, 1065353216, 0, 1042267767, 1032447002,
+            1058295333, 1057380173, 1065353216, 0, 1061871944, 1048760021,
         ],
     ),
     (3, [0, 0, 0, 0, 0, 0]),

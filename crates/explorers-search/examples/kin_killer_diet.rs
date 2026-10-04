@@ -2436,8 +2436,8 @@ fn reference(rows: &[Row], seeds: u64) -> Result<(&'static str, u64, u64), Strin
 
 const LOCKUP: &str = "nutrient_lockup";
 const REFERENCE_SEEDS: u64 = 475;
-/// #642's atlas (`atlas.json` as of #642–#655, 95 cells over the
-/// size-blind box): its
+/// #642's atlas (the committed `atlas.json` from #545 until #663 replaced
+/// it, 95 cells over the size-blind box): its
 /// [`AtlasUnits::fingerprint`](explorers_search::sweep::AtlasUnits::fingerprint)
 /// in hex.
 const REFERENCE_ATLAS: &str = "e12caad9b8f2a5a2";
