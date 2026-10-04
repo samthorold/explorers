@@ -254,10 +254,28 @@ pub fn realised_drains(
     params: &WorldParameters,
     events: &[Event],
 ) -> HashMap<u64, Drained> {
+    let mut out: HashMap<u64, Drained> = HashMap::new();
+    for (e, b) in realised_bites(agents, carcasses, params, events) {
+        let d = out.entry(e.source).or_default();
+        d.energy += b.energy;
+        d.bound_nutrient += b.bound_nutrient;
+        d.retained_nutrient += b.retained_nutrient;
+    }
+    out
+}
+
+/// [`realised_drains`] bite by bite: each `Consumed` event whose consumer is
+/// on the drain-time roster, with that one bite's [`Drained`].
+pub fn realised_bites<'a>(
+    agents: &[Agent],
+    carcasses: &[Carcass],
+    params: &WorldParameters,
+    events: &'a [Event],
+) -> Vec<(&'a Event, Drained)> {
     let k = params.wear_degradation_steepness;
     let eff_het = |a: &Agent| a.effective_trait_with_steepness(1, k);
     let ratio = |t: &TraitVector| explorers_sim::stoichiometric_demand(t, 1.0, params);
-    let mut out: HashMap<u64, Drained> = HashMap::new();
+    let mut out: Vec<(&'a Event, Drained)> = Vec::new();
     let living: HashMap<u64, &Agent> = agents.iter().map(|a| (a.id, a)).collect();
     let dead: HashMap<u64, &Carcass> = carcasses.iter().map(|c| (c.id, c)).collect();
     let consumed = || {
@@ -297,10 +315,14 @@ pub fn realised_drains(
         let gained =
             drained * explorers_sim::trophic_transfer_efficiency(&c.traits, &target_traits, params);
         let need = explorers_sim::stoichiometric_demand(&c.traits, c.structure, params) * gained;
-        let d = out.entry(c.id).or_default();
-        d.energy += gained;
-        d.bound_nutrient += nutrient;
-        d.retained_nutrient += nutrient.min(need);
+        out.push((
+            e,
+            Drained {
+                energy: gained,
+                bound_nutrient: nutrient,
+                retained_nutrient: nutrient.min(need),
+            },
+        ));
     }
     out
 }

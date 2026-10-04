@@ -52,6 +52,18 @@ Textbooks typically distinguish consumers (organisms that eat living things) fro
 
 **Decomposers** feed on dead organic matter. Their targets do not resist. The challenges are different: accessing the substrate physically (penetrating bark, soil aggregates, chitin), breaking down recalcitrant compounds (lignin, cellulose, keratin), and competing with other decomposers for the resource. Fungi and bacteria dominate decomposition not because they possess unique heterotrophic biochemistry but because their growth forms — hyphae that penetrate substrate, extracellular enzyme secretion, high surface-area-to-volume ratios — are well-suited to processing dead, structurally complex organic matter (de Boer et al. 2005). Decomposition effort is itself regulated by need: soil microbes raise production of nutrient-acquiring enzymes when that nutrient is scarce and cut it when the nutrient is supplied directly (Allison & Vitousek 2005). A decomposer does not attack dead matter at a fixed rate.
 
+### Why decomposition falls to specialists
+
+Most dead organic matter is polymer: cellulose, lignin, protein, chitin. These molecules are too large to take into a cell, so a decomposer digests them outside its body. It secretes enzymes into the substrate and absorbs what they release. That arrangement carries costs that favour organisms built for the job:
+
+- **Enzymes are costly.** They are proteins, paid for in carbon and nitrogen before any return arrives. Their cost couples a decomposer's own carbon and nitrogen limitation to how much enzyme it makes (Schimel & Weintraub 2003).
+- **Products diffuse away.** Some of what an enzyme releases is lost before its maker can absorb it. The return on enzyme falls with diffusion distance, and depends on the structure of the substrate (Allison 2005).
+- **Products are a public good.** A neighbour that makes no enzyme can absorb the released products. Enzyme producers are therefore open to cheaters (Allison 2005).
+
+Hyphae that grow into the substrate, high surface area and enzymes matched to particular substrates all reduce these costs. These are the growth forms of fungi and bacteria described above.
+
+**Producers do not mineralise detritus themselves.** Plants take up nutrient mainly in mineral form: ammonium, nitrate and phosphate (Chapin, Matson & Vitousek 2011). Some plants also take up small organic molecules such as amino acids directly (Näsholm et al. 1998). But depolymerising dead matter into those small molecules is microbial work (Schimel & Bennett 2004). Herbivores take only 5–15 % of terrestrial net primary production (Cyr & Pace 1993). Most of the rest enters the detrital pathway, which runs through microbes and detritivores. Where a plant draws on organic nutrient at scale, it does so through a fungal partner (see [fungi](fungi.md), *Mycorrhizal strategy*), not by digesting dead matter itself.
+
 The distinction is not binary. Many organisms span both categories. Vultures are consumers that specialize on dead animals. Parasites consume living tissue from within. Detritivorous invertebrates (earthworms, millipedes, isopods) fragment dead matter, increasing the surface area available to microbial decomposers — a processing role rather than a purely metabolic one. The boundary between "consumer" and "decomposer" is better understood as a continuum of target states than as a categorical divide. The same machinery also does not stop at the species boundary. The nearest living target is often a conspecific, and often a relative. How common that is, and how organisms avoid eating their own kin, is covered in [cannibalism and kin](cannibalism-and-kin.md).
 
 ## Body size and the geometry of heterotrophic interactions
@@ -86,10 +98,21 @@ Some organisms occupy a single position cleanly. Obligate photoautotrophs are pu
 
 In mixotrophs, consumption is expressed conditionally, and the condition is usually the *limiting* currency rather than energy. Light-rich mixotrophic algae increase bacterivory under phosphorus or nitrogen limitation, and eat for nutrient rather than carbon (Nygaard & Tobiesen 1993; Stoecker 1998). The northern pitcher plant (*Sarracenia purpurea*) builds fewer, less carnivorous pitchers when nitrogen is added and more when it is scarce (Ellison & Gotelli 2002). The capacity to consume is retained, but its expression tracks need.
 
+### Mixotrophy: how common, what it eats, what it costs
+
+**On land, producer mixotrophy is rare.** Carnivorous plants number a few hundred species in a handful of lineages (Ellison & Gotelli 2001). They are confined to bright, wet, nutrient-poor habitats such as bogs, seeps and leached sands. Givnish et al. (1984) explain the restriction with a cost/benefit model. Traps cost photosynthetic area and construction, and the nutrient they bring in raises photosynthesis only where light and water are plentiful and soil nutrient is scarce. Everywhere else, roots and mycorrhizae are the cheaper route to nutrient (see [plants](plants.md), *Root allocation and nutrient uptake*). The conditional expression above is the same economy within one plant: *Sarracenia* builds less carnivorous pitchers when nitrogen is added (Ellison & Gotelli 2002).
+
+**In the plankton it is widespread.** Many flagellates and dinoflagellates combine photosynthesis with phagotrophy (Stoecker 1998). In the North Atlantic, small plastid-bearing algae carry out a large share of the grazing on bacteria (Zubkov & Tarran 2008). One reading is that the difference from land follows the same economy: a small cell in nutrient-poor water has no root to grow, and its prey is the nutrient.
+
+**What mixotrophs eat is the limiting nutrient in concentrated form.** Carnivorous plants catch animals, mostly arthropods, whose tissue is far richer in nitrogen and phosphorus than plant tissue. Algal mixotrophs graze bacteria and other cells smaller than themselves. Bacteria are rich in nitrogen and phosphorus relative to their carbon (Sterner & Elser 2002). In neither case is the prey the mixotroph's own kind: carnivorous plants do not catch plants. The plants that do draw on living plants are parasites, such as dodder and mistletoes, which tap a host through haustoria, and that host is usually another species (citation needed).
+
+**Carrying both machineries costs.** A carnivorous plant's traps are leaves that photosynthesise less, and they cost construction and digestive enzymes. That is the cost side of Givnish et al.'s model, and it is why carnivory pays only in a narrow band of habitats. For plankton mixotrophs, the usual expectation is that a cell carrying both apparatuses does less well at each mode than a specialist in it, and wins where neither mode alone suffices (citation needed).
+
 The roles are emergent properties of the flow network, not innate properties of the organisms. An organism's trophic role is determined by what it does — which flows it participates in — not by what it is. And those flows are constrained, ultimately, by the two physics: energy flows one way, matter cycles, and any self-sustaining biotic system must have functional positions that together maintain both flows.
 
 ## References
 
+- Allison, S.D. (2005). Cheaters, diffusion and nutrients constrain decomposition by microbial enzymes in spatially structured environments. *Ecology Letters* 8(6): 626–635.
 - Allison, S.D. & Vitousek, P.M. (2005). Responses of extracellular enzymes to simple and complex nutrient inputs. *Soil Biology and Biochemistry* 37(5): 937–944.
 - Bach, W. et al. (2006). Energy in the dark: fuel for life in the deep ocean and beyond. *Eos, Transactions AGU* 87(7): 73–78.
 - Bar-On, Y.M., Phillips, R. & Milo, R. (2018). The biomass distribution on Earth. *Proceedings of the National Academy of Sciences* 115(25): 6506–6511.
@@ -100,14 +123,20 @@ The roles are emergent properties of the flow network, not innate properties of 
 - de Boer, W. et al. (2005). Living in a fungal world: impact of fungi on soil bacterial niche development. *FEMS Microbiology Reviews* 29(4): 795–811.
 - DeVault, T.L., Rhodes, O.E. & Shivik, J.A. (2003). Scavenging by vertebrates: behavioral, ecological, and evolutionary perspectives on an important energy transfer pathway in terrestrial ecosystems. *Oikos* 102(2): 225–234.
 - Ellison, A.M. & Gotelli, N.J. (2002). Nitrogen availability alters the expression of carnivory in the northern pitcher plant, *Sarracenia purpurea*. *Proceedings of the National Academy of Sciences* 99(7): 4409–4412.
+- Ellison, A.M. & Gotelli, N.J. (2001). Evolutionary ecology of carnivorous plants. *Trends in Ecology & Evolution* 16(11): 623–629.
 - Estes, J.A. et al. (2011). Trophic downgrading of planet Earth. *Science* 333(6040): 301–306.
 - Field, C.B. et al. (1998). Primary production of the biosphere: integrating terrestrial and oceanic components. *Science* 281(5374): 237–240.
+- Givnish, T.J., Burkhardt, E.L., Happel, R.E. & Weintraub, J.D. (1984). Carnivory in the bromeliad *Brocchinia reducta*, with a cost/benefit model for the general restriction of carnivorous plants to sunny, moist, nutrient-poor habitats. *American Naturalist* 124(4): 479–497.
 - Gorham, E. (1991). Northern peatlands: role in the carbon cycle and probable responses to climatic warming. *Ecological Applications* 1(2): 182–195.
 - Hobbie, S.E. (1992). Effects of plant species on nutrient cycling. *Trends in Ecology and Evolution* 7(10): 336–339.
+- Näsholm, T., Ekblad, A., Nordin, A., Giesler, R., Högberg, M. & Högberg, P. (1998). Boreal forest plants take up organic nitrogen. *Nature* 392: 914–916.
 - Nygaard, K. & Tobiesen, A. (1993). Bacterivory in algae: a survival strategy during nutrient limitation. *Limnology and Oceanography* 38(2): 273–279.
 - Paine, R.T. (1966). Food web complexity and species diversity. *American Naturalist* 100(910): 65–75.
+- Schimel, J.P. & Bennett, J. (2004). Nitrogen mineralization: challenges of a changing paradigm. *Ecology* 85(3): 591–602.
+- Schimel, J.P. & Weintraub, M.N. (2003). The implications of exoenzyme activity on microbial carbon and nitrogen limitation in soil: a theoretical model. *Soil Biology and Biochemistry* 35(4): 549–563.
 - Schmitz, O.J., Krivan, V. & Ovadia, O. (2004). Trophic cascades: the primacy of trait-mediated indirect effects. *Ecology Letters* 7(2): 153–163.
 - Schmitz, O.J. et al. (2010). Predator control of ecosystem nutrient dynamics. *Ecology Letters* 13(10): 1199–1209.
 - Smith, S.E. & Read, D.J. (2008). *Mycorrhizal Symbiosis*. 3rd ed. Academic Press.
 - Sterner, R.W. & Elser, J.J. (2002). *Ecological Stoichiometry: The Biology of Elements from Molecules to the Biosphere*. Princeton University Press.
 - Stoecker, D.K. (1998). Conceptual models of mixotrophy. *Journal of Eukaryotic Microbiology* 45(3): 255–261.
+- Zubkov, M.V. & Tarran, G.A. (2008). High bacterivory by the smallest phytoplankton in the North Atlantic Ocean. *Nature* 455: 224–226.

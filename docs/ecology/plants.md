@@ -76,6 +76,14 @@ Light is the master resource for plants, and competition for it has a distinctiv
 - **Canopy stratification.** Forests self-organize into vertical layers: emergent trees, main canopy, understory, shrub layer, ground layer. Each layer represents a different light environment and selects for different trait syndromes.
 - **Gap dynamics.** When a canopy tree dies, it creates a light gap — a pulse of resources that triggers intense competition among suppressed individuals and new recruits. Gap dynamics are the fundamental driver of forest community structure and diversity (Whitmore 1989).
 
+### Root allocation and nutrient uptake
+
+Shoots capture light and roots capture nutrient and water, and a plant divides its growth between them.
+
+- **Uptake capacity scales with the root system.** How much soil a plant can exploit is set by its absorbing root length and surface area, extended by mycorrhizal hyphae (Lambers, Chapin & Pons 2008). Below ground, competition is size-symmetric: neighbours deplete each other's nutrient in proportion to their root biomass ([spatial ecology](spatial-ecology.md), *Spatial competition*; Schwinning & Weiner 1998). A bigger plant gains light *and* nutrient capture, provided it builds root as well as shoot.
+- **Allocation follows the limiting resource.** Plants shift growth toward the organ that acquires whatever is scarcest. They build more root under nutrient or water shortage, and more shoot under low light. This is the functional-equilibrium or optimal-partitioning view (Bloom, Chapin & Mooney 1985). A meta-analysis across many species and experiments confirms that the root share of biomass rises when nutrient is short (Poorter et al. 2012).
+- **A plant's answer to nutrient shortage is root and fungus, not prey.** It grows more root, and it pays carbon to mycorrhizal partners that reach further, and in some soils into organic matter (see [fungi](fungi.md), *Mycorrhizal strategy*). Carnivory is the exception: a few hundred species in bright, wet, nutrient-poor habitats (see [trophic roles](trophic-roles.md), *Mixotrophy*).
+
 ### Defense and tolerance
 
 Sessile organisms cannot flee herbivores. Plants have evolved two broad responses:
@@ -202,6 +210,7 @@ This is the fundamental reason primary producers are non-negotiable. They are th
 - Bais, H.P., Weir, T.L., Perry, L.G., Gilroy, S. & Vivanco, J.M. (2006) The role of root exudates in rhizosphere interactions. *Annual Review of Plant Biology*, 57, 233-266.
 - Bar-On, Y.M., Phillips, R. & Milo, R. (2018) The biomass distribution on Earth. *Proceedings of the National Academy of Sciences*, 115, 6506-6511.
 - Berger, U. & Hildenbrandt, H. (2000) A new approach to spatially explicit modelling of forest dynamics. *Ecological Modelling*, 132, 109-120.
+- Bloom, A.J., Chapin, F.S. & Mooney, H.A. (1985) Resource limitation in plants — an economic analogy. *Annual Review of Ecology and Systematics*, 16, 363-392.
 - Botkin, D.B., Janak, J.F. & Wallis, J.R. (1972) Some ecological consequences of a computer model of forest growth. *Journal of Ecology*, 60, 849-872.
 - Chapin, F.S., Matson, P.A. & Vitousek, P.M. (2011) *Principles of Terrestrial Ecosystem Ecology*, 2nd edn. Springer.
 - Clark, J.S., Silman, M., Kern, R., Macklin, E. & HilleRisLambers, J. (1999) Seed dispersal near and far. *Ecology*, 80, 1475-1494.
@@ -227,6 +236,7 @@ This is the fundamental reason primary producers are non-negotiable. They are th
 - Jeltsch, F., Milton, S.J., Dean, W.R.J. & van Rooyen, N. (1996) Tree spacing and coexistence in semiarid savannas. *Journal of Ecology*, 84, 583-595.
 - Jones, C.G., Lawton, J.H. & Shachak, M. (1994) Organisms as ecosystem engineers. *Oikos*, 69, 373-386.
 - Kohler, P. & Huth, A. (1998) The effects of tree species grouping in tropical rainforest modelling. *Ecological Modelling*, 109, 301-321.
+- Lambers, H., Chapin, F.S. & Pons, T.L. (2008) *Plant Physiological Ecology*, 2nd edn. Springer.
 - Lindeman, R.L. (1942) The trophic-dynamic aspect of ecology. *Ecology*, 23, 399-417.
 - MacArthur, R.H. & Wilson, E.O. (1967) *The Theory of Island Biogeography*. Princeton University Press.
 - Monteith, J.L. (1972) Solar radiation and productivity in tropical ecosystems. *Journal of Applied Ecology*, 9, 747-766.
@@ -234,6 +244,7 @@ This is the fundamental reason primary producers are non-negotiable. They are th
 - Ollerton, J., Winfree, R. & Tarrant, S. (2011) How many flowering plants are pollinated by animals? *Oikos*, 120, 321-326.
 - Pacala, S.W., Canham, C.D., Saponara, J., Silander, J.A., Kobe, R.K. & Ribbens, E. (1996) Forest models defined by field measurements: estimation, error analysis and dynamics. *Ecological Monographs*, 66, 1-43.
 - Pianka, E.R. (1970) On r- and K-selection. *American Naturalist*, 104, 592-597.
+- Poorter, H., Niklas, K.J., Reich, P.B., Oleksyn, J., Poot, P. & Mommer, L. (2012) Biomass allocation to leaves, stems and roots: meta-analyses of interspecific variation and environmental control. *New Phytologist*, 193, 30-50.
 - Salati, E. & Vose, P.B. (1984) Amazon basin: a system in equilibrium. *Science*, 225, 129-138.
 - Scanlon, T.M., Caylor, K.K., Levin, S.A. & Rodriguez-Iturbe, I. (2007) Positive feedbacks promote power-law clustering of Kalahari vegetation. *Nature*, 449, 209-212.
 - Schwinning, S. & Weiner, J. (1998) Mechanisms determining the degree of size asymmetry in competition among plants. *Oecologia*, 113, 447-455.
