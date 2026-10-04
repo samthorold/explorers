@@ -41,10 +41,20 @@ emitter and archive are implementation; the illumination contract is the design.
 
 ## The search box: the full box by default, a narrowed box held in reserve
 
-A config is a point of the unit cube, and `decode` maps it onto 32 raw fields — 23 world parameters
+A config is a point of the unit cube, and `decode` maps it onto 33 raw fields — 24 world parameters
 and 9 founder-distribution fields — each linearly over a range. The set of ranges is the **search
 box**. The full box, `default_ranges()`, spans every field's plausible range, and the search runs over
-it by default. A **narrowed box** (`narrowed_ranges()`) keeps the same 32 raw coordinates and narrows
+it by default.
+
+The 33rd coordinate is the **uptake structure exponent** `b`, linear over `[0, 1]` (#653). The range
+must hold `b = 0` exactly, the size-blind uptake every earlier world ran, so a log scale is out; above
+1 a large body would take up more per unit structure than a small one. Its partner, the uptake
+reference structure, stays out of the box at 100. The reasons are in world-rules.md flow 2
+(*Size-scaled uptake*). The 32-coordinate box before it is the **size-blind box**
+(`size_blind_ranges()`): `decode` reads a box without `b`'s coordinate as `b = 0`, so a unit vector
+drawn under it still names the world it always named.
+
+A **narrowed box** (`narrowed_ranges()`) keeps the same 33 raw coordinates and narrows
 only the box. It is opt-in: it keeps outcome prediction but costs the illumination (below).
 
 - **The core stays at full width.** `light_competition_radius`, `world_extent`,
@@ -53,11 +63,12 @@ only the box. It is opt-in: it keeps outcome prediction but costs the illuminati
   eight-dim raw set matches the full 32 on every target, and greedy selection on either draw picks the
   same eight on its own. Raw32 loses 0.13 R² on the live fraction between draws, and the core does not.
   `trait_covariance` and `mean_heterotrophy` also stay wide, for the bloom-onset margin.
-- **The other 22 fields are narrowed, not frozen.** Each one's range is cut to a band of
+- **The other 23 fields are narrowed, not frozen.** Each one's range is cut to a band of
   `NARROWED_BAND_FRACTION` (0.25) of its full span. The band is centred on the value `decode` inherits
   for that field from the known-viable baseline. The five founder-distribution fields inherit no value,
   so their band is centred on the midpoint of the full range. A band that would cross a full-range
-  bound is slid back inside it, keeping its width. An effect that cannot be detected at n ≈ 200 is not
+  bound is slid back inside it, keeping its width. The uptake structure exponent's centre is the
+  baseline's 0, so its band is the bottom quarter of `[0, 1]`. An effect that cannot be detected at n ≈ 200 is not
   proven to be zero, so the band keeps some width and a weak effect stays findable. Carrying these
   fields at full width would spend a covariance-adapting emitter's evaluations on directions with no
   detectable effect. The width is a judgement call that the data does not settle, so it is set in one
@@ -96,9 +107,12 @@ worlds under the full and the narrowed box. So the atlas records the box it was 
 (`search_box`), and every reader of atlas cells decodes them over that box: the recipe projection, the
 re-projection, and the research instruments (`atlas:i`). A reader that brings a box of its own is
 refused with an error when that box differs from the atlas's. It never silently decodes the wrong
-worlds. An atlas written before the box was recorded reads as the full box, which is the box it was
-searched under. The instruments' LHS draws (`sample:i`, `sample@S:i`) sample the whole full box, not
-the search's box, so they always decode over `default_ranges()`.
+worlds. An atlas written before the box was recorded reads as the size-blind box, which is the box it
+was searched under. The instruments' LHS draws (`sample:i`, `sample@S:i`) sample a whole box, not the
+search's box, and that box is the size-blind one (`config_source::sample_box()`): recorded rows and
+research notes name worlds by `sample:i`, and a draw over the 33-coordinate box would have given every
+one of them a nonzero `b`. So every sample world keeps `b = 0`, and the instruments see `b` only through
+atlas cells or an explicit pin.
 
 ## The three behaviour axes are the failure-mode coordinates
 

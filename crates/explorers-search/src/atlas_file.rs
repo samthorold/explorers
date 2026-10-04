@@ -356,7 +356,8 @@ mod tests {
 
     /// #559: an atlas written by a search records the box it was searched
     /// under, so reading it back names the same box; an atlas from before
-    /// the box was recorded reads as the full box, which it was searched under.
+    /// the box was recorded reads as the box it was searched under: the full
+    /// box before #653, the size-blind box.
     #[test]
     fn an_atlas_records_the_search_box_it_was_drawn_under() {
         let config = QdConfig {
@@ -382,7 +383,7 @@ mod tests {
         std::fs::write(&path, legacy.to_string()).unwrap();
         assert_eq!(
             bounds(&read_atlas(&path).unwrap().search_box()),
-            bounds(&default_ranges())
+            bounds(&crate::search::size_blind_ranges())
         );
     }
 
@@ -433,7 +434,12 @@ mod tests {
             search_box: None,
             ..atlas
         };
-        assert!(legacy.check_search_box(&default_ranges()).is_ok());
+        assert!(
+            legacy
+                .check_search_box(&crate::search::size_blind_ranges())
+                .is_ok()
+        );
+        assert!(legacy.check_search_box(&default_ranges()).is_err());
         assert!(legacy.check_search_box(&narrowed.ranges).is_err());
     }
 

@@ -26,16 +26,12 @@
 
 use std::time::Instant;
 
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
-
-use explorers_search::lhs;
-use explorers_search::search::{decode, default_ranges};
+use explorers_search::config_source::{SAMPLE_CONFIGS, sample_box, sampled_units};
+use explorers_search::search::decode;
+use explorers_search::sweep::read_atlas_units;
 use explorers_sim::World;
 
 /// Mirrors `role_emergence.rs`'s sampled-config draw (keep in sync if that changes).
-const SAMPLE_CONFIGS: usize = 200;
-const SAMPLE_SEED: u64 = 421;
 const SEED_BASE: u64 = 1000;
 const DEFAULT_TICKS: u64 = 2000;
 
@@ -52,39 +48,28 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_TICKS);
 
-    let ranges = default_ranges();
-    let dims = ranges.len();
-
-    let unit: Vec<f64> = match source.as_str() {
+    // An atlas cell decodes over the box its atlas records (a legacy atlas:
+    // the size-blind box); a sample config over the instruments' box (#653).
+    let (params, dist) = match source.as_str() {
         "atlas" => {
             let path = std::env::var("ATLAS_PATH").unwrap_or_else(|_| "atlas.json".to_string());
-            let contents =
-                std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-            let v: serde_json::Value =
-                serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {path}: {e}"));
-            let cells = v["cells"].as_array().expect("atlas .cells array");
-            let cell = cells
-                .get(index)
-                .unwrap_or_else(|| panic!("atlas index {index} out of range ({})", cells.len()));
-            cell["unit"]
-                .as_array()
-                .expect("cell .unit array")
-                .iter()
-                .map(|x| x.as_f64().expect("unit element is a number"))
-                .collect()
+            let atlas = read_atlas_units(std::path::Path::new(&path));
+            assert!(
+                index < atlas.len(),
+                "atlas index {index} out of range ({})",
+                atlas.len()
+            );
+            atlas.decode(index)
         }
         "sample" => {
-            let mut rng = ChaCha8Rng::seed_from_u64(SAMPLE_SEED);
-            let sampled = lhs::sample(dims, SAMPLE_CONFIGS, &mut rng);
-            sampled
+            let sampled = sampled_units();
+            let unit = sampled
                 .get(index)
-                .unwrap_or_else(|| panic!("sample index {index} out of range ({SAMPLE_CONFIGS})"))
-                .clone()
+                .unwrap_or_else(|| panic!("sample index {index} out of range ({SAMPLE_CONFIGS})"));
+            decode(unit, &sample_box())
         }
         other => panic!("source {other:?} must be atlas|sample"),
     };
-
-    let (params, dist) = decode(&unit, &ranges);
     let grid_cell_size = params.light_competition_radius.max(1.0);
     eprintln!(
         "step_profile: {source}:{index} seed={seed} ticks={ticks}\n  \

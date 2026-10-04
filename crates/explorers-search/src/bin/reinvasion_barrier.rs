@@ -130,7 +130,6 @@ use explorers_search::invasion::{
     ConsumedCounts, DrainedEnergy, Lineage, RateSummary, SERIES_INTERVAL, WindowOutcome,
     growth_rate, median, place_cohort, run_window, summarise_rates,
 };
-use explorers_search::search::default_ranges;
 use explorers_search::sweep::read_atlas_units;
 use explorers_sim::event::EventKind;
 use explorers_sim::topology::TrophicRole;
@@ -737,7 +736,7 @@ fn resolve_reference(
     atlas: Option<&std::path::Path>,
 ) -> Result<(WorldParameters, InitialDistribution), String> {
     let (source, index) = parse_config_key(reference)?;
-    let sampled = sampled_units(default_ranges().len());
+    let sampled = sampled_units();
     let atlas_units = match (source.is_sample(), atlas) {
         (true, _) => Default::default(),
         (false, Some(path)) => read_atlas_units(path),

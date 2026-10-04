@@ -823,7 +823,7 @@ fn window(supply: &SurplusDistribution, intake: &SurplusDistribution) -> Option<
 mod tests {
     use super::*;
     use crate::config_source::{ConfigSource, resolve_config, sampled_units};
-    use crate::search::default_ranges;
+
     use explorers_sim::{AgentSpec, CarcassSpec, World, WorldRecipe};
 
     fn traits(photo: f32, het: f32) -> TraitVector {
@@ -844,7 +844,7 @@ mod tests {
             ConfigSource::SAMPLE,
             31,
             &Default::default(),
-            &sampled_units(default_ranges().len()),
+            &sampled_units(),
         );
         params.satiation_sensitivity = 0.0;
         params.recognition_distance = 0.0;
@@ -1085,7 +1085,7 @@ mod tests {
             ConfigSource::SAMPLE,
             31,
             &Default::default(),
-            &sampled_units(default_ranges().len()),
+            &sampled_units(),
         );
         let mut world = World::new(params.clone(), dist, 1000);
         world.retain_event_kinds(&[EventKind::Consumed]);

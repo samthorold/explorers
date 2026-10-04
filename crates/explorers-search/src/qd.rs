@@ -56,7 +56,9 @@ use explorers_sim::WorldRecipe;
 
 use crate::bifurcation::{branching_distance, oscillation_distance};
 use crate::prefilter::prefilter_cliff;
-use crate::search::{ParameterRange, SearchBoxMismatch, check_search_box, decode, default_ranges};
+use crate::search::{
+    ParameterRange, SearchBoxMismatch, check_search_box, decode, default_ranges, size_blind_ranges,
+};
 
 /// Bins per behaviour axis. Coarse, per the spike (20×20×20).
 pub const RESOLUTION: usize = 20;
@@ -985,7 +987,8 @@ pub struct Atlas {
     /// `unit` decodes over. A unit vector names a world only together with its
     /// box, so every reader decodes the cells over this one — read it through
     /// [`Atlas::search_box`]. `None` on an atlas written before it was
-    /// recorded, which was searched under the full box, `default_ranges()`.
+    /// recorded, which was searched under the full box as it then stood:
+    /// the size-blind box, `size_blind_ranges()` (#653).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_box: Option<Vec<ParameterRange>>,
     /// The live cells in cell-index order, so the same search writes the same
@@ -1116,10 +1119,11 @@ impl LockupCrosscheck {
 
 impl Atlas {
     /// The search box this atlas's cells decode over (#559): the one it
-    /// records, or the full box `default_ranges()` for an atlas from before the
-    /// box was recorded (the box every such atlas was searched under).
+    /// records, or the size-blind box `size_blind_ranges()` for an atlas from
+    /// before the box was recorded (the full box every such atlas was searched
+    /// under, before the uptake structure exponent joined it in #653).
     pub fn search_box(&self) -> Vec<ParameterRange> {
-        self.search_box.clone().unwrap_or_else(default_ranges)
+        self.search_box.clone().unwrap_or_else(size_blind_ranges)
     }
 
     /// Check that `ranges`, the box a reader would decode this atlas's cells
@@ -2132,7 +2136,8 @@ mod tests {
         }
         Atlas {
             provenance: None,
-            search_box: None,
+            // As a search writes it: drawn under the full box.
+            search_box: Some(default_ranges()),
             coverage: cells.len(),
             total_cells: RESOLUTION.pow(3),
             qd_score: 0.0,
@@ -2418,6 +2423,11 @@ mod tests {
             max_ticks: 50,
             batch: 5,
             generations: 1,
+            // No cross-check sample: at the default 5 % whether one of the ten
+            // gated configs is drawn for a cross-check rollout is RNG luck, and
+            // it changed when the box gained a dim (#653). The cross-check has
+            // its own test (fraction 1.0, below).
+            prefilter_crosscheck_fraction: 0.0,
             ..QdConfig::default()
         };
 

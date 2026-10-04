@@ -82,7 +82,7 @@ use explorers_genesis::EvalConfig;
 use explorers_search::config_source::{
     ConfigSource, parse_selector, resolve_config, sampled_units,
 };
-use explorers_search::search::{SearchConfig, default_ranges};
+use explorers_search::search::SearchConfig;
 use explorers_search::sweep::{
     AtlasUnits, DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE,
     append_row, done_configs, is_unfinished, plan_tasks, read_atlas_units, read_rows,
@@ -698,7 +698,7 @@ fn main() {
     let args = parse_args(std::env::args().skip(1));
     if !args.summary_only {
         let atlas_units = read_atlas_units(&args.atlas);
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         sweep(&args, &atlas_units, &sampled);
     }
     let rows: Vec<ConfigRow> = read_rows(&args.out);
@@ -1008,6 +1008,7 @@ mod tests {
 mod resume_tests {
     use super::*;
     use explorers_search::search::decode;
+    use explorers_search::search::default_ranges;
 
     fn tmp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("energy-bound-check-{}", std::process::id()));

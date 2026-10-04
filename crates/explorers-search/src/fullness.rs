@@ -665,7 +665,7 @@ pub fn fullness_report(g: &FullnessGrid) -> String {
 mod tests {
     use super::*;
     use crate::config_source::{ConfigSource, resolve_config, sampled_units};
-    use crate::search::default_ranges;
+
     use explorers_sim::{AgentSpec, TraitVector, World, WorldRecipe};
 
     fn traits(photo: f32, het: f32) -> TraitVector {
@@ -686,7 +686,7 @@ mod tests {
             ConfigSource::SAMPLE,
             31,
             &Default::default(),
-            &sampled_units(default_ranges().len()),
+            &sampled_units(),
         );
         params.satiation_sensitivity = 0.0;
         params.recognition_distance = 0.0;

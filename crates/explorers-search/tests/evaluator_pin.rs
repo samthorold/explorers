@@ -130,7 +130,7 @@ use explorers_genesis::{
     EvalConfig, FailureMode, FitnessBreakdown, InitialDistribution, RunConfig, WorldParameters,
     run_single,
 };
-use explorers_search::search::{decode, default_ranges};
+use explorers_search::search::decode;
 use explorers_search::sweep::{AtlasUnits, read_atlas_units};
 
 const HORIZON: u64 = 500;
@@ -489,10 +489,10 @@ fn fitness_breakdown_is_byte_identical_on_atlas_live_cells_at_the_500_tick_horiz
 #[ignore]
 fn horizon_ensemble_sample_55() {
     use explorers_genesis::{EnsembleConfig, run_ensemble};
-    use explorers_search::config_source::sampled_units;
+    use explorers_search::config_source::{sample_box, sampled_units};
 
-    let ranges = default_ranges();
-    let unit = &sampled_units(ranges.len())[55];
+    let ranges = sample_box();
+    let unit = &sampled_units()[55];
     let (params, dist) = decode(unit, &ranges);
     let config = EnsembleConfig {
         ensemble_size: 8,

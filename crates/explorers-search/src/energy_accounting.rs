@@ -649,7 +649,7 @@ mod tests {
     use super::*;
     use crate::config_source::{ConfigSource, resolve_config, sampled_units};
     use crate::invasion::place_cohort;
-    use crate::search::default_ranges;
+
     use explorers_sim::{AgentSpec, CarcassSpec, TraitVector, WorldRecipe};
 
     /// A small `sample:31` world: resident producers, a clutch of carcasses at
@@ -658,7 +658,7 @@ mod tests {
     /// origin carcass but (reach `0.6 × 0.81 ≈ 0.48`) not of each other — so
     /// the cohort photosynthesises, shares carcasses, and runs one dry.
     fn pile_world() -> (World, Vec<u64>) {
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let (params, dist) =
             resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         let producer = TraitVector {
@@ -810,7 +810,7 @@ mod tests {
     /// form, members may die or breed: whatever happens, the account closes.
     #[test]
     fn account_reconciles_with_the_ledger_on_a_sample_31_fork() {
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let (params, dist) =
             resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         let mut world = World::new(params, dist.clone(), 1000);
@@ -838,7 +838,7 @@ mod tests {
     /// pin is of the read, not of the gate.
     #[test]
     fn account_reads_the_killing_grazers_of_members_grazed_to_death() {
-        let sampled = sampled_units(default_ranges().len());
+        let sampled = sampled_units();
         let (mut params, dist) =
             resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         params.satiation_sensitivity = 0.0;

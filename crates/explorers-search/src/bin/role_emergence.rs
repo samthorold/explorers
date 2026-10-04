@@ -94,7 +94,6 @@ use explorers_genesis_eval::income::IncomeLedger;
 use explorers_search::config_source::{
     ConfigSource, parse_selector, resolve_config, sampled_units,
 };
-use explorers_search::search::default_ranges;
 use explorers_search::sweep::{plan_tasks, read_atlas_units};
 use explorers_sim::event::EventKind;
 use explorers_sim::topology::TrophicRole;
@@ -534,17 +533,14 @@ fn main() {
     let atlas_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "atlas.json".to_string());
-    let ranges = default_ranges();
-    let dims = ranges.len();
-
     // Source 1: the atlas live cells (the known coexisting regimes), decoded
     // over the atlas's own search box (#559).
     let atlas_units = read_atlas_units(std::path::Path::new(&atlas_path));
 
     // Source 2: a deterministic low-discrepancy (LHS) sample of the unit cube,
-    // decoded via `decode` over the full box, `default_ranges`. Naturally includes
+    // decoded via `decode` over the instruments' box, `sample_box` (#653). Naturally includes
     // monoculture / extinction regimes the atlas dead frontier cannot replay.
-    let sampled_units = sampled_units(dims);
+    let sampled_units = sampled_units();
 
     eprintln!(
         "role_emergence: {} atlas + {} sampled configs × {} seeds, horizon {} ticks",
@@ -846,6 +842,7 @@ mod tests {
     use super::*;
     use explorers_genesis_eval::guild::GUILD_MIN_SIZE;
     use explorers_search::search::decode;
+    use explorers_search::search::default_ranges;
 
     /// Coarse smoke check: the instrument runs a config and produces a record with
     /// the milestone fields populated (no brittle assertion on emergent *timings*).

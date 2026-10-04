@@ -128,7 +128,7 @@ use explorers_search::invasion::{
     summarise_rates,
 };
 use explorers_search::qd::COEXISTENCE_FLOOR;
-use explorers_search::search::{SearchConfig, default_ranges};
+use explorers_search::search::SearchConfig;
 use explorers_search::sweep::{plan_tasks, read_atlas_units};
 use explorers_sim::event::EventKind;
 use explorers_sim::topology::TrophicRole;
@@ -1314,7 +1314,7 @@ fn main() {
         serde_json::from_str(&contents).unwrap_or_else(|e| panic!("parse {atlas_path}: {e}"));
     // The cells' worlds, decoded over the atlas's own search box (#559).
     let atlas_units = read_atlas_units(std::path::Path::new(&atlas_path));
-    let sampled = sampled_units(default_ranges().len());
+    let sampled = sampled_units();
     let cell_filter = parse_cell_filter();
     let seeds = std::env::var("INVASION_GROWTH_SEEDS")
         .ok()
@@ -1450,6 +1450,7 @@ fn write_artifact(artifact: &Artifact) {
 mod tests {
     use super::*;
     use explorers_search::search::decode;
+    use explorers_search::search::default_ranges;
     use explorers_sim::TraitVector;
 
     /// Smoke check on one (config, seed): the resident runs to `t_inj`, every

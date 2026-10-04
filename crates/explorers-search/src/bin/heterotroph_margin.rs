@@ -134,7 +134,7 @@ fn read_loose_atlas(path: &Path) -> LooseAtlas {
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
     let search_box = match atlas.get("search_box") {
         Some(b) if !b.is_null() => serde_json::from_value(b.clone()).expect("a search box"),
-        _ => default_ranges(),
+        _ => explorers_search::search::size_blind_ranges(),
     };
     let cells = atlas["cells"].as_array().expect("an atlas has cells");
     let units = cells
@@ -164,8 +164,8 @@ fn read_loose_atlas(path: &Path) -> LooseAtlas {
 /// seed-421 sample), restricted to `filter` when one is given.
 fn all_rows(atlas_path: &Path, filter: Option<&HashSet<(ConfigSource, usize)>>) -> Vec<MarginRow> {
     let atlas = read_loose_atlas(atlas_path);
-    let full = default_ranges();
-    let sampled = sampled_units(full.len());
+    let full = explorers_search::config_source::sample_box();
+    let sampled = sampled_units();
     plan_tasks(
         atlas.units.len(),
         SAMPLE_CONFIGS,
@@ -183,7 +183,7 @@ fn all_rows(atlas_path: &Path, filter: Option<&HashSet<(ConfigSource, usize)>>) 
         ConfigSource::Sample(seed) => margin_row(
             source,
             index,
-            &explorers_search::config_source::sample_draw(seed, full.len())[index],
+            &explorers_search::config_source::sample_draw(seed)[index],
             &full,
         ),
     })
@@ -371,12 +371,12 @@ mod tests {
     }
 
     fn sample_row(index: usize) -> MarginRow {
-        let units = explorers_search::config_source::sampled_units(32);
+        let units = explorers_search::config_source::sampled_units();
         margin_row(
             ConfigSource::SAMPLE,
             index,
             &units[index],
-            &explorers_search::search::default_ranges(),
+            &explorers_search::config_source::sample_box(),
         )
     }
 
@@ -414,7 +414,7 @@ mod tests {
         let dir = std::env::temp_dir().join(dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("atlas.json");
-        let unit = explorers_search::config_source::sampled_units(32)[7].clone();
+        let unit = explorers_search::config_source::sampled_units()[7].clone();
         let atlas = serde_json::json!({ "cells": [{
             "decomposer_fraction": 0.25, "coexistence_fraction": 0.5, "unit": unit
         }]});

@@ -90,7 +90,7 @@ pub fn viable_baseline() -> WorldParameters {
 }
 
 /// Strategy over the searched `WorldParameters` dimensions (ranges copied from
-/// `explorers-search::default_ranges()`, indices 0..=16 and 24..=25, 28..=31), plus the need-gate's satiation
+/// `explorers-search::default_ranges()`, indices 0..=16, 24..=25 and 28..=32), plus the need-gate's satiation
 /// sensitivity, spanning the flat limiting case to a strong gate, and the
 /// recognition distance, spanning the kin-blind limit to a wide one.
 pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
@@ -123,6 +123,7 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
             1.0f32..=5.0,  // 29 growth_retention_multiplier
             0.05f32..=0.5, // 30 offspring_structure_fraction
             0.05f32..=1.0, // 31 reserve_mobilisation_rate
+            0.0f32..=1.0,  // 32 uptake_structure_exponent (#653)
             0.0f32..=0.5,  // satiation_sensitivity (not yet searched, #607): flat to strongly gated
             0.0f32..=1.5,  // recognition_distance (not searched): kin-blind to wide
         ),
@@ -151,8 +152,9 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
         growth_retention_multiplier: c.1,
         offspring_structure_fraction: c.2,
         reserve_mobilisation_rate: c.3,
-        satiation_sensitivity: c.4,
-        recognition_distance: c.5,
+        uptake_structure_exponent: c.4,
+        satiation_sensitivity: c.5,
+        recognition_distance: c.6,
         ..viable_baseline()
     })
 }
