@@ -677,7 +677,12 @@ impl Outcomes {
     }
 
     pub fn persisted(&self) -> u64 {
-        self.0.get(PERSISTED).copied().unwrap_or(0)
+        self.count(PERSISTED)
+    }
+
+    /// Seeds with this verdict label (`persisted` or a [`failure_label`]).
+    pub fn count(&self, label: &str) -> u64 {
+        self.0.get(label).copied().unwrap_or(0)
     }
 
     /// `persisted n, <label> n, …` (persisted first, then by label); `–`
@@ -1461,6 +1466,8 @@ mod tests {
         a.merge(&b);
         assert_eq!(a.seeds(), 5);
         assert_eq!(a.persisted(), 2);
+        assert_eq!(a.count("monoculture"), 2);
+        assert_eq!(a.count("nutrient_lockup"), 0);
         assert_eq!(a.describe(), "persisted 2, bloom_stop 1, monoculture 2");
         assert_eq!(Outcomes::default().describe(), "–");
         let mut dead = Outcomes::default();

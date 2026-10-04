@@ -56,6 +56,18 @@
 //! counts live connections by endpoint roles and kinship. Both print only
 //! when some seed ran with the network on, so an off run's tables are
 //! unchanged.
+//!
+//! #655 reads #647's two tests of light-fed mixotrophy as a niche, and opens
+//! the report with a **verdict block** (pass / fail per test, persisted seeds
+//! and nutrient-lockup seeds against #642's b = 0 reference). G.
+//! **Conditionality**: Spearman ρ(h_eff, pool N at the cell) over B's
+//! second-half Producer-role samples, pooled across every config and seed and
+//! per config (median), with B's bins' mean pool; passes when both are < 0.
+//! H. **Niche share**: carcass structure drained, nutrient released and
+//! nutrient retained by C's recipient buckets, whole run and second half;
+//! passes when light-fed mixotrophs drain < 50 % of the attributed structure
+//! in both. Rows from before #655 read back (G empty, H's unattributed share
+//! unrecorded).
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -611,6 +623,17 @@ struct Ext {
     network: NetCensus,
     #[serde(default)]
     network_second_half: NetCensus,
+    /// G (#655): every second-half Producer-role agent-sample B reads
+    /// (missing reads excluded), as `[h_eff, pool N at the cell]`.
+    #[serde(default)]
+    het_pool: Vec<[f32; 2]>,
+    /// H (#655): structure drained (`Consumed.energy_delta`) over every
+    /// carcass `Consumed` event, attributed to a recipient or not; whole run
+    /// and second half. Zero on pre-#655 rows.
+    #[serde(default)]
+    carcass_drained_all: f64,
+    #[serde(default)]
+    carcass_drained_all_second_half: f64,
 }
 
 impl Ext {
@@ -649,6 +672,9 @@ impl Ext {
         }
         self.network.merge(&o.network);
         self.network_second_half.merge(&o.network_second_half);
+        self.het_pool.extend_from_slice(&o.het_pool);
+        self.carcass_drained_all += o.carcass_drained_all;
+        self.carcass_drained_all_second_half += o.carcass_drained_all_second_half;
     }
 }
 
@@ -963,13 +989,17 @@ fn rollout(
                 s[o] += d.energy;
                 s[o + 1] += d.retained_nutrient;
             }
-            let carcass_events = tail
+            let carcass: Vec<&Event> = tail
                 .iter()
                 .filter(|e| e.kind == EventKind::Consumed && e.target_was_carcass)
-                .count() as u64;
+                .collect();
+            let carcass_events = carcass.len() as u64;
+            let carcass_drained: f64 = carcass.iter().map(|e| f64::from(e.energy_delta)).sum();
             tally.ext.carcass_events += carcass_events;
+            tally.ext.carcass_drained_all += carcass_drained;
             if second_half {
                 tally.ext.carcass_events_second_half += carcass_events;
+                tally.ext.carcass_drained_all_second_half += carcass_drained;
             }
         }
         // B. Births and agent-ticks by Producer-role parents / agents at the
@@ -1197,6 +1227,8 @@ fn rollout(
                 pb.earmark_fill += f64::from(fill);
                 pb.nutrient_limited += u64::from(surplus.nutrient < surplus.energy);
                 pb.pool += f64::from(pool);
+                tally.ext.het_pool.push([eff, pool]);
+                let pb = &mut tally.ext.producer_bins[b];
                 pb.light += f64::from(i.light);
                 pb.uptake += f64::from(i.uptake);
                 let s = split.get(&a.id).copied().unwrap_or_default();
@@ -1667,6 +1699,7 @@ fn summary(rows: &[Row]) {
     );
     println!("{}\n", uptake_label(rows));
     println!("{}\n", network_label(rows));
+    verdict(rows, &t);
     println!(
         "Population: heterotrophy > 0 and recent-income role Producer at the start of the tick. Fullness state at k = {k}, τ = {:.2} (index {j}), n = {N}: (i) E_E < 0.5 ≤ E_N; (ii) E_E ≥ 0.5; (iii) both < 0.5; from the fullness carried into the tick. Kin = parent, offspring or sibling (`DietLedger::is_kin`). Non-kin targets by recent-income role at the start of the tick.\n",
         tau_grid()[j]
@@ -1717,6 +1750,8 @@ fn summary(rows: &[Row]) {
     if t.ext.network_enabled_seeds > 0 {
         network_census(rows, &t.ext);
     }
+    conditionality(rows, &t.ext);
+    niche_share(&t.ext);
 }
 
 /// The uptake scaling the rows ran at, each distinct value listed.
@@ -2169,5 +2204,533 @@ fn ticks(sum: u64, n: u64) -> String {
         "–".into()
     } else {
         format!("{:.1}", sum as f64 / n as f64)
+    }
+}
+
+/// Midranks, 1-based: tied values share the mean of the ranks they span.
+fn midranks(v: &[f64]) -> Vec<f64> {
+    let mut order: Vec<usize> = (0..v.len()).collect();
+    order.sort_by(|&a, &b| v[a].total_cmp(&v[b]));
+    let mut ranks = vec![0.0; v.len()];
+    let mut i = 0;
+    while i < order.len() {
+        let mut j = i + 1;
+        while j < order.len() && v[order[j]] == v[order[i]] {
+            j += 1;
+        }
+        // Positions i..j hold ranks i + 1 ..= j.
+        let mid = (i + 1 + j) as f64 / 2.0;
+        for &k in &order[i..j] {
+            ranks[k] = mid;
+        }
+        i = j;
+    }
+    ranks
+}
+
+/// Spearman's ρ of `[x, y]` pairs: Pearson's correlation of the midranks
+/// (exact under ties). `None` below three pairs or when either side is
+/// constant.
+fn spearman(pairs: &[[f32; 2]]) -> Option<f64> {
+    if pairs.len() < 3 {
+        return None;
+    }
+    let side = |i: usize| -> Vec<f64> {
+        midranks(&pairs.iter().map(|p| f64::from(p[i])).collect::<Vec<_>>())
+    };
+    let (x, y) = (side(0), side(1));
+    let mean = (pairs.len() as f64 + 1.0) / 2.0;
+    let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
+    for (a, b) in x.iter().zip(&y) {
+        let (dx, dy) = (a - mean, b - mean);
+        sxy += dx * dy;
+        sxx += dx * dx;
+        syy += dy * dy;
+    }
+    (sxx > 0.0 && syy > 0.0).then(|| sxy / (sxx * syy).sqrt())
+}
+
+fn median(mut v: Vec<f64>) -> Option<f64> {
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(f64::total_cmp);
+    let m = v.len() / 2;
+    Some(if v.len() % 2 == 1 {
+        v[m]
+    } else {
+        (v[m - 1] + v[m]) / 2.0
+    })
+}
+
+/// A config's ρ counts toward the per-config median only on at least this
+/// many samples.
+const MIN_CONFIG_SAMPLES: usize = 10;
+
+/// G (#655): the trend of Producer h_eff against the pool nutrient at the
+/// cell, over second-half Producer-role agent-samples.
+#[derive(Clone, Debug, PartialEq)]
+struct Conditionality {
+    /// Samples pooled across every config and seed.
+    samples: usize,
+    /// Spearman ρ(h_eff, pool) over all of them.
+    pooled: Option<f64>,
+    /// Each config's ρ over its own seeds' samples, in input order; `None`
+    /// below [`MIN_CONFIG_SAMPLES`] or when undefined.
+    per_config: Vec<Option<f64>>,
+    /// Configs with a ρ, and of them those with ρ < 0.
+    configs: usize,
+    negative: usize,
+    /// Median of the per-config ρ.
+    median: Option<f64>,
+}
+
+impl Conditionality {
+    fn of(per_config: &[&[[f32; 2]]]) -> Self {
+        let pooled: Vec<[f32; 2]> = per_config.iter().flat_map(|c| c.iter().copied()).collect();
+        let rhos: Vec<Option<f64>> = per_config
+            .iter()
+            .map(|c| {
+                if c.len() >= MIN_CONFIG_SAMPLES {
+                    spearman(c)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let defined: Vec<f64> = rhos.iter().flatten().copied().collect();
+        Self {
+            samples: pooled.len(),
+            pooled: spearman(&pooled),
+            configs: defined.len(),
+            negative: defined.iter().filter(|r| **r < 0.0).count(),
+            median: median(defined),
+            per_config: rhos,
+        }
+    }
+
+    /// Heterotrophy falls as pool nutrient rises: the pooled ρ and the
+    /// median per-config ρ both below zero. `None` when either is undefined.
+    fn passes(&self) -> Option<bool> {
+        Some(self.pooled? < 0.0 && self.median? < 0.0)
+    }
+}
+
+/// H (#655): carcass structure drained, nutrient released (bound) and
+/// nutrient retained, per primary recipient bucket ([`RECIPIENTS`] less the
+/// memo).
+#[derive(Clone, Debug, PartialEq)]
+struct NicheShare {
+    drained: [f64; MEMO],
+    released: [f64; MEMO],
+    retained: [f64; MEMO],
+    /// Structure drained by carcass bites no bucket holds (the consumer, or
+    /// the carcass, off the drain-time roster); `None` on rows without the
+    /// all-events total.
+    unattributed_drained: Option<f64>,
+}
+
+impl NicheShare {
+    fn of(r: &Routes, all_drained: f64) -> Self {
+        let take = |v: &Vec<f64>| -> [f64; MEMO] {
+            let mut out = [0.0; MEMO];
+            out.copy_from_slice(&v[..MEMO]);
+            out
+        };
+        let drained = take(&r.carcass_drained);
+        let attributed: f64 = drained.iter().sum();
+        Self {
+            drained,
+            released: take(&r.carcass_bound),
+            retained: take(&r.carcass_retained),
+            unattributed_drained: (all_drained > 0.0 || attributed == 0.0)
+                .then(|| (all_drained - attributed).max(0.0)),
+        }
+    }
+
+    fn frac(v: &[f64; MEMO], b: usize) -> Option<f64> {
+        let total: f64 = v.iter().sum();
+        (total > 0.0).then(|| v[b] / total)
+    }
+
+    /// Bucket `b`'s share of the attributed carcass structure drained.
+    fn structure_share(&self, b: usize) -> Option<f64> {
+        Self::frac(&self.drained, b)
+    }
+
+    fn released_share(&self, b: usize) -> Option<f64> {
+        Self::frac(&self.released, b)
+    }
+
+    fn retained_share(&self, b: usize) -> Option<f64> {
+        Self::frac(&self.retained, b)
+    }
+
+    /// Light-fed mixotrophs drain strictly less than half the carcass
+    /// structure.
+    fn minority(&self) -> Option<bool> {
+        self.structure_share(0).map(|s| s < 0.5)
+    }
+}
+
+fn pct_of(x: Option<f64>) -> String {
+    x.map_or("–".into(), |v| format!("{:.1}", 100.0 * v))
+}
+
+fn rho(x: Option<f64>) -> String {
+    x.map_or("–".into(), |v| format!("{v:+.3}"))
+}
+
+fn pass(x: Option<bool>) -> &'static str {
+    match x {
+        Some(true) => "**PASS**",
+        Some(false) => "**FAIL**",
+        None => "**n/a**",
+    }
+}
+
+fn conditionality_of(rows: &[Row]) -> Conditionality {
+    let per: Vec<&[[f32; 2]]> = rows.iter().map(|r| &r.tally.ext.het_pool[..]).collect();
+    Conditionality::of(&per)
+}
+
+/// #642's persisted seeds and nutrient-lockup seeds of 475 at b = 0
+/// (`docs/research/645-size-scaled-uptake.md` §8), for decoded rows and
+/// rows at founder_aggregation = 0; `None` for other or mixed pins.
+fn reference(rows: &[Row]) -> Option<(&'static str, u64, u64)> {
+    let fa = rows.first()?.founder_aggregation;
+    if rows.iter().any(|r| r.founder_aggregation != fa) {
+        return None;
+    }
+    match fa {
+        None => Some(("decoded", 403, 40)),
+        Some(a) if a == 0.0 => Some(("fa 0", 423, 41)),
+        _ => None,
+    }
+}
+
+const LOCKUP: &str = "nutrient_lockup";
+const REFERENCE_SEEDS: u64 = 475;
+
+/// The pass/fail block at the top of the report (#655).
+fn verdict(rows: &[Row], t: &Tally) {
+    let g = conditionality_of(rows);
+    let whole = NicheShare::of(&t.ext.routes, t.ext.carcass_drained_all);
+    let second = NicheShare::of(
+        &t.ext.routes_second_half,
+        t.ext.carcass_drained_all_second_half,
+    );
+    let minority = match (whole.minority(), second.minority()) {
+        (Some(a), Some(b)) => Some(a && b),
+        _ => None,
+    };
+    let (seeds, persisted, lockup) = (
+        t.outcomes.seeds(),
+        t.outcomes.persisted(),
+        t.outcomes.count(LOCKUP),
+    );
+    println!("### Verdict (#655)\n");
+    println!(
+        "Conditionality passes when the pooled and the median per-config Spearman ρ(h_eff, pool N at cell) are both < 0 (G). Minority share passes when light-fed mixotrophs drain < 50 % of the attributed carcass structure, whole run and second half (H). Persistence against #642 (b = 0, 475 seeds): within 2 % when |Δ| ≤ 2 % of the reference.\n"
+    );
+    println!("| test | verdict | reading |");
+    println!("|---|---|---|");
+    println!(
+        "| conditionality: Producer h_eff falls as pool N rises | {} | pooled ρ = {} (n = {} second-half Producer agent-samples, all configs × seeds); median per-config ρ = {} over {} configs ({} with ρ < 0) |",
+        pass(g.passes()),
+        rho(g.pooled),
+        g.samples,
+        rho(g.median),
+        g.configs,
+        g.negative
+    );
+    println!(
+        "| minority share: light-fed mixotrophs drain < 50 % of carcass structure | {} | mixotroph share of carcass structure: whole run {} %, second half {} % |",
+        pass(minority),
+        pct_of(whole.structure_share(0)),
+        pct_of(second.structure_share(0))
+    );
+    let regression = reference(rows).filter(|_| seeds == REFERENCE_SEEDS);
+    let (p_ref, l_ref) = match regression {
+        Some((name, p, l)) => {
+            let d = persisted as i64 - p as i64;
+            (
+                format!(
+                    "#642 {name}: {p}; Δ = {d:+} ({:+.1} %), within 2 %: {}",
+                    100.0 * d as f64 / p as f64,
+                    if d.unsigned_abs() as f64 <= 0.02 * p as f64 {
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                ),
+                format!(
+                    "#642 {name}: {l}; Δ = {:+}, rising: {}",
+                    lockup as i64 - l as i64,
+                    if lockup > l { "yes" } else { "no" }
+                ),
+            )
+        }
+        None => (
+            format!("no #642 reference (needs {REFERENCE_SEEDS} seeds, decoded or fa 0)"),
+            "–".into(),
+        ),
+    };
+    println!(
+        "| persisted seeds | {persisted} / {seeds} ({} %) | {p_ref} |",
+        pct(persisted, seeds)
+    );
+    println!("| nutrient lockup seeds | {lockup} | {l_ref} |\n");
+}
+
+/// G (#655): conditionality.
+fn conditionality(rows: &[Row], x: &Ext) {
+    let g = conditionality_of(rows);
+    println!(
+        "\n### G. Conditionality (#655): Producer h_eff against the pool nutrient at the cell (second half)\n"
+    );
+    println!(
+        "Samples: B's second-half Producer-role agent-samples (sample ticks, the sample's recent-income role) with a pre-step pool reading, each as (h_eff, pool N in the nutrient-grid cell under the agent before the step). Spearman ρ: Pearson's correlation of midranks (ties share their mean rank). **Pooled**: every such sample across all {} configs and all their seeds in one ranking (configs at different nutrient levels share it). **Per config**: each config's seeds pooled, ρ where it has ≥ {MIN_CONFIG_SAMPLES} samples and both sides vary; the median over those configs, so a few dense configs cannot carry it. Negative ρ = heterotrophy falls as pool nutrient rises.\n",
+        rows.len()
+    );
+    println!(
+        "Pooled: n = {}, ρ = **{}**. Per config: {} configs with a ρ, median ρ = **{}**, ρ < 0 in {} of them.\n",
+        g.samples,
+        rho(g.pooled),
+        g.configs,
+        rho(g.median),
+        g.negative
+    );
+    println!("Mean pool N at the cell by h_eff bin (B's bins):\n");
+    println!("| h_eff bin | samples with a reading | mean pool N at cell |");
+    println!("|---|---:|---:|");
+    for (name, b) in HET_BINS.iter().zip(&x.producer_bins) {
+        let n = b.samples - b.missing_pre;
+        println!("| {name} | {n} | {} |", per(b.pool, n));
+    }
+    println!("\nPer config:\n");
+    println!("| config | samples | ρ(h_eff, pool N) |");
+    println!("|---|---:|---:|");
+    for (r, c) in rows.iter().zip(&g.per_config) {
+        println!(
+            "| {}:{} | {} | {} |",
+            r.source,
+            r.config_index,
+            r.tally.ext.het_pool.len(),
+            rho(*c)
+        );
+    }
+}
+
+/// H (#655): who drains carcass structure, and who gets its nutrient.
+fn niche_share(x: &Ext) {
+    println!(
+        "\n### H. Niche share (#655): carcass structure drained and nutrient released, by role\n"
+    );
+    println!(
+        "Recipient by recent-income role at the start of the tick and drain-time h_eff (C's buckets). Structure: `Consumed.energy_delta` on carcass bites; released: the nutrient bound in what was drained (`realised_bites`' bound nutrient); retained: what the consumer kept under the retention cap (reported, not deciding). Shares are of the attributed total; unattributed: carcass bites `realised_bites` drops (consumer or carcass off the drain-time roster), as a share of all carcass structure drained.\n"
+    );
+    for (title, r, all) in [
+        ("Whole run", &x.routes, x.carcass_drained_all),
+        (
+            "Second half",
+            &x.routes_second_half,
+            x.carcass_drained_all_second_half,
+        ),
+    ] {
+        let s = NicheShare::of(r, all);
+        println!("#### H. {title}\n");
+        println!(
+            "| recipient (role at start of tick) | structure drained | % structure | N released | % N released | N retained | % N retained |"
+        );
+        println!("|---|---:|---:|---:|---:|---:|---:|");
+        for (b, name) in RECIPIENTS[..MEMO].iter().enumerate() {
+            println!(
+                "| {name} | {:.1} | {} | {:.2} | {} | {:.2} | {} |",
+                s.drained[b],
+                pct_of(s.structure_share(b)),
+                s.released[b],
+                pct_of(s.released_share(b)),
+                s.retained[b],
+                pct_of(s.retained_share(b)),
+            );
+        }
+        let attributed: f64 = s.drained.iter().sum();
+        println!(
+            "| **all attributed** | {attributed:.1} | 100 | {:.2} | 100 | {:.2} | 100 |",
+            s.released.iter().sum::<f64>(),
+            s.retained.iter().sum::<f64>()
+        );
+        match s.unattributed_drained {
+            Some(u) => println!(
+                "\nUnattributed structure drained: {u:.1} ({} % of all {all:.1}).\n",
+                share(u, all)
+            ),
+            None => println!("\nUnattributed structure drained: unrecorded (pre-#655 rows).\n"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn midranks_share_the_mean_rank_among_ties() {
+        assert_eq!(midranks(&[3.0, 1.0, 2.0]), vec![3.0, 1.0, 2.0]);
+        // The two 0s hold ranks 1 and 2, the three 5s ranks 3–5.
+        assert_eq!(
+            midranks(&[5.0, 0.0, 5.0, 0.0, 5.0]),
+            vec![4.0, 1.5, 4.0, 1.5, 4.0]
+        );
+    }
+
+    #[test]
+    fn spearman_reads_monotone_trends_whatever_their_shape() {
+        // h_eff falling as the pool rises, non-linearly: ρ = −1.
+        let falling: Vec<[f32; 2]> = (1..=6).map(|i| [1.0 / i as f32, (i * i) as f32]).collect();
+        assert!(close(spearman(&falling).unwrap(), -1.0));
+        let rising: Vec<[f32; 2]> = (1..=6).map(|i| [i as f32, (i * i * i) as f32]).collect();
+        assert!(close(spearman(&rising).unwrap(), 1.0));
+    }
+
+    #[test]
+    fn spearman_with_ties_is_pearson_on_midranks() {
+        // h = [0, 0, 1, 1], pool = [1, 2, 3, 4]: ranks h = [1.5, 1.5, 3.5,
+        // 3.5], pool = [1, 2, 3, 4]; Pearson = 4 / √(4 × 5) = 0.8944.
+        let pairs = [[0.0, 1.0], [0.0, 2.0], [1.0, 3.0], [1.0, 4.0]];
+        assert!(close(spearman(&pairs).unwrap(), 4.0 / 20f64.sqrt()));
+    }
+
+    #[test]
+    fn spearman_is_undefined_when_too_few_or_constant() {
+        assert_eq!(spearman(&[]), None);
+        assert_eq!(spearman(&[[0.0, 1.0], [1.0, 2.0]]), None);
+        assert_eq!(spearman(&[[0.1, 1.0], [0.1, 2.0], [0.1, 3.0]]), None);
+        assert_eq!(spearman(&[[0.1, 1.0], [0.2, 1.0], [0.3, 1.0]]), None);
+    }
+
+    #[test]
+    fn median_averages_the_middle_pair() {
+        assert_eq!(median(vec![]), None);
+        assert_eq!(median(vec![3.0, 1.0, 2.0]), Some(2.0));
+        assert_eq!(median(vec![4.0, 1.0, 3.0, 2.0]), Some(2.5));
+    }
+
+    /// `n` pairs on which h_eff falls (or rises) with the pool, the pool
+    /// offset so configs sit at different nutrient levels.
+    fn trend(n: usize, offset: f32, falling: bool) -> Vec<[f32; 2]> {
+        (0..n)
+            .map(|i| {
+                let h = i as f32 / n as f32;
+                [if falling { 1.0 - h } else { h }, offset + i as f32]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn conditionality_pools_every_sample_and_takes_the_median_per_config() {
+        let a = trend(20, 0.0, true);
+        let b = trend(20, 100.0, true);
+        let c = trend(20, 200.0, false);
+        // Below MIN_CONFIG_SAMPLES: pooled, but no per-config ρ.
+        let d = trend(MIN_CONFIG_SAMPLES - 1, 0.0, false);
+        let g = Conditionality::of(&[&a, &b, &c, &d]);
+        assert_eq!(g.samples, 20 * 3 + MIN_CONFIG_SAMPLES - 1);
+        let pooled: Vec<[f32; 2]> = [&a, &b, &c, &d].into_iter().flatten().copied().collect();
+        assert!(close(g.pooled.unwrap(), spearman(&pooled).unwrap()));
+        assert_eq!(g.per_config, vec![Some(-1.0), Some(-1.0), Some(1.0), None]);
+        assert_eq!((g.configs, g.negative), (3, 2));
+        assert_eq!(g.median, Some(-1.0));
+        assert_eq!(g.passes(), Some(g.pooled.unwrap() < 0.0));
+    }
+
+    #[test]
+    fn conditionality_passes_only_when_pooled_and_median_both_fall() {
+        let fall = trend(20, 0.0, true);
+        let rise = trend(20, 0.0, false);
+        assert_eq!(Conditionality::of(&[&fall, &fall]).passes(), Some(true));
+        assert_eq!(Conditionality::of(&[&rise, &rise]).passes(), Some(false));
+        assert_eq!(Conditionality::of(&[]).passes(), None);
+        // One dense falling config cannot carry two rising ones: the pooled
+        // ρ falls, the median rises.
+        let dense = trend(2000, 0.0, true);
+        let g = Conditionality::of(&[&dense, &rise, &rise]);
+        assert!(g.pooled.unwrap() < 0.0);
+        assert_eq!(g.median, Some(1.0));
+        assert_eq!(g.passes(), Some(false));
+    }
+
+    fn routes(drained: [f64; 5], released: [f64; 5], retained: [f64; 5]) -> Routes {
+        let mut r = Routes::default();
+        r.carcass_drained[..MEMO].copy_from_slice(&drained);
+        r.carcass_bound[..MEMO].copy_from_slice(&released);
+        r.carcass_retained[..MEMO].copy_from_slice(&retained);
+        // The memo overlaps the first two buckets and must not count again.
+        r.carcass_drained[MEMO] = 1e6;
+        r.carcass_bound[MEMO] = 1e6;
+        r
+    }
+
+    #[test]
+    fn niche_share_divides_carcass_structure_by_role() {
+        let r = routes(
+            [30.0, 10.0, 40.0, 15.0, 5.0],
+            [3.0, 1.0, 4.0, 1.5, 0.5],
+            [2.0, 1.0, 1.0, 0.0, 0.0],
+        );
+        let s = NicheShare::of(&r, 110.0);
+        assert!(close(s.structure_share(0).unwrap(), 0.3));
+        assert!(close(s.structure_share(2).unwrap(), 0.4));
+        assert!(close(s.released_share(3).unwrap(), 0.15));
+        assert!(close(s.retained_share(0).unwrap(), 0.5));
+        assert!(close(s.unattributed_drained.unwrap(), 10.0));
+        assert_eq!(s.minority(), Some(true));
+        let majority = NicheShare::of(
+            &routes([60.0, 10.0, 20.0, 10.0, 0.0], [0.0; 5], [0.0; 5]),
+            100.0,
+        );
+        assert!(close(majority.structure_share(0).unwrap(), 0.6));
+        assert_eq!(majority.minority(), Some(false));
+        // Exactly half is not a minority.
+        let half = NicheShare::of(
+            &routes([50.0, 0.0, 50.0, 0.0, 0.0], [0.0; 5], [0.0; 5]),
+            100.0,
+        );
+        assert_eq!(half.minority(), Some(false));
+    }
+
+    #[test]
+    fn niche_share_is_undefined_without_drains_and_unrecorded_on_old_rows() {
+        let none = NicheShare::of(&Routes::default(), 0.0);
+        assert_eq!(none.structure_share(0), None);
+        assert_eq!(none.minority(), None);
+        // A pre-#655 row has drains but no all-events total.
+        let old = NicheShare::of(&routes([1.0, 0.0, 1.0, 0.0, 0.0], [0.0; 5], [0.0; 5]), 0.0);
+        assert_eq!(old.unattributed_drained, None);
+        assert_eq!(old.minority(), Some(false));
+    }
+
+    #[test]
+    fn rows_without_the_new_fields_still_read_back() {
+        let mut t = Tally::new();
+        t.ext.het_pool.push([0.3, 2.0]);
+        t.ext.carcass_drained_all = 5.0;
+        let mut json: serde_json::Value = serde_json::to_value(&t).unwrap();
+        let ext = json["ext"].as_object_mut().unwrap();
+        for k in [
+            "het_pool",
+            "carcass_drained_all",
+            "carcass_drained_all_second_half",
+        ] {
+            assert!(ext.remove(k).is_some(), "{k} is serialised");
+        }
+        let back: Tally = serde_json::from_value(json).unwrap();
+        assert!(back.ext.het_pool.is_empty());
+        assert_eq!(back.ext.carcass_drained_all, 0.0);
     }
 }
