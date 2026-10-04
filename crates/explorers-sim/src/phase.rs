@@ -851,15 +851,17 @@ pub fn resolve_drains_with_expression(
         .map(|a| consumption_reach(a.effective_trait_with_steepness(1, k), a.structure, params))
         .fold(0.0_f32, f32::max);
 
-    // Each consumer's stoichiometric demand, evaluated once at tick-start
-    // structure (execution-model.md, "Pass 1 — Drains", step 2: demand is
-    // computed before any drain is applied, step 4). Consumers graze each
-    // other, so reading `structure` live inside the apply loops would make a
-    // consumer's retained/excreted nutrient split depend on whether its own
-    // drain block had already run — i.e. on slice order (#452).
-    let consumer_stoichiometric_demand: Vec<f32> = agents
+    // Each consumer's stoichiometric ratio — nutrient demanded per unit
+    // structure — which caps what it keeps from a bite at ratio × the energy
+    // the bite gains it (consumer-driven recycling, world-rules.md flow 3;
+    // #652). The ratio reads traits only, so it is fixed across the tick by
+    // construction: it cannot depend on whether the consumer's own drain block
+    // (consumers graze each other) has already run, i.e. on slice order (#452).
+    // It is collected once before any drain is applied
+    // (execution-model.md, "Pass 1 — Drains", steps 2 and 4).
+    let consumer_ratio: Vec<f32> = agents
         .iter()
-        .map(|a| crate::stoichiometric_demand(&a.traits, a.structure, params))
+        .map(|a| crate::stoichiometric_demand(&a.traits, 1.0, params))
         .collect();
 
     // --- Pass over living targets ---
@@ -995,9 +997,9 @@ pub fn resolve_drains_with_expression(
                 crate::stoichiometric_demand(&agents[drain.target_idx].traits, 1.0, params);
             let nutrient_released = actual_drain * target_ratio;
             if nutrient_released > 0.0 {
-                // Consumer retains up to its tick-start stoichiometric demand
-                let consumer_nutrient_need =
-                    consumer_stoichiometric_demand[consumer_idx] * energy_gained;
+                // Consumer retains up to its ratio × the energy the bite gains
+                // it (consumer-driven recycling, world-rules.md flow 3)
+                let consumer_nutrient_need = consumer_ratio[consumer_idx] * energy_gained;
                 let retained = nutrient_released.min(consumer_nutrient_need);
                 let excreted = nutrient_released - retained;
 
@@ -1161,8 +1163,7 @@ pub fn resolve_drains_with_expression(
                 };
                 let nutrient_transferred = tick_start_nutrient * nutrient_fraction;
 
-                let consumer_nutrient_need =
-                    consumer_stoichiometric_demand[consumer_idx] * energy_gained;
+                let consumer_nutrient_need = consumer_ratio[consumer_idx] * energy_gained;
                 let retained = nutrient_transferred.min(consumer_nutrient_need);
                 let excreted = nutrient_transferred - retained;
 
@@ -5605,25 +5606,25 @@ mod tests {
     fn drain_releases_bound_nutrient_retaining_up_to_stoichiometric_demand() {
         // Embodiment (ADR-0003): grazing releases only the nutrient *bound in the
         // structure removed* (actual_drain * target_ratio). The target's free
-        // store is never touched. The consumer retains up to its stoichiometric
-        // demand; the excess is excreted to the available pool.
+        // store is never touched. The consumer retains up to its ratio × the
+        // energy gained (#652); the excess is excreted to the available pool.
         let params = test_params();
         let consumer_traits = TraitVector {
             heterotrophy: 2.0,
             ..zero_traits()
         };
-        // High-demand target so the bound released exceeds the consumer's need,
-        // forcing excretion: target_ratio = 0.1 + 0.2 * 4.0 = 0.9 per structure.
+        // Low-demand target so the bound released stays within the consumer's
+        // need: target_ratio = 0.1 + 0.2 * 0.5 = 0.2 per structure.
         let target_traits = TraitVector {
-            photosynthetic_absorption: 4.0,
+            photosynthetic_absorption: 0.5,
             ..zero_traits()
         };
         let mut agents = vec![
             make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
             make_agent(2, (1.0, 0.0), 10.0, target_traits),
         ];
-        // Consumer demand = structure * (base_ratio + spec_coeff * spec_sum)
-        //                 = 5.0 * (0.1 + 0.2 * 2.0) = 5.0 * 0.5 = 2.5
+        // Consumer ratio = base_ratio + spec_coeff * spec_sum
+        //                = 0.1 + 0.2 * 2.0 = 0.5 per unit energy gained
         agents[0].structure = 5.0;
         agents[1].structure = 10.0;
         agents[1].nutrient = 20.0; // free store — must be left untouched
@@ -5643,18 +5644,18 @@ mod tests {
         );
 
         // Drain = 2.0 (demand <= supply of 10.0)
-        // target_ratio = 0.1 + 0.2 * 4.0 = 0.9
-        // bound released = actual_drain * target_ratio = 2.0 * 0.9 = 1.8
+        // target_ratio = 0.1 + 0.2 * 0.5 = 0.2
+        // bound released = actual_drain * target_ratio = 2.0 * 0.2 = 0.4
         // energy_gained = 2.0 * 0.5 = 1.0
-        // consumer_nutrient_need = demand(2.5) * energy_gained(1.0) = 2.5
-        // retained = min(1.8, 2.5) = 1.8; excreted = 0.0
+        // consumer_nutrient_need = ratio(0.5) * energy_gained(1.0) = 0.5
+        // retained = min(0.4, 0.5) = 0.4; excreted = 0.0
         // kappa = 0 here, so the retained nutrient lands entirely in the
         // reproductive-nutrient earmark (ADR-0004). This test asserts the
         // retention magnitude, so check the total retained across both stores.
         let retained = agents[0].nutrient + agents[0].repro_nutrient;
         assert!(
-            (retained - 1.8).abs() < 1e-3,
-            "consumer should retain the 1.8 bound nutrient released, got {retained}"
+            (retained - 0.4).abs() < 1e-3,
+            "consumer should retain the 0.4 bound nutrient released, got {retained}"
         );
         assert!(
             (nutrient_grid.total()).abs() < 1e-3,
@@ -5671,10 +5672,10 @@ mod tests {
     #[test]
     fn drain_excretes_bound_nutrient_excess_to_available_pool() {
         // When the bound nutrient released by grazing exceeds the consumer's
-        // stoichiometric demand, the excess is excreted to the available pool —
-        // the target's free store still stays untouched.
+        // need (ratio × energy gained, #652), the excess is excreted to the
+        // available pool — the target's free store still stays untouched.
         let params = test_params();
-        // Low-demand consumer (tiny structure) so the released bound exceeds need.
+        // Nutrient-rich target so the released bound exceeds the consumer's need.
         let consumer_traits = TraitVector {
             heterotrophy: 2.0,
             ..zero_traits()
@@ -5687,7 +5688,7 @@ mod tests {
             make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
             make_agent(2, (1.0, 0.0), 10.0, target_traits),
         ];
-        agents[0].structure = 0.1; // demand = 0.1 * 0.5 = 0.05
+        agents[0].structure = 0.1; // ratio = 0.1 + 0.2 * 2.0 = 0.5, whatever the body size
         agents[1].structure = 10.0;
         agents[1].nutrient = 20.0;
 
@@ -5705,24 +5706,148 @@ mod tests {
             &mut nutrient_grid,
         );
 
-        // bound released = 2.0 * 0.9 = 1.8; consumer need = 0.05 * 1.0 = 0.05
-        // retained = 0.05; excreted = 1.75
+        // bound released = 2.0 * 0.9 = 1.8; consumer need = ratio(0.5) * energy_gained(1.0) = 0.5
+        // retained = 0.5; excreted = 1.3
         // kappa = 0 routes the retained nutrient to the earmark (ADR-0004); the
         // retention magnitude is the total across both stores.
         let retained = agents[0].nutrient + agents[0].repro_nutrient;
         assert!(
-            (retained - 0.05).abs() < 1e-3,
-            "consumer retains its demand 0.05, got {retained}"
+            (retained - 0.5).abs() < 1e-3,
+            "consumer retains ratio × energy gained 0.5, got {retained}"
         );
         assert!(
-            (nutrient_grid.total() - 1.75).abs() < 1e-3,
-            "excess bound nutrient 1.75 is excreted, got {}",
+            (nutrient_grid.total() - 1.3).abs() < 1e-3,
+            "excess bound nutrient 1.3 is excreted, got {}",
             nutrient_grid.total()
         );
         assert!(
             (agents[1].nutrient - 20.0).abs() < 1e-3,
             "target's free store untouched, got {}",
             agents[1].nutrient
+        );
+    }
+
+    /// One bite of a nutrient-rich living producer by a heterotroph of the given
+    /// structure: (energy gained, nutrient retained, nutrient excreted).
+    fn living_bite_by_consumer_of_structure(structure: f32) -> (f32, f32, f32) {
+        let params = test_params();
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 4.0, // ratio = 0.9 per structure
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
+            make_agent(2, (1.0, 0.0), 10.0, target_traits),
+        ];
+        agents[0].structure = structure;
+        agents[1].structure = 10.0;
+        let reserve_before = agents[0].reserve;
+
+        let mut carcasses: Vec<Carcass> = Vec::new();
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
+        (
+            agents[0].reserve - reserve_before,
+            agents[0].nutrient + agents[0].repro_nutrient,
+            nutrient_grid.total(),
+        )
+    }
+
+    #[test]
+    fn consumers_differing_only_in_structure_retain_equal_nutrient_from_equal_living_bites() {
+        // #652: retention is the consumer's ratio (demand per unit structure) ×
+        // energy gained — consumer-driven recycling (world-rules.md flow 3) —
+        // not its whole-body demand, so body size does not decide how much of
+        // a nutrient-rich bite is kept.
+        let (small_gain, small_kept, small_excreted) = living_bite_by_consumer_of_structure(0.5);
+        let (large_gain, large_kept, large_excreted) = living_bite_by_consumer_of_structure(5.0);
+        assert!(
+            (small_gain - large_gain).abs() < 1e-6 && small_gain > 0.0,
+            "equal bites gain equal energy: {small_gain} vs {large_gain}"
+        );
+        // ratio = 0.1 + 0.2 * 2.0 = 0.5; energy gained = 1.0 → kept = 0.5 of
+        // the 1.8 released; the other 1.3 is excreted to the cell.
+        assert!(
+            (small_kept - 0.5).abs() < 1e-4 && (large_kept - 0.5).abs() < 1e-4,
+            "both keep ratio × energy gained: {small_kept} vs {large_kept}"
+        );
+        assert!(
+            (small_excreted - 1.3).abs() < 1e-4 && (large_excreted - 1.3).abs() < 1e-4,
+            "both excrete the rest: {small_excreted} vs {large_excreted}"
+        );
+    }
+
+    /// One bite of a nutrient-rich carcass by a heterotroph of the given
+    /// structure: (energy gained, nutrient retained, nutrient excreted).
+    fn carcass_bite_by_consumer_of_structure(structure: f32) -> (f32, f32, f32) {
+        let params = test_params();
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            ..zero_traits()
+        };
+        let consumer_pos = (41.0, 0.0);
+        let mut agents = vec![make_agent(1, consumer_pos, 10.0, consumer_traits)];
+        agents[0].structure = structure;
+        let reserve_before = agents[0].reserve;
+        let mut carcasses = vec![Carcass {
+            id: 99,
+            position: (40.0, 0.0),
+            energy: 10.0,
+            nutrient: 20.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                ..zero_traits()
+            },
+        }];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, consumer_pos);
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
+        (
+            agents[0].reserve - reserve_before,
+            agents[0].nutrient + agents[0].repro_nutrient,
+            nutrient_grid.total(),
+        )
+    }
+
+    #[test]
+    fn consumers_differing_only_in_structure_retain_equal_nutrient_from_equal_carcass_bites() {
+        // #652, the detrital twin: retention from a carcass bite is also the
+        // consumer's ratio × energy gained, whatever its body size.
+        let (small_gain, small_kept, small_excreted) = carcass_bite_by_consumer_of_structure(0.5);
+        let (large_gain, large_kept, large_excreted) = carcass_bite_by_consumer_of_structure(5.0);
+        assert!(
+            (small_gain - large_gain).abs() < 1e-6 && small_gain > 0.0,
+            "equal bites gain equal energy: {small_gain} vs {large_gain}"
+        );
+        // ratio = 0.5, so each keeps 0.5 × energy gained and excretes the rest.
+        let kept = 0.5 * small_gain;
+        assert!(
+            (small_kept - kept).abs() < 1e-4 && (large_kept - kept).abs() < 1e-4,
+            "both keep ratio × energy gained ({kept}): {small_kept} vs {large_kept}"
+        );
+        assert!(
+            small_excreted > 0.0 && (small_excreted - large_excreted).abs() < 1e-4,
+            "both excrete the same rest: {small_excreted} vs {large_excreted}"
         );
     }
 
@@ -5796,17 +5921,17 @@ mod tests {
             kappa: 0.25,
             ..zero_traits()
         };
-        // High-demand target so the bound released (1.8) is below the consumer's
-        // need (2.5), forcing the whole release to be retained and then split.
+        // Low-demand target so the bound released (0.4) is below the consumer's
+        // need (0.5), forcing the whole release to be retained and then split.
         let target_traits = TraitVector {
-            photosynthetic_absorption: 4.0,
+            photosynthetic_absorption: 0.5, // ratio = 0.1 + 0.2 * 0.5 = 0.2
             ..zero_traits()
         };
         let mut agents = vec![
             make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
             make_agent(2, (1.0, 0.0), 10.0, target_traits),
         ];
-        agents[0].structure = 5.0; // demand = 5.0 * 0.5 = 2.5
+        agents[0].structure = 5.0; // ratio = 0.1 + 0.2 * 2.0 = 0.5
         agents[1].structure = 10.0;
 
         let mut carcasses: Vec<Carcass> = Vec::new();
@@ -5823,16 +5948,17 @@ mod tests {
             &mut nutrient_grid,
         );
 
-        // released = 2.0 * 0.9 = 1.8; need = 2.5; retained = 1.8; excreted = 0.0.
-        // kappa share (0.25) -> free store = 0.45; (1 - kappa) share -> earmark = 1.35.
+        // released = 2.0 * 0.2 = 0.4; need = ratio 0.5 * energy gained 1.0 = 0.5;
+        // retained = 0.4; excreted = 0.0.
+        // kappa share (0.25) -> free store = 0.1; (1 - kappa) share -> earmark = 0.3.
         assert!(
-            (agents[0].nutrient - 0.45).abs() < 1e-3,
-            "free store should get kappa share 0.45, got {}",
+            (agents[0].nutrient - 0.1).abs() < 1e-3,
+            "free store should get kappa share 0.1, got {}",
             agents[0].nutrient
         );
         assert!(
-            (agents[0].repro_nutrient - 1.35).abs() < 1e-3,
-            "earmark should get (1-kappa) share 1.35, got {}",
+            (agents[0].repro_nutrient - 0.3).abs() < 1e-3,
+            "earmark should get (1-kappa) share 0.3, got {}",
             agents[0].repro_nutrient
         );
         assert!(
@@ -5847,13 +5973,13 @@ mod tests {
         // Issue #274: grazing a living target transfers only the nutrient *bound
         // in the structure removed*. The victim's free nutrient store AND its
         // reproductive-nutrient earmark must survive a non-lethal graze; the
-        // consumer keeps up to its stoichiometric demand and the excess is
+        // consumer keeps up to its ratio × energy gained and the excess is
         // excreted to the local pool. This locks in the embodiment behaviour
         // (#273) against regressions that would touch the free store/earmark or
         // stop excreting.
         let params = test_params();
-        // Low-demand consumer (tiny structure) so the released bound exceeds the
-        // consumer's stoichiometric need, forcing a non-zero excretion.
+        // Nutrient-rich target so the released bound exceeds the consumer's
+        // need, forcing a non-zero excretion.
         let consumer_traits = TraitVector {
             heterotrophy: 2.0,
             ..zero_traits()
@@ -5866,7 +5992,7 @@ mod tests {
             make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
             make_agent(2, (1.0, 0.0), 10.0, target_traits),
         ];
-        agents[0].structure = 0.1; // demand = 0.1 * 0.5 = 0.05
+        agents[0].structure = 0.1; // ratio = 0.1 + 0.2 * 2.0 = 0.5, whatever the body size
         agents[1].structure = 10.0; // graze removes 2.0 -> 8.0, well above death threshold
         agents[1].nutrient = 20.0; // free store — must be left untouched
         agents[1].repro_nutrient = 7.0; // reproductive earmark — must be left untouched
@@ -5893,14 +6019,14 @@ mod tests {
         );
 
         // bound released = actual_drain(2.0) * target_ratio(0.9) = 1.8
-        // consumer need = demand(0.05) * energy_gained(1.0) = 0.05
-        // retained = 0.05; excreted = 1.75
+        // consumer need = ratio(0.5) * energy_gained(1.0) = 0.5 (#652)
+        // retained = 0.5; excreted = 1.3
         // kappa = 0 routes the consumer's retained nutrient to the earmark
         // (ADR-0004); the magnitude retained is the total across both stores.
         let retained = agents[0].nutrient + agents[0].repro_nutrient;
         assert!(
-            (retained - 0.05).abs() < 1e-3,
-            "consumer retains its stoichiometric demand 0.05, got {retained}"
+            (retained - 0.5).abs() < 1e-3,
+            "consumer retains ratio × energy gained 0.5, got {retained}"
         );
         assert!(
             nutrient_grid.total() > 0.0,
@@ -5908,8 +6034,8 @@ mod tests {
             nutrient_grid.total()
         );
         assert!(
-            (nutrient_grid.total() - 1.75).abs() < 1e-3,
-            "excess bound nutrient 1.75 is excreted, got {}",
+            (nutrient_grid.total() - 1.3).abs() < 1e-3,
+            "excess bound nutrient 1.3 is excreted, got {}",
             nutrient_grid.total()
         );
 
@@ -6084,8 +6210,8 @@ mod tests {
             make_agent(1, (49.0, 0.0), 10.0, consumer_traits),
             make_agent(2, (31.0, 0.0), 10.0, consumer_traits),
         ];
-        // Stoichiometric need = 5.0 * (0.1 + 0.2 * 2.0) * energy_gained(1.0) = 2.5
-        // each, so a 4.0 share is retained 2.5 / excreted 1.5.
+        // Need = ratio (0.1 + 0.2 * 2.0) * energy_gained(1.0) = 0.5 each (#652),
+        // so a 4.0 share is retained 0.5 / excreted 3.5.
         agents[0].structure = 5.0;
         agents[1].structure = 5.0;
 
@@ -6122,14 +6248,14 @@ mod tests {
         for a in &agents {
             let retained = a.nutrient + a.repro_nutrient;
             assert!(
-                (retained - 2.5).abs() < 1e-5,
-                "consumer {} should retain its full need 2.5 from a 4.0 share, got {retained}",
+                (retained - 0.5).abs() < 1e-5,
+                "consumer {} should retain its full need 0.5 from a 4.0 share, got {retained}",
                 a.id
             );
         }
         assert!(
-            (nutrient_grid.total() - 3.0).abs() < 1e-5,
-            "the two 1.5 excesses reach the carcass's cell, got {}",
+            (nutrient_grid.total() - 7.0).abs() < 1e-5,
+            "the two 3.5 excesses reach the carcass's cell, got {}",
             nutrient_grid.total()
         );
     }
@@ -6151,8 +6277,8 @@ mod tests {
             make_agent(1, (49.0, 0.0), 10.0, consumer_traits),
             make_agent(2, (31.0, 0.0), 10.0, consumer_traits),
         ];
-        // Tiny structure: need = 0.1 * 0.5 * 1.0 = 0.05 each, so almost the
-        // whole 2.0 share is excreted to the cell.
+        // Need = ratio 0.5 * energy gained 1.0 = 0.5 each (#652), whatever the
+        // body size, so most of the 2.0 share is excreted to the cell.
         agents[0].structure = 0.1;
         agents[1].structure = 0.1;
 
@@ -6189,14 +6315,14 @@ mod tests {
         for a in &agents {
             let retained = a.nutrient + a.repro_nutrient;
             assert!(
-                (retained - 0.05).abs() < 1e-5,
-                "consumer {} retains its need 0.05 from a 2.0 share, got {retained}",
+                (retained - 0.5).abs() < 1e-5,
+                "consumer {} retains its need 0.5 from a 2.0 share, got {retained}",
                 a.id
             );
         }
         assert!(
-            (nutrient_grid.total() - 3.9).abs() < 1e-5,
-            "the two 1.95 excesses reach the cell, got {}",
+            (nutrient_grid.total() - 3.0).abs() < 1e-5,
+            "the two 1.5 excesses reach the cell, got {}",
             nutrient_grid.total()
         );
     }
@@ -6219,7 +6345,7 @@ mod tests {
         let carcass_pos = (40.0, 0.0);
         let consumer_pos = (41.0, 0.0);
         let mut agents = vec![make_agent(1, consumer_pos, 10.0, consumer_traits)];
-        agents[0].structure = 5.0; // demand = 5.0 * 0.5 = 2.5
+        agents[0].structure = 5.0; // ratio = 0.1 + 0.2 * 2.0 = 0.5
 
         let mut carcasses = vec![Carcass {
             id: 99,
@@ -6241,23 +6367,23 @@ mod tests {
             &mut nutrient_grid,
         );
 
-        // actual_drain = 2.0; energy_gained = 2.0 * 0.5 = 1.0; need = 2.5 * 1.0 = 2.5.
-        // transferred = 20.0 * (2.0/10.0) = 4.0; retained = min(4.0, 2.5) = 2.5.
-        // kappa share (0.25) -> free store = 0.625; (1 - kappa) -> earmark = 1.875.
+        // actual_drain = 2.0; energy_gained = 2.0 * 0.5 = 1.0; need = 0.5 * 1.0 = 0.5.
+        // transferred = 20.0 * (2.0/10.0) = 4.0; retained = min(4.0, 0.5) = 0.5.
+        // kappa share (0.25) -> free store = 0.125; (1 - kappa) -> earmark = 0.375.
         assert!(
-            (agents[0].nutrient - 0.625).abs() < 1e-3,
-            "free store should get kappa share 0.625, got {}",
+            (agents[0].nutrient - 0.125).abs() < 1e-3,
+            "free store should get kappa share 0.125, got {}",
             agents[0].nutrient
         );
         assert!(
-            (agents[0].repro_nutrient - 1.875).abs() < 1e-3,
-            "earmark should get (1-kappa) share 1.875, got {}",
+            (agents[0].repro_nutrient - 0.375).abs() < 1e-3,
+            "earmark should get (1-kappa) share 0.375, got {}",
             agents[0].repro_nutrient
         );
-        // Excretion is unchanged by the split: 4.0 - 2.5 = 1.5 reaches the pool.
+        // Excretion is unchanged by the split: 4.0 - 0.5 = 3.5 reaches the pool.
         assert!(
-            (nutrient_grid.total() - 1.5).abs() < 1e-3,
-            "excess 1.5 still excreted to the pool, got {}",
+            (nutrient_grid.total() - 3.5).abs() < 1e-3,
+            "excess 3.5 still excreted to the pool, got {}",
             nutrient_grid.total()
         );
     }

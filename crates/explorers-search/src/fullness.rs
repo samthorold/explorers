@@ -1047,9 +1047,9 @@ mod tests {
     }
 
     /// A consumer beside a large prey takes in the energy it received and,
-    /// on the nutrient side, the bound nutrient released capped at its
-    /// stoichiometric demand on that energy (the drain pass's retention);
-    /// its light and uptake count too.
+    /// on the nutrient side, the bound nutrient released capped at its ratio
+    /// × that energy, whatever its body size (the drain pass's retention,
+    /// #652); its light and uptake count too.
     #[test]
     fn a_consumer_books_drain_energy_received_and_nutrient_retained() {
         let params = params();
@@ -1067,8 +1067,12 @@ mod tests {
         let (c, t) = (traits(0.3, 1.0), traits(1.0, 0.0));
         let gained = drained * explorers_sim::trophic_transfer_efficiency(&c, &t, &params);
         let released = drained * explorers_sim::stoichiometric_demand(&t, 1.0, &params);
-        let need =
-            explorers_sim::stoichiometric_demand(&c, drain_time[0].structure, &params) * gained;
+        assert!(
+            (drain_time[0].structure - 1.0).abs() > 0.1,
+            "a body whose size would show in a whole-body cap"
+        );
+        let need = explorers_sim::stoichiometric_demand(&c, 1.0, &params) * gained;
+        assert!(need < released, "the cap binds on this bite");
         let i = intakes[&0];
         assert!(close(i.drained_energy, gained, 1e-6), "{i:?}");
         assert!(

@@ -3,7 +3,9 @@
 //! capability, so worlds step exactly as they did before need-gating. The
 //! fingerprints below were taken from the pre-need-gating stepper (main at
 //! f6a1c1f) running the same scenarios, seeds and horizons; a flat gate must
-//! reproduce them bit for bit. That stepper also predates recognition (#604),
+//! reproduce them bit for bit. Re-pinned for #652: that stepper with its
+//! consumer retention cap moved to ratio × energy gained (the one-line
+//! change #652 makes here) gives the fingerprints now pinned. That stepper also predates recognition (#604),
 //! so the flat run is kin-blind too (`recognition_distance = 0`).
 
 use explorers_sim::{World, WorldRecipe};
@@ -51,18 +53,18 @@ fn fingerprint(world: &World) -> u64 {
 /// The scenarios, seeds and horizons, with the pre-need-gating fingerprint of
 /// each.
 const PINNED: [(&str, u64, u64, u64); 3] = [
-    ("example4.json", 7, 200, 0x5b79_dab7_1a9d_0b82),
+    ("example4.json", 7, 200, 0xd804_3d11_47fc_99a9),
     (
         "example9_detrital_pathway.json",
         11,
         200,
-        0x691b_a488_6ebf_7c69,
+        0x7654_dd4b_64cc_b3d8,
     ),
     (
         "example10_predator_prey_hopf.json",
         3,
         200,
-        0x8eae_0217_0bec_ce73,
+        0xb416_319f_dae4_51b7,
     ),
 ];
 
