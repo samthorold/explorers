@@ -237,9 +237,9 @@ pub struct Drained {
     /// The nutrient bound in what was drained, before the retention cap.
     pub bound_nutrient: f32,
     /// The nutrient retained: each bite's released nutrient capped at the
-    /// consumer's stoichiometric demand on the energy it gained
-    /// (`demand(traits, drain-time structure) × gained`), as the drain pass
-    /// caps it (#637).
+    /// consumer's nutrient ratio × the energy it gained
+    /// (`demand(traits, 1) × gained`, independent of body size), as the
+    /// drain pass caps it (#637, #652).
     pub retained_nutrient: f32,
 }
 
@@ -314,7 +314,9 @@ pub fn realised_bites<'a>(
         };
         let gained =
             drained * explorers_sim::trophic_transfer_efficiency(&c.traits, &target_traits, params);
-        let need = explorers_sim::stoichiometric_demand(&c.traits, c.structure, params) * gained;
+        // The drain pass's retention cap: the consumer's ratio × the energy
+        // the bite gains it, whatever its body size (world-rules.md flow 3).
+        let need = ratio(&c.traits) * gained;
         out.push((
             e,
             Drained {
@@ -1073,7 +1075,9 @@ mod tests {
     /// On a running `sample:31` world with the gate and recognition off,
     /// what each agent drained never exceeds its potential (co-feeders only
     /// split it), and most consumers take exactly their potential: the
-    /// reach and per-target demand mirror the drain pass.
+    /// reach and per-target demand mirror the drain pass. The horizon is
+    /// 120 ticks so that more than 20 agent-ticks feed (80 gave 20 once
+    /// retention moved to the consumer's ratio, #652).
     #[test]
     fn realised_drains_are_bounded_by_and_mostly_equal_the_potential() {
         let params = params();
@@ -1086,7 +1090,7 @@ mod tests {
         let mut world = World::new(params.clone(), dist, 1000);
         world.retain_event_kinds(&[EventKind::Consumed]);
         let (mut fed, mut equal) = (0, 0);
-        for _ in 0..80 {
+        for _ in 0..120 {
             let pre = PreStep::capture(&world);
             let cursor = world.event_log().len();
             world.step();

@@ -2073,14 +2073,19 @@ mod tests {
         // compact the log before `consumed_events()` after every step. That is
         // observer-side only — the breakdown must be identical to a full-log
         // rollout's.
-        // A live fixture: `test_world_params` is extinct by tick 1.
+        // A live fixture: `test_world_params` is extinct by tick 1. Founded
+        // on the wide `live_world_params` world since #652: on the packed
+        // 20-unit world these structureless bodies (no offspring structure)
+        // now keep ratio × energy gained from each bite instead of a
+        // whole-body cap of zero, and the population went extinct by tick 19,
+        // before turning over.
         let params = explorers_sim::WorldParameters {
             base_metabolic_rate: 0.1,
             movement_cost_coefficient: 0.01,
             reproduction_energy_threshold: 10.0,
             offspring_structure_fraction: 0.0,
             initial_nutrient_pool: 50.0,
-            ..test_world_params()
+            ..live_world_params()
         };
         let dist = explorers_sim::InitialDistribution {
             initial_energy_per_agent: 100.0,

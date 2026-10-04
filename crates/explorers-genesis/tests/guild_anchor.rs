@@ -43,14 +43,23 @@ fn recipe() -> WorldRecipe {
 /// buffer, read before growth, at the default sensitivity 33 — a physics
 /// change, not a changed read (every seed moved; seed 3 now reads zero on
 /// every column, its world failing before it scores).
+/// Re-pinned under #652: a consumer retains its nutrient ratio × the energy
+/// a bite gains it, not its whole-body demand × that energy — a physics
+/// change, not a changed read (seeds 1 and 2 moved; seed 1 regained its
+/// clustering; seed 3 still reads zero).
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
-    (1, [1037008966, 1045306156, 0, 0, 1045488992, 1029446348]),
+    (
+        1,
+        [
+            1051957666, 1044994138, 1065353216, 0, 1045656764, 1030349268,
+        ],
+    ),
     (
         2,
         [
-            1052079288, 1050660550, 1065353216, 0, 1037570146, 1032375789,
+            1052341607, 1050015326, 1065353216, 0, 1042267767, 1032447002,
         ],
     ),
     (3, [0, 0, 0, 0, 0, 0]),
