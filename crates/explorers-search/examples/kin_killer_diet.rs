@@ -38,6 +38,13 @@
 //!
 //! `--crosscheck` also runs `role_diet::rollout_with_fullness` per seed and
 //! prints its `fullness.kills` beside this tool's kin-kill count.
+//!
+//! #645 reruns it with size-scaled uptake (#644): `--uptake-structure-exponent
+//! <b>` and `--uptake-reference-structure <s_ref>` pin those parameters on
+//! every decoded config (unset, each keeps its decoded value: b = 0, s_ref =
+//! 100). E. reads whether the worlds still persist: the census's verdict per
+//! seed (`role_diet::census_failure`), per config and pooled, and the kin
+//! kills per Producer-role agent-tick.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -47,13 +54,14 @@ use rayon::prelude::*;
 
 use explorers_genesis_eval::{EvalConfig, RolloutObservations};
 use explorers_search::config_source::{
-    ConfigSource, parse_founder_aggregation, parse_non_negative, parse_selector, resolve_config,
-    sampled_units, with_consumption_scales, with_founder_aggregation,
+    ConfigSource, parse_founder_aggregation, parse_non_negative, parse_positive, parse_selector,
+    resolve_config, sampled_units, with_consumption_scales, with_founder_aggregation,
+    with_uptake_scaling,
 };
 use explorers_search::fullness::{FullnessBank, FullnessTracker, k_grid, tau_grid, tick_intakes};
 use explorers_search::grazer_hunger::PreStep;
 use explorers_search::intake_ceiling::realised_bites;
-use explorers_search::role_diet::{DietLedger, rollout_with_fullness};
+use explorers_search::role_diet::{DietLedger, Outcomes, census_failure, rollout_with_fullness};
 use explorers_search::search::default_ranges;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
 use explorers_sim::event::{Event, EventKind};
@@ -542,6 +550,15 @@ struct Tally {
     /// Sections A–D.
     #[serde(default)]
     ext: Ext,
+    /// E: Producer-role agents (recent-income role at the start of the
+    /// tick, the kin-kill classification's read) summed over every tick.
+    #[serde(default)]
+    producer_agent_ticks: u64,
+    /// E: the census's verdict per seed, and Σ termination tick.
+    #[serde(default)]
+    outcomes: Outcomes,
+    #[serde(default)]
+    termination_ticks: u64,
 }
 
 impl Tally {
@@ -574,6 +591,9 @@ impl Tally {
         self.non_killer_mobility.merge(&o.non_killer_mobility);
         self.non_killer_dispersal.merge(&o.non_killer_dispersal);
         self.ext.merge(&o.ext);
+        self.producer_agent_ticks += o.producer_agent_ticks;
+        self.outcomes.merge(&o.outcomes);
+        self.termination_ticks += o.termination_ticks;
     }
 }
 
@@ -655,6 +675,7 @@ fn rollout(
     // sample's role was not Producer).
     let mut birth_tick: HashMap<u64, u64> = HashMap::new();
     let mut last_bin: HashMap<u64, usize> = HashMap::new();
+    let mut stopped = None;
     for _ in 0..max_ticks {
         let tick_before = world.tick();
         let second_half_tick = tick_before + 1 >= window_start;
@@ -693,6 +714,10 @@ fn rollout(
             .iter()
             .map(|a| (a.id, income.role(a.id)))
             .collect();
+        tally.producer_agent_ticks += roles
+            .values()
+            .filter(|r| **r == Some(TrophicRole::Producer))
+            .count() as u64;
         let pre = PreStep::capture(&world);
         world.step();
         let tail: Vec<Event> = world.event_log().since(cursor).to_vec();
@@ -996,17 +1021,19 @@ fn rollout(
         world.compact_event_log_before(cursor.min(observations.consumed_events()));
         cursor = world.event_log().len();
         // Every early stop ends the run, as in the census rollout.
-        if explorers_genesis_eval::early_stop(
+        stopped = explorers_genesis_eval::early_stop(
             world.agents().len(),
             &observations,
             eval_config,
             sustainable_stock,
-        )
-        .is_some()
-        {
+        );
+        if stopped.is_some() {
             break;
         }
     }
+    let failure = census_failure(&world, &observations, eval_config, max_ticks, stopped);
+    tally.outcomes.record(failure.as_ref());
+    tally.termination_ticks = world.tick();
     for (id, (m, d)) in lfm_ever {
         if killers.contains(&id) {
             tally.killers += 1;
@@ -1030,6 +1057,13 @@ struct Row {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     founder_aggregation: Option<f32>,
     satiation_sensitivity: Option<f32>,
+    /// The uptake scaling the rows ran at (#645): the config's effective
+    /// `uptake_structure_exponent` and `uptake_reference_structure`. Absent
+    /// on older rows (which ran before #644, so at b = 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uptake_structure_exponent: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uptake_reference_structure: Option<f32>,
     /// Kin kills per seed (for the cross-check).
     seed_kin_kills: Vec<u64>,
     /// Summed over the seeds.
@@ -1047,6 +1081,8 @@ struct Args {
     summary_only: bool,
     founder_aggregation: Option<f32>,
     satiation_sensitivity: Option<f32>,
+    uptake_structure_exponent: Option<f32>,
+    uptake_reference_structure: Option<f32>,
     crosscheck: bool,
 }
 
@@ -1062,6 +1098,8 @@ fn parse_args() -> Result<Args, String> {
         summary_only: false,
         founder_aggregation: None,
         satiation_sensitivity: Some(0.0),
+        uptake_structure_exponent: None,
+        uptake_reference_structure: None,
         crosscheck: false,
     };
     let mut it = std::env::args().skip(1);
@@ -1086,6 +1124,12 @@ fn parse_args() -> Result<Args, String> {
             }
             "--satiation-sensitivity" => {
                 args.satiation_sensitivity = Some(parse_non_negative(&flag, &value()?)?)
+            }
+            "--uptake-structure-exponent" => {
+                args.uptake_structure_exponent = Some(parse_non_negative(&flag, &value()?)?)
+            }
+            "--uptake-reference-structure" => {
+                args.uptake_reference_structure = Some(parse_positive(&flag, &value()?)?)
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -1130,6 +1174,11 @@ fn main() {
             let config = resolve_config(source, idx, &atlas_units, &sampled);
             let config = with_founder_aggregation(config, args.founder_aggregation);
             let config = with_consumption_scales(config, args.satiation_sensitivity, None);
+            let config = with_uptake_scaling(
+                config,
+                args.uptake_structure_exponent,
+                args.uptake_reference_structure,
+            );
             let tallies: Vec<Tally> = (0..args.ensemble)
                 .into_par_iter()
                 .map(|i| rollout(&config.0, &config.1, args.seed + i, args.horizon, &eval))
@@ -1174,6 +1223,8 @@ fn main() {
                     base_seed: args.seed,
                     founder_aggregation: args.founder_aggregation,
                     satiation_sensitivity: args.satiation_sensitivity,
+                    uptake_structure_exponent: Some(config.0.uptake_structure_exponent),
+                    uptake_reference_structure: Some(config.0.uptake_reference_structure),
                     seed_kin_kills,
                     tally,
                 },
@@ -1364,6 +1415,7 @@ fn summary(rows: &[Row]) {
         "## Light-fed mixotroph diet: {} configs, {seeds} seeds, {fa}\n",
         rows.len()
     );
+    println!("{}\n", uptake_label(rows));
     println!(
         "Population: heterotrophy > 0 and recent-income role Producer at the start of the tick. Fullness state at k = {k}, τ = {:.2} (index {j}), n = {N}: (i) E_E < 0.5 ≤ E_N; (ii) E_E ≥ 0.5; (iii) both < 0.5; from the fullness carried into the tick. Kin = parent, offspring or sibling (`DietLedger::is_kin`). Non-kin targets by recent-income role at the start of the tick.\n",
         tau_grid()[j]
@@ -1372,6 +1424,7 @@ fn summary(rows: &[Row]) {
         "Light-fed mixotroph kin kills (one per pair): **{}**",
         t.kin_kills
     );
+    println!("{}", kin_kill_rates(&t));
     diet_table("1. Diet, whole run", &t.diet);
     diet_table("1. Diet, second half (tick ≥ T/2 + 1)", &t.diet_second_half);
     reach_table("2. Reach at each kin kill, whole run", &t.reach);
@@ -1409,6 +1462,77 @@ fn summary(rows: &[Row]) {
         );
     }
     ext_summary(&t.ext);
+    persistence(rows, &t);
+}
+
+/// The uptake scaling the rows ran at, each distinct value listed.
+fn uptake_label(rows: &[Row]) -> String {
+    let distinct = |f: &dyn Fn(&Row) -> Option<f32>| -> String {
+        let mut v: Vec<String> = Vec::new();
+        for r in rows {
+            let s = f(r).map_or("unrecorded (pre-#645 row)".into(), |x| format!("{x}"));
+            if !v.contains(&s) {
+                v.push(s);
+            }
+        }
+        if v.is_empty() {
+            "–".into()
+        } else {
+            v.join(" / ")
+        }
+    };
+    format!(
+        "Uptake scaling (#644): b = uptake_structure_exponent = **{}**, s_ref = uptake_reference_structure = **{}**",
+        distinct(&|r| r.uptake_structure_exponent),
+        distinct(&|r| r.uptake_reference_structure)
+    )
+}
+
+/// Kin kills per 1000 Producer-role agent-ticks, whole run and second half.
+fn kin_kill_rates(t: &Tally) -> String {
+    let second_kills: u64 = t.reach_second_half.iter().map(|r| r.kills).sum();
+    let second_ticks: u64 = t.ext.producer_bins.iter().map(|b| b.agent_ticks).sum();
+    format!(
+        "Per 1000 Producer-role agent-ticks: whole run {} ({} agent-ticks), second half {} ({} kin kills / {} agent-ticks)",
+        per(1000.0 * t.kin_kills as f64, t.producer_agent_ticks),
+        t.producer_agent_ticks,
+        per(1000.0 * second_kills as f64, second_ticks),
+        second_kills,
+        second_ticks
+    )
+}
+
+fn persistence(rows: &[Row], t: &Tally) {
+    println!("\n### E. Persistence: the census's verdict per seed (`role_diet::census_failure`)\n");
+    println!(
+        "Pooled over {} seeds: {} persisted ({} %); {}\n",
+        t.outcomes.seeds(),
+        t.outcomes.persisted(),
+        pct(t.outcomes.persisted(), t.outcomes.seeds()),
+        t.outcomes.describe()
+    );
+    println!(
+        "| config | seeds | persisted | verdicts | mean termination tick | kin kills | Producer agent-ticks | kin kills / 1000 P agent-ticks |"
+    );
+    println!("|---|---:|---:|---|---:|---:|---:|---:|");
+    for r in rows {
+        let o = &r.tally.outcomes;
+        println!(
+            "| {}:{} | {} | {} | {} | {} | {} | {} | {} |",
+            r.source,
+            r.config_index,
+            o.seeds(),
+            o.persisted(),
+            o.describe(),
+            ticks(r.tally.termination_ticks, o.seeds()),
+            r.tally.kin_kills,
+            r.tally.producer_agent_ticks,
+            per(
+                1000.0 * r.tally.kin_kills as f64,
+                r.tally.producer_agent_ticks
+            ),
+        );
+    }
 }
 
 fn f4(x: Option<f64>) -> String {
@@ -1614,5 +1738,14 @@ fn ext_summary(x: &Ext) {
                 pct(h.above[2], h.n),
             );
         }
+    }
+}
+
+/// A mean tick count, to one decimal.
+fn ticks(sum: u64, n: u64) -> String {
+    if n == 0 {
+        "–".into()
+    } else {
+        format!("{:.1}", sum as f64 / n as f64)
     }
 }

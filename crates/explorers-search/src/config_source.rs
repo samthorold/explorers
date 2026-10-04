@@ -151,6 +151,32 @@ pub fn with_consumption_scales(
     (params, dist)
 }
 
+/// Pin a resolved world's **size-scaled uptake** (#644) — the exponent `b`
+/// and the reference structure `s_ref` — when given, leaving everything else
+/// as decoded: #645's probe of whether uptake that grows with the body ends
+/// producers' carcass dependence.
+pub fn with_uptake_scaling(
+    (mut params, dist): (WorldParameters, InitialDistribution),
+    exponent: Option<f32>,
+    reference_structure: Option<f32>,
+) -> (WorldParameters, InitialDistribution) {
+    if let Some(b) = exponent {
+        params.uptake_structure_exponent = b;
+    }
+    if let Some(s) = reference_structure {
+        params.uptake_reference_structure = s;
+    }
+    (params, dist)
+}
+
+/// Parse a `flag`'s value as a finite number `> 0` (`--uptake-reference-structure`).
+pub fn parse_positive(flag: &str, raw: &str) -> Result<f32, String> {
+    raw.parse::<f32>()
+        .ok()
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .ok_or_else(|| format!("{flag} {raw:?} must be a finite number > 0"))
+}
+
 /// Parse a `flag`'s value as a finite number `≥ 0` (`--satiation-sensitivity`,
 /// `--recognition-distance`; `0` is each mechanism's off limit).
 pub fn parse_non_negative(flag: &str, raw: &str) -> Result<f32, String> {
@@ -252,6 +278,46 @@ mod tests {
         let mut want = decoded.0.clone();
         want.recognition_distance = 1.5;
         assert_eq!(params, want);
+    }
+
+    /// #645 measures size-scaled uptake (#644) on the atlas: a pinned
+    /// exponent or reference structure overrides only its own parameter, and
+    /// no pin leaves the world as decoded (b = 0, the size-blind rule).
+    #[test]
+    fn pinned_uptake_scaling_overrides_only_its_own_parameter() {
+        let sampled = sampled_units(default_ranges().len());
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        assert_eq!(decoded.0.uptake_structure_exponent, 0.0);
+        assert_eq!(with_uptake_scaling(decoded.clone(), None, None), decoded);
+
+        let (params, dist) = with_uptake_scaling(decoded.clone(), Some(2.0 / 3.0), None);
+        assert_eq!(dist, decoded.1);
+        let mut want = decoded.0.clone();
+        want.uptake_structure_exponent = 2.0 / 3.0;
+        assert_eq!(params, want);
+
+        let (params, dist) = with_uptake_scaling(decoded.clone(), Some(1.0), Some(140.0));
+        assert_eq!(dist, decoded.1);
+        let mut want = decoded.0.clone();
+        want.uptake_structure_exponent = 1.0;
+        want.uptake_reference_structure = 140.0;
+        assert_eq!(params, want);
+
+        let (params, _) = with_uptake_scaling(decoded.clone(), None, Some(40.0));
+        let mut want = decoded.0.clone();
+        want.uptake_reference_structure = 40.0;
+        assert_eq!(params, want);
+    }
+
+    #[test]
+    fn a_reference_structure_flag_value_must_be_a_positive_number() {
+        assert_eq!(parse_positive("--x", "40"), Ok(40.0));
+        assert_eq!(parse_positive("--x", "0.5"), Ok(0.5));
+        assert!(parse_positive("--x", "0").is_err());
+        assert!(parse_positive("--x", "-1").is_err());
+        assert!(parse_positive("--x", "NaN").is_err());
+        assert!(parse_positive("--x", "inf").is_err());
+        assert!(parse_positive("--x", "x").is_err());
     }
 
     #[test]
