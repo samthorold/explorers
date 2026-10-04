@@ -632,6 +632,75 @@ pub fn failure_label(f: &FailureMode) -> &'static str {
     }
 }
 
+/// The census's verdict on a finished rollout: `stopped` is the early stop
+/// that ended it, if any. An extinction or explosion stop is left to the
+/// evaluator, which reads those itself; any other early stop is the verdict
+/// (there is no settled window to read); a run that reached the horizon is
+/// evaluated from its log.
+pub fn census_failure(
+    world: &World,
+    observations: &RolloutObservations,
+    eval_config: &EvalConfig,
+    max_ticks: u64,
+    stopped: Option<FailureMode>,
+) -> Option<FailureMode> {
+    match stopped {
+        Some(FailureMode::Extinction) | Some(FailureMode::PopulationExplosion) | None => {
+            explorers_genesis_eval::evaluate_from_log(world, observations, eval_config, max_ticks)
+                .failure
+        }
+        Some(failure) => Some(failure),
+    }
+}
+
+/// Seeds pooled by the census's verdict (#645): count per failure label,
+/// with live runs under "persisted".
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Outcomes(std::collections::BTreeMap<String, u64>);
+
+const PERSISTED: &str = "persisted";
+
+impl Outcomes {
+    pub fn record(&mut self, failure: Option<&FailureMode>) {
+        let label = failure.map_or(PERSISTED, failure_label);
+        *self.0.entry(label.to_string()).or_default() += 1;
+    }
+
+    pub fn merge(&mut self, o: &Outcomes) {
+        for (k, n) in &o.0 {
+            *self.0.entry(k.clone()).or_default() += n;
+        }
+    }
+
+    pub fn seeds(&self) -> u64 {
+        self.0.values().sum()
+    }
+
+    pub fn persisted(&self) -> u64 {
+        self.0.get(PERSISTED).copied().unwrap_or(0)
+    }
+
+    /// `persisted n, <label> n, …` (persisted first, then by label); `–`
+    /// when empty.
+    pub fn describe(&self) -> String {
+        let parts: Vec<String> = (self.persisted() > 0)
+            .then(|| format!("{PERSISTED} {}", self.persisted()))
+            .into_iter()
+            .chain(
+                self.0
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != PERSISTED)
+                    .map(|(k, n)| format!("{k} {n}")),
+            )
+            .collect();
+        if parts.is_empty() {
+            "–".into()
+        } else {
+            parts.join(", ")
+        }
+    }
+}
+
 /// One seed rolled out as the genesis rollout does it (unbudgeted, no
 /// cross-check carry), with the diet census taken alongside.
 pub fn rollout(
@@ -817,16 +886,11 @@ pub fn rollout_with_fullness(
         // An early stop has no settled window to read: no guild (#527).
         Some(failure) => (Some(failure), world.tick(), [false; 3], [false; 3]),
         None => {
-            let breakdown = explorers_genesis_eval::evaluate_from_log(
-                &world,
-                &observations,
-                eval_config,
-                max_ticks,
-            );
+            let failure = census_failure(&world, &observations, eval_config, max_ticks, None);
             let tag = role_guilds_from_samples(&tag_snapshots, &observations.born, max_ticks);
             let diet = role_guilds_from_samples(&diet_snapshots, &observations.born, max_ticks);
             let (tag, diet) = (guild_flags(tag), guild_flags(diet));
-            (breakdown.failure, world.tick(), tag, diet)
+            (failure, world.tick(), tag, diet)
         }
     };
     let (trophic_balance_tag, trophic_balance_diet) = if world.agents().is_empty() {
@@ -1380,5 +1444,30 @@ mod tests {
         assert!(births.count() > 0);
         assert!(births.mean().unwrap() < 0.5, "{births:?}");
         assert_eq!(ours, rollout(&params, &dist, 1000, 300, &eval));
+    }
+
+    /// #645's persistence readout pools the census's per-seed verdicts:
+    /// seeds per failure label, "persisted" for a live run, in a stable
+    /// order (persisted first, then the labels alphabetically).
+    #[test]
+    fn outcomes_pool_seed_verdicts_by_failure_label() {
+        let mut a = Outcomes::default();
+        a.record(None);
+        a.record(Some(&FailureMode::Monoculture));
+        a.record(None);
+        let mut b = Outcomes::default();
+        b.record(Some(&FailureMode::BloomStop));
+        b.record(Some(&FailureMode::Monoculture));
+        a.merge(&b);
+        assert_eq!(a.seeds(), 5);
+        assert_eq!(a.persisted(), 2);
+        assert_eq!(a.describe(), "persisted 2, bloom_stop 1, monoculture 2");
+        assert_eq!(Outcomes::default().describe(), "–");
+        let mut dead = Outcomes::default();
+        dead.record(Some(&FailureMode::Extinction));
+        assert_eq!(dead.persisted(), 0);
+        assert_eq!(dead.describe(), "extinction 1");
+        let json = serde_json::to_string(&a).unwrap();
+        assert_eq!(serde_json::from_str::<Outcomes>(&json).unwrap(), a);
     }
 }
