@@ -73,6 +73,9 @@ Mycorrhizal fungi are the system's connective tissue. They create flows between 
 
 - **Arbuscular mycorrhizal fungi (AMF)** associate with ~80% of land plant species. They primarily enhance phosphorus uptake. The network is relatively non-specific — many plant species connect through the same fungal network, creating broad resource-sharing potential.
 - **Ectomycorrhizal fungi (ECM)** associate primarily with trees in temperate and boreal forests. They form dense hyphal mantles around root tips and can decompose soil organic matter to access organically bound nitrogen (Lindahl et al. 2007). This dual role — mutualist and decomposer — means ECM fungi create a direct coupling between the carbon-for-nutrients exchange and the decomposition loop.
+- **Ericoid mycorrhizal fungi** associate with heathland plants (Ericaceae) on acidic, organic, nutrient-poor soils. Like ECM fungi, they produce enzymes that release nitrogen and phosphorus from organic matter and pass them to the host (Read & Perez-Moreno 2003; Smith & Read 2008).
+
+**The producer's route to organic nutrient.** Plants take up nutrient mainly in mineral form (ammonium, nitrate, phosphate). They do not digest dead matter themselves (see [trophic roles](trophic-roles.md), *Why decomposition falls to specialists*). Where most of the soil's nitrogen and phosphorus is held in organic matter, a plant reaches it through ECM or ericoid partners, which break that matter down and hand the nutrient over in exchange for carbon. Read & Perez-Moreno (2003) describe a gradient across ecosystems. Arbuscular mycorrhizal plants dominate where nutrient cycles mainly in mineral form. ECM and ericoid plants dominate where it is held in organic matter: boreal forest and heathland. So a producer short of nutrient pays a decomposer-capable partner to do the decomposing. It does not become a decomposer.
 
 From a network perspective, the mycorrhizal strategy transforms point-to-point resource competition into a network flow problem. The implications for system dynamics are significant: connected plant communities show reduced variance in individual fitness, greater resilience to local perturbations, and altered competitive dynamics (van der Heijden et al. 1998).
 
@@ -159,5 +162,7 @@ The overall pattern: removing fungi doesn't eliminate energy from the system —
 - Moore, J.C. et al. (2004). Detritus, trophic dynamics and biodiversity. *Ecology Letters*, 7, 584-600.
 - Moore, J.A.M. et al. (2015). Decomposition by ectomycorrhizal fungi alters soil carbon storage in a simulation model. *Ecosphere*, 6, 1-16.
 - Nelsen, M.P. et al. (2016). Delayed fungal evolution did not cause the Paleozoic peak in coal production. *PNAS*, 113, 2442-2447.
+- Read, D.J. & Perez-Moreno, J. (2003). Mycorrhizas and nutrient cycling in ecosystems – a journey towards relevance? *New Phytologist*, 157, 475-492.
 - Simard, S.W. (2018). Mycorrhizal networks facilitate tree communication, learning, and memory. In *Memory and Learning in Plants* (pp. 191-213). Springer.
+- Smith, S.E. & Read, D.J. (2008). *Mycorrhizal Symbiosis* (3rd ed.). Academic Press.
 - van der Heijden, M.G.A. et al. (1998). Mycorrhizal fungal diversity determines plant biodiversity, ecosystem variability and productivity. *Nature*, 396, 69-72.

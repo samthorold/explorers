@@ -162,6 +162,15 @@ Self/non-self and kin discrimination, and self-consumption, occur well outside a
 - **Social amoebae.** Genetically different *Dictyostelium discoideum* strains segregate during multicellular development, and the more so the more distant they are (Ostrowski et al. 2008).
 - **Ciliates.** In dense, fast-growing cultures, *Blepharisma* forms giant cannibal cells that eat much smaller members of their own species (Dawson 1929). Size asymmetry is again what makes a conspecific edible.
 
+## Sessile and viscous consumers
+
+Sessile consumers cannot choose what comes within reach, so their diet is set by what drifts or settles beside them.
+
+- **Suspension feeders.** In dense beds of sessile and burrowing suspension feeders, the adults filter settling larvae out of the water and suppress recruitment beneath them (Woodin 1976). Larvae of the adults' own species can be among those taken (citation needed). In broadcast spawners, larvae spend time mixed in the plankton before settling, so the larvae a bed filters are unlikely to be its members' close kin. This is an inference from the life cycle, not a measured relatedness.
+- **Plants.** No plant is known to eat its own kin. Carnivorous plants catch animals (see [trophic roles](trophic-roles.md), *Mixotrophy*). Plant kin interactions run through competition, as in sea rocket's root allocation above (Dudley & File 2007), not through consumption.
+
+So the domain has sessile cannibals of a sort, and viscous populations where kin-blind harm lands on relatives. Where kin consumption has been selected on directly in such a population, cannibalism fell (Boots et al. 2021). It has no clear analogue for a light-fed, sessile producer that drains its own offspring and siblings. For that case in the simulation, see [the #642 research note](../research/642-light-fed-mixotrophs.md).
+
 ## Consequences for population dynamics
 
 Cannibalism is neither simply stabilising nor destabilising. Claessen, de Roos & Persson (2004) break it into four components:
@@ -316,3 +325,5 @@ van den Bosch, F., de Roos, A.M. & Gabriel, W. (1988). Cannibalism as a life boa
 vom Saal, F.S. (1985). Time-contingent change in infanticide and parental behavior induced by ejaculation in male mice. *Physiology & Behavior*.
 
 Wilson, D.S., Pollock, G.B. & Dugatkin, L.A. (1992). Can altruism evolve in purely viscous populations? *Evolutionary Ecology*, 6, 331-341.
+
+Woodin, S.A. (1976). Adult-larval interactions in dense infaunal assemblages: patterns of abundance. *Journal of Marine Research*, 34, 25-41.

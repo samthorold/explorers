@@ -58,6 +58,7 @@ for each tick:
     grow (all agents)
     resolve drains (coordinated — living and carcass targets)
     mark deaths
+    network (prune dead endpoints, maintain, form, redistribute)
     resolve reproduction (coordinated — excluding dead agents)
     move (all agents)
     wear (all agents)
@@ -65,6 +66,8 @@ for each tick:
     append events to log
     verify energy conservation
 ```
+
+The network pass (world rules, flow 5) runs between consumption and reproduction. It is inert while the connection cap is 0, which is the default, the search baseline and every atlas config.
 
 ### Properties
 
@@ -221,7 +224,7 @@ The domain vocabulary serves as the observation language. Events are produced by
 
 - **Consumed** — consumer drained target's structure (living or carcass)
 - **Reproduced** — parents produced offspring
-- **Redistributed** — resource transfer through network (deferred)
+- **Redistributed** — resource transfer through network (implemented; default-disabled, so it fires only when the connection cap is above 0)
 
 ## What events are not
 
