@@ -46,6 +46,10 @@
 //!   feasible region and the largest-margin default, or "region EMPTY"; the
 //!   energy-alone sated split; and the per-agent lifetime mean intake / m of
 //!   both populations ([`explorers_search::fullness::fullness_report`]).
+//!   Its header names the uptake scaling the rows were pinned to (#656).
+//!   Each row stores its grid's axes, so rows from before #656's downward
+//!   `k` extension read back on their own 17-point grid; pooling rows of
+//!   different grids is refused, never misaligned.
 //!
 //! Configs and seeds as `guild_census`: the atlas cells (`--atlas PATH`),
 //! the LHS sample, or `--configs` (`sample@S:i` for another draw); the seed
@@ -459,7 +463,8 @@ fn fullness_text(rows: &[Row]) -> String {
         }
         let p = pool(of());
         out.push_str(&format!(
-            "\n## Fullness-gate region (#637): {name}, all configs\n\n"
+            "\n## Fullness-gate region (#637): {name}, all configs\n\n{}\n\n",
+            uptake_line(of())
         ));
         if p.fullness.k.is_empty() {
             out.push_str("No fullness counters on these rows (run with --fullness).\n");
@@ -468,6 +473,33 @@ fn fullness_text(rows: &[Row]) -> String {
         out.push_str(&fullness_report(&p.fullness));
     }
     out
+}
+
+/// The uptake scaling the rows ran at (#656): the pinned `(b, s_ref)` when
+/// every row shares one, else that the worlds ran as decoded (each config
+/// its own) or under mixed pins.
+fn uptake_line<'a>(rows: impl Iterator<Item = &'a Row>) -> String {
+    let pins: HashSet<(Option<u32>, Option<u32>)> = rows
+        .map(|r| {
+            (
+                r.uptake_structure_exponent.map(f32::to_bits),
+                r.uptake_reference_structure.map(f32::to_bits),
+            )
+        })
+        .collect();
+    let show = |v: Option<u32>| v.map_or("decoded".to_string(), |b| f32::from_bits(b).to_string());
+    match pins.into_iter().collect::<Vec<_>>()[..] {
+        [(None, None)] => {
+            "Uptake scaling (#644): as decoded, each config its own b and s_ref (not pinned)."
+                .into()
+        }
+        [(b, s)] => format!(
+            "Uptake scaling (#644): pinned, b = {}, s_ref = {}.",
+            show(b),
+            show(s)
+        ),
+        _ => "Uptake scaling (#644): MIXED pins across these rows.".into(),
+    }
 }
 
 /// The `(k_a, k_h)` grid the region is read on (#634): each over
@@ -1302,5 +1334,33 @@ mod tests {
         assert_ne!(pinned.seeds, unpinned.seeds, "the pins change the rollout");
         let back: Row = serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
         assert_eq!(back, pinned);
+    }
+    /// #656: the fullness region's header names the uptake scaling, so a
+    /// report says which `b` it was read at without its filename.
+    #[test]
+    fn the_region_header_names_the_uptake_scaling() {
+        let row = |b: Option<f32>, s: Option<f32>| Row {
+            source: ConfigSource::Atlas,
+            config_index: 0,
+            horizon: 60,
+            base_seed: 1000,
+            founder_aggregation: None,
+            satiation_sensitivity: None,
+            recognition_distance: None,
+            intake_ceiling_k: None,
+            uptake_structure_exponent: b,
+            uptake_reference_structure: s,
+            seeds: Vec::new(),
+        };
+        let pinned = [row(Some(1.0), Some(100.0)), row(Some(1.0), Some(100.0))];
+        assert_eq!(
+            uptake_line(pinned.iter()),
+            "Uptake scaling (#644): pinned, b = 1, s_ref = 100."
+        );
+        let decoded = [row(None, None)];
+        assert!(uptake_line(decoded.iter()).contains("as decoded"));
+        let mixed = [row(None, None), row(Some(1.0), Some(100.0))];
+        assert!(uptake_line(mixed.iter()).contains("MIXED"));
+        assert!(fullness_text(&pinned).contains("pinned, b = 1, s_ref = 100"));
     }
 }

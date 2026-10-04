@@ -68,6 +68,12 @@
 //! passes when light-fed mixotrophs drain < 50 % of the attributed structure
 //! in both. Rows from before #655 read back (G empty, H's unattributed share
 //! unrecorded).
+//!
+//! #656 runs it on a fresh atlas. Each `atlas:` row records the atlas's
+//! fingerprint (`AtlasUnits::fingerprint`), and the verdict block compares
+//! persistence with #642 only on #642's atlas (rows without one predate the
+//! fingerprint and ran there); otherwise it prints "no reference (different
+//! atlas)".
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -1288,6 +1294,11 @@ struct Row {
     /// five network parameters. Absent on older rows (network off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     network: Option<NetworkRecord>,
+    /// The atlas an `atlas:` row ran on (#656): its
+    /// [`AtlasUnits::fingerprint`](explorers_search::sweep::AtlasUnits::fingerprint)
+    /// in hex. Absent on older rows, which all ran on #642's atlas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    atlas: Option<String>,
     /// Kin kills per seed (for the cross-check).
     seed_kin_kills: Vec<u64>,
     /// Summed over the seeds.
@@ -1428,6 +1439,7 @@ fn main() {
             .as_deref()
             .map(read_atlas_units)
             .unwrap_or_default();
+        let atlas_fingerprint = format!("{:016x}", atlas_units.fingerprint());
         let sampled = sampled_units();
         let done = done_configs(&args.out);
         let tasks = plan_tasks(
@@ -1507,6 +1519,7 @@ fn main() {
                     uptake_structure_exponent: Some(config.0.uptake_structure_exponent),
                     uptake_reference_structure: Some(config.0.uptake_reference_structure),
                     network: Some(NetworkRecord::of(&config.0)),
+                    atlas: (source == ConfigSource::Atlas).then(|| atlas_fingerprint.clone()),
                     seed_kin_kills,
                     tally,
                 },
@@ -2396,21 +2409,38 @@ fn conditionality_of(rows: &[Row]) -> Conditionality {
 
 /// #642's persisted seeds and nutrient-lockup seeds of 475 at b = 0
 /// (`docs/research/645-size-scaled-uptake.md` §8), for decoded rows and
-/// rows at founder_aggregation = 0; `None` for other or mixed pins.
-fn reference(rows: &[Row]) -> Option<(&'static str, u64, u64)> {
-    let fa = rows.first()?.founder_aggregation;
-    if rows.iter().any(|r| r.founder_aggregation != fa) {
-        return None;
+/// rows at founder_aggregation = 0, over `seeds` seeds of #642's atlas.
+/// `Err` says why it does not apply: rows from another atlas (#656: a fresh
+/// atlas can have 95 configs too, so the seed count alone cannot tell), or
+/// other or mixed pins, or another seed count.
+fn reference(rows: &[Row], seeds: u64) -> Result<(&'static str, u64, u64), String> {
+    let other_atlas = rows.iter().any(|r| {
+        r.source != ConfigSource::Atlas || r.atlas.as_deref().is_some_and(|a| a != REFERENCE_ATLAS)
+    });
+    if other_atlas {
+        return Err("no reference (different atlas)".into());
+    }
+    let needs = || format!("no #642 reference (needs {REFERENCE_SEEDS} seeds, decoded or fa 0)");
+    let Some(fa) = rows.first().map(|r| r.founder_aggregation) else {
+        return Err(needs());
+    };
+    if seeds != REFERENCE_SEEDS || rows.iter().any(|r| r.founder_aggregation != fa) {
+        return Err(needs());
     }
     match fa {
-        None => Some(("decoded", 403, 40)),
-        Some(a) if a == 0.0 => Some(("fa 0", 423, 41)),
-        _ => None,
+        None => Ok(("decoded", 403, 40)),
+        Some(a) if a == 0.0 => Ok(("fa 0", 423, 41)),
+        _ => Err(needs()),
     }
 }
 
 const LOCKUP: &str = "nutrient_lockup";
 const REFERENCE_SEEDS: u64 = 475;
+/// #642's atlas (`atlas.json` as of #642–#655, 95 cells over the
+/// size-blind box): its
+/// [`AtlasUnits::fingerprint`](explorers_search::sweep::AtlasUnits::fingerprint)
+/// in hex.
+const REFERENCE_ATLAS: &str = "e12caad9b8f2a5a2";
 
 /// The pass/fail block at the top of the report (#655).
 fn verdict(rows: &[Row], t: &Tally) {
@@ -2450,9 +2480,8 @@ fn verdict(rows: &[Row], t: &Tally) {
         pct_of(whole.structure_share(0)),
         pct_of(second.structure_share(0))
     );
-    let regression = reference(rows).filter(|_| seeds == REFERENCE_SEEDS);
-    let (p_ref, l_ref) = match regression {
-        Some((name, p, l)) => {
+    let (p_ref, l_ref) = match reference(rows, seeds) {
+        Ok((name, p, l)) => {
             let d = persisted as i64 - p as i64;
             (
                 format!(
@@ -2471,10 +2500,7 @@ fn verdict(rows: &[Row], t: &Tally) {
                 ),
             )
         }
-        None => (
-            format!("no #642 reference (needs {REFERENCE_SEEDS} seeds, decoded or fa 0)"),
-            "–".into(),
-        ),
+        Err(why) => (why, "–".into()),
     };
     println!(
         "| persisted seeds | {persisted} / {seeds} ({} %) | {p_ref} |",
@@ -2732,5 +2758,47 @@ mod tests {
         let back: Tally = serde_json::from_value(json).unwrap();
         assert!(back.ext.het_pool.is_empty());
         assert_eq!(back.ext.carcass_drained_all, 0.0);
+    }
+    fn row(atlas: Option<&str>, fa: Option<f32>) -> Row {
+        Row {
+            source: ConfigSource::Atlas,
+            config_index: 0,
+            horizon: 2000,
+            base_seed: 1000,
+            founder_aggregation: fa,
+            satiation_sensitivity: None,
+            uptake_structure_exponent: None,
+            uptake_reference_structure: None,
+            network: None,
+            atlas: atlas.map(str::to_string),
+            seed_kin_kills: Vec::new(),
+            tally: Tally::new(),
+        }
+    }
+
+    /// #656: #642's persistence reference applies only to 475 seeds of
+    /// #642's atlas, decoded or at fa 0. A fresh atlas of 95 configs also
+    /// has 475 seeds, so the rows' atlas decides; rows from before the
+    /// fingerprint ran on #642's atlas.
+    #[test]
+    fn the_642_reference_applies_only_on_its_own_atlas() {
+        let old = [row(None, None), row(Some(REFERENCE_ATLAS), None)];
+        assert_eq!(reference(&old, 475), Ok(("decoded", 403, 40)));
+        let fa0 = [row(None, Some(0.0))];
+        assert_eq!(reference(&fa0, 475), Ok(("fa 0", 423, 41)));
+        assert!(reference(&old, 10).unwrap_err().contains("needs 475"));
+        let mixed = [row(None, None), row(None, Some(0.0))];
+        assert!(reference(&mixed, 475).is_err());
+        let fresh = [row(Some("0123456789abcdef"), None)];
+        assert_eq!(
+            reference(&fresh, 475),
+            Err("no reference (different atlas)".to_string())
+        );
+        let mut sampled = row(None, None);
+        sampled.source = ConfigSource::SAMPLE;
+        assert_eq!(
+            reference(&[sampled], 475),
+            Err("no reference (different atlas)".to_string())
+        );
     }
 }

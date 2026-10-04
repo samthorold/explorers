@@ -154,11 +154,22 @@ impl FullnessBank {
     }
 }
 
-/// The ceiling multiples `k` of the grid: [0.25, 20] at ≥ 8 points per
-/// decade (17 values), as #634's `k_a`.
+/// The ceiling multiples `k` of the grid: #637's [0.25, 20] at ≥ 8 points
+/// per decade (17 values, as #634's `k_a`), extended downward at the same
+/// log step by [`K_POINTS_BELOW`] points to about 0.048 (#656), 23 values.
+/// #637's points are unchanged, so its rows' cells are shared cells.
 pub fn k_grid() -> Vec<f32> {
-    log_grid(0.25, 20.0, 8.0)
+    let upper = log_grid(0.25, 20.0, 8.0);
+    let steps = (upper.len() - 1) as f32;
+    let lower = (1..=K_POINTS_BELOW)
+        .rev()
+        .map(|i| 0.25 * 80f32.powf(-(i as f32) / steps));
+    lower.chain(upper).collect()
 }
+
+/// Grid points below #637's floor of 0.25 (#656): six log steps of
+/// `80^(1/16) ≈ 1.315` reach `k ≈ 0.048`.
+pub const K_POINTS_BELOW: usize = 6;
 
 /// The exponents the region is read at; the design fixes 4.
 pub const EXPONENTS: [f32; 3] = [2.0, 4.0, 8.0];
@@ -1085,6 +1096,24 @@ mod tests {
         let m = phase::metabolic_cost(&drain_time[0], &params);
         assert!(close(i.maintenance, m, 1e-6));
         assert!(i.nutrient_per_energy > 0.0);
+    }
+
+    /// #656: the `k` grid extends #637's [0.25, 20] downward at the same
+    /// log spacing, to about 0.05, so the region's lower edge (#655 found
+    /// every feasible cell at `k ≤ 0.432`) is resolved; #637's 17 points
+    /// are kept bit for bit, so old rows' cells are shared cells.
+    #[test]
+    fn the_k_grid_spans_below_a_quarter_and_keeps_637_s_points() {
+        let ks = k_grid();
+        let old = log_grid(0.25, 20.0, 8.0);
+        assert_eq!(old.len(), 17);
+        assert!(ks[0] < 0.06 && ks[0] > 0.04, "lowest k {}", ks[0]);
+        assert_eq!(&ks[ks.len() - old.len()..], &old[..], "#637's points");
+        assert_eq!(ks.len(), old.len() + 6);
+        let step = old[1] / old[0];
+        for w in ks.windows(2) {
+            assert!(close(w[1] / w[0], step, 1e-4), "{w:?}");
+        }
     }
 
     fn close(a: f32, b: f32, tol: f32) -> bool {
