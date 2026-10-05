@@ -24,3 +24,5 @@ The full `cargo test --workspace` runs 827 tests, but they take only ~25 s. The 
 ## Durable knowledge lives in the repo
 
 Anything worth remembering across sessions — workflow, runtimes, known traps, project vision — is written into committed docs (`CLAUDE.md`, `docs/agents/`, `CONTEXT.md`, `docs/system-design/`), never only in an agent's private memory. Private memory is not under source control and drifts out of date unseen.
+
+Research working folders (for example `research_notes/` and `reports/` from deep-research runs, and scratch outputs) are temporary. Once the research is finished, fold what is durable into the right docs layer: domain findings into `docs/ecology/`, measurements and world-specific analysis into `docs/research/<issue>-<slug>.md`, and design into `docs/system-design/` via a grill. Then delete the working folders. They are never committed.

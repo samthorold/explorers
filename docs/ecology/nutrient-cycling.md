@@ -120,7 +120,7 @@ When nutrient inputs increase (naturally or anthropogenically), primary producti
 
 ### Oligotrophic traps (reinforcing)
 
-The inverse of eutrophication: nutrient-poor ecosystems can maintain themselves through reinforcing feedbacks. Low nutrient availability selects for plants with long-lived, well-defended, nutrient-poor leaves. This recalcitrant litter decomposes slowly, keeping nutrients locked in organic forms. Slow decomposition means low nutrient release, maintaining low availability. Fire can reinforce the trap by volatilizing nitrogen. Hobbie (1992) and Wardle et al. (2004) documented this feedback in boreal forests and heathlands — the vegetation actively maintains the nutrient poverty that selects for it.
+The inverse of eutrophication: nutrient-poor ecosystems can maintain themselves through reinforcing feedbacks. Low nutrient availability selects for plants with long-lived, well-defended, nutrient-poor leaves. This recalcitrant litter decomposes slowly, keeping nutrients locked in organic forms. Slow decomposition means low nutrient release, maintaining low availability. Fire can reinforce the trap by volatilizing nitrogen. Hobbie (1992) and Wardle et al. (2004) documented this feedback in boreal forests and heathlands — the vegetation actively maintains the nutrient poverty that selects for it. Why detritus stabilises food webs only while decomposers track it, the abiotic exits (leaching, photodegradation, fire) that dead matter always has, and paludification as the extreme case of this trap are in [Stability and Resilience](stability-and-resilience.md), *Detritus stabilises only while something eats it*.
 
 ### Nitrogen-phosphorus interaction (cross-cycle coupling)
 

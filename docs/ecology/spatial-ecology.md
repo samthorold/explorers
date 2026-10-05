@@ -37,6 +37,8 @@ Disturb this balance — fragment the landscape (reducing colonization) or degra
 
 **Patch dynamics in communities.** Extending the metapopulation concept beyond single species, patch dynamics theory describes how communities in discrete habitat patches are shaped by the interplay of local succession, disturbance, and inter-patch dispersal (Pickett & White 1985). A landscape of patches in different successional stages — recently disturbed, mid-succession, late-succession — maintains higher regional diversity than any single patch could support, because different species specialize on different stages.
 
+**Space and persistence of interacting species.** How subdivision prolongs predator–prey persistence (Huffaker, Holyoak & Lawler), why spatial insurance needs heterogeneity among patches, and when limited dispersal selects for prudent exploitation are in [Stability and Resilience](stability-and-resilience.md), *Space stabilises through asynchrony*.
+
 ## Dispersal
 
 Dispersal is the spatial flow of individuals (or propagules) between locations. It is the connective tissue of spatial ecology — without it, every location would be an isolated system, and spatial structure would be irrelevant.

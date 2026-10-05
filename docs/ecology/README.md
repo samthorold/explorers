@@ -14,6 +14,7 @@ The cross-cutting topics describe system-level properties that emerge regardless
 - [Spatial Ecology](spatial-ecology.md) — patch dynamics, dispersal, movement ecology, spatial pattern formation, spatial competition, spatial feedbacks
 - [Cannibalism and Kin](cannibalism-and-kin.md) — intraspecific and kin-directed consumption: how common it is, its forms (filial, sibling, matriphagy), what limits it, how organisms avoid eating relatives (recognition, timing, location, dispersal), and its population dynamics
 - [Disturbance and Succession](disturbance-and-succession.md) — disturbance regimes, successional models, alternative stable states, resilience, gap dynamics, recovery trajectories
+- [Stability and Resilience](stability-and-resilience.md) — what keeps food webs alive: donor-controlled detritus and its unconditional exits, low-density refuges, spatial asynchrony, when variability helps, anti-fragility as local convexity, evolutionary rescue and suicide, and how robustness is measured
 
 ## Taxa
 
