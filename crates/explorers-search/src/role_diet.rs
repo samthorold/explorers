@@ -405,7 +405,7 @@ impl DietLedger {
     }
 
     /// Tally each grazer of a grazed death by kinship, trait distance to the
-    /// victim, drain-time satiation and pre-growth surplus expression.
+    /// victim, drain-time satiation and pre-growth surplus.
     fn record_kills(
         &mut self,
         victim: u64,
@@ -503,9 +503,8 @@ impl Confusion {
 /// role (#599): `roles` is producer, consumer, decomposer, no role (no income
 /// yet). The **light-fed mixotrophs** — income producers carrying
 /// heterotrophy above zero — are tallied again apart: the population whose
-/// 25th percentile sets the default `satiation_sensitivity` (world rules,
-/// *Capability and expression are decoupled*), read over those with
-/// positive surplus ([`SurplusByRole::proposed_sensitivity`]).
+/// 25th percentile over those with positive surplus set the surplus gate's
+/// default sensitivity (#622) until #684 removed the gate.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SurplusByRole {
     pub roles: [SurplusDistribution; 4],
@@ -524,15 +523,6 @@ impl SurplusByRole {
             self.light_fed_mixotrophs_energy
                 .record(surplus.energy.max(0.0));
         }
-    }
-
-    /// The default `satiation_sensitivity` this census proposes: `1 / s₂₅`
-    /// over the light-fed mixotrophs with positive surplus. Those at zero are
-    /// short of free nutrient (or at their buffer), and the design leaves
-    /// them at full capability at any `c`, so they do not set it (#622).
-    pub fn proposed_sensitivity(&self) -> Option<f64> {
-        let s25 = self.light_fed_mixotrophs.positive_percentile(0.25)?;
-        (s25 > 0.0).then(|| 1.0 / s25)
     }
 
     pub fn merge(&mut self, other: &SurplusByRole) {
@@ -1396,30 +1386,6 @@ mod tests {
             },
             plain
         );
-    }
-
-    /// The proposed default sensitivity is `1 / s₂₅` over the light-fed
-    /// mixotrophs with positive surplus; zero-surplus mixotrophs and other
-    /// roles do not move it.
-    #[test]
-    fn proposed_sensitivity_is_the_inverse_positive_mixotroph_quartile() {
-        let surplus = |t: f32| Surplus {
-            energy: t,
-            nutrient: t,
-        };
-        let mut sp = SurplusByRole::default();
-        assert_eq!(sp.proposed_sensitivity(), None);
-        for i in 1..=400 {
-            sp.record(Some(TrophicRole::Producer), 0.1, &surplus(i as f32 * 0.1));
-        }
-        let c = sp.proposed_sensitivity().unwrap();
-        for _ in 0..1000 {
-            sp.record(Some(TrophicRole::Producer), 0.1, &surplus(0.0));
-            sp.record(Some(TrophicRole::Consumer), 0.9, &surplus(100.0));
-            sp.record(Some(TrophicRole::Producer), 0.0, &surplus(100.0));
-        }
-        assert_eq!(sp.proposed_sensitivity(), Some(c));
-        assert!((c * 10.0 - 1.0).abs() < 0.15, "{c}");
     }
 
     /// The census reads each killing graze's grazer at drain time (#606):

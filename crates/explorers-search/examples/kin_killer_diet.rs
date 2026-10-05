@@ -145,8 +145,8 @@ use explorers_genesis_eval::guild::GUILD_MIN_SIZE;
 use explorers_genesis_eval::{EvalConfig, RolloutObservations};
 use explorers_search::config_source::{
     ConfigSource, NetworkPins, parse_founder_aggregation, parse_non_negative, parse_positive,
-    parse_selector, parse_unit_interval, resolve_config, sampled_units, with_consumption_scales,
-    with_cross_trait_cost, with_founder_aggregation, with_network, with_uptake_scaling,
+    parse_selector, parse_unit_interval, resolve_config, sampled_units, with_cross_trait_cost,
+    with_founder_aggregation, with_network, with_uptake_scaling,
 };
 use explorers_search::flow1_verdict::{
     COIN_ALPHA, Conditionality as Flow1Conditionality, DrainShift, Drains, LINEAGE_CLUSTERS,
@@ -1588,7 +1588,6 @@ struct Row {
     base_seed: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     founder_aggregation: Option<f32>,
-    satiation_sensitivity: Option<f32>,
     /// The uptake scaling the rows ran at (#645): the config's effective
     /// `uptake_structure_exponent` and `uptake_reference_structure`. Absent
     /// on older rows (which ran before #644, so at b = 0).
@@ -1665,7 +1664,6 @@ struct Args {
     configs: Option<HashSet<(ConfigSource, usize)>>,
     summary_only: bool,
     founder_aggregation: Option<f32>,
-    satiation_sensitivity: Option<f32>,
     uptake_structure_exponent: Option<f32>,
     uptake_reference_structure: Option<f32>,
     network: NetworkPins,
@@ -1685,7 +1683,6 @@ fn parse_args() -> Result<Args, String> {
         configs: None,
         summary_only: false,
         founder_aggregation: None,
-        satiation_sensitivity: Some(0.0),
         uptake_structure_exponent: None,
         uptake_reference_structure: None,
         network: NetworkPins::default(),
@@ -1713,9 +1710,6 @@ fn parse_args() -> Result<Args, String> {
             "--baseline" => args.baseline = Some(PathBuf::from(value()?)),
             "--founder-aggregation" => {
                 args.founder_aggregation = Some(parse_founder_aggregation(&value()?)?)
-            }
-            "--satiation-sensitivity" => {
-                args.satiation_sensitivity = Some(parse_non_negative(&flag, &value()?)?)
             }
             "--uptake-structure-exponent" => {
                 args.uptake_structure_exponent = Some(parse_non_negative(&flag, &value()?)?)
@@ -1788,7 +1782,6 @@ fn main() {
             let t = Instant::now();
             let config = resolve_config(source, idx, &atlas_units, &sampled);
             let config = with_founder_aggregation(config, args.founder_aggregation);
-            let config = with_consumption_scales(config, args.satiation_sensitivity, None);
             let config = with_uptake_scaling(
                 config,
                 args.uptake_structure_exponent,
@@ -1862,7 +1855,6 @@ fn main() {
                     horizon: args.horizon,
                     base_seed: args.seed,
                     founder_aggregation: args.founder_aggregation,
-                    satiation_sensitivity: args.satiation_sensitivity,
                     uptake_structure_exponent: Some(config.0.uptake_structure_exponent),
                     uptake_reference_structure: Some(config.0.uptake_reference_structure),
                     network: Some(NetworkRecord::of(&config.0)),
@@ -4213,7 +4205,6 @@ mod tests {
             horizon: 2000,
             base_seed: 1000,
             founder_aggregation: fa,
-            satiation_sensitivity: None,
             uptake_structure_exponent: None,
             uptake_reference_structure: None,
             network: None,

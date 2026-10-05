@@ -525,7 +525,6 @@ fn default_recipe() -> WorldRecipe {
             network_transfer_efficiency: 0.0,
             uptake_structure_exponent: 0.0,
             uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
-            satiation_sensitivity: 33.0,
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
         },
@@ -1307,11 +1306,6 @@ impl ExplorersApp {
                 ui.add(
                     egui::Slider::new(&mut params.base_trophic_efficiency, 0.0..=1.0)
                         .text("Base trophic efficiency"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut params.satiation_sensitivity, 0.0..=100.0)
-                        .logarithmic(true)
-                        .text("Satiation sensitivity (0 = ungated drain)"),
                 );
                 ui.add(
                     egui::Slider::new(&mut params.recognition_distance, 0.0..=2.0)

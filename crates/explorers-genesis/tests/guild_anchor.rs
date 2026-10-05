@@ -62,12 +62,16 @@ fn recipe() -> WorldRecipe {
 /// (atlas:90, cell [9, 19, 6], `b` ≈ 0.72, `c_AH` ≈ 0.139), so every value is
 /// new — a different world, not a changed read. Seeds 1 and 3 reach the
 /// horizon; seed 2 locks up (tick 1650) and reads zero.
+/// Re-pinned under #684: the surplus gate is removed (expression ungated)
+/// and recognition restraint is 1 — a physics change, not a changed read.
+/// The recipe was found under the gate. Seed 1 moved (fitness 0.108 → 0.177);
+/// seed 2 no longer reads zero (fitness 0.104), and seed 3 now does (was 0.320).
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
-    (1, [1037937632, 1046760836, 0, 0, 1045891645, 1048246707]),
-    (2, [0, 0, 0, 0, 0, 0]),
-    (3, [1050924810, 0, 1065353216, 0, 1049582633, 1050425182]),
+    (1, [1043700327, 1056340067, 0, 0, 1047099605, 1052697981]),
+    (2, [1037368820, 0, 0, 0, 1054146036, 1054440732]),
+    (3, [0, 0, 0, 0, 0, 0]),
 ];
 
 fn readings(seed: u64) -> [u32; 6] {

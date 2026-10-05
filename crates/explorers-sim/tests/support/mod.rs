@@ -84,15 +84,13 @@ pub fn viable_baseline() -> WorldParameters {
         network_transfer_efficiency: 0.0,
         uptake_structure_exponent: 0.0,
         uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
-        satiation_sensitivity: 0.1,
         recognition_distance: 0.5,
         cross_trait_cost: 0.0,
     }
 }
 
 /// Strategy over the searched `WorldParameters` dimensions (ranges copied from
-/// `explorers-search::default_ranges()`, indices 0..=16, 24..=25 and 28..=33), plus the need-gate's satiation
-/// sensitivity, spanning the flat limiting case to a strong gate, and the
+/// `explorers-search::default_ranges()`, indices 0..=16, 24..=25 and 28..=33), plus the
 /// recognition distance, spanning the kin-blind limit to a wide one.
 pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
     let searched = (
@@ -126,7 +124,6 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
             0.05f32..=1.0, // 31 reserve_mobilisation_rate
             0.0f32..=1.0,  // 32 uptake_structure_exponent (#653)
             0.0f32..=0.14, // 33 cross_trait_cost (#669)
-            0.0f32..=0.5,  // satiation_sensitivity (not yet searched, #607): flat to strongly gated
             0.0f32..=1.5,  // recognition_distance (not searched): kin-blind to wide
         ),
     );
@@ -156,8 +153,7 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
         reserve_mobilisation_rate: c.3,
         uptake_structure_exponent: c.4,
         cross_trait_cost: c.5,
-        satiation_sensitivity: c.6,
-        recognition_distance: c.7,
+        recognition_distance: c.6,
         ..viable_baseline()
     })
 }

@@ -19,8 +19,8 @@
 //!   distance to its parents.
 //! - every second-half sampled agent's surplus satiation, read after
 //!   metabolism and before growth, by recent-income role, with the light-fed
-//!   mixotrophs apart, and the default `satiation_sensitivity = 1 / s₂₅` it
-//!   proposes (#622).
+//!   mixotrophs apart (#622; the surplus gate it calibrated was removed in
+//!   #684).
 //! - the intake-ceiling window (#629): light-fed mixotrophs' light and
 //!   heterotrophs-by-diet's realised intake and drain potential at the start
 //!   of drain resolution, in ticks of maintenance in both currencies
@@ -61,8 +61,8 @@
 //! `--founder-aggregation A` pins every world's founding placement (#601)
 //! and records the pin on each row; `0` is the pre-#601 well-mixed scatter,
 //! for comparing against an older tree (#605).
-//! `--satiation-sensitivity C` and `--recognition-distance D` pin every
-//! world's need-gate and recognition scales (#619), recorded likewise.
+//! `--recognition-distance D` pins every world's recognition scale (#619),
+//! recorded likewise.
 //! `--uptake-structure-exponent b` and `--uptake-reference-structure s_ref`
 //! pin every world's size-scaled uptake (#644; for re-reading the region at
 //! b = 1, #655), recorded likewise. `--cross-trait-cost c` pins every
@@ -85,14 +85,14 @@ use rayon::prelude::*;
 use explorers_genesis::EvalConfig;
 use explorers_search::config_source::{
     ConfigSource, parse_founder_aggregation, parse_non_negative, parse_positive, parse_selector,
-    resolve_config, sampled_units, with_consumption_scales, with_cross_trait_cost,
-    with_founder_aggregation, with_uptake_scaling,
+    resolve_config, sampled_units, with_cross_trait_cost, with_founder_aggregation,
+    with_recognition_distance, with_uptake_scaling,
 };
 use explorers_search::fullness::{FullnessGrid, fullness_report};
 use explorers_search::grazer_hunger::SurplusDistribution;
 use explorers_search::grazer_hunger::{
-    DISTANCE_BANDS, DISTANCE_EDGES, EXPRESSION_TABLE_HEADER, GrazerHunger, HALF_EXPRESSION_BAND,
-    HUNGRY_BANDS, RECOGNITION_BANDS, SATIATION_BANDS, SATIATION_EDGES, TraitDistances,
+    DISTANCE_BANDS, DISTANCE_EDGES, GrazerHunger, HALF_EXPRESSION_BAND, HUNGRY_BANDS,
+    RECOGNITION_BANDS, SATIATION_BANDS, SATIATION_EDGES, TraitDistances,
 };
 use explorers_search::intake_ceiling::{GateSamples, Region, log_grid, region_report, window_line};
 use explorers_search::role_diet::{
@@ -120,10 +120,6 @@ struct Row {
     /// (`--founder-aggregation`, #605); absent when worlds ran as decoded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     founder_aggregation: Option<f32>,
-    /// The satiation sensitivity every world was pinned to
-    /// (`--satiation-sensitivity`, #619); absent when worlds ran as decoded.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    satiation_sensitivity: Option<f32>,
     /// The recognition distance every world was pinned to
     /// (`--recognition-distance`, #619); absent when worlds ran as decoded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -262,8 +258,6 @@ struct Args {
     /// `None` runs worlds as decoded. `0` is the pre-#601 well-mixed scatter,
     /// for comparing against an older tree (#605).
     founder_aggregation: Option<f32>,
-    /// Pin every world's satiation sensitivity (#619); `None` as decoded.
-    satiation_sensitivity: Option<f32>,
     /// Pin every world's recognition distance (#619); `None` as decoded.
     recognition_distance: Option<f32>,
     /// Read the killing grazers' predicted intake-gate expression at this
@@ -296,7 +290,6 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
         configs: None,
         summary_only: false,
         founder_aggregation: None,
-        satiation_sensitivity: None,
         recognition_distance: None,
         intake_ceiling_k: None,
         uptake_structure_exponent: None,
@@ -327,9 +320,6 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
             "--fullness-region" => args.fullness_region = true,
             "--founder-aggregation" => {
                 args.founder_aggregation = Some(parse_founder_aggregation(&value()?)?)
-            }
-            "--satiation-sensitivity" => {
-                args.satiation_sensitivity = Some(parse_non_negative(&flag, &value()?)?)
             }
             "--recognition-distance" => {
                 args.recognition_distance = Some(parse_non_negative(&flag, &value()?)?)
@@ -366,11 +356,7 @@ fn run_row(
 ) -> Row {
     let eval = EvalConfig::default();
     let config = with_founder_aggregation(config.clone(), args.founder_aggregation);
-    let config = with_consumption_scales(
-        config,
-        args.satiation_sensitivity,
-        args.recognition_distance,
-    );
+    let config = with_recognition_distance(config, args.recognition_distance);
     let config = with_uptake_scaling(
         config,
         args.uptake_structure_exponent,
@@ -397,7 +383,6 @@ fn run_row(
         horizon: args.horizon,
         base_seed: args.seed,
         founder_aggregation: args.founder_aggregation,
-        satiation_sensitivity: args.satiation_sensitivity,
         recognition_distance: args.recognition_distance,
         intake_ceiling_k: args.intake_ceiling_k,
         uptake_structure_exponent: args.uptake_structure_exponent,
@@ -768,12 +753,12 @@ fn print_reproduction(label: &str, g: &GroupReproduction) {
 /// retention buffer, co-limited by free nutrient, read before growth.
 fn print_surplus(sp: &SurplusByRole) {
     println!(
-        "\nSurplus satiation (#622): s = max(0, min(reserve − buffer, N / (η·ratio))) / m, read after metabolism and before growth, over second-half agent-samples by recent-income role (#599). Light-fed mixotrophs: income producers with heterotrophy > 0. Proposed default c = 1 / s₂₅ over the light-fed mixotrophs with positive surplus (#622).\n"
+        "\nSurplus satiation (#622): s = max(0, min(reserve − buffer, N / (η·ratio))) / m, read after metabolism and before growth, over second-half agent-samples by recent-income role (#599). Light-fed mixotrophs: income producers with heterotrophy > 0.\n"
     );
     println!(
-        "| agents | samples | at s = 0 | of which no free nutrient | nutrient-limited | s₂₅ | median | s₇₅ | 1 / s₂₅ | 1 / median | s₂₅ (s > 0) | 1 / s₂₅ (s > 0) |"
+        "| agents | samples | at s = 0 | of which no free nutrient | nutrient-limited | s₂₅ | median | s₇₅ | s₂₅ (s > 0) |"
     );
-    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
     let mut heterotrophs = sp.roles[1].clone();
     heterotrophs.merge(&sp.roles[2]);
     let rows: [(&str, &SurplusDistribution); 7] = [
@@ -789,29 +774,19 @@ fn print_surplus(sp: &SurplusByRole) {
         ("no income role", &sp.roles[3]),
     ];
     let fmt = |v: Option<f64>| v.map_or("–".to_string(), |x| format!("{x:.3}"));
-    let inv = |v: Option<f64>| fmt(v.filter(|&x| x > 0.0).map(|x| 1.0 / x));
     for (label, d) in rows {
-        let (s25, s50) = (d.percentile(0.25), d.percentile(0.5));
-        let p25 = d.positive_percentile(0.25);
         println!(
-            "| {label} | {} | {}% | {}% | {}% | {} | {} | {} | {} | {} | {} | {} |",
+            "| {label} | {} | {}% | {}% | {}% | {} | {} | {} | {} |",
             d.count(),
             pct(d.zero, d.count()),
             pct(d.zero_nutrient_limited, d.zero),
             pct(d.nutrient_limited, d.count()),
-            fmt(s25),
-            fmt(s50),
+            fmt(d.percentile(0.25)),
+            fmt(d.percentile(0.5)),
             fmt(d.percentile(0.75)),
-            inv(s25),
-            inv(s50),
-            fmt(p25),
-            inv(p25),
+            fmt(d.positive_percentile(0.25)),
         );
     }
-    println!(
-        "\nProposed default satiation_sensitivity c = 1 / s₂₅ (light-fed mixotrophs, s > 0): {}",
-        fmt(sp.proposed_sensitivity())
-    );
 }
 
 /// Band labels from upper edges: `[0, e0)`, …, `≥ eN`.
@@ -878,15 +853,6 @@ fn print_kills(k: &GrazerHunger, births: &TraitDistances) {
             .collect();
         println!("| {label} | {} |", hungry.join(" | "));
     }
-    println!(
-        "\nKilling grazers at the pre-growth surplus read (#624): the same pairs by the grazer's surplus s (reserve above the retention buffer, co-limited by free nutrient, in ticks of maintenance) read after metabolism and before growth, and its expression E = 1/(1 + c·s) at each run's c (pinned or as decoded). E ≥ 0.5 = at most half gated (hungry side); E < 0.5 = past half expression (sated side); s = 0 = no surplus (E = 1). Bands: E < 0.1, 0.1–0.5, 0.5–0.9, ≥ 0.9.\n"
-    );
-    println!("| pairs | {EXPRESSION_TABLE_HEADER} |");
-    println!(
-        "|---|{}",
-        "---:|".repeat(EXPRESSION_TABLE_HEADER.matches('|').count() + 1)
-    );
-    println!("| all | {} |", k.expression_cells());
     println!(
         "\nParent–offspring trait distance over {} births: mean {}, rms {}; by band {}.",
         births.count(),
@@ -955,7 +921,7 @@ mod tests {
         kills.record(
             true,
             0.05,
-            KillerReading::at(
+            KillerReading::of(
                 Satiation {
                     energy: 2.0,
                     nutrient: 0.5,
@@ -964,7 +930,6 @@ mod tests {
                     energy: 0.0,
                     nutrient: 0.5,
                 },
-                33.0,
             ),
         );
         let mut births = TraitDistances::default();
@@ -1049,7 +1014,6 @@ mod tests {
             horizon: 2000,
             base_seed: 1000,
             founder_aggregation: None,
-            satiation_sensitivity: None,
             recognition_distance: None,
             intake_ceiling_k: None,
             uptake_structure_exponent: None,
@@ -1127,7 +1091,6 @@ mod tests {
             horizon: 2000,
             base_seed: 1000,
             founder_aggregation: None,
-            satiation_sensitivity: None,
             recognition_distance: None,
             intake_ceiling_k: None,
             uptake_structure_exponent: None,
@@ -1249,22 +1212,17 @@ mod tests {
         assert_eq!(back, pinned);
     }
 
-    /// `--satiation-sensitivity C` and `--recognition-distance D` pin every
-    /// resolved world's need-gate and recognition scales (#619), and each row
-    /// records them; unpinned rows read and write as before.
+    /// `--recognition-distance D` pins every resolved world's recognition
+    /// scale (#619), and each row records it; unpinned rows read and write as
+    /// before. The withdrawn surplus gate's `--satiation-sensitivity` (#684)
+    /// is no longer accepted.
     #[test]
-    fn consumption_scale_pins_reach_the_world_and_the_row() {
+    fn a_recognition_distance_pin_reaches_the_world_and_the_row() {
         let parse = |a: &[&str]| parse_args(a.iter().map(|s| s.to_string()));
-        let a = parse(&[]).unwrap();
-        assert_eq!(
-            (a.satiation_sensitivity, a.recognition_distance),
-            (None, None)
-        );
-        assert!(parse(&["--satiation-sensitivity", "-1"]).is_err());
+        assert_eq!(parse(&[]).unwrap().recognition_distance, None);
+        assert!(parse(&["--satiation-sensitivity", "0"]).is_err());
         assert!(parse(&["--recognition-distance", "x"]).is_err());
         let args = parse(&[
-            "--satiation-sensitivity",
-            "3",
             "--recognition-distance",
             "1.5",
             "--founder-aggregation",
@@ -1275,18 +1233,12 @@ mod tests {
             "1",
         ])
         .unwrap();
-        assert_eq!(
-            (args.satiation_sensitivity, args.recognition_distance),
-            (Some(3.0), Some(1.5))
-        );
+        assert_eq!(args.recognition_distance, Some(1.5));
 
         let sampled = sampled_units();
         let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
         let pinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
-        assert_eq!(
-            (pinned.satiation_sensitivity, pinned.recognition_distance),
-            (Some(3.0), Some(1.5))
-        );
+        assert_eq!(pinned.recognition_distance, Some(1.5));
         let unpinned_args = parse(&[
             "--founder-aggregation",
             "0",
@@ -1298,7 +1250,7 @@ mod tests {
         .unwrap();
         let unpinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &unpinned_args);
         let json = serde_json::to_string(&unpinned).unwrap();
-        assert!(!json.contains("satiation_sensitivity") && !json.contains("recognition_distance"));
+        assert!(!json.contains("recognition_distance"));
         assert_ne!(pinned.seeds, unpinned.seeds, "the pins change the rollout");
         let back: Row = serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
         assert_eq!(back, pinned);
@@ -1385,7 +1337,6 @@ mod tests {
             horizon: 60,
             base_seed: 1000,
             founder_aggregation: None,
-            satiation_sensitivity: None,
             recognition_distance: None,
             intake_ceiling_k: None,
             uptake_structure_exponent: b,

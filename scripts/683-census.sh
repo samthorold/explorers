@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # #683: the census of mobile autotrophy (kin_killer_diet section L) on the
-# committed atlas, seeds 1000–1004, T = 2000, ungated (satiation sensitivity
-# 0), in two modes: decoded and at founder_aggregation = 0. The reading
+# committed atlas, seeds 1000–1004, T = 2000, ungated (the stepper's
+# expression is ungated since #684; earlier binaries default kin_killer_diet
+# to satiation sensitivity 0), in two modes: decoded and at founder_aggregation = 0. The reading
 # decides whether substrate contact (#648) comes out of reserve
 # (world-rules.md flow 2).
 #
@@ -75,10 +76,9 @@ kkd() { # out-stem, flags...
   local s=$1
   shift
   untear "$K/$s.jsonl"
-  # Ungated: satiation sensitivity 0.
   "$BIN/kin_killer_diet" --atlas "$ATLAS" --configs "$C" \
     --max-ticks "$T" --seed "$SEED" --ensemble "$E" \
-    --satiation-sensitivity 0 ${@+"$@"} \
+    ${@+"$@"} \
     --out "$K/$s.jsonl" >"$K/$s.md"
 }
 

@@ -1,12 +1,14 @@
 //! A grazer's hunger at the moment it grazes (issue #606).
 //!
-//! Need-gated consumption (#600, #603) scales a consumer's drain by its
+//! Need-gated consumption (#600, #603) scaled a consumer's drain by its
 //! expression `1 / (1 + c·s)`, where `s` is its satiation: the lesser of its
 //! reserve and the energy its free nutrient can match, in ticks of its own
-//! maintenance. Recognition (#604) then withholds `r·w(d)` of capability from
-//! a living target that resembles the consumer. So whether a kill was
-//! *hunger-driven* is a question about the grazer's satiation in the drain
-//! pass, and #605 found neither instrument could read it.
+//! maintenance. Recognition (#604) withholds `r·w(d)` of capability from a
+//! living target that resembles the consumer. So whether a kill was
+//! *hunger-driven* was a question about the grazer's satiation in the drain
+//! pass, and #605 found neither instrument could read it. #684 removed the
+//! gate (expression is ungated, `r = 1`); the satiation and surplus readings
+//! stay, as readings of the grazer's state, with no gate replayed on them.
 //!
 //! The drain pass reads each consumer's state after the tick's first four
 //! phases (photosynthesise, absorb nutrients, metabolise, grow). [`PreStep`]
@@ -19,12 +21,11 @@
 //!
 //! #621 redefined satiation as **surplus** above the grow phase's retention
 //! buffer, read after metabolism and before growth, and #623 made the stepper
-//! read it. [`PreStep::metabolised_agents`] replays the first three phases
-//! and [`Surplus`] reads it there; its expression is the stepper's gate
-//! (pinned in the tests). #622 measured its distribution
-//! ([`SurplusDistribution`]) to set the default sensitivity. [`Satiation`]
-//! is the previous, reserve-based reading (#600–#619), which the
-//! [`GrazerHunger`] tallies still band by.
+//! read it until #684. [`PreStep::metabolised_agents`] replays the first
+//! three phases and [`Surplus`] reads it there. #622 measured its
+//! distribution ([`SurplusDistribution`]) to set the then default
+//! sensitivity. [`Satiation`] is the previous, reserve-based reading
+//! (#600–#619), which the [`GrazerHunger`] tallies still band by.
 //!
 //! #629 reads intake at the same point: [`PreStep::drain_start`] keeps what
 //! the replayed photosynthesis and uptake credited each agent, for
@@ -164,9 +165,8 @@ impl PreStep {
     }
 
     /// Every agent's [`KillerReading`] for the tick: drain-time
-    /// [`Satiation`] off the grown roster, [`Surplus`] and its expression off
-    /// the metabolised roster (the stepper's pre-growth read), at `params`'
-    /// satiation sensitivity.
+    /// [`Satiation`] off the grown roster, [`Surplus`] off the metabolised
+    /// roster (the pre-growth read).
     pub fn killer_readings(&self, params: &WorldParameters) -> HashMap<u64, KillerReading> {
         let metabolised = self.metabolised_agents(params);
         let mut grown = metabolised.clone();
@@ -175,11 +175,7 @@ impl PreStep {
             .iter()
             .zip(&grown)
             .map(|(m, g)| {
-                let reading = KillerReading::at(
-                    Satiation::of(g, params),
-                    Surplus::of(m, params),
-                    params.satiation_sensitivity,
-                );
+                let reading = KillerReading::of(Satiation::of(g, params), Surplus::of(m, params));
                 (m.id, reading)
             })
             .collect()
@@ -187,25 +183,22 @@ impl PreStep {
 }
 
 /// What a killing grazer is read at (#606, #624): its drain-time
-/// [`Satiation`] (the pre-#623 reading) and its pre-growth [`Surplus`] with
-/// the need-gated expression `E = 1 / (1 + c·s)` at the run's `c`.
+/// [`Satiation`] (the pre-#623 reading) and its pre-growth [`Surplus`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct KillerReading {
     pub satiation: Satiation,
     pub surplus: Surplus,
-    pub expression: f32,
     /// The intake gate's predicted expression at a given ceiling multiple
     /// `k` (#629; `IntakeReading::expression_at`), when one was given.
     pub intake_expression: Option<f32>,
 }
 
 impl KillerReading {
-    /// A reading with its expression taken at satiation sensitivity `c`.
-    pub fn at(satiation: Satiation, surplus: Surplus, c: f32) -> Self {
+    /// A reading of these two states, with no intake-gate expression.
+    pub fn of(satiation: Satiation, surplus: Surplus) -> Self {
         KillerReading {
             satiation,
             surplus,
-            expression: surplus.expression_at(c),
             intake_expression: None,
         }
     }
@@ -237,9 +230,8 @@ fn nutrient_matched_energy(agent: &Agent, params: &WorldParameters) -> f32 {
 /// about to mobilise. Only the energy side is shifted by the buffer, so
 /// `energy` is negative below it.
 ///
-/// Computed here as well as by the stepper (#623) so the read works on the
-/// replayed roster and splits the two sides; [`Surplus::expression`] is
-/// pinned against `phase::consumption_expression` in the tests.
+/// The stepper read it for the surplus gate from #623 until #684 removed
+/// the gate; it stays a reading of the agent's state, split by side.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Surplus {
     /// `(reserve − buffer) / m`, with `buffer = growth_retention_multiplier × m`.
@@ -259,29 +251,12 @@ impl Surplus {
         }
     }
 
-    /// `s = max(0, min(energy, nutrient))`: the surplus the need gate
-    /// reads.
+    /// `s = max(0, min(energy, nutrient))`: the surplus the withdrawn need
+    /// gate read.
     pub fn ticks(&self) -> f32 {
         self.energy.min(self.nutrient).max(0.0)
     }
-
-    /// The need-gated expression `1 / (1 + c·s)` at this surplus: the
-    /// stepper's gate (#623; pinned against `phase::consumption_expression`
-    /// in the tests).
-    pub fn expression(&self, params: &WorldParameters) -> f32 {
-        self.expression_at(params.satiation_sensitivity)
-    }
-
-    /// [`Surplus::expression`] at satiation sensitivity `c`.
-    pub fn expression_at(&self, c: f32) -> f32 {
-        let s = self.ticks();
-        if c <= 0.0 || s <= 0.0 {
-            return 1.0;
-        }
-        1.0 / (1.0 + c * s)
-    }
 }
-
 /// Lower edge of the [`SurplusDistribution`]'s log bins, in ticks of
 /// maintenance; positive surplus below it is binned together.
 pub const SURPLUS_LOW: f64 = 1e-3;
@@ -447,18 +422,7 @@ impl Satiation {
     pub fn nutrient_limited(&self) -> bool {
         self.nutrient < self.energy
     }
-
-    /// The pre-#623 need-gated expression `1 / (1 + c·s)` at this satiation.
-    pub fn expression(&self, params: &WorldParameters) -> f32 {
-        let c = params.satiation_sensitivity;
-        let s = self.ticks();
-        if c <= 0.0 || s <= 0.0 {
-            return 1.0;
-        }
-        1.0 / (1.0 + c * s)
-    }
 }
-
 /// Upper edges of the trait-distance bands (on `TraitVector::distance`, the
 /// recognition metric): `[0, 0.1)`, `[0.1, 0.25)`, `[0.25, 0.5)`,
 /// `[0.5, 1)`, `≥ 1`. At the default recognition distance 0.5 the first three
@@ -477,25 +441,24 @@ pub const SATIATION_BANDS: usize = SATIATION_EDGES.len() + 1;
 /// The bands under half expression (at the pre-#623 default): hungry.
 pub const HUNGRY_BANDS: usize = 3;
 
-/// Upper edges of the surplus-expression bands (#624), on
-/// `E = 1 / (1 + c·s)`: `[0, 0.1)`, `[0.1, 0.5)`, `[0.5, 0.9)`, `≥ 0.9`.
+/// Upper edges of the expression bands (#624, #629), on a gate expression
+/// `E ∈ [0, 1]`: `[0, 0.1)`, `[0.1, 0.5)`, `[0.5, 0.9)`, `≥ 0.9`. The intake
+/// gate's predicted expression is banded on them.
 pub const EXPRESSION_EDGES: [f32; 3] = [0.1, 0.5, 0.9];
 pub const EXPRESSION_BANDS: usize = EXPRESSION_EDGES.len() + 1;
-/// Column headers after the row label for [`GrazerHunger::expression_cells`].
-pub const EXPRESSION_TABLE_HEADER: &str = "kin pairs | kin E ≥ 0.5 | kin s = 0 | kin E < 0.1 | kin E 0.1–0.5 | kin E 0.5–0.9 | kin E ≥ 0.9 | non-kin pairs | non-kin E ≥ 0.5";
-/// The first band at most half gated (`E ≥ 0.5`, the hungry side of half expression).
+/// The first band at or above half expression (`E ≥ 0.5`).
 pub const HALF_EXPRESSION_BAND: usize = 2;
 
 fn band(value: f32, edges: &[f32]) -> usize {
     edges.iter().take_while(|&&e| value >= e).count()
 }
 
-/// Band index of a trait distance.
 /// The [`EXPRESSION_EDGES`] band an expression falls in.
 pub fn expression_band(e: f32) -> usize {
     band(e, &EXPRESSION_EDGES)
 }
 
+/// Band index of a trait distance.
 pub fn distance_band(d: f32) -> usize {
     band(d, &DISTANCE_EDGES)
 }
@@ -510,11 +473,6 @@ pub struct GrazerHunger {
     /// Of those, pairs whose grazer's scarcer currency was nutrient:
     /// `[kin][satiation band]`.
     pub nutrient_limited: [[u64; SATIATION_BANDS]; 2],
-    /// `[kin][expression band]`: pairs by the grazer's pre-growth surplus
-    /// expression at the run's `c` ([`EXPRESSION_EDGES`], #624). Empty on
-    /// rows written before #624.
-    #[serde(default)]
-    pub expression: [[u64; EXPRESSION_BANDS]; 2],
     /// `[kin]`: pairs whose grazer held no pre-growth surplus (`s = 0`, full
     /// expression).
     #[serde(default)]
@@ -535,19 +493,10 @@ impl GrazerHunger {
         if satiation.nutrient_limited() {
             self.nutrient_limited[k][s] += 1;
         }
-        self.expression[k][band(reading.expression, &EXPRESSION_EDGES)] += 1;
         self.surplus_zero[k] += u64::from(reading.surplus.ticks() <= 0.0);
         if let Some(e) = reading.intake_expression {
             self.intake_expression[k][band(e, &EXPRESSION_EDGES)] += 1;
         }
-    }
-
-    /// Pairs of this kinship whose grazer was at most half gated
-    /// (`E ≥ 0.5`) at its pre-growth surplus.
-    pub fn at_half_expression(&self, kin: bool) -> u64 {
-        self.expression[usize::from(kin)][HALF_EXPRESSION_BAND..]
-            .iter()
-            .sum()
     }
 
     pub fn merge(&mut self, other: &GrazerHunger) {
@@ -561,38 +510,10 @@ impl GrazerHunger {
                 self.nutrient_limited[k][s] += other.nutrient_limited[k][s];
             }
             for e in 0..EXPRESSION_BANDS {
-                self.expression[k][e] += other.expression[k][e];
                 self.intake_expression[k][e] += other.intake_expression[k][e];
             }
             self.surplus_zero[k] += other.surplus_zero[k];
         }
-    }
-
-    /// The cells of a "killing grazers at the pre-growth surplus read" table
-    /// row, after the row label, matching [`EXPRESSION_TABLE_HEADER`]: kin
-    /// pairs, their share at most half gated (`E ≥ 0.5`) and at zero surplus,
-    /// kin pairs by expression band, non-kin pairs and their share at most
-    /// half gated.
-    pub fn expression_cells(&self) -> String {
-        let share = |n: u64, d: u64| {
-            if d == 0 {
-                "–".to_string()
-            } else {
-                format!("{:.0}%", 100.0 * n as f64 / d as f64)
-            }
-        };
-        let (kin, non) = (self.total(true), self.total(false));
-        let bands = self.expression[1]
-            .iter()
-            .map(|n| n.to_string())
-            .collect::<Vec<_>>()
-            .join(" | ");
-        format!(
-            "{kin} | {} | {} | {bands} | {non} | {}",
-            share(self.at_half_expression(true), kin),
-            share(self.surplus_zero[1], kin),
-            share(self.at_half_expression(false), non),
-        )
     }
 
     /// Pairs of this kinship.
@@ -695,9 +616,8 @@ mod tests {
 
     /// Replaying the pre-step state recovers what the stepper drained with:
     /// every living drain a lone consumer took from a target that could cover
-    /// it equals `h_eff · u_H · max(0, E − r·w)`, with `E` read off the
-    /// metabolised roster (before growth, #623) and the target's structure off
-    /// the drain-time roster, bit for bit.
+    /// it equals `h_eff · u_H · max(0, 1 − r·w)` (expression ungated, #684),
+    /// with the target's structure off the drain-time roster, bit for bit.
     #[test]
     fn replayed_state_reproduces_the_stepper_s_living_drains() {
         let mut world = sample_31_world(1000);
@@ -721,11 +641,6 @@ mod tests {
             }
             let drain_time = pre.drain_time_agents(&params);
             let by_id: HashMap<u64, &Agent> = drain_time.iter().map(|a| (a.id, a)).collect();
-            let metabolised = pre.metabolised_agents(&params);
-            let gate_of: HashMap<u64, f32> = metabolised
-                .iter()
-                .map(|a| (a.id, phase::consumption_expression(a, &params)))
-                .collect();
             let mut consumers_of: HashMap<u64, usize> = HashMap::new();
             for e in &events {
                 *consumers_of.entry(e.target.unwrap()).or_default() += 1;
@@ -736,7 +651,7 @@ mod tests {
                     continue;
                 }
                 let (c, t) = (by_id[&e.source], by_id[&target]);
-                let expression = (gate_of[&e.source]
+                let expression = (1.0
                     - phase::RECOGNITION_RESTRAINT
                         * phase::resemblance(&c.traits, &t.traits, &params))
                 .max(0.0);
@@ -755,8 +670,8 @@ mod tests {
     }
 
     /// Satiation reads both currencies in ticks of maintenance, the reading
-    /// the need gate took before #623: `1 / (1 + c·min(s_E, s_N))` on the
-    /// whole reserve at drain time.
+    /// the need gate took before #623: `min(s_E, s_N)` on the whole reserve
+    /// at drain time.
     #[test]
     fn satiation_is_the_reserve_based_co_limited_reading() {
         let mut world = sample_31_world(1001);
@@ -768,12 +683,6 @@ mod tests {
         let (mut energy_limited, mut nutrient_limited) = (0, 0);
         for a in &drain_time {
             let s = Satiation::of(a, &params);
-            let want = 1.0 / (1.0 + params.satiation_sensitivity * s.ticks());
-            let got = s.expression(&params);
-            assert!(
-                (got - want).abs() <= 1e-6 * want.max(1e-6),
-                "{s:?}: {got} vs {want}"
-            );
             let m = phase::metabolic_cost(a, &params);
             assert!((s.energy - a.reserve.max(0.0) / m).abs() <= 1e-5 * s.energy.max(1.0));
             assert_eq!(s.ticks(), s.energy.min(s.nutrient));
@@ -784,31 +693,6 @@ mod tests {
             }
         }
         assert!(energy_limited + nutrient_limited > 10);
-    }
-
-    /// The stepper reads surplus satiation itself (#623): on the metabolised
-    /// roster, [`Surplus`]'s expression `1 / (1 + c·s)` is the stepper's
-    /// need gate, and some agent is gated by it.
-    #[test]
-    fn surplus_expression_is_the_stepper_s_need_gate() {
-        let mut world = sample_31_world(1001);
-        for _ in 0..60 {
-            world.step();
-        }
-        let params = world.params().clone();
-        let metabolised = PreStep::capture(&world).metabolised_agents(&params);
-        let mut gated = 0;
-        for a in &metabolised {
-            let want = phase::consumption_expression(a, &params);
-            let got = Surplus::of(a, &params).expression(&params);
-            assert!(
-                (got - want).abs() <= 1e-5 * want.max(1e-6),
-                "{:?}: {got} vs {want}",
-                Surplus::of(a, &params)
-            );
-            gated += usize::from(want < 1.0);
-        }
-        assert!(gated > 0, "some agent carries a surplus the gate reads");
     }
 
     fn lone_agent(reserve: f32, nutrient: f32) -> (Agent, WorldParameters) {
@@ -1009,15 +893,14 @@ mod tests {
         }
     }
 
-    /// A reading with only drain-time satiation set (ungated, zero surplus).
+    /// A reading with only drain-time satiation set (zero surplus).
     fn unread(satiation: Satiation) -> KillerReading {
-        KillerReading::at(
+        KillerReading::of(
             satiation,
             Surplus {
                 energy: 0.0,
                 nutrient: 0.0,
             },
-            0.0,
         )
     }
 
@@ -1043,67 +926,50 @@ mod tests {
     }
 
     /// A grazer whose pre-growth surplus is `s` ticks (energy-limited).
-    fn with_surplus(s: f32, c: f32) -> KillerReading {
-        KillerReading::at(
+    fn with_surplus(s: f32) -> KillerReading {
+        KillerReading::of(
             sated(30.0, false),
             Surplus {
                 energy: s,
                 nutrient: s + 1.0,
             },
-            c,
         )
     }
 
-    /// Each kill pair is also banded by its grazer's surplus expression
-    /// `E = 1/(1 + c·s)` at the run's `c` (#624): `[0, 0.1)`, `[0.1, 0.5)`,
-    /// `[0.5, 0.9)`, `≥ 0.9`, with pairs at zero surplus counted apart.
+    /// Each kill pair whose grazer held no pre-growth surplus is counted
+    /// apart (#624); a negative energy side is zero surplus.
     #[test]
-    fn grazer_hunger_bands_pairs_by_surplus_expression() {
-        let c = 33.0;
+    fn grazer_hunger_counts_pairs_at_zero_surplus() {
         let mut h = GrazerHunger::default();
-        // s = 0 → E = 1; s = 0.002 → E ≈ 0.94; s = 0.01 → E ≈ 0.75;
-        // s = 0.1 → E ≈ 0.23; s = 1 → E ≈ 0.03; a negative energy side is s = 0.
-        for s in [0.0, 0.002, 0.01, 0.1, 1.0, -2.0] {
-            h.record(true, 0.05, with_surplus(s, c));
+        for s in [0.0, 0.002, 1.0, -2.0] {
+            h.record(true, 0.05, with_surplus(s));
         }
-        h.record(false, 0.05, with_surplus(1.0, c));
-        assert_eq!(h.expression[1], [1, 1, 1, 3]);
-        assert_eq!(h.expression[0], [1, 0, 0, 0]);
+        h.record(false, 0.05, with_surplus(1.0));
         assert_eq!(h.surplus_zero, [0, 2]);
-        assert_eq!(h.at_half_expression(true), 4);
-        assert_eq!(h.total(true), 6);
-        // Ungated (c = 0) every grazer is at full expression.
-        let mut u = GrazerHunger::default();
-        u.record(true, 0.05, with_surplus(1.0, 0.0));
-        assert_eq!(u.expression[1], [0, 0, 0, 1]);
         let mut sum = h;
         sum.merge(&h);
-        assert_eq!(sum.expression[1], [2, 2, 2, 6]);
         assert_eq!(sum.surplus_zero, [0, 4]);
-        assert_eq!(
-            h.expression_cells(),
-            "6 | 67% | 33% | 1 | 1 | 1 | 3 | 1 | 0%"
-        );
-        assert_eq!(
-            h.expression_cells().matches('|').count(),
-            EXPRESSION_TABLE_HEADER.matches('|').count()
-        );
     }
 
-    /// Rows written before #624 carry no expression bands and read back empty.
+    /// Rows written before #624 carry no surplus or intake bands and read
+    /// back empty; rows written before #684 carry the withdrawn gate's
+    /// expression bands, which are ignored.
     #[test]
-    fn grazer_hunger_reads_back_without_expression_bands() {
+    fn grazer_hunger_reads_back_rows_from_before_and_after_the_gate() {
         let mut old = serde_json::to_value(GrazerHunger::default()).unwrap();
         let o = old.as_object_mut().unwrap();
-        o.remove("expression");
         o.remove("surplus_zero");
+        o.remove("intake_expression");
+        o.insert(
+            "expression".into(),
+            serde_json::json!([[1, 2, 3, 4], [5, 6, 7, 8]]),
+        );
         let back: GrazerHunger = serde_json::from_value(old).unwrap();
         assert_eq!(back, GrazerHunger::default());
     }
 
     /// The killer reading takes drain-time satiation off the grown roster
-    /// and surplus off the metabolised roster, before growth spends it, at
-    /// the world's `c`.
+    /// and surplus off the metabolised roster, before growth spends it.
     #[test]
     fn killer_readings_read_surplus_on_the_pre_growth_roster() {
         let mut world = sample_31_world(1003);
@@ -1111,7 +977,6 @@ mod tests {
             world.step();
         }
         let params = world.params().clone();
-        assert!(params.satiation_sensitivity > 0.0);
         let pre = PreStep::capture(&world);
         let readings = pre.killer_readings(&params);
         let metabolised = pre.metabolised_agents(&params);
@@ -1123,7 +988,6 @@ mod tests {
             let want = Surplus::of(m, &params);
             assert_eq!(r.surplus, want);
             assert_eq!(r.satiation, Satiation::of(d, &params));
-            assert_eq!(r.expression, want.expression(&params));
             grown_apart += usize::from(Surplus::of(d, &params) != want);
         }
         assert!(grown_apart > 0, "growth moves some agent's surplus");

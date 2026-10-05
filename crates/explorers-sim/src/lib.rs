@@ -176,9 +176,6 @@ fn default_growth_retention_multiplier() -> f32 {
 fn default_reserve_mobilisation_rate() -> f32 {
     1.0
 }
-fn default_satiation_sensitivity() -> f32 {
-    33.0
-}
 fn default_recognition_distance() -> f32 {
     0.5
 }
@@ -601,34 +598,14 @@ pub struct WorldParameters {
     /// Default 0.0 (network off).
     #[serde(default)]
     pub network_transfer_efficiency: f32,
-    /// Satiation sensitivity `c` of need-gated consumption (world-rules.md,
-    /// "Capability and expression are decoupled: consumption is need-gated").
-    /// Heterotrophy is capability — the most a consumer can drain per tick; the
-    /// drain it expresses is capability × `1 / (1 + c × s)`, where `s` is the
-    /// consumer's co-limited **surplus satiation**: its reserve above the grow
-    /// phase's retention buffer (`growth_retention_multiplier` ticks of
-    /// maintenance), capped by the reserve energy its free nutrient could
-    /// match in growth (not shifted by the buffer), floored at zero and
-    /// measured in ticks of its own per-tick metabolic cost. Read once per
-    /// consumer after metabolise and before grow. A consumer at or below its
-    /// buffer, or with no free nutrient, drains at full capability; one
-    /// carrying `1/c` ticks of surplus drains half; the response falls
-    /// smoothly toward zero as the surplus grows, with one kink at the buffer.
-    /// The gate reads only the consumer, so it applies identically to living
-    /// and carcass targets. `0.0` is the flat (ungated) limiting case — the
-    /// pre-need-gating drain — kept for comparison. Units `1/T` (per tick of
-    /// maintenance carried as surplus). Default 33: `1 / s₂₅⁺`, the 25th
-    /// percentile of surplus over light-fed mixotrophs with positive surplus on
-    /// the decoded atlas (#622, `s₂₅⁺ = 0.030` ticks).
-    #[serde(default = "default_satiation_sensitivity")]
-    pub satiation_sensitivity: f32,
     /// Recognition distance (world-rules.md, "Recognition: living targets that
     /// resemble the consumer are spared"): the trait-space distance — on the
     /// same metric as `reproductive_compatibility_distance` — over which a
-    /// consumer spares living targets that resemble it. Suppression of the
-    /// expressed drain is strongest toward an identical target and falls
-    /// smoothly to none at this distance; it relaxes, only partially, with the
-    /// consumer's hunger. Carcasses are never spared. `0.0` is the kin-blind
+    /// consumer spares living targets that resemble it. Expression is
+    /// ungated, so the drain toward a living target is capability ×
+    /// `max(0, 1 − RECOGNITION_RESTRAINT × resemblance)`: an identical target
+    /// is fully spared, and the suppression falls smoothly to none at this
+    /// distance. Carcasses are never spared. `0.0` is the kin-blind
     /// limiting case — the pre-recognition drain — kept for comparison.
     /// Dimensionless (a trait-space distance). Default 0.5: half a trait unit,
     /// ten mutation steps from a parent yet well inside the producer–consumer
@@ -1386,11 +1363,9 @@ impl World {
         // Agents that could not fund this tick's metabolism have starved; they
         // die at the death check whatever later phases credit them (#540).
         let starved_ids = phase::starved_ids(&self.agents);
-        // Each consumer's need-gated expression, read once on the surplus
-        // the grow phase is about to mobilise (execution-model.md, Pass 1).
-        let consumer_expression = phase::consumption_expressions(&self.agents, &self.params);
-        // And its nutrient deficit, read at the same point: what the surplus
-        // is waiting on caps the nutrient it keeps from a bite (flow 3).
+        // Each consumer's nutrient deficit, read once on the surplus the grow
+        // phase is about to mobilise (execution-model.md, Pass 1): what the
+        // surplus is waiting on caps the nutrient it keeps from a bite (flow 3).
         let consumer_deficit = phase::retention_deficits(&self.agents, &self.params);
 
         // 4. Grow
@@ -1399,13 +1374,12 @@ impl World {
         events.extend(grow_events);
 
         // 5. Resolve drains (coordinated pass 1)
-        let drain_result = phase::resolve_drains_with_expression(
+        let drain_result = phase::resolve_drains_with_deficits(
             &mut self.agents,
             &mut self.carcasses,
             &grid,
             &self.params,
             &mut self.nutrient_grid,
-            &consumer_expression,
             &consumer_deficit,
         );
         self.dissipated_energy += drain_result.dissipated;
@@ -2033,7 +2007,6 @@ mod tests {
             network_transfer_efficiency: 0.0,
             uptake_structure_exponent: 0.0,
             uptake_reference_structure: DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
-            satiation_sensitivity: 0.1,
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             solar_flux_magnitude: 10.0,
@@ -2238,18 +2211,27 @@ mod tests {
     }
 
     #[test]
-    fn the_need_gate_reads_surplus_before_growth_mobilises_it() {
-        // Surplus satiation is read after metabolise and before grow
-        // (execution-model.md, Pass 1): at `reserve_mobilisation_rate = 1` the
-        // grow phase mobilises the whole surplus, so a gate read after growth
-        // would always see the bare buffer and never close. A pure consumer
-        // (kappa 0: its surplus goes to repro_reserve) holding, after paying
-        // this tick's metabolism, 10 ticks of maintenance above its 2-tick
-        // buffer expresses half its capability (c = 0.1).
+    fn a_recipe_carrying_the_withdrawn_satiation_sensitivity_still_loads() {
+        // The surplus gate and its parameter are gone (#684), but recipes
+        // written before then carry `satiation_sensitivity`; the committed
+        // recipe is one. Unknown fields are ignored on load.
+        let committed = include_str!("../../../recipe.json");
+        assert!(committed.contains("\"satiation_sensitivity\""));
+        let recipe: WorldRecipe = serde_json::from_str(committed).expect("recipe.json loads");
+        let round_trip = serde_json::to_string(&recipe).unwrap();
+        assert!(!round_trip.contains("satiation_sensitivity"));
+    }
+
+    #[test]
+    fn a_well_fed_consumer_drains_at_full_capability() {
+        // Expression is ungated (world-rules.md, "Capability and expression
+        // are decoupled: expression is ungated"): a consumer holding, after
+        // paying this tick's metabolism, 10 ticks of maintenance above its
+        // retention buffer drains a trait-distant living target at its full
+        // heterotrophic capability.
         let params = WorldParameters {
             initial_population_size: 0,
             reserve_mobilisation_rate: 1.0,
-            satiation_sensitivity: 0.1,
             ..test_params()
         };
         let m = params.base_metabolic_rate;
@@ -2283,8 +2265,8 @@ mod tests {
         let drained = living_drain_in_one_step(&mut world, consumer);
         let capability = 0.6 * units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
         assert!(
-            (drained - 0.5 * capability).abs() < 1e-4 * capability,
-            "half capability at 10 ticks of surplus: drained {drained}, capability {capability}"
+            (drained - capability).abs() < 1e-4 * capability,
+            "full capability at 10 ticks of surplus: drained {drained}, capability {capability}"
         );
     }
 
@@ -3066,9 +3048,6 @@ mod tests {
             trophic_distance_decay: 0.0,
             initial_population_size: 0,
             movement_cost_coefficient: 0.0,
-            // Ungated drain: this pins use-wear, and a 50-energy reserve is
-            // ample surplus, which the need gate (read before growth) damps.
-            satiation_sensitivity: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -4133,7 +4112,6 @@ mod tests {
             network_transfer_efficiency: 0.0,
             uptake_structure_exponent: 0.0,
             uptake_reference_structure: DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
-            satiation_sensitivity: 0.1,
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             solar_flux_magnitude: 10.0,
