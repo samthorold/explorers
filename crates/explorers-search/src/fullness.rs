@@ -691,7 +691,7 @@ mod tests {
         }
     }
 
-    /// `sample:31`'s physics, ungated, recognition off.
+    /// `sample:31`'s physics, recognition off.
     fn params() -> WorldParameters {
         let (mut params, _) = resolve_config(
             ConfigSource::SAMPLE,
@@ -699,7 +699,6 @@ mod tests {
             &Default::default(),
             &sampled_units(),
         );
-        params.satiation_sensitivity = 0.0;
         params.recognition_distance = 0.0;
         params
     }

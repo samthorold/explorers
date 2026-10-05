@@ -14,7 +14,11 @@
 //! deficit to that cap: only the closed web moves, where light-fed facultative
 //! detritivores (autotrophy 0.25 + heterotrophy 0.6) now keep the carcass
 //! nutrient their surplus is waiting on. Recognition is unchanged and still
-//! subtracts nothing at `recognition_distance = 0`.
+//! subtracts nothing at `recognition_distance = 0`. Re-pinned for #684,
+//! which removes the surplus gate (expression is ungated): the kin-blind
+//! world is now the flat, ungated drain, and the example4, example9 and
+//! example10 fingerprints are exactly the pre-need-gating ones the former
+//! `flat_satiation_limit` test pinned (f6a1c1f with #652's retention cap).
 
 use explorers_sim::{World, WorldRecipe};
 
@@ -61,25 +65,25 @@ fn fingerprint(world: &World) -> u64 {
 /// The scenarios, seeds and horizons, with the pre-recognition fingerprint of
 /// each.
 const PINNED: [(&str, u64, u64, u64); 5] = [
-    ("example4.json", 7, 200, 0x75ce_32f5_4b50_b59b),
+    ("example4.json", 7, 200, 0xd804_3d11_47fc_99a9),
     (
         "example9_detrital_pathway.json",
         11,
         200,
-        0x97fa_6123_dca4_2752,
+        0x7654_dd4b_64cc_b3d8,
     ),
     (
         "example10_predator_prey_hopf.json",
         3,
         200,
-        0x3a6b_7328_5ec0_bab9,
+        0xb416_319f_dae4_51b7,
     ),
-    ("example13_closed_web.json", 5, 200, 0x5a22_e5a0_80ea_e07b),
+    ("example13_closed_web.json", 5, 200, 0x3729_25a6_f93b_4990),
     (
         "example11_branching_coexistence.json",
         2,
         200,
-        0x4b71_bfbf_8a92_73b1,
+        0x9749_9876_7d6e_76ca,
     ),
 ];
 

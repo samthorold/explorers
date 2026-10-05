@@ -833,15 +833,11 @@ mod tests {
     /// (#606): a tight cohort of near-producers with raised heterotrophy
     /// breeds and grazes its own young, and each such death books its
     /// grazers by kinship (a lineage member), trait distance and satiation.
-    /// Run ungated (`satiation_sensitivity = 0`): at the default surplus gate
-    /// (#623) this cohort kills none of its young within the horizon, and the
-    /// pin is of the read, not of the gate.
     #[test]
     fn account_reads_the_killing_grazers_of_members_grazed_to_death() {
         let sampled = sampled_units();
-        let (mut params, dist) =
+        let (params, dist) =
             resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
-        params.satiation_sensitivity = 0.0;
         let mut world = World::new(params, dist.clone(), 1000);
         for _ in 0..120 {
             world.step();

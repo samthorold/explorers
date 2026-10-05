@@ -321,8 +321,17 @@ const PATHWAY_TEST_MAX_TICKS: u64 = 500;
 /// need. The same single step-loop accumulates the topology projection (for the
 /// detrital reliance) and the predation-vs-decomposition tally (the green/brown
 /// split), so no property requires a second run of the same seed.
+///
+/// The sweep runs **kin-blind** (`recognition_distance = 0`). The scenario's
+/// deposit is sized for one obligate decomposer (#341), and under the
+/// default recognition at restraint 1 (#684) the decomposer spares its own
+/// near-identical offspring. Its lineage then grows on the finite deposit
+/// and exhausts it: on seed 12, 11 decomposers empty the deposit by tick
+/// ~442 and starve together at 445–446. That boom and bust is ecology, not
+/// wiring, and these tests are a regression on the wiring.
 fn compute_pathway_seed(seed: u64) -> PathwaySeedResult {
-    let recipe = load_pathway();
+    let mut recipe = load_pathway();
+    recipe.parameters.recognition_distance = 0.0;
     let mut world = World::from_recipe(&recipe, seed);
     let mut topology = TopologyProjection::new();
     let mut predation = 0.0f32;

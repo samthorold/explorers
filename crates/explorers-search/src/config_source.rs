@@ -145,18 +145,13 @@ pub fn with_founder_aggregation(
     (params, dist)
 }
 
-/// Pin a resolved world's **satiation sensitivity** and **recognition
-/// distance** (the need gate's and recognition's scales, #600/#604) when given,
-/// leaving everything else as decoded — #619's probe of whether those
-/// mechanisms fail on scale or by design.
-pub fn with_consumption_scales(
+/// Pin a resolved world's **recognition distance** (recognition's scale,
+/// #604) when given, leaving everything else as decoded — #619's probe of
+/// whether recognition fails on scale or by design.
+pub fn with_recognition_distance(
     (mut params, dist): (WorldParameters, InitialDistribution),
-    satiation_sensitivity: Option<f32>,
     recognition_distance: Option<f32>,
 ) -> (WorldParameters, InitialDistribution) {
-    if let Some(c) = satiation_sensitivity {
-        params.satiation_sensitivity = c;
-    }
     if let Some(d) = recognition_distance {
         params.recognition_distance = d;
     }
@@ -248,8 +243,8 @@ pub fn parse_positive(flag: &str, raw: &str) -> Result<f32, String> {
         .ok_or_else(|| format!("{flag} {raw:?} must be a finite number > 0"))
 }
 
-/// Parse a `flag`'s value as a finite number `≥ 0` (`--satiation-sensitivity`,
-/// `--recognition-distance`; `0` is each mechanism's off limit).
+/// Parse a `flag`'s value as a finite number `≥ 0` (e.g.
+/// `--recognition-distance`, where `0` is the kin-blind limit).
 pub fn parse_non_negative(flag: &str, raw: &str) -> Result<f32, String> {
     raw.parse::<f32>()
         .ok()
@@ -326,25 +321,16 @@ mod tests {
         assert_eq!(dist, as_decoded);
     }
 
-    /// #619 probes whether the need gate and recognition fail on scale: a
-    /// pinned satiation sensitivity or recognition distance overrides only
-    /// that parameter, and no pin leaves the world as decoded.
+    /// #619 probes whether recognition fails on scale: a pinned recognition
+    /// distance overrides only that parameter, and no pin leaves the world as
+    /// decoded.
     #[test]
-    fn pinned_consumption_scales_override_only_their_own_parameter() {
+    fn a_pinned_recognition_distance_overrides_only_its_own_parameter() {
         let sampled = sampled_units();
         let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
-        assert_eq!(
-            with_consumption_scales(decoded.clone(), None, None),
-            decoded
-        );
+        assert_eq!(with_recognition_distance(decoded.clone(), None), decoded);
 
-        let (params, dist) = with_consumption_scales(decoded.clone(), Some(1.0), None);
-        assert_eq!(dist, decoded.1);
-        let mut want = decoded.0.clone();
-        want.satiation_sensitivity = 1.0;
-        assert_eq!(params, want);
-
-        let (params, dist) = with_consumption_scales(decoded.clone(), None, Some(1.5));
+        let (params, dist) = with_recognition_distance(decoded.clone(), Some(1.5));
         assert_eq!(dist, decoded.1);
         let mut want = decoded.0.clone();
         want.recognition_distance = 1.5;

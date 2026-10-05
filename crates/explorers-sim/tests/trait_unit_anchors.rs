@@ -77,14 +77,17 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// example4 and example10 re-pinned for #652: a consumer retains its ratio ×
 /// the energy a bite gains it, not its whole-body demand × that energy
 /// (example8 still feeds no consumer, so it is unchanged).
+/// example4 and example10 re-pinned for #684: expression is ungated and
+/// recognition restraint is 1, so a consumer drains at full capability less
+/// the resemblance of a living target.
 const GOLDEN: [(&str, u64, u64, u64); 3] = [
-    ("example4.json", 7, 300, 0x5aff7ba1c105587d),
+    ("example4.json", 7, 300, 0x1dc20e4bb35be8eb),
     ("example8.json", 11, 300, 0x366aea7e88b3c291),
     (
         "example10_predator_prey_hopf.json",
         3,
         300,
-        0xc4fa3af6318e1385,
+        0x21bbe174a767fc54,
     ),
 ];
 
@@ -108,13 +111,14 @@ fn naming_the_unit_anchors_leaves_every_trajectory_byte_identical() {
 /// structure and move. Digest pinned on `main` at 5a7bede, before the anchors
 /// were named; re-pinned for #600 (need-gated consumption), #604
 /// (recognition), #623 (surplus satiation read before growth) and #652
-/// (retention capped at the consumer's ratio × energy gained).
+/// (retention capped at the consumer's ratio × energy gained) and #684
+/// (ungated expression, recognition restraint 1).
 const USE_WEAR_GOLDEN: (&str, f32, u64, u64, u64) = (
     "example10_predator_prey_hopf.json",
     0.02,
     3,
     300,
-    0x4346bd79c5367179,
+    0xba6a410f14b8c0be,
 );
 
 #[test]
