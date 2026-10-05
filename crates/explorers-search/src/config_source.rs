@@ -94,7 +94,8 @@ impl std::str::FromStr for ConfigSource {
 /// #653). The draws are instruments whose `sample:i` keys name worlds in
 /// recorded rows and research notes; drawing them over a box with another
 /// coordinate would give every one of those worlds a nonzero exponent, so
-/// they keep the size-blind box and every sample world keeps `b = 0`.
+/// they keep the size-blind box and every sample world keeps `b = 0` (and,
+/// since #669, the cross-trait cost `c_AH = 0`).
 pub fn sample_box() -> Vec<ParameterRange> {
     size_blind_ranges()
 }
@@ -555,7 +556,8 @@ mod tests {
 
     /// #653: the uptake structure exponent joined the full box, but the LHS
     /// draws stay over the size-blind box, so `sample:i` and `sample@S:i` keep
-    /// naming the worlds every recorded row names, all with `b = 0`.
+    /// naming the worlds every recorded row names, all with `b = 0` — and,
+    /// since the cross-trait cost joined it too (#669), with `c_AH = 0`.
     #[test]
     fn sample_keys_keep_naming_their_size_blind_worlds() {
         assert_eq!(sample_box(), crate::search::size_blind_ranges());
@@ -569,6 +571,7 @@ mod tests {
                 let world = resolve_config(source, i, &AtlasUnits::default(), &sampled);
                 assert_eq!(world, decode(&units[i], &sample_box()));
                 assert_eq!(world.0.uptake_structure_exponent, 0.0);
+                assert_eq!(world.0.cross_trait_cost, 0.0);
             }
         }
     }

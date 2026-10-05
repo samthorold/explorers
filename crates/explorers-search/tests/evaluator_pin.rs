@@ -163,7 +163,8 @@ const CELLS: [usize; 7] = [27, 39, 50, 59, 71, 77, 78];
 const SEEDS: [u64; 2] = [1000, 1001];
 
 /// The committed atlas's live cells, each decoded over the atlas's own search
-/// box (#559), which it records: the 33-dimension box with `b` (#653, #663).
+/// box (#559), which it records: the 33-dimension box with `b` (#653, #663),
+/// the untaxed box, so every cell decodes with `c_AH = 0` (#669).
 fn atlas_units() -> AtlasUnits {
     read_atlas_units(Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),

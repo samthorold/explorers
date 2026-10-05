@@ -276,6 +276,18 @@ pub fn default_ranges() -> Vec<ParameterRange> {
             min: 0.0,
             max: 1.0,
         }, // 32
+        ParameterRange {
+            name: "cross_trait_cost".into(),
+            // Cross-trait cost `c_AH` (trade-off #5, #669), linear over
+            // [0, 0.14]: the range must hold `c_AH = 0` exactly — the latent
+            // default every world before #669 ran — so a log scale is out.
+            // The top is measured, not copied from the per-trait costs: the
+            // `c_AH` at which a typical light-fed mixotroph that drains pays
+            // about twice its median drain income
+            // (`docs/research/668-cross-trait-calibration.md`).
+            min: 0.0,
+            max: 0.14,
+        }, // 33
     ]
 }
 
@@ -291,6 +303,19 @@ pub fn size_blind_ranges() -> Vec<ParameterRange> {
 
 /// The raw coordinates of [`size_blind_ranges`].
 const SIZE_BLIND_DIMS: usize = 32;
+
+/// The full box as it stood before the cross-trait cost joined it (#669):
+/// the first 33 [`default_ranges`] dims, with mixotrophy untaxed
+/// (`c_AH = 0`, which [`decode`] gives any box without `c_AH`'s coordinate).
+/// The committed atlas (#663) was searched under this one.
+pub fn untaxed_ranges() -> Vec<ParameterRange> {
+    let mut ranges = default_ranges();
+    ranges.truncate(UNTAXED_DIMS);
+    ranges
+}
+
+/// The raw coordinates of [`untaxed_ranges`].
+const UNTAXED_DIMS: usize = 33;
 
 /// The dims the narrowed search box keeps at their full [`default_ranges`]
 /// width (#559). The first eight are the raw core both LHS draws select on
@@ -368,6 +393,7 @@ pub fn narrowed_ranges() -> Vec<ParameterRange> {
 /// | `offspring_structure_fraction` | 0.2 |
 /// | `reserve_mobilisation_rate` | 1.0 (the full range's top, so the band is its top quarter) |
 /// | `uptake_structure_exponent` | 0.0 (size-blind uptake, the range's bottom, so the band is its bottom quarter) |
+/// | `cross_trait_cost` | 0.0 (untaxed mixotrophy, the range's bottom, so the band is its bottom quarter) |
 ///
 /// The founder-distribution dims have no inherited value — `decode` sets the
 /// whole `InitialDistribution` from the unit vector — so their centre is the
@@ -397,6 +423,7 @@ pub fn band_centre(range: &ParameterRange) -> f64 {
         "offspring_structure_fraction" => b.offspring_structure_fraction,
         "reserve_mobilisation_rate" => b.reserve_mobilisation_rate,
         "uptake_structure_exponent" => b.uptake_structure_exponent,
+        "cross_trait_cost" => b.cross_trait_cost,
         _ => return (range.min + range.max) / 2.0,
     };
     // The baseline holds f32; read it back at the decimal it was written as,
@@ -560,6 +587,13 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         } else {
             0.0
         },
+        // A box from before #669 has no coordinate for `c_AH`: its worlds keep
+        // the baseline's untaxed mixotrophy, `c_AH = 0`.
+        cross_trait_cost: if ranges.len() > UNTAXED_DIMS {
+            v(33) as f32
+        } else {
+            0.0
+        },
         ..viable_baseline()
     };
 
@@ -695,7 +729,7 @@ mod tests {
         }
     }
 
-    /// #559: the narrowed box names the same dims (33 since #653) in the same order (so a
+    /// #559: the narrowed box names the same dims (34 since #669) in the same order (so a
     /// unit vector has the same length and axis meaning under either box), and
     /// keeps the ten core dims at exactly their full-box bounds.
     #[test]
@@ -746,8 +780,9 @@ mod tests {
             .zip(&full)
             .filter(|(n, _)| !FULL_WIDTH_DIMS.contains(&n.name.as_str()))
             .collect();
-        // 22 dims at #559, plus the uptake structure exponent (#653).
-        assert_eq!(shrunk.len(), 23);
+        // 22 dims at #559, plus the uptake structure exponent (#653) and the
+        // cross-trait cost (#669).
+        assert_eq!(shrunk.len(), 24);
         for (n, f) in shrunk {
             let centre = band_centre(f);
             assert!(f.min <= n.min && n.max <= f.max, "{} outside", f.name);
@@ -960,13 +995,35 @@ mod tests {
         }
     }
 
+    /// #669: the cross-trait cost `c_AH` is searched linearly over
+    /// `[0, 0.14]` (the top measured in #668; the range must hold `c_AH = 0`
+    /// exactly, the latent default, so a log scale is out), as the last
+    /// coordinate of the full box.
+    #[test]
+    fn decode_spans_the_cross_trait_cost_over_zero_to_its_measured_top() {
+        let ranges = default_ranges();
+        let idx = ranges
+            .iter()
+            .position(|r| r.name == "cross_trait_cost")
+            .expect("cross_trait_cost must be a searched parameter");
+        assert_eq!(idx, ranges.len() - 1, "appended last");
+        assert_eq!((ranges[idx].min, ranges[idx].max), (0.0, 0.14));
+        let mut unit = vec![0.5; ranges.len()];
+        for (u, want) in [(0.0, 0.0), (0.5, 0.07), (1.0, 0.14)] {
+            unit[idx] = u;
+            let (params, _) = decode(&unit, &ranges);
+            assert_eq!(params.cross_trait_cost, want as f32, "unit {u}");
+        }
+    }
+
     /// #653: a unit vector drawn under the size-blind box (the full box before
     /// `b` joined it, 32 raw coordinates) still decodes to the world it named,
-    /// with `b = 0` — the same world as the full box at `b`'s raw coordinate 0.
+    /// with `b = 0` — the same world as the untaxed box (#669) at `b`'s raw
+    /// coordinate 0.
     #[test]
     fn a_size_blind_box_still_decodes_its_worlds_with_b_zero() {
         let old = size_blind_ranges();
-        let full = default_ranges();
+        let full = untaxed_ranges();
         assert_eq!(old.len(), 32);
         assert_eq!(old[..], full[..32]);
         for u in [0.0, 0.3, 1.0] {
@@ -979,6 +1036,28 @@ mod tests {
             let (p33, d33) = decode(&extended, &full);
             assert_eq!(format!("{params:?}"), format!("{p33:?}"));
             assert_eq!(format!("{dist:?}"), format!("{d33:?}"));
+        }
+    }
+
+    /// #669: a unit vector drawn under the untaxed box (the full box before
+    /// `c_AH` joined it, 33 raw coordinates — the committed atlas's) still
+    /// decodes to the world it named, with `c_AH = 0`: the same world as the
+    /// full box at `c_AH`'s raw coordinate 0.
+    #[test]
+    fn an_untaxed_box_still_decodes_its_worlds_with_c_ah_zero() {
+        let old = untaxed_ranges();
+        let full = default_ranges();
+        assert_eq!(old.len(), 33);
+        assert_eq!(old[..], full[..33]);
+        for u in [0.0, 0.3, 1.0] {
+            let unit: Vec<f64> = (0..33).map(|i| (u + i as f64 * 0.017) % 1.0).collect();
+            let (params, dist) = decode(&unit, &old);
+            assert_eq!(params.cross_trait_cost, 0.0);
+            let mut extended = unit.clone();
+            extended.push(0.0);
+            let (p34, d34) = decode(&extended, &full);
+            assert_eq!(format!("{params:?}"), format!("{p34:?}"));
+            assert_eq!(format!("{dist:?}"), format!("{d34:?}"));
         }
     }
 
