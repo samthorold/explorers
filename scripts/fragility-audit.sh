@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # #693: the fragility audit of the committed atlas — for each cell, how often
 # its outcome flips across 10 seeds, and across 8 Gaussian jitters of its
-# unit vector at radii 0.01, 0.03 and 0.1, under the search's evaluator
-# (EvalConfig::default(), T = 2000) on current main physics.
+# unit vector at radii 0.01, 0.03 and 0.1, rolled out exactly as the search
+# rolls out (its evaluator with the bloom stop at 300:10, T = 2000, its
+# 600 s + 600 s per-rollout budget) on current main physics.
 #
 # From the repo root:   scripts/fragility-audit.sh
 # Smoke:                env K=target/fragility-smoke C=atlas:0,atlas:1 T=300 D=2 scripts/fragility-audit.sh

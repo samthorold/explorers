@@ -1,18 +1,25 @@
 //! The fragility audit (#693): for each atlas cell, how often its outcome
 //! flips under small perturbations — of the seed and of its parameters.
 //!
-//! Each cell is evaluated as the search evaluates it (`run_single`,
-//! `EvalConfig::default()`, horizon `--horizon`, default 2000) on an
-//! ensemble of `--ensemble` seeds (default 10, from `--seed`, default 1000),
+//! Each cell is evaluated as the search evaluates it (`run_single` with the
+//! search's evaluator, `QdConfig::default().eval_config()`: the predictive
+//! bloom stop on at `DEFAULT_BLOOM_STOP`, moved by `--bloom-stop TICK:FACTOR`
+//! or turned off by `--no-bloom-stop`; the search's horizon 2000,
+//! `--horizon`; and the search's per-rollout budget `SEARCH_ROLLOUT_BUDGET`)
+//! on an ensemble of `--ensemble` seeds (default 10, from `--seed`, default
+//! 1000; the search's own seeds are not recorded per cell),
 //! first unperturbed (the baseline, radius 0), then at each of `--radii`
 //! (default 0.01, 0.03, 0.1) on `--draws` perturbed copies of its unit
 //! vector (default 8): Gaussian noise of standard deviation the radius per
 //! dimension of the atlas's own unit box, clamped to `[0, 1]`, deterministic
 //! in `--jitter-seed` (`explorers_search::fragility::jitter`). Every row —
 //! one per cell × radius × draw — records the jitter vector, each seed's
-//! verdict (`live`, a failure mode, or an unfinished `timeout` /
-//! `eval_timeout`) and fitness, the persisted fraction and the modal
-//! verdict.
+//! verdict (`live`, a failure mode — `bloom_stop` among them — or an
+//! unfinished `timeout` / `eval_timeout`) and fitness, the persisted
+//! fraction, the modal verdict, the bloom stop it ran under and the search's
+//! a-priori prefilter cliff on the world, if any. The search would record a
+//! gated world dead on that cliff without a rollout; the audit rolls it out
+//! anyway and the summary tallies the gated rows apart.
 //!
 //! The summary (printed after every run, or alone with `--summary`) reads
 //! per cell and radius the **flip rate** — the share of finished (draw,
@@ -33,8 +40,8 @@
 //! `target/fragility-audit.jsonl`) in order when the cell finishes; rows
 //! already present are skipped, so a killed run loses at most one cell.
 //! `--limit N` runs at most `N` further cells; `--configs atlas:0,atlas:5`
-//! selects cells. Each rollout carries the sweep budgets
-//! (`--run-timeout-secs`, `--eval-timeout-secs`, default 300 each); one
+//! selects cells. Each rollout carries the search's budgets
+//! (`--run-timeout-secs`, `--eval-timeout-secs`, default 600 each); one
 //! that exhausts either is recorded unfinished, never dropped.
 //!
 //! ## Running
@@ -48,40 +55,37 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use explorers_genesis::RolloutBudget;
 use explorers_search::config_source::{ConfigSource, parse_selector};
 use explorers_search::fragility::{
-    AXES, FragilityRow, Summary, evaluate_rows, plan_rows, read_cell_meta, summarise,
+    AXES, FragilityRow, Rollouts, Summary, evaluate_rows, plan_rows, read_cell_meta, summarise,
 };
+use explorers_search::search::{BLOOM_STOP_FLAG, NO_BLOOM_STOP_FLAG, parse_bloom_stop};
 use explorers_search::sweep::{
-    DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, RUN_TIMEOUT_FLAG, append_row, plan_tasks,
-    read_atlas_units, read_rows,
+    EVAL_TIMEOUT_FLAG, RUN_TIMEOUT_FLAG, append_row, plan_tasks, read_atlas_units, read_rows,
 };
 
 const DEFAULT_OUT: &str = "target/fragility-audit.jsonl";
-const DEFAULT_HORIZON: u64 = 2000;
 const DEFAULT_SEED: u64 = 1000;
 const DEFAULT_ENSEMBLE: u64 = 10;
 const DEFAULT_DRAWS: usize = 8;
 const DEFAULT_RADII: [f64; 3] = [0.01, 0.03, 0.1];
 const DEFAULT_JITTER_SEED: u64 = 693;
-const DEFAULT_RUN_TIMEOUT_SECS: u64 = 300;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 struct Args {
     atlas: PathBuf,
     out: PathBuf,
     json: Option<PathBuf>,
     configs: Option<HashSet<(ConfigSource, usize)>>,
     limit: Option<usize>,
-    horizon: u64,
+    /// The horizon, evaluator (bloom stop) and per-rollout budget: the
+    /// search's unless a flag moves them.
+    rollouts: Rollouts,
     seed: u64,
     ensemble: u64,
     draws: usize,
     radii: Vec<f64>,
     jitter_seed: u64,
-    run_timeout: Duration,
-    eval_timeout: Duration,
     summary_only: bool,
 }
 
@@ -92,14 +96,12 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
         json: None,
         configs: None,
         limit: None,
-        horizon: DEFAULT_HORIZON,
+        rollouts: Rollouts::default(),
         seed: DEFAULT_SEED,
         ensemble: DEFAULT_ENSEMBLE,
         draws: DEFAULT_DRAWS,
         radii: DEFAULT_RADII.to_vec(),
         jitter_seed: DEFAULT_JITTER_SEED,
-        run_timeout: Duration::from_secs(DEFAULT_RUN_TIMEOUT_SECS),
-        eval_timeout: Duration::from_secs(DEFAULT_EVAL_TIMEOUT_SECS),
         summary_only: false,
     };
     let mut it = argv.into_iter();
@@ -126,9 +128,9 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
             }
             "--limit" => args.limit = Some(number("--limit", value("--limit")) as usize),
             "--horizon" => {
-                args.horizon = number("--horizon", value("--horizon"));
+                args.rollouts.horizon = number("--horizon", value("--horizon"));
                 assert!(
-                    args.horizon > 0,
+                    args.rollouts.horizon > 0,
                     "fragility_audit: --horizon must be positive"
                 );
             }
@@ -160,13 +162,20 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
             }
             "--jitter-seed" => args.jitter_seed = number("--jitter-seed", value("--jitter-seed")),
             RUN_TIMEOUT_FLAG => {
-                args.run_timeout =
+                args.rollouts.budget.simulation =
                     Duration::from_secs(number(RUN_TIMEOUT_FLAG, value(RUN_TIMEOUT_FLAG)))
             }
             EVAL_TIMEOUT_FLAG => {
-                args.eval_timeout =
+                args.rollouts.budget.evaluation =
                     Duration::from_secs(number(EVAL_TIMEOUT_FLAG, value(EVAL_TIMEOUT_FLAG)))
             }
+            BLOOM_STOP_FLAG => {
+                args.rollouts.eval_config.bloom_stop = Some(
+                    parse_bloom_stop(&value(BLOOM_STOP_FLAG))
+                        .unwrap_or_else(|e| panic!("fragility_audit: {e}")),
+                )
+            }
+            NO_BLOOM_STOP_FLAG => args.rollouts.eval_config.bloom_stop = None,
             "--summary" => args.summary_only = true,
             other => panic!("fragility_audit: unknown argument {other:?}"),
         }
@@ -181,8 +190,9 @@ fn opt(v: Option<f64>) -> String {
 fn print_summary(s: &Summary, names_len: usize, atlas_fingerprint: u64) {
     println!("# Fragility audit (#693)");
     println!(
-        "# horizon(s) {:?}; radii {:?}; {} cells read; {} parameters",
+        "# horizon(s) {:?}; bloom stop(s) {:?}; radii {:?}; {} cells read; {} parameters",
         s.horizons,
+        s.bloom_stops,
         s.radii,
         s.cells.len(),
         names_len
@@ -297,6 +307,18 @@ fn print_summary(s: &Summary, names_len: usize, atlas_fingerprint: u64) {
         row(format!("flip r={}", r.radius), r);
     }
 
+    println!(
+        "\n## Prefilter (worlds the search would gate a priori, recorded dead without a rollout)"
+    );
+    let p = &s.prefilter;
+    println!(
+        "  {} gated rows; {} finished seeds on them, {} live (prefilter disagreements)",
+        p.gated_rows, p.gated_finished_seeds, p.gated_live_seeds
+    );
+    for (cliff, n) in &p.by_cliff {
+        println!("  {cliff}: {n} rows");
+    }
+
     println!("\n## Unfinished evaluations (recorded, unread)");
     if s.unfinished.is_empty() {
         println!("  none");
@@ -319,33 +341,24 @@ fn main() {
         let mut plan = plan_rows(&cells, &args.radii, args.draws, &done);
         plan.truncate(args.limit.unwrap_or(usize::MAX));
         let seeds: Vec<u64> = (0..args.ensemble).map(|i| args.seed + i).collect();
-        let budget = RolloutBudget {
-            simulation: args.run_timeout,
-            evaluation: args.eval_timeout,
-        };
         eprintln!(
-            "fragility_audit: {} cells selected, {} rows done in {}; {} seeds × (1 + {} radii × {} draws), horizon {}; running {} cells now",
+            "fragility_audit: {} cells selected, {} rows done in {}; {} seeds × (1 + {} radii × {} draws), horizon {}, bloom stop {:?}, budget {:?}; running {} cells now",
             cells.len(),
             done.len(),
             args.out.display(),
             seeds.len(),
             args.radii.len(),
             args.draws,
-            args.horizon,
+            args.rollouts.horizon,
+            args.rollouts.eval_config.bloom_stop,
+            args.rollouts.budget,
             plan.len()
         );
         let start = Instant::now();
         let total = plan.len();
         for (n, (cell, keys)) in plan.into_iter().enumerate() {
             let t0 = Instant::now();
-            let rows = evaluate_rows(
-                &atlas,
-                &keys,
-                &seeds,
-                args.horizon,
-                budget,
-                args.jitter_seed,
-            );
+            let rows = evaluate_rows(&atlas, &keys, &seeds, &args.rollouts, args.jitter_seed);
             for row in &rows {
                 append_row(&args.out, row);
             }
@@ -383,12 +396,38 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use explorers_genesis::BloomStop;
+    use explorers_search::qd::{DEFAULT_BLOOM_STOP, SEARCH_ROLLOUT_BUDGET};
+    use explorers_search::search::SearchConfig;
+
+    /// #693: by default the audit rolls out as the search does — its
+    /// bloom stop, horizon and per-rollout budget — and the search's bloom
+    /// stop flags move or turn off the stop.
+    #[test]
+    fn the_default_audit_carries_the_searchs_bloom_stop_and_budget() {
+        let search = SearchConfig::default();
+        let a = parse_args(std::iter::empty());
+        assert_eq!(a.rollouts.eval_config.bloom_stop, Some(DEFAULT_BLOOM_STOP));
+        assert_eq!(a.rollouts.eval_config.bloom_stop, search.bloom_stop);
+        assert_eq!(a.rollouts.horizon, search.max_ticks);
+        assert_eq!(a.rollouts.budget, SEARCH_ROLLOUT_BUDGET);
+        let a = parse_args([NO_BLOOM_STOP_FLAG.to_string()]);
+        assert_eq!(a.rollouts.eval_config.bloom_stop, None);
+        let a = parse_args([BLOOM_STOP_FLAG.to_string(), "500:5".to_string()]);
+        assert_eq!(
+            a.rollouts.eval_config.bloom_stop,
+            Some(BloomStop {
+                tick: 500,
+                factor: 5.0
+            })
+        );
+    }
 
     #[test]
     fn args_default_to_the_full_audit_and_accept_each_flag() {
         let a = parse_args(std::iter::empty());
         assert_eq!(a.out, PathBuf::from(DEFAULT_OUT));
-        assert_eq!(a.horizon, 2000);
+        assert_eq!(a.rollouts.horizon, 2000);
         assert_eq!(a.ensemble, 10);
         assert_eq!(a.draws, 8);
         assert_eq!(a.radii, vec![0.01, 0.03, 0.1]);
@@ -404,11 +443,14 @@ mod tests {
         assert_eq!(a.json, Some(PathBuf::from("s.json")));
         assert_eq!(a.configs.map(|c| c.len()), Some(2));
         assert_eq!(a.limit, Some(1));
-        assert_eq!((a.horizon, a.seed, a.ensemble, a.draws), (300, 5, 3, 2));
+        assert_eq!(
+            (a.rollouts.horizon, a.seed, a.ensemble, a.draws),
+            (300, 5, 3, 2)
+        );
         assert_eq!(a.radii, vec![0.01, 0.1]);
         assert_eq!(a.jitter_seed, 9);
-        assert_eq!(a.run_timeout, Duration::from_secs(7));
-        assert_eq!(a.eval_timeout, Duration::from_secs(11));
+        assert_eq!(a.rollouts.budget.simulation, Duration::from_secs(7));
+        assert_eq!(a.rollouts.budget.evaluation, Duration::from_secs(11));
         assert!(a.summary_only);
     }
 }

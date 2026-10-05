@@ -2,7 +2,9 @@
 //! small perturbations — of the seed, and of its unit vector in the atlas's
 //! own search box.
 
-use explorers_genesis::{EvalConfig, RolloutBudget, RunConfig, Unfinished, run_single_within};
+use explorers_genesis::{
+    BloomStop, EvalConfig, RolloutBudget, RunConfig, Unfinished, run_single_within,
+};
 use std::collections::BTreeMap;
 
 use rand::{Rng, SeedableRng};
@@ -10,8 +12,10 @@ use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 
 use crate::config_source::ConfigSource;
+use crate::prefilter::prefilter_cliff;
+use crate::qd::QdConfig;
 use crate::role_diet::failure_label;
-use crate::search::decode;
+use crate::search::{SearchConfig, decode};
 use crate::sweep::{AtlasUnits, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, is_unfinished};
 
 /// The verdict label of a live world (no failure mode).
@@ -29,20 +33,47 @@ pub struct SeedVerdict {
     pub fitness: Option<f32>,
 }
 
-/// Evaluate a world on one seed as the search does: `run_single` with
-/// `EvalConfig::default()` to `horizon`, under the wall-clock `budget`.
+/// How every rollout of the audit runs: the horizon, the evaluator and the
+/// per-rollout wall-clock budget. The default is the search's own (#693):
+/// `QdConfig::default().eval_config()` (the evaluator with the predictive
+/// bloom stop at `DEFAULT_BLOOM_STOP`), `SearchConfig::default().max_ticks`
+/// and `SEARCH_ROLLOUT_BUDGET`, so the verdicts are the ones genesis scores.
+#[derive(Clone, Debug)]
+pub struct Rollouts {
+    pub horizon: u64,
+    pub eval_config: EvalConfig,
+    pub budget: RolloutBudget,
+}
+
+impl Default for Rollouts {
+    fn default() -> Self {
+        let search = SearchConfig::default();
+        Rollouts {
+            horizon: search.max_ticks,
+            eval_config: EvalConfig {
+                bloom_stop: search.bloom_stop,
+                ..QdConfig::default().eval_config()
+            },
+            budget: search.rollout_budget,
+        }
+    }
+}
+
+/// Evaluate a world on one seed as the search does: `run_single` under
+/// `rollouts`. The early-stop carry-to-horizon cross-check is off: it never
+/// changes a seed's verdict, only records a second reading beside it.
 pub fn evaluate_seed(
     params: &explorers_genesis::WorldParameters,
     dist: &explorers_genesis::InitialDistribution,
     seed: u64,
-    horizon: u64,
-    budget: RolloutBudget,
+    rollouts: &Rollouts,
 ) -> SeedVerdict {
     let config = RunConfig {
-        max_ticks: horizon,
-        eval_config: EvalConfig::default(),
+        max_ticks: rollouts.horizon,
+        eval_config: rollouts.eval_config.clone(),
         early_stop_crosscheck_fraction: 0.0,
     };
+    let budget = rollouts.budget;
     match run_single_within(params, dist, &config, seed, budget) {
         Ok(result) => SeedVerdict {
             seed,
@@ -124,8 +155,17 @@ pub struct FragilityRow {
     pub radius: f64,
     pub draw: usize,
     pub horizon: u64,
+    /// The predictive bloom stop the rollouts ran under (`None`: off).
+    #[serde(default)]
+    pub bloom_stop: Option<BloomStop>,
     /// The perturbed unit vector minus the cell's, after clamping.
     pub jitter: Vec<f64>,
+    /// The search's a-priori prefilter cliff on this world
+    /// (`prefilter::prefilter_cliff`), if it gates it. The search would not
+    /// roll a gated world out but record it dead on that cliff; the audit
+    /// rolls it out anyway and keeps both readings.
+    #[serde(default)]
+    pub prefilter_cliff: Option<String>,
     pub seeds: Vec<SeedVerdict>,
     /// The live share of the finished seeds; `None` when none finished.
     #[serde(default)]
@@ -178,7 +218,9 @@ impl FragilityRow {
             radius: key.radius,
             draw: key.draw,
             horizon,
+            bloom_stop: None,
             jitter,
+            prefilter_cliff: None,
             persisted_fraction: persisted_fraction(&seeds),
             modal_verdict: modal_verdict(&seeds),
             seeds,
@@ -208,17 +250,25 @@ pub fn evaluate_row(
     atlas: &AtlasUnits,
     key: RowKey,
     seeds: &[u64],
-    horizon: u64,
-    budget: RolloutBudget,
+    rollouts: &Rollouts,
     jitter_seed: u64,
 ) -> FragilityRow {
     let (moved, delta) = perturbed(atlas, key, jitter_seed);
     let (params, dist) = decode(&moved, atlas.search_box());
     let seeds = seeds
         .iter()
-        .map(|&s| evaluate_seed(&params, &dist, s, horizon, budget))
+        .map(|&s| evaluate_seed(&params, &dist, s, rollouts))
         .collect();
-    FragilityRow::new(key, horizon, delta, seeds, atlas.fingerprint())
+    FragilityRow {
+        prefilter_cliff: prefilter_label(&params),
+        bloom_stop: rollouts.eval_config.bloom_stop,
+        ..FragilityRow::new(key, rollouts.horizon, delta, seeds, atlas.fingerprint())
+    }
+}
+
+/// The search's prefilter cliff on a world, as its label.
+fn prefilter_label(params: &explorers_genesis::WorldParameters) -> Option<String> {
+    prefilter_cliff(params).map(|c| c.label().to_string())
 }
 
 /// [`evaluate_row`] for each of `keys`, every (row, seed) rollout in
@@ -228,8 +278,7 @@ pub fn evaluate_rows(
     atlas: &AtlasUnits,
     keys: &[RowKey],
     seeds: &[u64],
-    horizon: u64,
-    budget: RolloutBudget,
+    rollouts: &Rollouts,
     jitter_seed: u64,
 ) -> Vec<FragilityRow> {
     let worlds: Vec<_> = keys
@@ -243,14 +292,18 @@ pub fn evaluate_rows(
         .into_par_iter()
         .map(|i| {
             let (_, _, (params, dist)) = &worlds[i / seeds.len()];
-            evaluate_seed(params, dist, seeds[i % seeds.len()], horizon, budget)
+            evaluate_seed(params, dist, seeds[i % seeds.len()], rollouts)
         })
         .collect();
     let fingerprint = atlas.fingerprint();
     worlds
         .into_iter()
         .zip(verdicts.chunks(seeds.len().max(1)))
-        .map(|((key, delta, _), v)| FragilityRow::new(key, horizon, delta, v.to_vec(), fingerprint))
+        .map(|((key, delta, (params, _)), v)| FragilityRow {
+            prefilter_cliff: prefilter_label(&params),
+            bloom_stop: rollouts.eval_config.bloom_stop,
+            ..FragilityRow::new(key, rollouts.horizon, delta, v.to_vec(), fingerprint)
+        })
         .collect()
 }
 
@@ -612,6 +665,9 @@ pub struct Summary {
     pub radii: Vec<f64>,
     pub horizons: Vec<u64>,
     pub atlas_fingerprints: Vec<u64>,
+    /// The distinct bloom stops the rows ran under, as `TICK:FACTOR` or
+    /// `off`.
+    pub bloom_stops: Vec<String>,
     pub cells: Vec<CellFragility>,
     /// The cells' seed-only flip rates: the noise floor.
     pub seed_flip_rate: Option<Quantiles>,
@@ -624,8 +680,43 @@ pub struct Summary {
     /// The seed-only flip rate's regional reading, then each radius's.
     pub regional_seed: Regional,
     pub regional: Vec<Regional>,
+    pub prefilter: PrefilterTally,
     /// Unfinished evaluations by mode, over every row.
     pub unfinished: Vec<(String, usize)>,
+}
+
+/// The rows whose world the search's a-priori prefilter gates: the search
+/// would have recorded them dead on the cliff without a rollout.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct PrefilterTally {
+    pub gated_rows: usize,
+    pub gated_finished_seeds: usize,
+    /// Finished seeds of gated rows the rollout found live: prefilter
+    /// disagreements.
+    pub gated_live_seeds: usize,
+    pub by_cliff: Vec<(String, usize)>,
+}
+
+fn prefilter_tally(rows: &[FragilityRow]) -> PrefilterTally {
+    let gated: Vec<&FragilityRow> = rows
+        .iter()
+        .filter(|r| r.prefilter_cliff.is_some())
+        .collect();
+    let mut by_cliff: BTreeMap<String, usize> = BTreeMap::new();
+    for r in &gated {
+        *by_cliff
+            .entry(r.prefilter_cliff.clone().unwrap_or_default())
+            .or_default() += 1;
+    }
+    PrefilterTally {
+        gated_rows: gated.len(),
+        gated_finished_seeds: gated.iter().map(|r| finished(&r.seeds).count()).sum(),
+        gated_live_seeds: gated
+            .iter()
+            .map(|r| finished(&r.seeds).filter(|s| s.verdict == LIVE).count())
+            .sum(),
+        by_cliff: by_cliff.into_iter().collect(),
+    }
 }
 
 fn regional(radius: f64, rates: &[(usize, Option<f64>)], meta: &[CellMeta]) -> Regional {
@@ -709,7 +800,17 @@ pub fn summarise(
             *unfinished.entry(s.verdict.clone()).or_default() += 1;
         }
     }
+    let mut bloom_stops: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            r.bloom_stop
+                .map_or("off".to_string(), |b| format!("{}:{}", b.tick, b.factor))
+        })
+        .collect();
+    bloom_stops.sort();
+    bloom_stops.dedup();
     Summary {
+        bloom_stops,
         radii: radii.to_vec(),
         horizons,
         atlas_fingerprints,
@@ -720,6 +821,7 @@ pub fn summarise(
         attribution: dimension_attribution(rows, names),
         regional_seed,
         regional: regional_by_radius,
+        prefilter: prefilter_tally(rows),
         unfinished: unfinished.into_iter().collect(),
         cells,
     }
@@ -767,6 +869,15 @@ pub fn plan_rows(
 mod tests {
     use super::*;
     use crate::sweep::read_atlas_units;
+
+    /// The search's rollouts at a short horizon, unbudgeted.
+    fn quick(horizon: u64) -> Rollouts {
+        Rollouts {
+            horizon,
+            budget: RolloutBudget::UNBOUNDED,
+            ..Rollouts::default()
+        }
+    }
 
     fn atlas() -> AtlasUnits {
         read_atlas_units(std::path::Path::new(concat!(
@@ -835,7 +946,7 @@ mod tests {
     fn a_jittered_row_records_its_displacement() {
         let atlas = atlas();
         let key = jittered_key(0, 0.1, 1);
-        let row = evaluate_row(&atlas, key, &[1000], 5, RolloutBudget::UNBOUNDED, 7);
+        let row = evaluate_row(&atlas, key, &[1000], &quick(5), 7);
         let moved = jitter(&atlas.units()[0], key, 7);
         let expected: Vec<f64> = moved
             .iter()
@@ -843,6 +954,7 @@ mod tests {
             .map(|(p, u)| p - u)
             .collect();
         assert_eq!(row.jitter, expected);
+        assert_eq!(row.bloom_stop, Some(crate::qd::DEFAULT_BLOOM_STOP));
         assert!(row.jitter.iter().any(|&d| d != 0.0));
     }
 
@@ -917,10 +1029,10 @@ mod tests {
             jittered_key(1, 0.03, 1),
         ];
         let seeds = [1000, 1001];
-        let together = evaluate_rows(&atlas, &keys, &seeds, 5, RolloutBudget::UNBOUNDED, 7);
+        let together = evaluate_rows(&atlas, &keys, &seeds, &quick(5), 7);
         let alone: Vec<FragilityRow> = keys
             .iter()
-            .map(|&k| evaluate_row(&atlas, k, &seeds, 5, RolloutBudget::UNBOUNDED, 7))
+            .map(|&k| evaluate_row(&atlas, k, &seeds, &quick(5), 7))
             .collect();
         assert_eq!(together, alone);
         assert_eq!(together[2].atlas_fingerprint, Some(atlas.fingerprint()));
@@ -1165,8 +1277,56 @@ mod tests {
         );
     }
 
+    /// The audit evaluates as the search does by default (#693): the
+    /// search's evaluator, with its predictive bloom stop, its horizon and
+    /// its per-rollout budget.
+    #[test]
+    fn the_default_rollouts_are_the_searchs() {
+        let search = crate::search::SearchConfig::default();
+        let r = Rollouts::default();
+        assert_eq!(
+            r.eval_config.bloom_stop,
+            Some(crate::qd::DEFAULT_BLOOM_STOP)
+        );
+        assert_eq!(r.eval_config.bloom_stop, search.bloom_stop);
+        assert_eq!(
+            format!("{:?}", r.eval_config),
+            format!("{:?}", crate::qd::QdConfig::default().eval_config())
+        );
+        assert_eq!(r.horizon, search.max_ticks);
+        assert_eq!(r.budget, search.rollout_budget);
+    }
+
+    /// A row records the search's a-priori prefilter cliff on its world (the
+    /// search would not have rolled a gated world out); the summary tallies
+    /// gated rows and how many of their finished seeds the rollout found live.
+    #[test]
+    fn rows_record_the_prefilter_and_the_summary_tallies_its_gated_rows() {
+        let atlas = atlas();
+        let row0 = evaluate_row(&atlas, jittered_key(0, 0.1, 0), &[1000], &quick(3), 7);
+        let (moved, _) = perturbed(&atlas, jittered_key(0, 0.1, 0), 7);
+        let (params, _) = decode(&moved, atlas.search_box());
+        assert_eq!(
+            row0.prefilter_cliff.as_deref(),
+            crate::prefilter::prefilter_cliff(&params).map(|c| c.label())
+        );
+        let mut gated = row(0, 0.1, 0, &[LIVE, "energy_death", "timeout"]);
+        gated.prefilter_cliff = Some("energy_death".to_string());
+        let rows = vec![
+            row(0, 0.0, 0, &[LIVE, LIVE, LIVE]),
+            row(0, 0.1, 1, &[LIVE, LIVE, LIVE]),
+            gated,
+        ];
+        let s = summarise(&rows, &[0.1], &[], &[]);
+        assert_eq!(s.prefilter.gated_rows, 1);
+        assert_eq!(s.prefilter.gated_finished_seeds, 2);
+        assert_eq!(s.prefilter.gated_live_seeds, 1);
+        assert_eq!(s.prefilter.by_cliff, vec![("energy_death".to_string(), 1)]);
+    }
+
     /// The tracer: one cell at radius 0 on one seed is the search's own
-    /// rollout of the decoded cell, verdict and fitness bit for bit.
+    /// rollout of the decoded cell (its evaluator, bloom stop included, past
+    /// the bloom stop's tick), verdict and fitness bit for bit.
     #[test]
     fn radius_zero_reproduces_the_unperturbed_evaluation_bit_for_bit() {
         let atlas = atlas();
@@ -1175,11 +1335,11 @@ mod tests {
             radius: 0.0,
             draw: 0,
         };
-        let row = evaluate_row(&atlas, key, &[1000], 40, RolloutBudget::UNBOUNDED, 7);
+        let row = evaluate_row(&atlas, key, &[1000], &quick(320), 7);
         let (params, dist) = atlas.decode(0);
         let config = RunConfig {
-            max_ticks: 40,
-            eval_config: EvalConfig::default(),
+            max_ticks: 320,
+            eval_config: crate::qd::QdConfig::default().eval_config(),
             early_stop_crosscheck_fraction: 0.0,
         };
         let direct = explorers_genesis::run_single(&params, &dist, &config, 1000);
