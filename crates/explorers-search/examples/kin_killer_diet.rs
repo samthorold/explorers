@@ -106,6 +106,22 @@
 //! `c_AH` and at `--cross-trait-cost 0`. `--crosscheck` also reconciles each
 //! agent-tick's charge with the stepper's `Metabolized` charge less its
 //! per-trait cost. Rows from before #681 read back with K empty.
+//!
+//! #682 opens the report with **flow 1's verdicts** as world-rules.md flow 1
+//! states them (`explorers_search::flow1_verdict`), for the mode the rows ran
+//! in: conditionality's three tests on G's per-config ρ (median < 0; the
+//! configs with ρ < 0 differ from a coin's, two-sided exact binomial p <
+//! 0.05; a majority of 8 Ward lineage clusters over the atlas's unit
+//! coordinates have a median < 0), PASS / FAIL, and the fallback's pooled ρ
+//! ≤ 0; and the minority share (H, second half, < 50 %). In summary mode
+//! `--atlas` names the atlas the rows ran on (the clusters; without it, or
+//! on another atlas's rows, test 3 is not read), and `--baseline <jsonl>`
+//! an earlier run's rows: the share is then classified by absolute drains
+//! per seed as mixotroph excess or decomposer deficit.
+//!
+//!   cargo run --release -p explorers-search --example kin_killer_diet -- \
+//!       --summary --out target/670/seed43/kkd-decoded.jsonl \
+//!       --atlas target/670/atlas-seed43.json --baseline target/668/kkd-decoded.jsonl
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -119,11 +135,17 @@ use explorers_search::config_source::{
     parse_selector, parse_unit_interval, resolve_config, sampled_units, with_consumption_scales,
     with_cross_trait_cost, with_founder_aggregation, with_network, with_uptake_scaling,
 };
+use explorers_search::flow1_verdict::{
+    COIN_ALPHA, Conditionality as Flow1Conditionality, DrainShift, Drains, LINEAGE_CLUSTERS,
+    MINORITY_BAR, minority, ward_clusters,
+};
 use explorers_search::fullness::{FullnessBank, FullnessTracker, k_grid, tau_grid, tick_intakes};
 use explorers_search::grazer_hunger::PreStep;
 use explorers_search::intake_ceiling::realised_bites;
 use explorers_search::role_diet::{DietLedger, Outcomes, census_failure, rollout_with_fullness};
-use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_atlas_units, read_rows};
+use explorers_search::sweep::{
+    AtlasUnits, append_row, done_configs, plan_tasks, read_atlas_units, read_rows,
+};
 use explorers_sim::event::{Event, EventKind};
 use explorers_sim::topology::TrophicRole;
 use explorers_sim::{InitialDistribution, World, WorldParameters, phase, toroidal_distance};
@@ -1586,6 +1608,7 @@ struct Args {
     network: NetworkPins,
     cross_trait_cost: Option<f32>,
     crosscheck: bool,
+    baseline: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -1605,6 +1628,7 @@ fn parse_args() -> Result<Args, String> {
         network: NetworkPins::default(),
         cross_trait_cost: None,
         crosscheck: false,
+        baseline: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -1623,6 +1647,7 @@ fn parse_args() -> Result<Args, String> {
             "--configs" => args.configs = Some(parse_selector(&value()?, "--configs", None)),
             "--summary" => args.summary_only = true,
             "--crosscheck" => args.crosscheck = true,
+            "--baseline" => args.baseline = Some(PathBuf::from(value()?)),
             "--founder-aggregation" => {
                 args.founder_aggregation = Some(parse_founder_aggregation(&value()?)?)
             }
@@ -1795,7 +1820,19 @@ fn main() {
         }
     }
     let rows: Vec<Row> = read_rows(&args.out);
-    summary(&rows);
+    let clusters = match args.atlas.as_deref() {
+        Some(path) => lineage_clusters(&rows, &read_atlas_units(path), LINEAGE_CLUSTERS),
+        None => Err("no atlas given (`--atlas`)".into()),
+    };
+    let baseline = args
+        .baseline
+        .as_deref()
+        .map(|p| (p.display().to_string(), read_rows::<Row>(p)));
+    summary(
+        &rows,
+        &clusters,
+        baseline.as_ref().map(|(n, r)| (n.as_str(), &r[..])),
+    );
 }
 
 fn pct(n: u64, d: u64) -> String {
@@ -1954,7 +1991,7 @@ fn reach_table(title: &str, reach: &[Reach]) {
     }
 }
 
-fn summary(rows: &[Row]) {
+fn summary(rows: &[Row], clusters: &Result<Vec<usize>, String>, baseline: Option<(&str, &[Row])>) {
     let mut t = Tally::new();
     for r in rows {
         t.merge(&r.tally);
@@ -1974,6 +2011,7 @@ fn summary(rows: &[Row]) {
     println!("{}\n", uptake_label(rows));
     println!("{}\n", network_label(rows));
     println!("{}\n", cross_trait_label(rows));
+    flow1_verdict(rows, &t, clusters, baseline);
     verdict(rows, &t);
     println!(
         "Population: heterotrophy > 0 and recent-income role Producer at the start of the tick. Fullness state at k = {k}, τ = {:.2} (index {j}), n = {N}: (i) E_E < 0.5 ≤ E_N; (ii) E_E ≥ 0.5; (iii) both < 0.5; from the fullness carried into the tick. Kin = parent, offspring or sibling (`DietLedger::is_kin`). Non-kin targets by recent-income role at the start of the tick.\n",
@@ -2774,6 +2812,158 @@ fn verdict(rows: &[Row], t: &Tally) {
     println!("| nutrient lockup seeds | {lockup} | {l_ref} |\n");
 }
 
+/// #682: each row's lineage cluster, its atlas cell's label among
+/// `clusters` Ward clusters over every cell of `atlas` (unit coordinates).
+/// `Err` says why the rows cannot be clustered: not all `atlas:` rows, or
+/// rows that did not run on this atlas (fingerprint absent or different).
+fn lineage_clusters(
+    rows: &[Row],
+    atlas: &AtlasUnits,
+    clusters: usize,
+) -> Result<Vec<usize>, String> {
+    let fp = format!("{:016x}", atlas.fingerprint());
+    if let Some(r) = rows.iter().find(|r| r.source != ConfigSource::Atlas) {
+        return Err(format!(
+            "{}:{} is not an atlas cell",
+            r.source, r.config_index
+        ));
+    }
+    if let Some(r) = rows.iter().find(|r| r.atlas.as_deref() != Some(&fp)) {
+        return Err(format!(
+            "atlas:{} ran on atlas {}, not this one ({fp})",
+            r.config_index,
+            r.atlas.as_deref().unwrap_or("unrecorded")
+        ));
+    }
+    let labels = ward_clusters(atlas.units(), clusters);
+    Ok(rows.iter().map(|r| labels[r.config_index]).collect())
+}
+
+/// #682: flow 1's two verdicts as world-rules.md flow 1 states them, for
+/// the mode these rows ran in. `clusters`: each row's lineage cluster, or
+/// why there are none; `baseline`: an earlier run's rows to classify the
+/// share against by absolute drains.
+fn flow1_verdict(
+    rows: &[Row],
+    t: &Tally,
+    clusters: &Result<Vec<usize>, String>,
+    baseline: Option<(&str, &[Row])>,
+) {
+    let g = conditionality_of(rows);
+    let v = Flow1Conditionality::of(g.pooled, &g.per_config, clusters.as_deref().ok());
+    println!("### Flow 1 verdict (#682, world-rules.md flow 1)\n");
+    println!(
+        "Conditionality: Spearman ρ(h_eff, pool N at cell) over second-half Producer-role samples, per config (G). It passes only if all three hold: (1) the median per-config ρ < 0; (2) the configs with ρ < 0 differ from a coin's share (two-sided exact binomial p < {COIN_ALPHA}); (3) a majority of the configs' lineage clusters ({LINEAGE_CLUSTERS} Ward clusters over the atlas's cells, unit coordinates) have a median ρ < 0. Fallback: heterotrophy does not run backwards, pooled ρ ≤ 0. Minority share: light-fed mixotrophs drain < {:.0} % of the second half's attributed carcass structure (H).\n",
+        100.0 * MINORITY_BAR
+    );
+    println!("| test | verdict | reading |");
+    println!("|---|---|---|");
+    println!(
+        "| (1) median per-config ρ < 0 | {} | median ρ = {} over {} configs |",
+        pass(v.median_negative()),
+        rho(v.median),
+        v.configs
+    );
+    println!(
+        "| (2) configs with ρ < 0 differ from a coin's | {} | {} of {}, p = {:.3} |",
+        pass(v.not_a_coin()),
+        v.negative,
+        v.configs,
+        v.binomial_p
+    );
+    let cluster_reading = match (clusters, v.clusters) {
+        (Ok(labels), Some(c)) => {
+            let mut sizes = vec![0usize; LINEAGE_CLUSTERS];
+            for &l in labels {
+                sizes[l] += 1;
+            }
+            format!(
+                "{} of {} clusters with a median have it < 0 (configs per cluster: {})",
+                c.negative,
+                c.with_median,
+                sizes
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+        (Err(why), _) => format!("not read: {why}"),
+        _ => "not read".into(),
+    };
+    println!(
+        "| (3) a majority of lineage clusters have a median ρ < 0 | {} | {cluster_reading} |",
+        pass(v.clusters_negative())
+    );
+    println!(
+        "| **conditionality** | {} | all of (1)–(3) |",
+        pass(v.passes())
+    );
+    println!(
+        "| fallback: does not run backwards (pooled ρ ≤ 0) | {} | pooled ρ = {} (n = {}) |",
+        pass(v.does_not_run_backwards()),
+        rho(g.pooled),
+        g.samples
+    );
+    let share = NicheShare::of(
+        &t.ext.routes_second_half,
+        t.ext.carcass_drained_all_second_half,
+    )
+    .structure_share(0);
+    println!(
+        "| **minority share** (second half) | {} | light-fed mixotrophs drain {} % of carcass structure |",
+        pass(minority(share)),
+        pct_of(share)
+    );
+    let Some((name, base_rows)) = baseline else {
+        println!(
+            "\nNo baseline run given (`--baseline`): the share is not classified by absolute drains.\n"
+        );
+        return;
+    };
+    let mut bt = Tally::new();
+    for r in base_rows {
+        bt.merge(&r.tally);
+    }
+    match (drains(rows, &t.ext), drains(base_rows, &bt.ext)) {
+        (Some(run), Some(base)) => {
+            let delta = |a: f64, b: f64| {
+                if b > 0.0 {
+                    format!("{:+.0} %", 100.0 * (a - b) / b)
+                } else {
+                    "–".into()
+                }
+            };
+            println!(
+                "| share by absolute drains, against {name} | {} | carcass structure drained per seed, second half: light-fed mixotrophs {:.1} vs {:.1} ({}), decomposers {:.1} vs {:.1} ({}) |",
+                DrainShift::of(run, base).label(),
+                run.mixotrophs,
+                base.mixotrophs,
+                delta(run.mixotrophs, base.mixotrophs),
+                run.decomposers,
+                base.decomposers,
+                delta(run.decomposers, base.decomposers)
+            );
+        }
+        _ => println!("| share by absolute drains, against {name} | n/a | no seeds |"),
+    }
+    println!(
+        "\nMixotroph excess: mixotrophs drain more than the baseline. Decomposer deficit: decomposers drain less, and mixotrophs no more.\n"
+    );
+}
+
+/// #682: settled-half carcass structure drained per seed by light-fed
+/// mixotrophs and decomposers by role (C's buckets 0 and 3). `None` without
+/// seeds.
+fn drains(rows: &[Row], x: &Ext) -> Option<Drains> {
+    let seeds: usize = rows.iter().map(|r| r.seed_kin_kills.len()).sum();
+    let r = &x.routes_second_half;
+    (seeds > 0 && !r.carcass_drained.is_empty()).then(|| Drains {
+        mixotrophs: r.carcass_drained[0] / seeds as f64,
+        decomposers: r.carcass_drained[3] / seeds as f64,
+    })
+}
+
 /// G (#655): conditionality.
 fn conditionality(rows: &[Row], x: &Ext) {
     let g = conditionality_of(rows);
@@ -3536,6 +3726,58 @@ mod tests {
             seed_kin_kills: Vec::new(),
             tally: Tally::new(),
         }
+    }
+
+    fn unit_atlas(units: &[f64]) -> AtlasUnits {
+        let dims = explorers_search::search::default_ranges();
+        AtlasUnits::new(
+            dims.clone(),
+            units.iter().map(|&u| vec![u; dims.len()]).collect(),
+        )
+    }
+
+    /// #682: each row's lineage cluster is its atlas cell's Ward cluster
+    /// over every cell of the atlas, and only on the atlas the rows ran on.
+    #[test]
+    fn rows_take_their_cells_lineage_cluster_on_their_own_atlas() {
+        // Cells 0, 2 and 4 near 0; 1 and 3 near 1. Rows for cells 3, 0, 4.
+        let atlas = unit_atlas(&[0.0, 0.9, 0.05, 0.95, 0.1]);
+        let fp = format!("{:016x}", atlas.fingerprint());
+        let rows: Vec<Row> = [3, 0, 4]
+            .iter()
+            .map(|&i| Row {
+                config_index: i,
+                ..row(Some(&fp), None)
+            })
+            .collect();
+        assert_eq!(lineage_clusters(&rows, &atlas, 2), Ok(vec![1, 0, 0]));
+        // Another atlas's rows, or rows without the fingerprint, do not.
+        let other = unit_atlas(&[0.0, 0.9, 0.05, 0.95, 0.2]);
+        assert!(lineage_clusters(&rows, &other, 2).is_err());
+        let unprinted = [row(None, None)];
+        assert!(lineage_clusters(&unprinted, &atlas, 2).is_err());
+        let mut sampled = row(Some(&fp), None);
+        sampled.source = ConfigSource::SAMPLE;
+        assert!(lineage_clusters(&[sampled], &atlas, 2).is_err());
+    }
+
+    /// #682: drains per seed, settled half, light-fed mixotrophs (bucket 0)
+    /// and decomposers by role (bucket 3), over every row's seeds.
+    #[test]
+    fn drains_are_read_per_seed_over_the_settled_half() {
+        let mut a = row(None, None);
+        a.seed_kin_kills = vec![0; 2];
+        a.tally.ext = Ext::new();
+        a.tally.ext.routes_second_half = routes([30.0, 1.0, 2.0, 10.0, 0.0], [0.0; 5], [0.0; 5]);
+        let mut b = a.clone();
+        b.seed_kin_kills = vec![0; 3];
+        let mut t = Tally::new();
+        t.merge(&a.tally);
+        t.merge(&b.tally);
+        let d = drains(&[a, b], &t.ext).unwrap();
+        assert!(close(d.mixotrophs, 12.0));
+        assert!(close(d.decomposers, 4.0));
+        assert_eq!(drains(&[], &Tally::new().ext), None);
     }
 
     /// #656: #642's persistence reference applies only to 475 seeds of

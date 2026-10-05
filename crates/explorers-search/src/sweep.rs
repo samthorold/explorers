@@ -152,6 +152,11 @@ impl AtlasUnits {
         &self.search_box
     }
 
+    /// The live cells' unit vectors, in file order.
+    pub fn units(&self) -> &[Vec<f64>] {
+        &self.units
+    }
+
     /// The world live cell `index` names, decoded over the atlas's own box.
     pub fn decode(&self, index: usize) -> (WorldParameters, InitialDistribution) {
         decode(&self.units[index], &self.search_box)
