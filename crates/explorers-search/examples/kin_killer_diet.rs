@@ -122,13 +122,26 @@
 //!   cargo run --release -p explorers-search --example kin_killer_diet -- \
 //!       --summary --out target/670/seed43/kkd-decoded.jsonl \
 //!       --atlas target/670/atlas-seed43.json --baseline target/668/kkd-decoded.jsonl
+//!
+//! #683 adds L. **Mobile autotrophy** (world-rules.md flow 2: substrate
+//! contact is held in reserve until mobile autotrophy is measured viable):
+//! producers by role (the sample's recent-income role) on second-half sample
+//! ticks, by effective mobility. The distribution of their effective mobility
+//! and of their realised movement per tick (quantiles), and at each candidate
+//! threshold (`MOBILE_THRESHOLDS`) the share of producer samples above it,
+//! the second-half births by such producers and their distinct parents, and
+//! the seeds where they **hold** as the heterotroph guild does: ≥
+//! `GUILD_MIN_SIZE` on every second-half sample tick of a run that reached the
+//! horizon, plus at least one such birth. Per config and pooled; rows from
+//! before #683 read back with L empty. `scripts/683-census.sh` drives it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
 use rayon::prelude::*;
 
+use explorers_genesis_eval::guild::GUILD_MIN_SIZE;
 use explorers_genesis_eval::{EvalConfig, RolloutObservations};
 use explorers_search::config_source::{
     ConfigSource, NetworkPins, parse_founder_aggregation, parse_non_negative, parse_positive,
@@ -723,6 +736,9 @@ struct Ext {
     /// summed over seeds (the groups' share denominator).
     #[serde(default)]
     second_half_agent_ticks: u64,
+    /// L (#683): mobile autotrophy. Empty on pre-#683 rows.
+    #[serde(default)]
+    mobile: MobileCensus,
 }
 
 impl Ext {
@@ -773,6 +789,7 @@ impl Ext {
             a.extend_from_slice(b);
         }
         self.second_half_agent_ticks += o.second_half_agent_ticks;
+        self.mobile.merge(&o.mobile);
     }
 }
 
@@ -969,6 +986,10 @@ fn rollout(
         ..params.clone()
     };
     let mut live_connections: HashSet<(u64, u64)> = HashSet::new();
+    // L (#683): mobile autotrophy, and each agent's (Σ distance moved, ticks)
+    // since the last sample tick, over second-half ticks.
+    let mut mobile = MobileTracker::default();
+    let mut moved: HashMap<u64, (f64, u32)> = HashMap::new();
     for _ in 0..max_ticks {
         let tick_before = world.tick();
         let second_half_tick = tick_before + 1 >= window_start;
@@ -988,6 +1009,16 @@ fn rollout(
                 .unzip()
         } else {
             Default::default()
+        };
+        // L: each agent's pre-step effective mobility (a parent's, at birth).
+        let pre_mob: HashMap<u64, f32> = if second_half_tick {
+            world
+                .agents()
+                .iter()
+                .map(|a| (a.id, a.effective_trait_with_steepness(2, steep)))
+                .collect()
+        } else {
+            HashMap::new()
         };
         // Start-of-tick reads: the income ledger has not walked this tick.
         let income = observations.income();
@@ -1024,6 +1055,17 @@ fn rollout(
         }
         let tick = world.tick();
         let second_half = tick >= window_start;
+        if second_half {
+            let before: HashMap<u64, (f32, f32)> =
+                pre.agents().iter().map(|a| (a.id, a.position)).collect();
+            for a in world.agents() {
+                if let Some(&from) = before.get(&a.id) {
+                    let m = moved.entry(a.id).or_default();
+                    m.0 += f64::from(toroidal_distance(from, a.position, params.world_extent));
+                    m.1 += 1;
+                }
+            }
+        }
         if network_on {
             let now: HashSet<(u64, u64)> = world
                 .connections()
@@ -1249,6 +1291,7 @@ fn rollout(
                         && let Some(&h) = pre_eff.get(&p)
                     {
                         tally.ext.producer_bins[het_bin(h)].births += 1;
+                        mobile.birth(p, pre_mob.get(&p).copied().unwrap_or(0.0));
                     }
                 }
                 EventKind::Died if second_half => {
@@ -1427,6 +1470,25 @@ fn rollout(
                 } else {
                     HashMap::new()
                 };
+            if second_half {
+                let producers: Vec<(u64, f32, Option<f32>)> = world
+                    .agents()
+                    .iter()
+                    .filter(|a| sample_roles.get(&a.id) == Some(&TrophicRole::Producer))
+                    .map(|a| {
+                        (
+                            a.id,
+                            a.effective_trait_with_steepness(2, steep),
+                            moved
+                                .get(&a.id)
+                                .filter(|m| m.1 > 0)
+                                .map(|m| (m.0 / f64::from(m.1)) as f32),
+                        )
+                    })
+                    .collect();
+                mobile.sample(&producers);
+                moved.clear();
+            }
             for a in world.agents() {
                 let role = sample_roles.get(&a.id).copied();
                 let eff = a.effective_trait_with_steepness(1, steep);
@@ -1486,6 +1548,7 @@ fn rollout(
             break;
         }
     }
+    tally.ext.mobile = mobile.finish(stopped.is_none() && world.tick() >= max_ticks);
     let failure = census_failure(&world, &observations, eval_config, max_ticks, stopped);
     tally.outcomes.record(failure.as_ref());
     tally.termination_ticks = world.tick();
@@ -2068,6 +2131,7 @@ fn summary(rows: &[Row], clusters: &Result<Vec<usize>, String>, baseline: Option
     calibration(rows, &t.ext);
     retention(rows, &t.ext);
     charge_by_role(rows, &t.ext);
+    mobile_autotrophy(rows, &t.ext);
 }
 
 /// The uptake scaling the rows ran at, each distinct value listed.
@@ -3547,12 +3611,445 @@ fn retention(rows: &[Row], x: &Ext) {
     }
 }
 
+/// L (#683): the quantiles L reports of [`FineHist`]s.
+const MOBILE_QUANTILES: [(&str, f64); 6] = [
+    ("p50", 0.5),
+    ("p75", 0.75),
+    ("p90", 0.9),
+    ("p95", 0.95),
+    ("p99", 0.99),
+    ("max", 1.0),
+];
+
+fn fine_cells(h: &FineHist) -> String {
+    let mut cells: Vec<String> = vec![h.n.to_string(), g4(h.mean())];
+    cells.extend(MOBILE_QUANTILES.iter().map(|&(_, q)| g4(h.quantile(q))));
+    cells.join(" | ")
+}
+
+fn above_cells(c: &MobileCensus, a: &MobileAbove) -> String {
+    format!(
+        "{} | {} | {} | {} | {} | {} / {} | {} / {} | {} / {}",
+        a.samples,
+        pct(a.samples, c.samples),
+        g4((a.movement_n > 0).then(|| a.movement_sum / a.movement_n as f64)),
+        a.births,
+        a.breeders,
+        a.breeding_seeds,
+        c.seeds,
+        a.sustained_seeds,
+        c.completed_seeds,
+        a.guild_seeds,
+        c.completed_seeds
+    )
+}
+
+/// L (#683): mobile autotrophy, which decides whether substrate contact
+/// (#648) comes out of reserve (world-rules.md flow 2).
+fn mobile_autotrophy(rows: &[Row], x: &Ext) {
+    println!(
+        "\n### L. Mobile autotrophy: producers by role that move, persist and breed (#683, second half)\n"
+    );
+    let c = &x.mobile;
+    if c.seeds == 0 {
+        println!("No mobile-autotrophy entries on these rows (pre-#683 rows).");
+        return;
+    }
+    println!(
+        "Unit: the **producer agent-sample**, every agent whose recent-income role is Producer on a second-half sample tick ({} over {} seeds, {} of them run to the horizon). Effective mobility: the wear-degraded trait (`effective_trait_with_steepness(2, k)`). Realised movement: the agent's mean toroidal distance moved per tick since the previous sample tick (second-half ticks only; none for an agent that has not yet stepped in that span). Above a threshold: effective mobility strictly greater. Births: second-half births whose parent was a producer by role at the start of the tick with pre-step effective mobility above it; breeders: their distinct parents, summed over seeds. **Sustained**: a run to the horizon whose producers above the threshold number ≥ {GUILD_MIN_SIZE} on every second-half sample tick; **holds**: sustained and at least one such birth (the heterotroph guild's rule, applied to the mobile producers as a population). Quantiles: nearest rank, at {FINE_WIDTH}-wide bins' midpoints; max exact.\n",
+        c.samples, c.seeds, c.completed_seeds
+    );
+    let head: Vec<&str> = MOBILE_QUANTILES.iter().map(|&(n, _)| n).collect();
+    println!(
+        "| producer agent-samples | n | mean | {} |",
+        head.join(" | ")
+    );
+    println!("|---|---:|---:|{}", "---:|".repeat(head.len()));
+    println!("| effective mobility | {} |", fine_cells(&c.mobility));
+    println!(
+        "| realised movement per tick | {} |",
+        fine_cells(&c.movement)
+    );
+    println!(
+        "\n| effective mobility > | agent-samples | % of producer samples | mean movement per tick | births | breeders | seeds breeding | seeds sustained | seeds holding |"
+    );
+    println!("|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for (t, a) in MOBILE_THRESHOLDS.iter().zip(&c.above) {
+        println!("| {t} | {} |", above_cells(c, a));
+    }
+    println!(
+        "\nPer config: effective mobility quantiles, realised movement per tick (p50, p90), and per threshold the % of producer samples above it · births · seeds holding / seeds run to the horizon.\n"
+    );
+    let thresholds: Vec<String> = MOBILE_THRESHOLDS.iter().map(|t| format!("> {t}")).collect();
+    println!(
+        "| config | seeds | producer samples | m p50 | m p90 | m p99 | m max | move p50 | move p90 | {} |",
+        thresholds.join(" | ")
+    );
+    println!(
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|{}",
+        "---:|".repeat(thresholds.len())
+    );
+    for r in rows {
+        let c = &r.tally.ext.mobile;
+        if c.seeds == 0 {
+            continue;
+        }
+        let cells: Vec<String> = c
+            .above
+            .iter()
+            .map(|a| {
+                format!(
+                    "{} · {} · {}/{}",
+                    pct(a.samples, c.samples),
+                    a.births,
+                    a.guild_seeds,
+                    c.completed_seeds
+                )
+            })
+            .collect();
+        println!(
+            "| {}:{} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            r.source,
+            r.config_index,
+            c.seeds,
+            c.samples,
+            g4(c.mobility.quantile(0.5)),
+            g4(c.mobility.quantile(0.9)),
+            g4(c.mobility.quantile(0.99)),
+            g4(c.mobility.quantile(1.0)),
+            g4(c.movement.quantile(0.5)),
+            g4(c.movement.quantile(0.9)),
+            cells.join(" | ")
+        );
+    }
+}
+
+/// L (#683): candidate thresholds on a producer's effective mobility, so the
+/// census can be read at each and the threshold chosen afterwards.
+const MOBILE_THRESHOLDS: [f32; 5] = [0.05, 0.1, 0.2, 0.3, 0.5];
+/// L: [`FineHist`]'s bin width.
+const FINE_WIDTH: f64 = 0.001;
+
+/// A sparse histogram at [`FINE_WIDTH`] resolution, with the exact maximum.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct FineHist {
+    n: u64,
+    sum: f64,
+    max: f32,
+    bins: BTreeMap<u32, u64>,
+}
+
+impl FineHist {
+    fn record(&mut self, v: f32) {
+        let v = v.max(0.0);
+        self.n += 1;
+        self.sum += f64::from(v);
+        self.max = self.max.max(v);
+        *self
+            .bins
+            .entry((f64::from(v) / FINE_WIDTH) as u32)
+            .or_default() += 1;
+    }
+
+    fn merge(&mut self, o: &FineHist) {
+        self.n += o.n;
+        self.sum += o.sum;
+        self.max = self.max.max(o.max);
+        for (&b, &c) in &o.bins {
+            *self.bins.entry(b).or_default() += c;
+        }
+    }
+
+    fn mean(&self) -> Option<f64> {
+        (self.n > 0).then(|| self.sum / self.n as f64)
+    }
+
+    /// Nearest-rank quantile, at its bin's midpoint capped at the exact max
+    /// (q = 1 is the max).
+    fn quantile(&self, q: f64) -> Option<f64> {
+        if self.n == 0 {
+            return None;
+        }
+        if q >= 1.0 {
+            return Some(f64::from(self.max));
+        }
+        let rank = (q * (self.n - 1) as f64).round() as u64;
+        let mut seen = 0;
+        for (&b, &c) in &self.bins {
+            seen += c;
+            if seen > rank {
+                return Some(((f64::from(b) + 0.5) * FINE_WIDTH).min(f64::from(self.max)));
+            }
+        }
+        None
+    }
+}
+
+/// L: the census above one threshold (`MOBILE_THRESHOLDS[i]`), summed over
+/// seeds.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct MobileAbove {
+    /// Producer-role agent-samples with effective mobility above it.
+    samples: u64,
+    /// Σ realised movement per tick over those samples that have a reading,
+    /// and how many have one.
+    movement_sum: f64,
+    movement_n: u64,
+    /// Second-half births whose parent was such a producer (role at the start
+    /// of the tick, pre-step effective mobility), and the distinct parents.
+    births: u64,
+    breeders: u64,
+    /// Seeds with at least one such birth.
+    breeding_seeds: u64,
+    /// Completed seeds where such producers number ≥ `GUILD_MIN_SIZE` on
+    /// every second-half sample tick.
+    sustained_seeds: u64,
+    /// Sustained and breeding: the mobile autotroph population holds.
+    guild_seeds: u64,
+}
+
+/// L (#683): **mobile autotrophy**, producers by role (the sample's
+/// recent-income role) on second-half sample ticks, by effective mobility.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct MobileCensus {
+    seeds: u64,
+    /// Seeds that ran to the horizon (no early stop).
+    completed_seeds: u64,
+    /// Producer-role agent-samples.
+    samples: u64,
+    /// Their effective mobility (wear-degraded, `ft_index` 2).
+    mobility: FineHist,
+    /// Their realised movement: mean toroidal distance moved per tick since
+    /// the previous sample (second-half ticks only; absent for an agent with
+    /// no step in that span).
+    movement: FineHist,
+    /// Per [`MOBILE_THRESHOLDS`].
+    above: Vec<MobileAbove>,
+}
+
+impl MobileCensus {
+    fn merge(&mut self, o: &MobileCensus) {
+        self.seeds += o.seeds;
+        self.completed_seeds += o.completed_seeds;
+        self.samples += o.samples;
+        self.mobility.merge(&o.mobility);
+        self.movement.merge(&o.movement);
+        if self.above.len() < o.above.len() {
+            self.above.resize(o.above.len(), MobileAbove::default());
+        }
+        for (a, b) in self.above.iter_mut().zip(&o.above) {
+            a.samples += b.samples;
+            a.movement_sum += b.movement_sum;
+            a.movement_n += b.movement_n;
+            a.births += b.births;
+            a.breeders += b.breeders;
+            a.breeding_seeds += b.breeding_seeds;
+            a.sustained_seeds += b.sustained_seeds;
+            a.guild_seeds += b.guild_seeds;
+        }
+    }
+}
+
+/// L, per threshold, within one seed.
+#[derive(Clone, Debug, Default)]
+struct MobileTrack {
+    above: MobileAbove,
+    parents: HashSet<u64>,
+    /// The fewest such producers on any second-half sample tick.
+    min_count: Option<usize>,
+}
+
+/// L's per-seed state: fed every second-half sample tick's producers and
+/// every second-half birth by a producer, read once at the end.
+#[derive(Clone, Debug, Default)]
+struct MobileTracker {
+    census: MobileCensus,
+    tracks: Vec<MobileTrack>,
+}
+
+impl MobileTracker {
+    fn tracks(&mut self) -> &mut [MobileTrack] {
+        if self.tracks.is_empty() {
+            self.tracks = vec![MobileTrack::default(); MOBILE_THRESHOLDS.len()];
+        }
+        &mut self.tracks
+    }
+
+    /// One second-half sample tick: every producer by role, as `(id,
+    /// effective mobility, realised movement per tick)`.
+    fn sample(&mut self, producers: &[(u64, f32, Option<f32>)]) {
+        for &(_, m, moved) in producers {
+            self.census.samples += 1;
+            self.census.mobility.record(m);
+            if let Some(d) = moved {
+                self.census.movement.record(d);
+            }
+        }
+        for (track, t) in self.tracks().iter_mut().zip(MOBILE_THRESHOLDS) {
+            let mut count = 0;
+            for &(_, _, moved) in producers.iter().filter(|p| p.1 > t) {
+                count += 1;
+                track.above.samples += 1;
+                if let Some(d) = moved {
+                    track.above.movement_sum += f64::from(d);
+                    track.above.movement_n += 1;
+                }
+            }
+            track.min_count = Some(track.min_count.map_or(count, |c| c.min(count)));
+        }
+    }
+
+    /// A second-half birth whose parent was a producer by role at the start
+    /// of the tick, at the parent's pre-step effective mobility.
+    fn birth(&mut self, parent: u64, mobility: f32) {
+        for (track, t) in self.tracks().iter_mut().zip(MOBILE_THRESHOLDS) {
+            if mobility > t {
+                track.above.births += 1;
+                track.parents.insert(parent);
+            }
+        }
+    }
+
+    /// The seed's census; `completed` when the run reached its horizon (an
+    /// early stop holds no population over the settled half).
+    fn finish(mut self, completed: bool) -> MobileCensus {
+        self.tracks();
+        let mut c = self.census;
+        c.seeds = 1;
+        c.completed_seeds = u64::from(completed);
+        c.above = self
+            .tracks
+            .into_iter()
+            .map(|t| {
+                let mut a = t.above;
+                a.breeders = t.parents.len() as u64;
+                a.breeding_seeds = u64::from(a.births > 0);
+                let sustained = completed && t.min_count.is_some_and(|n| n >= GUILD_MIN_SIZE);
+                a.sustained_seeds = u64::from(sustained);
+                a.guild_seeds = u64::from(sustained && a.births > 0);
+                a
+            })
+            .collect();
+        c
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    /// `n` producers with ids from `first`, all at effective mobility `m`,
+    /// each moving `moved` per tick.
+    fn producers(first: u64, n: u64, m: f32, moved: f32) -> Vec<(u64, f32, Option<f32>)> {
+        (first..first + n).map(|id| (id, m, Some(moved))).collect()
+    }
+
+    #[test]
+    fn a_still_producer_is_not_counted_as_mobile_whatever_it_breeds() {
+        let mut t = MobileTracker::default();
+        for _ in 0..10 {
+            t.sample(&producers(0, 2 * GUILD_MIN_SIZE as u64, 0.0, 0.0));
+            t.birth(0, 0.0);
+        }
+        let c = t.finish(true);
+        assert_eq!(c.samples, 20 * GUILD_MIN_SIZE as u64);
+        for above in &c.above {
+            assert_eq!(above.samples, 0);
+            assert_eq!((above.births, above.breeders), (0, 0));
+            assert_eq!(above.guild_seeds, 0);
+        }
+    }
+
+    #[test]
+    fn a_moving_producer_population_that_breeds_is_counted() {
+        let n = GUILD_MIN_SIZE as u64;
+        let mut t = MobileTracker::default();
+        for _ in 0..10 {
+            // n movers at m = 0.25 beside n still producers.
+            let mut p = producers(0, n, 0.25, 0.2);
+            p.extend(producers(100, n, 0.0, 0.0));
+            t.sample(&p);
+        }
+        t.birth(0, 0.25);
+        t.birth(0, 0.25);
+        t.birth(1, 0.25);
+        let c = t.finish(true);
+        assert_eq!(c.samples, 20 * n);
+        // Thresholds 0.05, 0.1, 0.2 sit below 0.25; 0.3 and 0.5 above it.
+        for (above, counted) in c.above.iter().zip([true, true, true, false, false]) {
+            let k = u64::from(counted);
+            assert_eq!(above.samples, k * 10 * n);
+            assert_eq!((above.births, above.breeders), (k * 3, k * 2));
+            assert_eq!(above.guild_seeds, k);
+            assert_eq!(above.movement_n, k * 10 * n);
+        }
+        assert!((c.above[0].movement_sum - 0.2 * 10.0 * n as f64).abs() < 1e-4);
+        // A bin midpoint (0.2505) is capped at the exact max.
+        assert_eq!(c.mobility.quantile(0.75), Some(0.25));
+        assert_eq!(c.mobility.quantile(0.25), Some(0.0005));
+        assert_eq!(c.mobility.quantile(1.0), Some(0.25f32 as f64));
+    }
+
+    #[test]
+    fn mobile_producers_that_dip_below_the_floor_or_never_breed_do_not_hold() {
+        let n = GUILD_MIN_SIZE as u64;
+        // Sustained, never breeding.
+        let mut sterile = MobileTracker::default();
+        for _ in 0..5 {
+            sterile.sample(&producers(0, n, 0.6, 0.5));
+        }
+        let c = sterile.finish(true);
+        assert_eq!((c.above[4].sustained_seeds, c.above[4].guild_seeds), (1, 0));
+        // Breeding, but one sample tick below the floor.
+        let mut dip = MobileTracker::default();
+        dip.sample(&producers(0, n, 0.6, 0.5));
+        dip.sample(&producers(0, n - 1, 0.6, 0.5));
+        dip.birth(0, 0.6);
+        let c = dip.finish(true);
+        assert_eq!((c.above[4].breeding_seeds, c.above[4].guild_seeds), (1, 0));
+        // Both, but the run stopped early.
+        let mut stopped = MobileTracker::default();
+        stopped.sample(&producers(0, n, 0.6, 0.5));
+        stopped.birth(0, 0.6);
+        assert_eq!(stopped.finish(false).above[4].guild_seeds, 0);
+    }
+
+    #[test]
+    fn mobile_censuses_merge_across_seeds() {
+        let n = GUILD_MIN_SIZE as u64;
+        let seed = |m: f32| {
+            let mut t = MobileTracker::default();
+            t.sample(&producers(0, n, m, 0.1));
+            t.birth(0, m);
+            t.finish(true)
+        };
+        let mut c = MobileCensus::default();
+        c.merge(&seed(0.6));
+        c.merge(&seed(0.0));
+        assert_eq!((c.seeds, c.completed_seeds, c.samples), (2, 2, 2 * n));
+        assert_eq!(c.above[0].guild_seeds, 1);
+        assert_eq!(c.above[0].breeders, 1);
+        assert_eq!(c.mobility.n, 2 * n);
+        assert_eq!(c.movement.mean(), Some(0.1f32 as f64));
+    }
+
+    #[test]
+    fn rows_from_before_the_mobile_census_read_back_empty() {
+        let mut t = MobileTracker::default();
+        t.sample(&producers(0, 3, 0.4, 0.1));
+        let mut r = row(None, None);
+        r.tally.ext.mobile = t.finish(true);
+        let mut json = serde_json::to_value(&r).unwrap();
+        let back: Row = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(back.tally.ext.mobile, r.tally.ext.mobile);
+        let ext = json["tally"]["ext"].as_object_mut().unwrap();
+        assert!(ext.remove("mobile").is_some());
+        let back: Row = serde_json::from_value(json).unwrap();
+        assert_eq!(back.tally.ext.mobile.seeds, 0);
     }
 
     #[test]
