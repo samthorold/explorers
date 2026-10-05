@@ -269,6 +269,14 @@ pub(crate) fn with_cross_trait_cost(cost: f32, a: f32, h: f32, params: &WorldPar
     cost + c * (a * h).powf(0.5 * params.maintenance_cost_exponent)
 }
 
+/// The cross-trait cost alone: what [`with_cross_trait_cost`] adds to an
+/// agent with raw autotrophy `a` and heterotrophy `h` each tick. For
+/// observers that read the charge (#681), so they cannot drift from the
+/// stepper; exactly 0 while `cross_trait_cost` is 0.
+pub fn cross_trait_charge(a: f32, h: f32, params: &WorldParameters) -> f32 {
+    with_cross_trait_cost(0.0, a, h, params)
+}
+
 /// The fraction of its heterotrophic capability a consumer expresses this tick
 /// (need-gated consumption; world-rules.md, "Capability and expression are
 /// decoupled"): `1 / (1 + satiation_sensitivity × s)`, where the **surplus

@@ -71,6 +71,11 @@ impl PreStep {
         }
     }
 
+    /// The agents before the step.
+    pub fn agents(&self) -> &[Agent] {
+        &self.agents
+    }
+
     /// The carcasses before the step: those the drain pass reads.
     pub fn carcasses(&self) -> &[Carcass] {
         &self.carcasses

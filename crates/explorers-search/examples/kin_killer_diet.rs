@@ -92,6 +92,20 @@
 //! `c_AH` on every decoded config (unset, each keeps its decoded value: 0),
 //! for the probe at `c_max`; rows record the effective value. Rows from
 //! before #668 read back with I and J empty.
+//!
+//! #681 reads what `c_AH` charges, by trophic role, so the paired read can
+//! tell whether the cost is what thins decomposers. K. **Charge by role**,
+//! on every second-half agent-sample, for decomposers by role and for
+//! producer → decomposer intermediates (mixotrophs by investment, raw A and
+//! H both > 0.05, whose role is not producer): the autotrophy carried (mean,
+//! median), the charge `c_AH × (A·H)^(p/2)` (`phase::cross_trait_charge`) as
+//! a fraction of income (light plus drain energy received), and the group's
+//! share of agent-samples; per config and pooled, beside C's second-half
+//! carcass structure drained per seed by decomposers and light-fed
+//! mixotrophs and the mixotrophs' share. Run the same worlds at their own
+//! `c_AH` and at `--cross-trait-cost 0`. `--crosscheck` also reconciles each
+//! agent-tick's charge with the stepper's `Metabolized` charge less its
+//! per-trait cost. Rows from before #681 read back with K empty.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -676,6 +690,17 @@ struct Ext {
     /// Second-half ticks run, summed over seeds (J's per-tick denominator).
     #[serde(default)]
     second_half_ticks: u64,
+    /// K (#681): per [`CHARGE_GROUPS`] group, one entry per agent per seed
+    /// over the second-half ticks it spent in the group (role at the start of
+    /// the tick, drain-time roster), as `[raw autotrophy A, cross-trait charge
+    /// per tick, ticks, Σ energy income on them]`; income is light plus drain
+    /// energy received (`TickIntake::energy`).
+    #[serde(default)]
+    charge: [Vec<[f32; 4]>; 2],
+    /// K: every agent on the drain-time roster on every second-half tick,
+    /// summed over seeds (the groups' share denominator).
+    #[serde(default)]
+    second_half_agent_ticks: u64,
 }
 
 impl Ext {
@@ -722,6 +747,10 @@ impl Ext {
             .extend_from_slice(&o.lfm_carcass_bites);
         self.lfm_carcass_bites_no_pool += o.lfm_carcass_bites_no_pool;
         self.second_half_ticks += o.second_half_ticks;
+        for (a, b) in self.charge.iter_mut().zip(&o.charge) {
+            a.extend_from_slice(b);
+        }
+        self.second_half_agent_ticks += o.second_half_agent_ticks;
     }
 }
 
@@ -753,6 +782,36 @@ struct Tally {
     outcomes: Outcomes,
     #[serde(default)]
     termination_ticks: u64,
+    /// `--crosscheck` (#681): K's charges against the stepper's. Not on the
+    /// rows.
+    #[serde(skip)]
+    charge_check: ChargeCheck,
+}
+
+/// #681's crosscheck, over every agent-tick of a run: the stepper's
+/// cross-trait charge — its `Metabolized` charge less the per-trait cost
+/// (`phase::metabolic_cost` at c_AH = 0) — against the readout's
+/// [`cross_trait_charge`]. A starving agent's charge is capped at its reserve,
+/// so its cross-trait part cannot be told apart; it is counted, not compared.
+#[derive(Clone, Debug, Default)]
+struct ChargeCheck {
+    agent_ticks: u64,
+    starved: u64,
+    /// Σ charge, the stepper's and the readout's, over the compared ticks.
+    stepper: f64,
+    readout: f64,
+    /// Compared ticks whose charges differ beyond f32 rounding.
+    mismatches: u64,
+}
+
+impl ChargeCheck {
+    fn merge(&mut self, o: &ChargeCheck) {
+        self.agent_ticks += o.agent_ticks;
+        self.starved += o.starved;
+        self.stepper += o.stepper;
+        self.readout += o.readout;
+        self.mismatches += o.mismatches;
+    }
 }
 
 impl Tally {
@@ -788,6 +847,7 @@ impl Tally {
         self.producer_agent_ticks += o.producer_agent_ticks;
         self.outcomes.merge(&o.outcomes);
         self.termination_ticks += o.termination_ticks;
+        self.charge_check.merge(&o.charge_check);
     }
 }
 
@@ -835,6 +895,7 @@ fn rollout(
     seed: u64,
     max_ticks: u64,
     eval_config: &EvalConfig,
+    crosscheck: bool,
 ) -> Tally {
     let (cell_k, cell_j) = cell();
     let mut tally = Tally::new();
@@ -846,7 +907,10 @@ fn rollout(
         EventKind::Born,
         EventKind::Died,
         EventKind::Redistributed,
-    ] {
+    ]
+    .into_iter()
+    .chain(crosscheck.then_some(EventKind::Metabolized))
+    {
         if !kinds.contains(&k) {
             kinds.push(k);
         }
@@ -876,6 +940,12 @@ fn rollout(
     // Σ drain energy gained on them, its cross-trait term).
     let mut calibration: HashMap<u64, (u32, f64, f32)> = HashMap::new();
     let p = params.maintenance_cost_exponent;
+    // K (#681): per group, per agent, `[A, charge per tick, ticks, Σ income]`.
+    let mut charge: [HashMap<u64, [f64; 4]>; 2] = Default::default();
+    let without_cross_trait = WorldParameters {
+        cross_trait_cost: 0.0,
+        ..params.clone()
+    };
     let mut live_connections: HashSet<(u64, u64)> = HashSet::new();
     for _ in 0..max_ticks {
         let tick_before = world.tick();
@@ -1088,6 +1158,60 @@ fn rollout(
                     });
                     c.0 += 1;
                     c.1 += f64::from(s[0] + s[2]);
+                }
+            }
+        }
+        // K. Each agent's cross-trait charge and income by group.
+        if second_half {
+            for a in &start.agents {
+                tally.ext.second_half_agent_ticks += 1;
+                let role = roles.get(&a.id).copied().flatten();
+                let (aa, h) = (a.traits.photosynthetic_absorption, a.traits.heterotrophy);
+                let income = intakes.get(&a.id).map_or(0.0, |i| f64::from(i.energy()));
+                for (g, member) in charge_groups(role, aa, h).into_iter().enumerate() {
+                    if member {
+                        let e = charge[g].entry(a.id).or_insert_with(|| {
+                            [
+                                f64::from(aa),
+                                f64::from(cross_trait_charge(aa, h, params)),
+                                0.0,
+                                0.0,
+                            ]
+                        });
+                        e[2] += 1.0;
+                        e[3] += income;
+                    }
+                }
+            }
+        }
+        if crosscheck {
+            let charged: HashMap<u64, f32> = tail
+                .iter()
+                .filter(|e| e.kind == EventKind::Metabolized)
+                .map(|e| (e.source, e.energy_delta))
+                .collect();
+            let check = &mut tally.charge_check;
+            for a in pre.agents() {
+                let Some(&event) = charged.get(&a.id) else {
+                    continue;
+                };
+                check.agent_ticks += 1;
+                let full = phase::metabolic_cost(a, params);
+                let available = a.reserve + start.light.get(&a.id).copied().unwrap_or(0.0);
+                if available < full {
+                    check.starved += 1;
+                    continue;
+                }
+                let stepper = event - phase::metabolic_cost(a, &without_cross_trait);
+                let readout = cross_trait_charge(
+                    a.traits.photosynthetic_absorption,
+                    a.traits.heterotrophy,
+                    params,
+                );
+                check.stepper += f64::from(stepper);
+                check.readout += f64::from(readout);
+                if (stepper - readout).abs() > 1e-5 * full.max(1.0) {
+                    check.mismatches += 1;
                 }
             }
         }
@@ -1343,6 +1467,14 @@ fn rollout(
     let failure = census_failure(&world, &observations, eval_config, max_ticks, stopped);
     tally.outcomes.record(failure.as_ref());
     tally.termination_ticks = world.tick();
+    for (g, by_agent) in charge.into_iter().enumerate() {
+        let mut by_agent: Vec<(u64, [f64; 4])> = by_agent.into_iter().collect();
+        by_agent.sort_by_key(|(id, _)| *id);
+        tally.ext.charge[g] = by_agent
+            .into_iter()
+            .map(|(_, e)| e.map(|v| v as f32))
+            .collect();
+    }
     let mut calibration: Vec<(u64, (u32, f64, f32))> = calibration.into_iter().collect();
     calibration.sort_by_key(|(id, _)| *id);
     tally.ext.lfm_calibration = calibration
@@ -1578,7 +1710,16 @@ fn main() {
             let config = with_cross_trait_cost(config, args.cross_trait_cost);
             let tallies: Vec<Tally> = (0..args.ensemble)
                 .into_par_iter()
-                .map(|i| rollout(&config.0, &config.1, args.seed + i, args.horizon, &eval))
+                .map(|i| {
+                    rollout(
+                        &config.0,
+                        &config.1,
+                        args.seed + i,
+                        args.horizon,
+                        &eval,
+                        args.crosscheck,
+                    )
+                })
                 .collect();
             let mut tally = Tally::new();
             for s in &tallies {
@@ -1602,6 +1743,20 @@ fn main() {
                         .map_or(0, |f| f.kills)
                     })
                     .collect();
+                let c = &tally.charge_check;
+                eprintln!(
+                    "  charge crosscheck {source}:{idx}: {} agent-ticks ({} starving, not compared): stepper Σ {:.6}, readout Σ {:.6}, {} mismatches -> {}",
+                    c.agent_ticks,
+                    c.starved,
+                    c.stepper,
+                    c.readout,
+                    c.mismatches,
+                    if c.mismatches == 0 {
+                        "MATCH"
+                    } else {
+                        "MISMATCH"
+                    }
+                );
                 eprintln!(
                     "  crosscheck {source}:{idx}: ours {seed_kin_kills:?}, role_diet fullness.kills {theirs:?} -> {}",
                     if theirs == seed_kin_kills {
@@ -1874,6 +2029,7 @@ fn summary(rows: &[Row]) {
     niche_share(&t.ext);
     calibration(rows, &t.ext);
     retention(rows, &t.ext);
+    charge_by_role(rows, &t.ext);
 }
 
 /// The uptake scaling the rows ran at, each distinct value listed.
@@ -2709,10 +2865,197 @@ fn niche_share(x: &Ext) {
 /// The cross-trait term the stepper charges `c_AH` against
 /// (`phase::metabolic_cost`, world-rules.md trade-off #5): `(A·H)^(p/2)` on
 /// the raw autotrophy `A` and heterotrophy `H`, `p` the config's
-/// `maintenance_cost_exponent`. The same expression as the sim's (which is
-/// crate-private), so `c_AH × term` is what the agent would pay.
+/// `maintenance_cost_exponent`. The same expression as the sim's, so
+/// `c_AH × term` is what the agent would pay (K reads the charge itself off
+/// `phase::cross_trait_charge`).
 fn cross_trait_term(a: f32, h: f32, p: f32) -> f32 {
     (a * h).powf(0.5 * p)
+}
+
+/// #681: the cross-trait cost an agent with raw autotrophy `a` and
+/// heterotrophy `h` is charged per tick, `c_AH × (A·H)^(p/2)` — the sim's own
+/// expression (`phase::cross_trait_charge`), so the readout cannot drift from
+/// the stepper.
+fn cross_trait_charge(a: f32, h: f32, params: &WorldParameters) -> f32 {
+    phase::cross_trait_charge(a, h, params)
+}
+
+/// The trait level above which the readout counts an investment (#681): the
+/// 0.05 its light-fed mixotroph bucket reads heterotrophy against.
+const INVESTMENT_THRESHOLD: f32 = 0.05;
+
+/// #681's groups, in this order: decomposers by trophic role; and producer →
+/// decomposer intermediates, mixotrophs by investment (raw autotrophy and
+/// heterotrophy both above [`INVESTMENT_THRESHOLD`]) with a role that is not
+/// producer. An agent with no income yet has no role, so is in neither.
+const CHARGE_GROUPS: [&str; 2] = [
+    "decomposer (by role)",
+    "producer → decomposer intermediate (mixotroph by investment, role not producer)",
+];
+
+fn charge_groups(role: Option<TrophicRole>, a: f32, h: f32) -> [bool; 2] {
+    let mixotroph = a > INVESTMENT_THRESHOLD && h > INVESTMENT_THRESHOLD;
+    [
+        role == Some(TrophicRole::Decomposer),
+        mixotroph && matches!(role, Some(TrophicRole::Consumer | TrophicRole::Decomposer)),
+    ]
+}
+
+/// #681: one group's read over its entries, one per agent per seed
+/// (`Ext::charge`: `[raw autotrophy A, cross-trait charge per tick, ticks in
+/// the group, Σ energy income on them]`).
+#[derive(Clone, Debug, PartialEq)]
+struct ChargeRead {
+    agents: usize,
+    /// Agent-samples: Σ ticks.
+    samples: u64,
+    /// Of all second-half agent-samples; `None` with none.
+    share: Option<f64>,
+    /// Autotrophy carried, per agent-sample.
+    autotrophy_mean: Option<f64>,
+    autotrophy_median: Option<f64>,
+    /// Σ charge / Σ income over the group's agent-samples; `None` with no
+    /// income.
+    charge_of_income: Option<f64>,
+    /// The median over agents with income of their charge / income.
+    median_charge_of_income: Option<f64>,
+    /// Agents with no income on any of their ticks in the group.
+    zero_income: usize,
+}
+
+impl ChargeRead {
+    fn of(agents: &[[f32; 4]], all_samples: u64) -> Self {
+        let ticks = |a: &[f32; 4]| a[2] as u64;
+        let samples: u64 = agents.iter().map(ticks).sum();
+        let charged = |a: &[f32; 4]| f64::from(a[1]) * f64::from(a[2]);
+        let income: f64 = agents.iter().map(|a| f64::from(a[3])).sum();
+        let mut by_a: Vec<(f64, u64)> =
+            agents.iter().map(|a| (f64::from(a[0]), ticks(a))).collect();
+        by_a.sort_by(|x, y| x.0.total_cmp(&y.0));
+        // The k-th agent-sample (0-based) in ascending A.
+        let nth = |k: u64| {
+            let mut seen = 0;
+            by_a.iter()
+                .find(|(_, n)| {
+                    seen += n;
+                    seen > k
+                })
+                .map(|(a, _)| *a)
+        };
+        let autotrophy_median = match samples {
+            0 => None,
+            n if n % 2 == 1 => nth(n / 2),
+            n => nth(n / 2 - 1)
+                .zip(nth(n / 2))
+                .map(|(lo, hi)| (lo + hi) / 2.0),
+        };
+        let ratios: Vec<f64> = agents
+            .iter()
+            .filter(|a| a[3] > 0.0)
+            .map(|a| charged(a) / f64::from(a[3]))
+            .collect();
+        Self {
+            agents: agents.len(),
+            samples,
+            share: (all_samples > 0).then(|| samples as f64 / all_samples as f64),
+            autotrophy_mean: (samples > 0).then(|| {
+                agents
+                    .iter()
+                    .map(|a| f64::from(a[0]) * f64::from(a[2]))
+                    .sum::<f64>()
+                    / samples as f64
+            }),
+            autotrophy_median,
+            charge_of_income: (income > 0.0)
+                .then(|| agents.iter().map(charged).sum::<f64>() / income),
+            median_charge_of_income: median(ratios),
+            zero_income: agents.iter().filter(|a| a[3] <= 0.0).count(),
+        }
+    }
+}
+
+/// A group's read as table cells: share of agent-samples, autotrophy mean
+/// and median, charge / income two ways.
+fn charge_cells(g: &ChargeRead) -> String {
+    format!(
+        "{} | {} | {} | {} | {}",
+        pct_of(g.share),
+        g4(g.autotrophy_mean),
+        g4(g.autotrophy_median),
+        pct_of(g.charge_of_income),
+        pct_of(g.median_charge_of_income),
+    )
+}
+
+/// Second-half carcass structure drained by C's decomposer and light-fed
+/// mixotroph buckets, per seed, and the mixotrophs' share of the attributed
+/// total (H's), as cells.
+fn drained_cells(x: &Ext, seeds: usize) -> String {
+    let r = &x.routes_second_half;
+    let per_seed = |b: usize| {
+        if seeds == 0 {
+            "–".into()
+        } else {
+            format!("{:.1}", r.carcass_drained[b] / seeds as f64)
+        }
+    };
+    format!(
+        "{} | {} | {}",
+        per_seed(3),
+        per_seed(0),
+        pct_of(NicheShare::of(r, x.carcass_drained_all_second_half).structure_share(0))
+    )
+}
+
+/// K (#681): what the cross-trait cost charges, by trophic role.
+fn charge_by_role(rows: &[Row], x: &Ext) {
+    println!("\n### K. The cross-trait cost's charge by trophic role (#681, second half)\n");
+    if x.second_half_agent_ticks == 0 {
+        println!("No charge entries on these rows (pre-#681 rows).");
+        return;
+    }
+    let seeds: usize = rows.iter().map(|r| r.seed_kin_kills.len()).sum();
+    println!(
+        "Unit: the **agent-sample**, every agent on the drain-time roster on every second-half tick ({} over {seeds} seeds). Groups, by recent-income role at the start of the tick: (1) **decomposers by role**, whatever they invest in; (2) **producer → decomposer intermediates**, mixotrophs by investment (raw autotrophy A and heterotrophy H both > {INVESTMENT_THRESHOLD}) whose role is consumer or decomposer (an agent with no income yet has no role, so is in neither). The groups overlap: a decomposer that is a mixotroph by investment is in both. Autotrophy: raw A per agent-sample. Charge: `c_AH × (A·H)^(p/2)` per tick, the stepper's own term (`phase::cross_trait_charge`), at the c_AH the rows ran at; income: light plus drain energy received that tick (`TickIntake::energy`). Charge / income: Σ charge / Σ income over the group's agent-samples, and the median over agents (one per agent per seed, those with income) of their own ratio. Carcass structure drained: C's second-half routes, per seed, by the decomposer bucket and the light-fed mixotroph bucket (P, h_eff > 0.05), and the mixotrophs' share of the attributed total (H's).\n",
+        x.second_half_agent_ticks
+    );
+    println!(
+        "| group | agents | agent-samples | % of agent-samples | A mean | A median | % charge / income (Σ / Σ) | % charge / income (median agent) | agents without income |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for (name, entries) in CHARGE_GROUPS.iter().zip(&x.charge) {
+        let g = ChargeRead::of(entries, x.second_half_agent_ticks);
+        println!(
+            "| {name} | {} | {} | {} | {} |",
+            g.agents,
+            g.samples,
+            charge_cells(&g),
+            g.zero_income
+        );
+    }
+    println!(
+        "\nCarcass structure drained per seed, second half: decomposers | light-fed mixotrophs | mixotrophs' share (%) = {}.\n",
+        drained_cells(x, seeds)
+    );
+    println!("Per config (D = decomposers by role, I = intermediates):\n");
+    println!(
+        "| config | c_AH | seeds | D % samples | D A mean | D A median | D % charge / income | D % median agent | I % samples | I A mean | I A median | I % charge / income | I % median agent | decomposer carcass drained / seed | mixotroph carcass drained / seed | mixotroph % |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for r in rows {
+        let e = &r.tally.ext;
+        let read = |g: usize| ChargeRead::of(&e.charge[g], e.second_half_agent_ticks);
+        println!(
+            "| {}:{} | {} | {} | {} | {} | {} |",
+            r.source,
+            r.config_index,
+            r.cross_trait_cost.map_or("–".into(), |c| format!("{c}")),
+            r.seed_kin_kills.len(),
+            charge_cells(&read(0)),
+            charge_cells(&read(1)),
+            drained_cells(e, r.seed_kin_kills.len()),
+        );
+    }
 }
 
 /// Linear-interpolation quantile (type 7) of an ascending slice; agrees
@@ -3317,6 +3660,150 @@ mod tests {
         assert_eq!(j.rho.samples, 24, "a zero drain has no ratio");
         assert_eq!(j.rho.per_config, vec![Some(-1.0), Some(1.0), None]);
         assert_eq!(j.rho.median, Some(0.0));
+    }
+
+    fn sample_params(i: usize) -> WorldParameters {
+        resolve_config(
+            ConfigSource::SAMPLE,
+            i,
+            &Default::default(),
+            &sampled_units(),
+        )
+        .0
+    }
+
+    /// #681: the charge is the stepper's own cross-trait term,
+    /// `c_AH × (A·H)^(p/2)` on raw A and H: zero for a specialist in either
+    /// trait, the closed form for a mixotroph, and exactly zero at c_AH = 0.
+    #[test]
+    fn the_cross_trait_charge_spares_specialists_and_matches_the_closed_form() {
+        let params = WorldParameters {
+            cross_trait_cost: 0.08,
+            maintenance_cost_exponent: 3.0,
+            ..sample_params(0)
+        };
+        assert_eq!(cross_trait_charge(0.0, 0.9, &params), 0.0);
+        assert_eq!(cross_trait_charge(0.7, 0.0, &params), 0.0);
+        // 0.08 × (0.5 × 0.5)^1.5 = 0.08 × 0.125 = 0.01.
+        assert!((cross_trait_charge(0.5, 0.5, &params) - 0.01).abs() < 1e-7);
+        let off = WorldParameters {
+            cross_trait_cost: 0.0,
+            ..params
+        };
+        assert_eq!(cross_trait_charge(0.5, 0.5, &off), 0.0);
+        assert_eq!(cross_trait_charge(1.3, 2.1, &off), 0.0);
+    }
+
+    /// #681: decomposers are read by trophic role alone, whatever they
+    /// invest in; the intermediates are mixotrophs by investment (raw A and
+    /// H both above 0.05) that are not producers by role — and an agent with
+    /// no income yet has no role, so is neither.
+    #[test]
+    fn charge_groups_follow_trophic_role_and_investment_profile() {
+        use TrophicRole::*;
+        let groups = |role, a, h| charge_groups(role, a, h);
+        // Decomposer by role, specialist or mixotroph by investment.
+        assert_eq!(groups(Some(Decomposer), 0.0, 0.8), [true, false]);
+        assert_eq!(groups(Some(Decomposer), 0.3, 0.8), [true, true]);
+        // A mixotroph by investment that is a consumer by role.
+        assert_eq!(groups(Some(Consumer), 0.3, 0.8), [false, true]);
+        // A producer by role is never an intermediate, however mixed.
+        assert_eq!(groups(Some(Producer), 0.3, 0.8), [false, false]);
+        // At or below the threshold in either trait is not a mixotroph.
+        assert_eq!(groups(Some(Consumer), 0.05, 0.8), [false, false]);
+        assert_eq!(groups(Some(Consumer), 0.3, 0.05), [false, false]);
+        assert_eq!(groups(None, 0.3, 0.8), [false, false]);
+    }
+
+    /// #681: a group's read over its agent entries `[A, charge per tick,
+    /// ticks, Σ income]`: autotrophy weighted by agent-samples, the charge
+    /// as a fraction of income (ratio of sums, and the median per agent),
+    /// and the group's share of all agent-samples.
+    #[test]
+    fn a_groups_charge_is_read_per_agent_sample_against_income() {
+        let agents = [
+            // A, charge/tick, ticks, Σ income.
+            [0.125, 0.0625, 8.0, 1.0],
+            [0.5, 0.125, 24.0, 4.0],
+            [0.75, 0.25, 16.0, 0.0],
+        ];
+        let g = ChargeRead::of(&agents, 192);
+        assert_eq!((g.agents, g.samples), (3, 48));
+        assert!(close(g.share.unwrap(), 0.25));
+        // (0.125 × 8 + 0.5 × 24 + 0.75 × 16) / 48.
+        assert!(close(g.autotrophy_mean.unwrap(), 25.0 / 48.0));
+        // Agent-samples sorted by A: 8 at 0.125, 24 at 0.5, 16 at 0.75 —
+        // the 24th and 25th both carry 0.5.
+        assert!(close(g.autotrophy_median.unwrap(), 0.5));
+        // Charged 0.5 + 3 + 4 against income 5.
+        assert!(close(g.charge_of_income.unwrap(), 1.5));
+        // Per agent with income: 0.5 / 1 and 3 / 4 -> median 0.625.
+        assert!(close(g.median_charge_of_income.unwrap(), 0.625));
+        assert_eq!(g.zero_income, 1);
+        let none = ChargeRead::of(&[], 0);
+        assert_eq!(
+            (none.share, none.autotrophy_median, none.charge_of_income),
+            (None, None, None)
+        );
+    }
+
+    /// #681: on one small run the readout's charges reconcile with the
+    /// stepper's maintenance accounting — each `Metabolized` charge less the
+    /// per-trait cost (`phase::metabolic_cost` at c_AH = 0) is the charge the
+    /// readout books — and at c_AH = 0 every booked charge is exactly 0.
+    #[test]
+    fn charges_reconcile_with_the_steppers_maintenance_on_a_small_run() {
+        let (params, dist) = resolve_config(
+            ConfigSource::SAMPLE,
+            14,
+            &Default::default(),
+            &sampled_units(),
+        );
+        let eval = EvalConfig::default();
+        let on = WorldParameters {
+            cross_trait_cost: 0.1,
+            ..params.clone()
+        };
+        let t = rollout(&on, &dist, 1000, 200, &eval, true);
+        let c = &t.charge_check;
+        assert!(c.agent_ticks > 100, "{c:?}");
+        assert_eq!(c.mismatches, 0, "{c:?}");
+        assert!(c.readout > 0.0, "a mixotroph is charged: {c:?}");
+        assert!((c.stepper - c.readout).abs() <= 1e-4 * c.readout, "{c:?}");
+        assert!(t.ext.second_half_agent_ticks > 0);
+        assert!(
+            t.ext.charge.iter().all(|g| !g.is_empty()),
+            "both groups are populated on sample:14"
+        );
+        let off = WorldParameters {
+            cross_trait_cost: 0.0,
+            ..params
+        };
+        let t = rollout(&off, &dist, 1000, 200, &eval, true);
+        assert_eq!(t.charge_check.mismatches, 0);
+        assert_eq!(t.charge_check.readout, 0.0);
+        assert!(t.ext.charge.iter().any(|g| !g.is_empty()));
+        for e in t.ext.charge.iter().flatten() {
+            assert_eq!(e[1], 0.0, "{e:?}");
+        }
+    }
+
+    /// Rows from before #681 (target/670) read back with K empty.
+    #[test]
+    fn rows_without_the_681_fields_still_read_back() {
+        let mut r = row(Some("0123456789abcdef"), None);
+        r.tally.ext.charge[0].push([0.25, 0.5, 3.0, 1.0]);
+        r.tally.ext.second_half_agent_ticks = 9;
+        let mut json = serde_json::to_value(&r).unwrap();
+        let ext = json["tally"]["ext"].as_object_mut().unwrap();
+        for k in ["charge", "second_half_agent_ticks"] {
+            assert!(ext.remove(k).is_some(), "{k} is serialised");
+        }
+        let back: Row = serde_json::from_value(json).unwrap();
+        assert!(back.tally.ext.charge.iter().all(Vec::is_empty));
+        assert_eq!(back.tally.ext.second_half_agent_ticks, 0);
+        let read = ChargeRead::of(&back.tally.ext.charge[0], 0);
+        assert_eq!((read.agents, read.share), (0, None));
     }
 
     /// Rows from before #668 (target/656) read back with I and J empty.
