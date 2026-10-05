@@ -25,6 +25,12 @@ pub enum EventKind {
     /// an observer can follow a lineage (an invader cohort and its
     /// descendants) off the log alone; no state is added to `Agent`.
     Born,
+    /// Carcass leaching (#698): `source` is the carcass id, `position` its
+    /// position, and `nutrient_delta` the nutrient it gave the available pool
+    /// at its cell this tick. One event per carcass that leached a positive
+    /// amount; `energy_delta` is always 0, as leaching moves nutrient only.
+    /// A readout; emitted only when the leaching rate is above 0.
+    Leached,
 }
 
 #[derive(Clone, Debug, PartialEq)]

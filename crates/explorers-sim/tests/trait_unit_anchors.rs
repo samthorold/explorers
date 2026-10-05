@@ -133,6 +133,25 @@ fn naming_the_use_wear_anchors_leaves_the_use_wear_branch_byte_identical() {
     );
 }
 
+/// Carcass leaching (#698) is skipped, not evaluated, at `λ = 0`: every
+/// committed recipe predates the field, loads with it at 0, and keeps its
+/// golden trajectory bit for bit. At `λ > 0` the same digest moves, so the
+/// guard is not vacuous: these worlds hold carcasses with leachable nutrient.
+#[test]
+fn a_zero_leaching_rate_leaves_every_golden_trajectory_byte_identical() {
+    for (name, seed, ticks, expected) in GOLDEN {
+        let mut recipe = load_recipe(name);
+        assert_eq!(recipe.parameters.leaching_rate, 0.0, "{name} loads λ = 0");
+        recipe.parameters.leaching_rate = 0.0;
+        let got = recipe_trajectory_hash(name, &recipe, seed, ticks);
+        assert_eq!(got, expected, "{name}: λ = 0 moved the trajectory");
+
+        recipe.parameters.leaching_rate = 0.05;
+        let leaching = recipe_trajectory_hash(name, &recipe, seed, ticks);
+        assert_ne!(leaching, expected, "{name}: λ > 0 left the trajectory");
+    }
+}
+
 #[test]
 fn every_trait_to_flow_anchor_is_one_in_todays_units() {
     use explorers_sim::units::*;

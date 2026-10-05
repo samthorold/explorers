@@ -1213,6 +1213,46 @@ pub fn resolve_drains_with_deficits(
     }
 }
 
+/// Leach carcasses (world-rules.md, *Carcass energy decays only through
+/// agents; carcass nutrient leaches*): each carcass, in slice order, gives
+/// `leaching_rate × leachable` nutrient to the available pool at its cell,
+/// where `leachable = max(0, nutrient − structure × ratio)` and `ratio` is
+/// the dead agent's stoichiometric demand per unit structure. Structure is
+/// untouched. Returns a `Leached` event per carcass that leached a positive
+/// amount. A no-op, not evaluated, at `leaching_rate == 0`.
+pub fn leach_carcasses(
+    carcasses: &mut [Carcass],
+    nutrient_grid: &mut crate::spatial::NutrientGrid,
+    params: &WorldParameters,
+) -> Vec<Event> {
+    let mut events = Vec::new();
+    if params.leaching_rate == 0.0 {
+        return events;
+    }
+    for carcass in carcasses.iter_mut() {
+        let bound = crate::stoichiometric_demand(&carcass.traits, carcass.energy, params);
+        let leached = params.leaching_rate * (carcass.nutrient - bound).max(0.0);
+        if leached <= 0.0 {
+            continue;
+        }
+        carcass.nutrient -= leached;
+        *nutrient_grid.at_position(carcass.position) += leached;
+        events.push(Event {
+            tick: 0,
+            seq: 0,
+            kind: EventKind::Leached,
+            source: carcass.id,
+            target: None,
+            energy_delta: 0.0,
+            position: Some(carcass.position),
+            target_was_carcass: false,
+            second_parent: None,
+            nutrient_delta: leached,
+        });
+    }
+    events
+}
+
 /// Check death thresholds: reserve depletion, starvation this tick (`starved`,
 /// from `starved_ids`) or structure below complexity-dependent threshold
 /// produces carcass.
@@ -2180,6 +2220,7 @@ mod tests {
             // set the distance explicitly.
             recognition_distance: 0.0,
             cross_trait_cost: 0.0,
+            leaching_rate: 0.0,
         }
     }
 

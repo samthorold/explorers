@@ -86,12 +86,14 @@ pub fn viable_baseline() -> WorldParameters {
         uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
         recognition_distance: 0.5,
         cross_trait_cost: 0.0,
+        leaching_rate: 0.0,
     }
 }
 
 /// Strategy over the searched `WorldParameters` dimensions (ranges copied from
 /// `explorers-search::default_ranges()`, indices 0..=16, 24..=25 and 28..=33), plus the
-/// recognition distance, spanning the kin-blind limit to a wide one.
+/// recognition distance, spanning the kin-blind limit to a wide one, and the
+/// leaching rate (#698), from off to a half-life of about three ticks.
 pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
     let searched = (
         (
@@ -125,6 +127,7 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
             0.0f32..=1.0,  // 32 uptake_structure_exponent (#653)
             0.0f32..=0.14, // 33 cross_trait_cost (#669)
             0.0f32..=1.5,  // recognition_distance (not searched): kin-blind to wide
+            0.0f32..=0.2,  // leaching_rate (#698, not yet searched): off to a ~3-tick half-life
         ),
     );
     searched.prop_map(|(a, b, c)| WorldParameters {
@@ -154,6 +157,7 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
         uptake_structure_exponent: c.4,
         cross_trait_cost: c.5,
         recognition_distance: c.6,
+        leaching_rate: c.7,
         ..viable_baseline()
     })
 }
