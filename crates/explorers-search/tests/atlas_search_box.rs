@@ -14,6 +14,7 @@ use explorers_search::config_source::{
 };
 use explorers_search::search::{
     SearchConfig, decode, default_ranges, narrowed_ranges, run_search, size_blind_ranges,
+    untaxed_ranges,
 };
 use explorers_search::sweep::read_atlas_units;
 use rand::SeedableRng;
@@ -91,12 +92,13 @@ fn sample_keys_stay_draws_over_the_sample_box() {
 const COMMITTED_ATLAS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
 
 /// The committed atlas (#663) was searched with `b` in the box and records
-/// it: the 33-dimension box, so every `atlas:i` decodes with its own `b`.
+/// it: the 33-dimension box, the untaxed box since `c_AH` joined the full box
+/// (#669). So every `atlas:i` decodes with its own `b` and with `c_AH = 0`.
 #[test]
 fn the_committed_atlas_records_its_33_dimension_box() {
     let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
     let read = read_atlas_units(std::path::Path::new(COMMITTED_ATLAS));
-    assert_eq!(read.search_box(), default_ranges().as_slice());
+    assert_eq!(read.search_box(), untaxed_ranges().as_slice());
     assert_eq!(read.search_box().len(), 33);
     // #663's atlas, the one #656 searched and read (`656-fresh-atlas-verdict.md`).
     assert_eq!(format!("{:016x}", read.fingerprint()), "9c79856550a0151e");
@@ -104,11 +106,9 @@ fn the_committed_atlas_records_its_33_dimension_box() {
     for i in 0..read.len() {
         let unit: Vec<f64> = serde_json::from_value(raw["cells"][i]["unit"].clone()).unwrap();
         assert_eq!(unit.len(), 33);
-        assert_eq!(
-            read.decode(i),
-            decode(&unit, &default_ranges()),
-            "atlas:{i}"
-        );
+        let world = read.decode(i);
+        assert_eq!(world, decode(&unit, &untaxed_ranges()), "atlas:{i}");
+        assert_eq!(world.0.cross_trait_cost, 0.0, "atlas:{i}");
     }
 }
 
@@ -145,6 +145,7 @@ fn a_legacy_atlas_reads_as_the_size_blind_box() {
         let world = read.decode(i);
         assert_eq!(world, decode(&unit, &size_blind_ranges()));
         assert_eq!(world.0.uptake_structure_exponent, 0.0, "atlas:{i}");
+        assert_eq!(world.0.cross_trait_cost, 0.0, "atlas:{i}");
     }
 }
 
