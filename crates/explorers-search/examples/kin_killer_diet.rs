@@ -84,7 +84,8 @@
 //! carcass) and its cross-trait term `(A·H)^(p/2)` (raw photosynthetic
 //! absorption and heterotrophy, `p` = the config's
 //! `maintenance_cost_exponent`); `c_max`, the `c_AH` at which a typical one's
-//! cross-trait cost is twice its drain income, two ways. J. **Carcass
+//! cross-trait cost is twice its drain income, two ways (ratio of medians;
+//! median of per-agent ratios), each also over drainers only. J. **Carcass
 //! nutrient retained** by light-fed mixotrophs in the second half, and
 //! Spearman ρ(retained per unit drained, pool N under the drainer) per
 //! carcass bite, pooled and median per config. `--cross-trait-cost <c>` pins
@@ -663,8 +664,10 @@ struct Ext {
     #[serde(default)]
     lfm_calibration: Vec<[f32; 3]>,
     /// J (#668): every second-half carcass bite by a light-fed mixotroph
-    /// that drained structure, as `[structure drained, nutrient retained,
-    /// pool N in the cell under the drainer before the step]`.
+    /// (`realised_bites`' valued ones, as C's route counts them), as
+    /// `[structure drained, nutrient retained, pool N in the cell under the
+    /// drainer before the step]`. A bite on a carcass with no structure left
+    /// drains 0 and can still retain nutrient.
     #[serde(default)]
     lfm_carcass_bites: Vec<[f32; 3]>,
     /// J: such bites with no pre-step pool reading (should be zero).
@@ -1040,7 +1043,6 @@ fn rollout(
                 // under it.
                 if second_half
                     && e.target_was_carcass
-                    && e.energy_delta > 0.0
                     && matches!(bucket_of(e.source), Some((0, _)))
                 {
                     match pool_at.get(&e.source) {
@@ -2770,6 +2772,10 @@ struct Calibration {
     c_max_median_of_ratios: Option<f64>,
     /// Agents (b) reads (term > 0).
     ratio_agents: usize,
+    /// (a) and (b) over the agents with drain income > 0 only (the median
+    /// income is 0 once half the population never drains); `None` when every
+    /// agent drains.
+    drainers: Option<Box<Calibration>>,
 }
 
 impl Calibration {
@@ -2787,7 +2793,9 @@ impl Calibration {
             .map(|a| COST_MULTIPLE * f64::from(a[0]) / f64::from(a[1]))
             .collect();
         let (income, term) = (Spread::of(income), Spread::of(term));
+        let drainers: Vec<[f32; 3]> = agents.iter().filter(|a| a[0] > 0.0).copied().collect();
         Self {
+            drainers: (drainers.len() < agents.len()).then(|| Box::new(Calibration::of(&drainers))),
             agents: agents.len(),
             zero_income: agents.iter().filter(|a| a[0] <= 0.0).count(),
             income_per_agent_tick: (ticks > 0.0).then(|| weighted / ticks),
@@ -2869,13 +2877,27 @@ fn calibration(rows: &[Row], x: &Ext) {
         g4(c.c_max_median_of_ratios),
         c.ratio_agents
     );
+    let d = c.drainers.as_deref().cloned().unwrap_or_else(|| c.clone());
+    println!(
+        "Drainers only (the {} agents with drain income > 0): income median {} (p25 {}, p75 {}), term median {}; c_max (a) = **{}**, (b) = **{}**.\n",
+        d.agents,
+        g4(d.income.map(|s| s.median)),
+        g4(d.income.map(|s| s.p25)),
+        g4(d.income.map(|s| s.p75)),
+        g4(d.term.map(|s| s.median)),
+        g4(d.c_max_ratio_of_medians),
+        g4(d.c_max_median_of_ratios),
+    );
     println!("Per config:\n");
-    println!("| config | p | agents | median income | median term | c_max (a) | c_max (b) |");
-    println!("|---|---:|---:|---:|---:|---:|---:|");
+    println!(
+        "| config | p | agents | median income | median term | c_max (a) | c_max (b) | drainers | c_max (a), drainers | c_max (b), drainers |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     for r in rows {
         let c = Calibration::of(&r.tally.ext.lfm_calibration);
+        let d = c.drainers.as_deref().cloned().unwrap_or_else(|| c.clone());
         println!(
-            "| {}:{} | {} | {} | {} | {} | {} | {} |",
+            "| {}:{} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             r.source,
             r.config_index,
             r.maintenance_cost_exponent
@@ -2885,6 +2907,9 @@ fn calibration(rows: &[Row], x: &Ext) {
             g4(c.term.map(|s| s.median)),
             g4(c.c_max_ratio_of_medians),
             g4(c.c_max_median_of_ratios),
+            d.agents,
+            g4(d.c_max_ratio_of_medians),
+            g4(d.c_max_median_of_ratios),
         );
     }
 }
@@ -2896,6 +2921,10 @@ struct Retention {
     bites: usize,
     drained: f64,
     retained: f64,
+    /// Bites that drained no structure (a spent carcass), and what they
+    /// retained; they carry no ratio, so ρ leaves them out.
+    zero_structure_bites: usize,
+    zero_structure_retained: f64,
     /// Spearman ρ(retained / drained, pool N) per bite; `Conditionality`'s
     /// pooled and per-config machinery.
     rho: Conditionality,
@@ -2914,7 +2943,13 @@ impl Retention {
             .collect();
         let refs: Vec<&[[f32; 2]]> = pairs.iter().map(|p| &p[..]).collect();
         let all = per_config.iter().flat_map(|c| c.iter());
+        let zero = per_config
+            .iter()
+            .flat_map(|c| c.iter())
+            .filter(|b| b[0] <= 0.0);
         Self {
+            zero_structure_bites: zero.clone().count(),
+            zero_structure_retained: zero.map(|b| f64::from(b[1])).sum(),
             bites: per_config.iter().map(|c| c.len()).sum(),
             drained: all.clone().map(|b| f64::from(b[0])).sum(),
             retained: all.map(|b| f64::from(b[1])).sum(),
@@ -2947,12 +2982,14 @@ fn retention(rows: &[Row], x: &Ext) {
         .collect();
     let j = Retention::of(&per_config);
     println!(
-        "Per bite (every second-half carcass bite by a light-fed mixotroph that drained structure; {} without a pool reading left out): {} bites, drained {:.1}, retained {:.2}, retained per unit drained {}. Spearman ρ(retained / drained, pool N in the cell under the drainer before the step), as G computes it: pooled ρ = **{}** (n = {}); per config (≥ {MIN_CONFIG_SAMPLES} bites) median ρ = **{}** over {} configs ({} with ρ < 0). Negative ρ = the drainer keeps less of a carcass's nutrient where the pool under it is richer.\n",
+        "Per bite (every second-half carcass bite by a light-fed mixotroph that `realised_bites` values; {} without a pool reading left out): {} bites, drained {:.1}, retained {:.2}, retained per unit drained {}; of them {} bites drained no structure (a spent carcass's nutrient) and retained {:.2}, and carry no ratio. Spearman ρ(retained / drained, pool N in the cell under the drainer before the step), as G computes it: pooled ρ = **{}** (n = {}); per config (≥ {MIN_CONFIG_SAMPLES} bites) median ρ = **{}** over {} configs ({} with ρ < 0). Negative ρ = the drainer keeps less of a carcass's nutrient where the pool under it is richer.\n",
         x.lfm_carcass_bites_no_pool,
         j.bites,
         j.drained,
         j.retained,
         ratio(j.retained, j.drained),
+        j.zero_structure_bites,
+        j.zero_structure_retained,
         rho(j.rho.pooled),
         j.rho.samples,
         rho(j.rho.median),
@@ -3245,6 +3282,13 @@ mod tests {
             ),
             (None, None, None)
         );
+        // Drainers only: income [1, 2, 3, 5] median 2.5; term [1, 4, 0.5, 0]
+        // median 0.75; ratios over term > 0 [2, 1, 12] median 2.
+        let d = c.drainers.as_deref().unwrap();
+        assert_eq!(d.agents, 4);
+        assert!(close(d.c_max_ratio_of_medians.unwrap(), 2.0 * 2.5 / 0.75));
+        assert!(close(d.c_max_median_of_ratios.unwrap(), 2.0));
+        assert!(d.drainers.is_none(), "every drainer drains");
         let zero_term = Calibration::of(&[[1.0, 0.0, 1.0]]);
         assert_eq!(zero_term.c_max_ratio_of_medians, None);
         assert_eq!(zero_term.c_max_median_of_ratios, None);
@@ -3265,6 +3309,11 @@ mod tests {
         let j = Retention::of(&[&falling, &rising, &zero_drain]);
         assert_eq!(j.bites, 25);
         assert!(close(j.drained, 36.0));
+        assert_eq!(j.zero_structure_bites, 1);
+        let spent = Retention::of(&[&[[0.0, 0.75, 1.0], [1.0, 0.25, 2.0]][..]]);
+        assert_eq!(spent.zero_structure_bites, 1);
+        assert!(close(spent.zero_structure_retained, 0.75));
+        assert!(close(spent.retained, 1.0));
         assert_eq!(j.rho.samples, 24, "a zero drain has no ratio");
         assert_eq!(j.rho.per_config, vec![Some(-1.0), Some(1.0), None]);
         assert_eq!(j.rho.median, Some(0.0));
