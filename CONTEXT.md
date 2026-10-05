@@ -249,11 +249,11 @@ The fraction of an agent's mobilisable reserve (the reserve above the metabolic 
 _Avoid_: energy conductance (the DEB term is the grounding, but "mobilisation rate" names its role here), reserve drain rate (drain conflates with metabolism, which is a separate outflow)
 
 **Intake ceiling**:
-The fullness at which a consumer reads half sated: a fixed multiple of its own maintenance, so a large, costly body processes more, as gut and handling capacity scale in the domain. The multiple is a world parameter searched by genesis on a log scale, and one ceiling sets both currencies.
+The fullness at which a consumer reads half sated: a fixed multiple of its own maintenance, so a large, costly body processes more, as gut and handling capacity scale in the domain. The multiple is a world parameter searched by genesis on a log scale, and one ceiling sets both currencies. The fullness gate it belongs to is withdrawn (#630, #670); the term survives in the instruments that replay it.
 _Avoid_: satiation sensitivity (the former name for the shape of a reserve-based gate, which this replaces), gut capacity (the domain analogue, not the physics)
 
 **Fullness**:
-A consumer's recent intake per tick in one currency, a moving average that each tick's intake fills and that clears over the **clearance time**. Satiation reads it against the intake ceiling. A newborn inherits its parent's fullness, as it inherits provisioned reserve and nutrient.
+A consumer's recent intake per tick in one currency, a moving average that each tick's intake fills and that clears over the **clearance time**. Satiation reads it against the intake ceiling. A newborn inherits its parent's fullness, as it inherits provisioned reserve and nutrient. The fullness gate is withdrawn (#630, #670); the term survives in the instruments that replay it.
 _Avoid_: gut content (light counts toward fullness, and no gut holds light), reserve (fullness is a flow average, not stored energy)
 _Avoid_: appetite (a trait word; this is world physics), hunger threshold (there is no threshold)
 
