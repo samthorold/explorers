@@ -180,6 +180,20 @@ pub fn with_uptake_scaling(
     (params, dist)
 }
 
+/// Pin a resolved world's **autotrophy × heterotrophy cross-trait cost**
+/// `c_AH` (#667; world-rules.md, trade-off #5) when given, leaving everything
+/// else as decoded: #668's probe of whether the term bites at the top of its
+/// calibrated range.
+pub fn with_cross_trait_cost(
+    (mut params, dist): (WorldParameters, InitialDistribution),
+    pin: Option<f32>,
+) -> (WorldParameters, InitialDistribution) {
+    if let Some(c) = pin {
+        params.cross_trait_cost = c;
+    }
+    (params, dist)
+}
+
 /// Pins for the five **network** parameters (flow 5); `None` keeps the
 /// decoded value (every decoded world has the network off: cap 0).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -333,6 +347,22 @@ mod tests {
         assert_eq!(dist, decoded.1);
         let mut want = decoded.0.clone();
         want.recognition_distance = 1.5;
+        assert_eq!(params, want);
+    }
+
+    /// #668 probes the cross-trait cost at the top of its range: a pinned
+    /// `c_AH` overrides only that parameter, and no pin leaves the world as
+    /// decoded.
+    #[test]
+    fn a_pinned_cross_trait_cost_overrides_only_its_own_parameter() {
+        let sampled = sampled_units();
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        assert_eq!(with_cross_trait_cost(decoded.clone(), None), decoded);
+
+        let (params, dist) = with_cross_trait_cost(decoded.clone(), Some(0.3));
+        assert_eq!(dist, decoded.1);
+        let mut want = decoded.0.clone();
+        want.cross_trait_cost = 0.3;
         assert_eq!(params, want);
     }
 
