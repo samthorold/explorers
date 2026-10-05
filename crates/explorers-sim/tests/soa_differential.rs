@@ -217,3 +217,24 @@ fn elementwise_phases_bit_identical_over_example4_trajectory() {
 fn elementwise_phases_bit_identical_over_example9_trajectory() {
     multitick_differential("example9_detrital_pathway.json", 3, 200);
 }
+
+/// #667: with the autotrophy × heterotrophy cross-trait cost switched on, the
+/// SoA metabolise and grow still match the scalar phases bit for bit, and the
+/// term is live on this agent set (it changes what metabolise dissipates).
+#[test]
+fn elementwise_phases_bit_identical_with_cross_trait_cost() {
+    let recipe = load_recipe("example4.json");
+    let (agents, off) = warmed_agents(&recipe, 1, 50);
+    assert!(!agents.is_empty());
+    let mut on = off.clone();
+    on.cross_trait_cost = 0.05;
+    assert_metabolise_identical(&agents, &on, "example4 metabolise, cross-trait cost");
+    assert_grow_identical(&agents, &on, "example4 grow, cross-trait cost");
+
+    let dissipated = |p: &WorldParameters| phase::metabolise(&mut agents.to_vec(), p).1;
+    assert_ne!(
+        dissipated(&on).to_bits(),
+        dissipated(&off).to_bits(),
+        "the cross-trait term must charge some agent in this set"
+    );
+}

@@ -527,6 +527,7 @@ fn default_recipe() -> WorldRecipe {
             uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             satiation_sensitivity: 33.0,
             recognition_distance: 0.5,
+            cross_trait_cost: 0.0,
         },
         initial_distribution: Some(InitialDistribution {
             mean_traits: TraitVector {
@@ -1250,6 +1251,10 @@ impl ExplorersApp {
                 ui.add(
                     egui::Slider::new(&mut params.heterotrophy_maintenance_cost, 0.0..=0.5)
                         .text("Heterotrophy maintenance"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.cross_trait_cost, 0.0..=0.5)
+                        .text("Autotrophy × heterotrophy cost (0 = latent)"),
                 );
                 ui.add(
                     egui::Slider::new(&mut params.somatic_maintenance_cost_coefficient, 0.0..=1.0)

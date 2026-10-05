@@ -184,12 +184,13 @@ impl AgentSoA {
 /// over column reads so the surrounding loop autovectorises.
 #[inline]
 fn maintenance_cost(s: &AgentSoA, i: usize, params: &WorldParameters, exp: f32) -> f32 {
-    params.base_metabolic_rate
+    let per_trait = params.base_metabolic_rate
         + s.t_photo[i].powf(exp) * params.photo_maintenance_cost
         + s.t_hetero[i].powf(exp) * params.heterotrophy_maintenance_cost
         + s.t_mobility[i].powf(exp) * params.mobility_maintenance_cost
         + s.t_asexual[i].powf(exp) * params.asexual_propensity_maintenance_cost
-        + s.structure[i] * params.structure_maintenance_coefficient
+        + s.structure[i] * params.structure_maintenance_coefficient;
+    crate::phase::with_cross_trait_cost(per_trait, s.t_photo[i], s.t_hetero[i], params)
 }
 
 /// SoA `metabolise`: fixed costs only, per-agent. Bit-identical to
