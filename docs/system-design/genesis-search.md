@@ -54,21 +54,9 @@ reference structure, stays out of the box at 100. The reasons are in world-rules
 (`size_blind_ranges()`): `decode` reads a box without `b`'s coordinate as `b = 0`, so a unit vector
 drawn under it still names the world it always named.
 
-The 34th coordinate is the **cross-trait cost** `c_AH`, linear over `[0, 0.14]` (#669). The range
-must hold `c_AH = 0` exactly, the latent default under which mixotrophy is untaxed, so a log scale is
-out. The top is measured, not copied from the per-trait costs: it is the `c_AH` at which a typical
-light-fed mixotroph that drains pays about twice its median drain income. The reasons are in
-world-rules.md trade-off #5, and the measurement is
-[`668-cross-trait-calibration.md`](../research/668-cross-trait-calibration.md). If the searched
-atlas's cells pile up at the top, the range is widened before its verdict is read, to about 0.25 (that
-note's alternative reading of a typical mixotroph). The 33-coordinate box before it is the **untaxed
-box** (`untaxed_ranges()`): `decode` reads a box without `c_AH`'s coordinate as `c_AH = 0`, so an
-atlas searched under that box, such as #663's, still names the worlds it always named. The committed
-atlas (#677) was searched under the full 34-coordinate box and records it, so each of its cells carries
-its own `c_AH`, and so does the committed recipe (atlas:90, `c_AH` ≈ 0.139). The `WorldParameters`
-default stays 0.
+The **cross-trait cost** `c_AH` is not in the box. Its default 0 holds in every world genesis searches, so the box is the 33-coordinate **untaxed box** (`untaxed_ranges()`). The term is latent (world-rules.md trade-off #5): it was specified as the lever for a signature that is now reported rather than required, genesis did not select on it when it was searched, and a dimension the search does not select on only adds noise. If it comes out of reserve, its range is linear over `[0, 0.14]`. That range holds `c_AH = 0` exactly, which rules out a log scale. Its top is measured, not copied from the per-trait costs: it is the `c_AH` at which a typical light-fed mixotroph that drains pays about twice its median drain income ([`668-cross-trait-calibration.md`](../research/668-cross-trait-calibration.md)). `decode` reads a box without `c_AH`'s coordinate as `c_AH = 0`, so an atlas searched under the untaxed box names the same worlds whether or not the coordinate exists. *Current state: the committed atlas (#677) was searched under a 34-coordinate box with `c_AH` over `[0, 0.14]`, so each of its cells and the committed recipe (atlas:90, `c_AH` ≈ 0.139) carry their own `c_AH`, and the search still defaults to that box. The next re-search (#686) runs the untaxed box.*
 
-A **narrowed box** (`narrowed_ranges()`) keeps the same 34 raw coordinates and narrows
+A **narrowed box** (`narrowed_ranges()`) keeps the same raw coordinates and narrows
 only the box. It is opt-in: it keeps outcome prediction but costs the illumination (below).
 
 - **The core stays at full width.** `light_competition_radius`, `world_extent`,
@@ -235,7 +223,7 @@ as if every rollout ran the full horizon, with one stated exception, the bloom s
 simply does not pay a settled-community price for a world that has no settled community. This is the tick-0 prefilter's interlock moved along the
 trajectory, and it is why the longer horizon does not force the map to get coarser: cutting
 generations or batch to hold wall-clock trades the atlas's resolution for its correctness, and
-shrinking the seed ensemble makes the median-over-seeds selection signal noisier exactly where
+shrinking the seed ensemble makes the selection signal over seeds noisier exactly where
 [the projection](#the-recipe-is-a-projection-of-the-atlas) already struggles. Neither is taken.
 
 The two dead-pool gates are read *incrementally* for this: on the series-so-far, exactly the
@@ -324,6 +312,67 @@ quantiles sit at the horizon on every sub-population (tail count ≥ 20: 90th pe
 the reading would move with any horizon it was run at. `SearchConfig::max_ticks` is therefore not
 moved on it; the band statistic is re-designed (a band in absolute agents, or a smoothed series)
 before `T` is read again, and #492 / 443 §6.3 remain the evidence the working value rests on.*
+
+## Genesis selects for worlds that are sensible across initial conditions
+
+A world's quality is a property of its ensemble, not of a draw. CONTEXT.md's *sensible world* is
+accepted "only when multiple patterns are reproduced simultaneously across an ensemble of runs", so a
+world that lives and coexists on some seeds and dies on others is not sensible however well its good
+seeds score. Genesis's target is therefore **robustness across initial conditions**: how reliably the
+world's parameters produce a sensible world, as well as how good that world is when they do.
+
+This is the robustness the search can afford, and it stands for the others. Across the committed
+atlas, a world whose seeds disagree on its verdict is the same world that flips when its parameters
+are jittered (Spearman ρ +0.80 between seed-only and jitter flip rates over 99 worlds). Worlds whose
+seeds all agree barely move under jitter: 3–10 % of verdicts flip, against 21–34 % for the rest. So
+robustness to parameters adds little beyond robustness to initial conditions, at about 25× the
+cost ([693-fragility-audit.md](../research/693-fragility-audit.md)). Robustness to perturbation
+mid-run is the one the game turns on, since the player's actions are perturbations. It is read on the
+atlas's worlds as a readout, not searched. A perturbation can only be applied to a world that
+settles first, so a world must first be robust across initial conditions, and pulse response is
+measured on top of that.
+
+Selecting on robustness is not new to genesis. It is where the projection already looks: the recipe
+pick reads a coexistence-fraction floor at a refined ensemble because a straddler can top the
+leaderboard on a lucky draw (*The recipe is a projection of the atlas*). The fragility audit shows
+the straddler is not an edge case of the pick. 42 of the committed atlas's 99 worlds have seeds that
+disagree, the seed-to-seed fitness spread (median sd 0.149) is close to the median cell fitness
+(0.191), and flip rate rises with fitness (ρ +0.27). A search that ranks on a 5-seed median keeps
+fragile worlds that drew well.
+
+**A cell's fitness is its expected fitness over the seed ensemble**: the mean of its seeds'
+fitness, with a seed that hits a gate (extinction, energy death, lockup, monoculture, generalist
+dominance, bloom stop) scoring 0, as the evaluator already scores it. That is the probability that the
+world's parameters produce a sensible world times how good it is when they do. A world that lives on 3
+of 5 seeds at 0.30 scores 0.18, and one that lives on all 5 at 0.25 scores 0.25. It is smooth in the
+share of seeds that live, as the arithmetic mean across the sensible-world criteria is smooth, so the
+emitters see a gradient toward robustness rather than a cliff. It is an aggregation over seeds, not a
+new criterion, so it stays inside the authority boundary below. The tempting alternatives each fail:
+
+- **The median over seeds** ignores how the losing seeds lose. It reaches 0 only once most seeds die, so
+  a world that dies on 2 of 5 scores as if it never did.
+- **Median × live fraction** penalises dying seeds twice, once in the factor and again once the median
+  falls to 0.
+- **A floor on the live fraction** is a cliff in parameter space, which the smooth-landscape
+  constraint forbids ([world rules](world-rules.md), *Smooth parameter landscape*).
+- **The live fraction as a behaviour axis** would make fragility a niche the archive preserves,
+  the opposite of selecting against it.
+
+Whether a cell is live or dead stays with its majority of seeds, so the dead frontier keeps its
+meaning: a cell is on a cliff when most of its seeds fall off it. The projection's coexistence floor
+and refinement stay, as a second, stricter guard on the one world the player is given. 
+
+**A cell's recorded fitness rests on 10 seeds.** Seed-to-seed fitness sd is about 0.15 on the
+committed atlas, against a median cell fitness of 0.19, so the mean's standard error is about 0.067 at
+5 seeds, 0.047 at 10 and 0.033 at 20. Ten seeds halve the variance and resolve the live fraction to a
+tenth, and keep a search near half an hour. Twenty would double the cost again for a third less error,
+and the one world given to the player already gets that precision from refinement at 32 seeds. How a
+search avoids paying for 10 seeds on a hopeless candidate is implementation. It may, for example,
+evaluate 5 and add the other 5 only to a candidate that could enter or replace an archive elite. But
+no cell's recorded fitness rests on fewer than 10 seeds, since a 5-seed estimate is the lucky draw
+this section exists to discount. *Current state: the search ranks on the median-fitness seed
+(`median_fitness` in `qd.rs`) of a 5-seed ensemble. Neither the mean nor the 10 seeds is implemented
+yet.*
 
 ## Authority boundary: the heterotroph guilds are reported, never optimised
 
