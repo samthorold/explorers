@@ -307,7 +307,7 @@ const SIZE_BLIND_DIMS: usize = 32;
 /// The full box as it stood before the cross-trait cost joined it (#669):
 /// the first 33 [`default_ranges`] dims, with mixotrophy untaxed
 /// (`c_AH = 0`, which [`decode`] gives any box without `c_AH`'s coordinate).
-/// The committed atlas (#663) was searched under this one.
+/// #663's atlas, committed until #677, was searched under this one.
 pub fn untaxed_ranges() -> Vec<ParameterRange> {
     let mut ranges = default_ranges();
     ranges.truncate(UNTAXED_DIMS);
@@ -1040,7 +1040,7 @@ mod tests {
     }
 
     /// #669: a unit vector drawn under the untaxed box (the full box before
-    /// `c_AH` joined it, 33 raw coordinates — the committed atlas's) still
+    /// `c_AH` joined it, 33 raw coordinates — #663's atlas's) still
     /// decodes to the world it named, with `c_AH = 0`: the same world as the
     /// full box at `c_AH`'s raw coordinate 0.
     #[test]

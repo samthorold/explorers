@@ -57,17 +57,17 @@ fn recipe() -> WorldRecipe {
 /// the drained nutrient their surplus waits on — a physics change, not a
 /// changed read. Seed 1 no longer locks up and now reaches the horizon;
 /// seed 2 moved (it now scores coexistence); seed 3 still reads zero.
+/// Re-pinned under #677 on the recipe of the atlas searched under the
+/// deficit rule with `c_AH` in the box: `recipe.json` itself was replaced
+/// (atlas:90, cell [9, 19, 6], `b` ≈ 0.72, `c_AH` ≈ 0.139), so every value is
+/// new — a different world, not a changed read. Seeds 1 and 3 reach the
+/// horizon; seed 2 locks up (tick 1650) and reads zero.
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
-    (1, [1048582270, 1055513292, 0, 0, 1057702806, 1050003902]),
-    (
-        2,
-        [
-            1058902120, 1052667590, 1065353216, 1035489772, 1065353216, 1043525939,
-        ],
-    ),
-    (3, [0, 0, 0, 0, 0, 0]),
+    (1, [1037937632, 1046760836, 0, 0, 1045891645, 1048246707]),
+    (2, [0, 0, 0, 0, 0, 0]),
+    (3, [1050924810, 0, 1065353216, 0, 1049582633, 1050425182]),
 ];
 
 fn readings(seed: u64) -> [u32; 6] {
