@@ -53,6 +53,7 @@ A single loop with explicit phases, run once per tick:
 for each tick:
     build spatial grid
     photosynthesise (all agents)
+    leach carcasses (all carcasses)
     absorb nutrients (all agents)
     metabolise (all agents)
     grow (all agents)
@@ -68,6 +69,8 @@ for each tick:
 ```
 
 The network pass (world rules, flow 5) runs between consumption and reproduction. It is inert while the connection cap is 0, which is the default, the search baseline and every atlas config.
+
+Carcass leaching (world rules, *Carcass energy decays only through agents; carcass nutrient leaches*) runs before nutrient uptake, so what a carcass leaches is in its cell's pool when that tick's uptake draws on it, and a drainer that reaches the carcass later in the tick bites the leached carcass. Carcasses leach in list order, each adding to the pool at its own cell. The pass is skipped while the leaching rate is 0, which is the default, the search baseline and every atlas config.
 
 ### Properties
 

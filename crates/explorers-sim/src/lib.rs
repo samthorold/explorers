@@ -637,6 +637,16 @@ pub struct WorldParameters {
     /// existing recipe, checkpoint, pin and the atlas are bit-unchanged.
     #[serde(default)]
     pub cross_trait_cost: f32,
+    /// Leaching rate `λ` (world-rules.md, *Carcass energy decays only through
+    /// agents; carcass nutrient leaches*): each tick every carcass gives
+    /// `λ × leachable nutrient` to the available pool at its cell, the
+    /// leachable nutrient being what its structure does not bind at the dead
+    /// agent's ratio, `max(0, nutrient − structure × ratio)`. Moves nutrient
+    /// only; a carcass's structure is untouched. Per tick, in `[0, 1]`.
+    /// Default `0.0` skips the term, so every existing recipe, pin and the
+    /// atlas are bit-unchanged.
+    #[serde(default)]
+    pub leaching_rate: f32,
 }
 
 /// Design default reference structure for size-scaled uptake (#644). Chosen
@@ -1351,6 +1361,13 @@ impl World {
         self.total_solar_input += solar_this_tick;
         events.extend(photo_events);
 
+        // 1b. Leach carcasses: each carcass's leachable nutrient moves to the
+        // pool at its cell before uptake, so this tick's absorb phase can draw
+        // it. Skipped at leaching rate 0.
+        let leach_events =
+            phase::leach_carcasses(&mut self.carcasses, &mut self.nutrient_grid, &self.params);
+        events.extend(leach_events);
+
         // 2. Absorb nutrients
         let nutrient_events =
             phase::absorb_nutrients(&mut self.agents, &mut self.nutrient_grid, &self.params);
@@ -2009,6 +2026,7 @@ mod tests {
             uptake_reference_structure: DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
+            leaching_rate: 0.0,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -2661,6 +2679,140 @@ mod tests {
         assert_eq!(without.network_maintenance_cost, 0.0);
         assert_eq!(without.network_redistribution_rate, 0.0);
         assert_eq!(without.network_transfer_efficiency, 0.0);
+    }
+
+    /// A world with no living agents, an empty pool and the given leaching
+    /// rate, holding one carcass: structure `energy`, `nutrient`, at `position`,
+    /// with a dead agent's specification traits (ratio 0.1 + 0.2 × 0.5 = 0.2).
+    fn leaching_world(
+        leaching_rate: f32,
+        energy: f32,
+        nutrient: f32,
+        position: (f32, f32),
+    ) -> World {
+        let mut params = test_params();
+        params.initial_population_size = 0;
+        params.leaching_rate = leaching_rate;
+        let mut world = World::new(params, test_distribution(), 1);
+        let mut traits = zero_traits();
+        traits.photosynthetic_absorption = 0.5;
+        world.add_carcass(Carcass {
+            id: 9999,
+            position,
+            energy,
+            nutrient,
+            traits,
+        });
+        world
+    }
+
+    #[test]
+    fn a_leaching_carcass_gives_its_leachable_nutrient_to_its_own_cell() {
+        // #698: a carcass with structure 10 at ratio 0.2 binds 2; the other 8
+        // is leachable, and λ = 0.25 of it moves to the cell under the carcass.
+        let pos = (-33.0, 27.0);
+        let mut world = leaching_world(0.25, 10.0, 10.0, pos);
+        let cell = world.nutrient_grid().cell_index_for(pos);
+        world.step();
+        let leached = 0.25 * (10.0 - 10.0 * 0.2);
+        let carcass = &world.carcasses()[0];
+        assert!((carcass.nutrient - (10.0 - leached)).abs() < 1e-5);
+        let cells = world.nutrient_grid().cells();
+        assert!(
+            (cells[cell] - leached).abs() < 1e-5,
+            "cell got {}",
+            cells[cell]
+        );
+        assert_eq!(world.nutrient_pool(), cells[cell], "no other cell gains");
+    }
+
+    #[test]
+    fn leaching_is_logged_as_a_leached_event_per_carcass() {
+        // A readout: one `Leached` event per carcass that leached, carrying the
+        // carcass id, its position and the nutrient it gave the pool.
+        let pos = (12.0, -4.0);
+        let mut world = leaching_world(0.25, 10.0, 10.0, pos);
+        world.add_carcass(Carcass {
+            id: 7777,
+            position: (0.0, 0.0),
+            energy: 10.0,
+            nutrient: 1.0, // below its ratio: leaches nothing, logs nothing
+            traits: zero_traits(),
+        });
+        world.step();
+        let leached = world.event_log().by_kind(&event::EventKind::Leached);
+        assert_eq!(leached.len(), 1);
+        assert_eq!(leached[0].source, 9999);
+        assert_eq!(leached[0].position, Some(pos));
+        assert_eq!(leached[0].energy_delta, 0.0);
+        assert_eq!(leached[0].nutrient_delta, world.nutrient_pool());
+    }
+
+    #[test]
+    fn a_carcass_at_or_below_its_structures_ratio_leaches_nothing() {
+        // Structure 10 at ratio 0.2 binds 2: a carcass holding exactly that,
+        // or less, has no leachable nutrient, however high λ is.
+        for nutrient in [2.0, 1.5, 0.0] {
+            let mut world = leaching_world(0.9, 10.0, nutrient, (0.0, 0.0));
+            for _ in 0..5 {
+                world.step();
+            }
+            assert_eq!(world.carcasses()[0].nutrient, nutrient);
+            assert_eq!(world.nutrient_pool(), 0.0);
+        }
+    }
+
+    #[test]
+    fn leaching_never_touches_a_carcasss_structure() {
+        let mut world = leaching_world(0.5, 10.0, 50.0, (0.0, 0.0));
+        for _ in 0..20 {
+            world.step();
+            assert_eq!(world.carcasses()[0].energy, 10.0);
+        }
+        // It has relaxed to its structure's ratio, and stopped there.
+        assert!((world.carcasses()[0].nutrient - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn leaching_is_first_order_with_half_life_ln2_over_minus_ln_one_minus_lambda() {
+        let lambda: f32 = 0.1;
+        let half_life = 2f32.ln() / -(1.0 - lambda).ln(); // ≈ 6.58 ticks
+        let mut world = leaching_world(lambda, 10.0, 42.0, (0.0, 0.0));
+        let leachable = |w: &World| w.carcasses()[0].nutrient - 2.0;
+        let initial = leachable(&world);
+        let mut previous = initial;
+        for tick in 1..=30 {
+            world.step();
+            let now = leachable(&world);
+            // Each tick loses the same fraction λ of what is leachable.
+            assert!(
+                (now - (1.0 - lambda) * previous).abs() < 1e-4,
+                "tick {tick}: {now} vs {}",
+                (1.0 - lambda) * previous
+            );
+            let t = tick as f32;
+            if t < half_life {
+                assert!(now > initial / 2.0, "tick {tick} is before the half-life");
+            } else {
+                assert!(now <= initial / 2.0, "tick {tick} is past the half-life");
+            }
+            previous = now;
+        }
+    }
+
+    #[test]
+    fn leaching_rate_round_trips_and_defaults_off() {
+        // #698: a recipe or checkpoint that predates leaching loads with λ = 0.
+        let mut params = test_params();
+        params.leaching_rate = 0.02;
+        let json = serde_json::to_string(&params).unwrap();
+        let back: WorldParameters = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, params);
+
+        let mut value = serde_json::to_value(test_params()).unwrap();
+        value.as_object_mut().unwrap().remove("leaching_rate");
+        let without: WorldParameters = serde_json::from_value(value).unwrap();
+        assert_eq!(without.leaching_rate, 0.0);
     }
 
     #[test]
@@ -4114,6 +4266,7 @@ mod tests {
             uptake_reference_structure: DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
+            leaching_rate: 0.0,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,
