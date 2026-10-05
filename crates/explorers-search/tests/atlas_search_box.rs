@@ -91,18 +91,53 @@ fn sample_keys_stay_draws_over_the_sample_box() {
 
 const COMMITTED_ATLAS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
 
-/// The committed atlas (#663) was searched with `b` in the box and records
-/// it: the 33-dimension box, the untaxed box since `c_AH` joined the full box
-/// (#669). So every `atlas:i` decodes with its own `b` and with `c_AH = 0`.
+/// The committed atlas (#677) was searched with `b` and `c_AH` in the box
+/// and records it: the full 34-dimension box, so every `atlas:i` decodes with
+/// its own `b` and `c_AH`.
 #[test]
-fn the_committed_atlas_records_its_33_dimension_box() {
+fn the_committed_atlas_records_its_34_dimension_box() {
     let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
     let read = read_atlas_units(std::path::Path::new(COMMITTED_ATLAS));
-    assert_eq!(read.search_box(), untaxed_ranges().as_slice());
-    assert_eq!(read.search_box().len(), 33);
-    // #663's atlas, the one #656 searched and read (`656-fresh-atlas-verdict.md`).
-    assert_eq!(format!("{:016x}", read.fingerprint()), "9c79856550a0151e");
+    assert_eq!(read.search_box(), default_ranges().as_slice());
+    assert_eq!(read.search_box().len(), 34);
+    // #677's atlas, the seed-42 one #670 searched and read
+    // (`670-cross-trait-verdict.md`).
+    assert_eq!(format!("{:016x}", read.fingerprint()), "aa2662b26da489a3");
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    for i in 0..read.len() {
+        let unit: Vec<f64> = serde_json::from_value(raw["cells"][i]["unit"].clone()).unwrap();
+        assert_eq!(unit.len(), 34);
+        let world = read.decode(i);
+        assert_eq!(world, decode(&unit, &default_ranges()), "atlas:{i}");
+        assert!(world.0.cross_trait_cost > 0.0, "atlas:{i}");
+    }
+}
+
+/// An atlas searched under the untaxed box (#663's, committed until #677):
+/// the committed atlas with its box and units cut to the first 33
+/// dimensions, written to scratch.
+fn untaxed_atlas(name: &str) -> PathBuf {
+    let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
+    let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    raw["search_box"].as_array_mut().unwrap().truncate(33);
+    for cell in raw["cells"].as_array_mut().unwrap() {
+        cell["unit"].as_array_mut().unwrap().truncate(33);
+    }
+    let path = scratch(name).join("atlas.json");
+    std::fs::write(&path, raw.to_string()).unwrap();
+    path
+}
+
+/// An atlas that records the untaxed box decodes over it: every `atlas:i`
+/// names the world it was searched as, with its own `b` and `c_AH = 0`.
+#[test]
+fn an_untaxed_atlas_reads_as_its_33_dimension_box_with_c_ah_zero() {
+    let path = untaxed_atlas("untaxed-box");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let read = read_atlas_units(&path);
+    assert_eq!(read.search_box(), untaxed_ranges().as_slice());
+    let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(!read.is_empty());
     for i in 0..read.len() {
         let unit: Vec<f64> = serde_json::from_value(raw["cells"][i]["unit"].clone()).unwrap();
         assert_eq!(unit.len(), 33);
@@ -113,8 +148,8 @@ fn the_committed_atlas_records_its_33_dimension_box() {
 }
 
 /// A legacy atlas (before #559, as the committed atlas was until #663): the
-/// committed atlas with its box, its 33rd coordinate and its heterotroph
-/// shares (#602) stripped, written to scratch.
+/// committed atlas with its box, its coordinates past the 32nd and its
+/// heterotroph shares (#602) stripped, written to scratch.
 fn legacy_atlas(name: &str) -> PathBuf {
     let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
     let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();

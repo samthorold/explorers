@@ -62,8 +62,11 @@ world-rules.md trade-off #5, and the measurement is
 [`668-cross-trait-calibration.md`](../research/668-cross-trait-calibration.md). If the searched
 atlas's cells pile up at the top, the range is widened before its verdict is read, to about 0.25 (that
 note's alternative reading of a typical mixotroph). The 33-coordinate box before it is the **untaxed
-box** (`untaxed_ranges()`): `decode` reads a box without `c_AH`'s coordinate as `c_AH = 0`, so the
-committed atlas, searched under that box, still names the worlds it always named.
+box** (`untaxed_ranges()`): `decode` reads a box without `c_AH`'s coordinate as `c_AH = 0`, so an
+atlas searched under that box, such as #663's, still names the worlds it always named. The committed
+atlas (#677) was searched under the full 34-coordinate box and records it, so each of its cells carries
+its own `c_AH`, and so does the committed recipe (atlas:90, `c_AH` ≈ 0.139). The `WorldParameters`
+default stays 0.
 
 A **narrowed box** (`narrowed_ranges()`) keeps the same 34 raw coordinates and narrows
 only the box. It is opt-in: it keeps outcome prediction but costs the illumination (below).
@@ -120,9 +123,9 @@ worlds under the full and the narrowed box. So the atlas records the box it was 
 re-projection, and the research instruments (`atlas:i`). A reader that brings a box of its own is
 refused with an error when that box differs from the atlas's. It never silently decodes the wrong
 worlds. An atlas written before the box was recorded reads as the size-blind box, which is the box it
-was searched under. An atlas that recorded the untaxed box, the committed one among them, decodes over
-it with `c_AH = 0`. The instruments' LHS draws (`sample:i`, `sample@S:i`) sample a whole box, not the
-search's box, and that box is the size-blind one (`config_source::sample_box()`): recorded rows and
+was searched under. An atlas that recorded the untaxed box, such as #663's (committed until #677),
+decodes over it with `c_AH = 0`. The instruments' LHS draws (`sample:i`, `sample@S:i`) sample a
+whole box, not the search's box, and that box is the size-blind one (`config_source::sample_box()`): recorded rows and
 research notes name worlds by `sample:i`, and a draw over the 33-coordinate box would have given every
 one of them a nonzero `b` (and, over the full box, a nonzero `c_AH`). So every sample world keeps
 `b = 0` and `c_AH = 0`, and the instruments see either only through atlas cells or an explicit pin.
