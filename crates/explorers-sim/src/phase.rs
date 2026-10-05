@@ -233,17 +233,40 @@ fn retention_buffer(agent: &Agent, params: &WorldParameters) -> f32 {
 }
 
 /// An agent's per-tick metabolic cost — its maintenance need: base rate, trait
-/// maintenance and structure maintenance (what `metabolise` charges, before the
-/// cap at available reserve). The yardstick both the grow phase's retention
-/// buffer and consumption's surplus satiation are measured in.
+/// maintenance, structure maintenance and the autotrophy × heterotrophy
+/// cross-trait cost (what `metabolise` charges, before the cap at available
+/// reserve). The yardstick both the grow phase's retention buffer and
+/// consumption's surplus satiation are measured in.
 pub fn metabolic_cost(agent: &Agent, params: &WorldParameters) -> f32 {
     let exp = params.maintenance_cost_exponent;
-    params.base_metabolic_rate
+    let per_trait = params.base_metabolic_rate
         + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
         + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
         + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
         + agent.traits.asexual_propensity.powf(exp) * params.asexual_propensity_maintenance_cost
-        + agent.structure * params.structure_maintenance_coefficient
+        + agent.structure * params.structure_maintenance_coefficient;
+    with_cross_trait_cost(
+        per_trait,
+        agent.traits.photosynthetic_absorption,
+        agent.traits.heterotrophy,
+        params,
+    )
+}
+
+/// `cost` plus the autotrophy × heterotrophy cross-trait cost (world-rules.md,
+/// trade-off #5): `cross_trait_cost × (A·H)^(p/2)` on the raw autotrophy `A`
+/// and heterotrophy `H`, `p` being `maintenance_cost_exponent`. Zero for a
+/// specialist in either trait and of degree `p`, like the per-trait terms.
+/// Added last, after the per-trait sum, and not at all while the cost is 0,
+/// so a world without it charges exactly what it did before the term existed.
+/// The one expression of the term, shared by the AoS and SoA paths.
+#[inline]
+pub(crate) fn with_cross_trait_cost(cost: f32, a: f32, h: f32, params: &WorldParameters) -> f32 {
+    let c = params.cross_trait_cost;
+    if c == 0.0 {
+        return cost;
+    }
+    cost + c * (a * h).powf(0.5 * params.maintenance_cost_exponent)
 }
 
 /// The fraction of its heterotrophic capability a consumer expresses this tick
@@ -2231,6 +2254,7 @@ mod tests {
             // Kin-blind: these tests pin drain mechanics; recognition tests
             // set the distance explicitly.
             recognition_distance: 0.0,
+            cross_trait_cost: 0.0,
         }
     }
 
@@ -3127,6 +3151,80 @@ mod tests {
         assert!((events[0].energy_delta - 1.0).abs() < 1e-6);
         assert!((agents[0].reserve - 9.0).abs() < 1e-6);
         assert!((dissipated - 1.0).abs() < 1e-6);
+    }
+
+    /// Maintenance `metabolise` charges one agent with these traits.
+    fn charged(traits: TraitVector, params: &WorldParameters) -> f32 {
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
+        let (events, _) = metabolise(&mut agents, params);
+        events[0].energy_delta
+    }
+
+    #[test]
+    fn cross_trait_cost_charges_a_mixotroph_and_spares_specialists() {
+        // Trade-off #5 (#667): with c_AH > 0 an agent running both autotrophy
+        // and heterotrophy pays c_AH × (A·H)^(p/2) on top of its per-trait
+        // maintenance; a pure producer or a pure heterotroph pays nothing extra.
+        let off = WorldParameters {
+            photo_maintenance_cost: 0.05,
+            heterotrophy_maintenance_cost: 0.07,
+            structure_maintenance_coefficient: 0.01,
+            ..test_params()
+        };
+        let on = WorldParameters {
+            cross_trait_cost: 0.3,
+            ..off.clone()
+        };
+        let mixotroph = TraitVector {
+            photosynthetic_absorption: 0.4,
+            heterotrophy: 0.9,
+            ..zero_traits()
+        };
+        let extra = charged(mixotroph, &on) - charged(mixotroph, &off);
+        // p = 1: 0.3 × (0.4 × 0.9)^(1/2) = 0.3 × 0.6 = 0.18.
+        assert!((extra - 0.18).abs() < 1e-6, "extra {extra}");
+
+        let producer = TraitVector {
+            photosynthetic_absorption: 0.8,
+            ..zero_traits()
+        };
+        let heterotroph = TraitVector {
+            heterotrophy: 0.8,
+            ..zero_traits()
+        };
+        for specialist in [producer, heterotroph] {
+            assert_eq!(
+                charged(specialist, &on).to_bits(),
+                charged(specialist, &off).to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn cross_trait_cost_has_degree_p_like_the_per_trait_terms() {
+        // (A·H)^(p/2) is homogeneous of degree p: doubling both traits
+        // multiplies the term by 2^p. Checked at p = 3, where p/2 is not an
+        // integer, with the per-trait costs off so the charge is the term.
+        let params = WorldParameters {
+            base_metabolic_rate: 0.0,
+            maintenance_cost_exponent: 3.0,
+            cross_trait_cost: 0.5,
+            ..test_params()
+        };
+        let traits = |a, h| TraitVector {
+            photosynthetic_absorption: a,
+            heterotrophy: h,
+            ..zero_traits()
+        };
+        let small = charged(traits(0.2, 0.3), &params);
+        let double = charged(traits(0.4, 0.6), &params);
+        // 0.5 × (0.06)^1.5
+        assert!((small - 0.5 * 0.06f32.powf(1.5)).abs() < 1e-7, "{small}");
+        assert!(
+            (double / small - 8.0).abs() < 1e-4,
+            "ratio {}",
+            double / small
+        );
     }
 
     #[test]

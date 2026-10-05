@@ -437,6 +437,7 @@ mod tests {
             uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             satiation_sensitivity: 0.1,
             recognition_distance: 0.5,
+            cross_trait_cost: 0.0,
         }
     }
 

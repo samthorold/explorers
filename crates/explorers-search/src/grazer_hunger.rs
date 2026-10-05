@@ -207,18 +207,8 @@ impl KillerReading {
 }
 
 /// An agent's maintenance need: its per-tick metabolic cost, floored at zero.
-/// Computed here rather than through the stepper so the reads work on a tree
-/// without the need gate (pinned against `phase::metabolic_cost` in the tests).
 fn maintenance_need(agent: &Agent, params: &WorldParameters) -> f32 {
-    let x = params.maintenance_cost_exponent;
-    let t = &agent.traits;
-    (params.base_metabolic_rate
-        + t.photosynthetic_absorption.powf(x) * params.photo_maintenance_cost
-        + t.heterotrophy.powf(x) * params.heterotrophy_maintenance_cost
-        + t.mobility.powf(x) * params.mobility_maintenance_cost
-        + t.asexual_propensity.powf(x) * params.asexual_propensity_maintenance_cost
-        + agent.structure * params.structure_maintenance_coefficient)
-        .max(0.0)
+    explorers_sim::phase::metabolic_cost(agent, params).max(0.0)
 }
 
 /// The reserve energy an agent's free nutrient can match when built into

@@ -650,6 +650,16 @@ pub struct WorldParameters {
     /// [`DEFAULT_UPTAKE_REFERENCE_STRUCTURE`].
     #[serde(default = "default_uptake_reference_structure")]
     pub uptake_reference_structure: f32,
+    /// Autotrophy × heterotrophy cross-trait cost `c_AH` (world-rules.md,
+    /// trade-off #5): a per-tick maintenance term `c_AH × (A·H)^(p/2)` on
+    /// the raw autotrophy (`A`) and heterotrophy (`H`) traits, `p` being
+    /// `maintenance_cost_exponent`. Zero for a specialist in either trait,
+    /// degree `p` like the per-trait terms, no structure factor, this pair
+    /// only: it charges a mixotroph for running both machineries at once.
+    /// Energy per tick. Default `0.0` leaves the term latent, so every
+    /// existing recipe, checkpoint, pin and the atlas are bit-unchanged.
+    #[serde(default)]
+    pub cross_trait_cost: f32,
 }
 
 /// Design default reference structure for size-scaled uptake (#644). Chosen
@@ -2025,6 +2035,7 @@ mod tests {
             uptake_reference_structure: DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             satiation_sensitivity: 0.1,
             recognition_distance: 0.5,
+            cross_trait_cost: 0.0,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -2668,6 +2679,22 @@ mod tests {
         assert_eq!(without.network_maintenance_cost, 0.0);
         assert_eq!(without.network_redistribution_rate, 0.0);
         assert_eq!(without.network_transfer_efficiency, 0.0);
+    }
+
+    #[test]
+    fn cross_trait_cost_round_trips_and_defaults_off() {
+        // #667: the cross-trait cost round-trips, and a recipe or checkpoint
+        // that predates it loads with the term latent (0).
+        let mut params = test_params();
+        params.cross_trait_cost = 0.02;
+        let json = serde_json::to_string(&params).unwrap();
+        let back: WorldParameters = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, params);
+
+        let mut value = serde_json::to_value(test_params()).unwrap();
+        value.as_object_mut().unwrap().remove("cross_trait_cost");
+        let without: WorldParameters = serde_json::from_value(value).unwrap();
+        assert_eq!(without.cross_trait_cost, 0.0);
     }
 
     #[test]
@@ -4108,6 +4135,7 @@ mod tests {
             uptake_reference_structure: DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             satiation_sensitivity: 0.1,
             recognition_distance: 0.5,
+            cross_trait_cost: 0.0,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,
