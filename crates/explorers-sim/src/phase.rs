@@ -797,6 +797,7 @@ pub fn resolve_drains(
     nutrient_grid: &mut crate::spatial::NutrientGrid,
 ) -> DrainResult {
     let consumer_expression = consumption_expressions(agents, params);
+    let consumer_deficit = retention_deficits(agents, params);
     resolve_drains_with_expression(
         agents,
         carcasses,
@@ -804,7 +805,45 @@ pub fn resolve_drains(
         params,
         nutrient_grid,
         &consumer_expression,
+        &consumer_deficit,
     )
+}
+
+/// An agent's **nutrient deficit** (world-rules.md flow 3, "What it needs
+/// from a bite"): the nutrient its surplus is waiting on,
+/// `max(0, ratio × growth_efficiency × (reserve − buffer) − free nutrient)`.
+/// `reserve − buffer` is the surplus above the growth retention buffer, and
+/// `growth_efficiency ×` it the structure that surplus could build, which
+/// binds `ratio` nutrient per unit. Zero when the free store already covers
+/// it, or when there is no surplus.
+pub fn retention_deficit(agent: &Agent, params: &WorldParameters) -> f32 {
+    let ratio = crate::stoichiometric_demand(&agent.traits, 1.0, params);
+    let surplus = (agent.reserve - retention_buffer(agent, params)).max(0.0);
+    (ratio * params.growth_efficiency * surplus - agent.nutrient).max(0.0)
+}
+
+/// Each agent's [`retention_deficit`], by slice index. The stepper reads it
+/// once per tick, with [`consumption_expressions`] — after metabolise, before
+/// grow, before any drain (execution-model.md, Pass 1) — so what a consumer
+/// keeps from a bite cannot depend on slice order or on its other meals.
+pub fn retention_deficits(agents: &[Agent], params: &WorldParameters) -> Vec<f32> {
+    agents
+        .iter()
+        .map(|a| retention_deficit(a, params))
+        .collect()
+}
+
+/// The nutrient a consumer keeps from one bite (world-rules.md flow 3):
+/// `min(released, energy_match + deficit_left)`, where `energy_match` is its
+/// `ratio × energy gained` from the bite and `deficit_left` what remains this
+/// tick of its tick-start [`retention_deficit`]. The deficit is a per-tick
+/// budget: what a bite keeps beyond its energy match is taken from it, so
+/// over the tick a consumer keeps at most its deficit beyond the
+/// energy-matched nutrient of its bites, however many it takes.
+pub fn bite_retention(released: f32, energy_match: f32, deficit_left: &mut f32) -> f32 {
+    let retained = released.min(energy_match + *deficit_left);
+    *deficit_left = (*deficit_left - (retained - energy_match).max(0.0)).max(0.0);
+    retained
 }
 
 /// Each agent's need-gated [`consumption_expression`], by slice index. The
@@ -832,8 +871,10 @@ pub fn resolve_drains_with_expression(
     params: &WorldParameters,
     nutrient_grid: &mut crate::spatial::NutrientGrid,
     consumer_expression: &[f32],
+    consumer_deficit: &[f32],
 ) -> DrainResult {
     debug_assert_eq!(consumer_expression.len(), agents.len());
+    debug_assert_eq!(consumer_deficit.len(), agents.len());
     let mut events = Vec::new();
     let mut dissipated = 0.0_f32;
     let mut dead_agents: Vec<u64> = Vec::new();
@@ -863,6 +904,11 @@ pub fn resolve_drains_with_expression(
         .iter()
         .map(|a| crate::stoichiometric_demand(&a.traits, 1.0, params))
         .collect();
+    // What remains this tick of each consumer's tick-start nutrient deficit,
+    // the nutrient its surplus is waiting on: a bite keeps up to its energy
+    // match plus this, and what it keeps beyond the match is spent from it
+    // ([`bite_retention`]). Bites run in target-id order, never slice order.
+    let mut deficit_left: Vec<f32> = consumer_deficit.to_vec();
 
     // --- Pass over living targets ---
     // For each agent that has structure, find consumers in range. The spatial
@@ -998,9 +1044,13 @@ pub fn resolve_drains_with_expression(
             let nutrient_released = actual_drain * target_ratio;
             if nutrient_released > 0.0 {
                 // Consumer retains up to its ratio × the energy the bite gains
-                // it (consumer-driven recycling, world-rules.md flow 3)
-                let consumer_nutrient_need = consumer_ratio[consumer_idx] * energy_gained;
-                let retained = nutrient_released.min(consumer_nutrient_need);
+                // it plus its remaining deficit (consumer-driven recycling,
+                // world-rules.md flow 3)
+                let retained = bite_retention(
+                    nutrient_released,
+                    consumer_ratio[consumer_idx] * energy_gained,
+                    &mut deficit_left[consumer_idx],
+                );
                 let excreted = nutrient_released - retained;
 
                 // Credit the retained nutrient, split by kappa (ADR-0004): a
@@ -1163,8 +1213,11 @@ pub fn resolve_drains_with_expression(
                 };
                 let nutrient_transferred = tick_start_nutrient * nutrient_fraction;
 
-                let consumer_nutrient_need = consumer_ratio[consumer_idx] * energy_gained;
-                let retained = nutrient_transferred.min(consumer_nutrient_need);
+                let retained = bite_retention(
+                    nutrient_transferred,
+                    consumer_ratio[consumer_idx] * energy_gained,
+                    &mut deficit_left[consumer_idx],
+                );
                 let excreted = nutrient_transferred - retained;
 
                 carcasses[carcass_idx].nutrient -= nutrient_transferred;
@@ -6385,6 +6438,158 @@ mod tests {
             (nutrient_grid.total() - 3.5).abs() < 1e-3,
             "excess 3.5 still excreted to the pool, got {}",
             nutrient_grid.total()
+        );
+    }
+
+    /// One light-fed producer's nutrient retained from a single bite of a
+    /// nutrient-rich carcass, with `free` nutrient in its store and a surplus
+    /// of 10 above its retention buffer (world-rules.md flow 3, the deficit).
+    fn producer_carcass_retention(free: f32) -> f32 {
+        let params = WorldParameters {
+            growth_efficiency: 0.5,
+            ..test_params()
+        };
+        // ratio = 0.1 + 0.2 × 2 = 0.5; buffer = 0.1 × 2 = 0.2.
+        let traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            heterotrophy: 1.0,
+            ..zero_traits()
+        };
+        let pos = (40.0, 0.0);
+        let mut agents = vec![make_agent(1, pos, 10.2, traits)];
+        agents[0].structure = 5.0;
+        agents[0].nutrient = free;
+        let mut carcasses = vec![Carcass {
+            id: 99,
+            position: (41.0, 0.0),
+            energy: 100.0,
+            nutrient: 1000.0,
+            traits,
+        }];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, pos);
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
+        agents[0].nutrient + agents[0].repro_nutrient - free
+    }
+
+    #[test]
+    fn drain_producer_short_of_nutrient_retains_its_deficit_beyond_the_energy_match() {
+        // Drain 1 (h = 1), released = 1000 × 1/100 = 10, energy gained = 0.5,
+        // ratio × gained = 0.25. Deficit = 0.5 × 0.5 × (10.2 − 0.2) − free.
+        // A store that covers the surplus (2.5) leaves no deficit; an empty
+        // one leaves the whole 2.5, which the bite fills (capped at released).
+        let covered = producer_carcass_retention(2.5);
+        let empty = producer_carcass_retention(0.0);
+        assert!(
+            (covered - 0.25).abs() < 1e-4,
+            "covered producer keeps ratio × gained = 0.25, got {covered}"
+        );
+        assert!(
+            (empty - 2.75).abs() < 1e-4,
+            "empty producer keeps 0.25 + its 2.5 deficit, got {empty}"
+        );
+    }
+
+    #[test]
+    fn drain_heterotroph_without_surplus_keeps_ratio_times_energy_gained_in_both_passes() {
+        // A pure heterotroph at its retention buffer has no surplus and so no
+        // deficit: it keeps ratio × energy gained from a living and a carcass
+        // bite alike. The deficit is read before any drain, so the reserve its
+        // living meal adds does not open one for the carcass bite.
+        let params = WorldParameters {
+            growth_efficiency: 0.5,
+            ..test_params()
+        };
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0, // ratio = 0.1 + 0.2 × 2 = 0.5; buffer = 0.2
+            ..zero_traits()
+        };
+        let rich = TraitVector {
+            photosynthetic_absorption: 4.0, // ratio 0.9: release exceeds the match
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 0.2, consumer_traits),
+            make_agent(2, (1.0, 0.0), 10.0, rich),
+        ];
+        agents[0].structure = 5.0;
+        agents[1].structure = 10.0;
+        let mut carcasses = vec![Carcass {
+            id: 99,
+            position: (2.0, 0.0),
+            energy: 10.0,
+            nutrient: 20.0,
+            traits: rich,
+        }];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, (0.0, 0.0));
+        grid.insert(1, (1.0, 0.0));
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
+        // Each pass: drain 2, gained 1, kept 0.5 × 1 = 0.5 (released 1.8 and 4).
+        let retained = agents[0].nutrient + agents[0].repro_nutrient;
+        assert!(
+            (retained - 1.0).abs() < 1e-4,
+            "heterotroph keeps 0.5 from each pass, got {retained}"
+        );
+        assert!(
+            (nutrient_grid.total() - (1.8 - 0.5 + 4.0 - 0.5)).abs() < 1e-4,
+            "the rest is excreted, got {}",
+            nutrient_grid.total()
+        );
+    }
+
+    #[test]
+    fn drain_deficit_is_a_per_tick_budget_shared_by_a_consumers_bites() {
+        // An empty producer (deficit 2.5, as above) taking two carcass bites
+        // in one tick keeps each bite's energy match, and its deficit once.
+        let params = WorldParameters {
+            growth_efficiency: 0.5,
+            ..test_params()
+        };
+        let traits = TraitVector {
+            photosynthetic_absorption: 1.0,
+            heterotrophy: 1.0,
+            ..zero_traits()
+        };
+        let pos = (40.0, 0.0);
+        let mut agents = vec![make_agent(1, pos, 10.2, traits)];
+        agents[0].structure = 5.0;
+        let carcass = |id| Carcass {
+            id,
+            position: (41.0, 0.0),
+            energy: 100.0,
+            nutrient: 1000.0,
+            traits,
+        };
+        let mut carcasses = vec![carcass(98), carcass(99)];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        grid.insert(0, pos);
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        resolve_drains(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+        );
+        let retained = agents[0].nutrient + agents[0].repro_nutrient;
+        assert!(
+            (retained - (0.25 + 0.25 + 2.5)).abs() < 1e-4,
+            "two energy matches plus one deficit, got {retained}"
         );
     }
 

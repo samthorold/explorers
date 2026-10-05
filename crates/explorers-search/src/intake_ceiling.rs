@@ -33,7 +33,7 @@ use explorers_sim::{Agent, Carcass, TraitVector, WorldParameters, phase};
 
 use explorers_sim::topology::TrophicRole;
 
-use crate::grazer_hunger::{PreStep, SurplusDistribution};
+use crate::grazer_hunger::{DrainStart, PreStep, SurplusDistribution};
 use crate::role_diet::DietGroup;
 
 /// One agent's intake at the intake gate's read point: once per consumer at
@@ -221,7 +221,7 @@ pub fn intake_readings(
         r.potential_nutrient = p_n;
     }
 
-    for (id, d) in realised_drains(agents, carcasses, params, events) {
+    for (id, d) in realised_drains(&start, carcasses, params, events) {
         let r = readings.get_mut(&id).expect("every agent has a reading");
         r.drained_energy = d.energy;
         r.drained_nutrient = d.bound_nutrient;
@@ -238,24 +238,25 @@ pub struct Drained {
     pub bound_nutrient: f32,
     /// The nutrient retained: each bite's released nutrient capped at the
     /// consumer's nutrient ratio × the energy it gained
-    /// (`demand(traits, 1) × gained`, independent of body size), as the
-    /// drain pass caps it (#637, #652).
+    /// (`demand(traits, 1) × gained`, independent of body size) plus what
+    /// remains of its tick-start nutrient deficit, as the drain pass caps it
+    /// (`phase::bite_retention`; #637, #652, #666).
     pub retained_nutrient: f32,
 }
 
-/// Every consumer's [`Drained`] for a tick: `agents` is the drain-time
-/// roster, `carcasses` the carcasses before the step, `events` the tick's
-/// events. A carcass already spent of energy hands its nutrient to its
+/// Every consumer's [`Drained`] for a tick: `start` is the drain-time
+/// state (its roster and each consumer's nutrient deficit), `carcasses` the
+/// carcasses before the step, `events` the tick's events. A carcass already spent of energy hands its nutrient to its
 /// consumers in proportion to demand; that is split here by effective
 /// heterotrophy, exact when the gate is off (expression 1).
 pub fn realised_drains(
-    agents: &[Agent],
+    start: &DrainStart,
     carcasses: &[Carcass],
     params: &WorldParameters,
     events: &[Event],
 ) -> HashMap<u64, Drained> {
     let mut out: HashMap<u64, Drained> = HashMap::new();
-    for (e, b) in realised_bites(agents, carcasses, params, events) {
+    for (e, b) in realised_bites(start, carcasses, params, events) {
         let d = out.entry(e.source).or_default();
         d.energy += b.energy;
         d.bound_nutrient += b.bound_nutrient;
@@ -265,13 +266,18 @@ pub fn realised_drains(
 }
 
 /// [`realised_drains`] bite by bite: each `Consumed` event whose consumer is
-/// on the drain-time roster, with that one bite's [`Drained`].
+/// on the drain-time roster, with that one bite's [`Drained`]. Bites are
+/// read in event order, which is the order the drain pass applied them, so
+/// each consumer's deficit is spent across its bites as the stepper spends
+/// it.
 pub fn realised_bites<'a>(
-    agents: &[Agent],
+    start: &DrainStart,
     carcasses: &[Carcass],
     params: &WorldParameters,
     events: &'a [Event],
 ) -> Vec<(&'a Event, Drained)> {
+    let agents = &start.agents;
+    let mut deficit_left = start.deficit.clone();
     let k = params.wear_degradation_steepness;
     let eff_het = |a: &Agent| a.effective_trait_with_steepness(1, k);
     let ratio = |t: &TraitVector| explorers_sim::stoichiometric_demand(t, 1.0, params);
@@ -315,14 +321,19 @@ pub fn realised_bites<'a>(
         let gained =
             drained * explorers_sim::trophic_transfer_efficiency(&c.traits, &target_traits, params);
         // The drain pass's retention cap: the consumer's ratio × the energy
-        // the bite gains it, whatever its body size (world-rules.md flow 3).
-        let need = ratio(&c.traits) * gained;
+        // the bite gains it, whatever its body size, plus what remains of
+        // its deficit (world-rules.md flow 3).
+        let retained = phase::bite_retention(
+            nutrient,
+            ratio(&c.traits) * gained,
+            deficit_left.entry(c.id).or_default(),
+        );
         out.push((
             e,
             Drained {
                 energy: gained,
                 bound_nutrient: nutrient,
-                retained_nutrient: nutrient.min(need),
+                retained_nutrient: retained,
             },
         ));
     }
@@ -1113,6 +1124,55 @@ mod tests {
             world.compact_event_log_before(world.event_log().len());
         }
         assert!(fed > 20 && equal * 2 > fed, "{equal} of {fed} at potential");
+    }
+
+    /// A light-fed mixotroph whose surplus waits on nutrient keeps, from a
+    /// rich carcass, up to its ratio × energy gained plus its deficit (flow
+    /// 3, #666): what [`realised_drains`] books as retained is exactly the
+    /// nutrient the stepper credited it, well beyond the energy match alone.
+    #[test]
+    fn realised_retention_includes_the_consumers_nutrient_deficit() {
+        let params = params();
+        let c = traits(1.0, 1.0);
+        let mut agents = vec![spec((10.0, 10.0), 60.0, c)];
+        agents[0].nutrient = 0.0;
+        let dead = traits(1.0, 0.0);
+        let carcass = CarcassSpec {
+            position: (10.0, 10.01),
+            energy: 1000.0,
+            traits: dead,
+            nutrient: 1000.0,
+        };
+        let recipe = WorldRecipe {
+            parameters: params.clone(),
+            initial_distribution: None,
+            agents: Some(agents),
+            carcasses: Some(vec![carcass]),
+            max_ticks: 10,
+        };
+        let mut world = World::from_recipe(&recipe, 7);
+        let params = world.params().clone();
+        let pre = PreStep::capture(&world);
+        let start = pre.drain_start(&params);
+        let cursor = world.event_log().len();
+        world.step();
+        let events = world.event_log().since(cursor).to_vec();
+        let held = |a: &Agent| a.nutrient + a.repro_nutrient;
+        let id = start.agents[0].id;
+        let after = world.agents().iter().find(|a| a.id == id).unwrap();
+        let kept = held(after) - held(&start.agents[0]);
+        let d = realised_drains(&start, pre.carcasses(), &params, &events)[&id];
+        let need = explorers_sim::stoichiometric_demand(&c, 1.0, &params) * d.energy;
+        assert!(d.energy > 0.0, "the mixotroph fed: {d:?}");
+        assert!(
+            kept > need * 1.5,
+            "the deficit binds: kept {kept}, need {need}"
+        );
+        assert!(
+            (d.retained_nutrient - kept).abs() <= 1e-5 * kept,
+            "observer {} vs stepper {kept}",
+            d.retained_nutrient
+        );
     }
 
     fn reading(light: f32, drained: f32, uptake: f32) -> IntakeReading {

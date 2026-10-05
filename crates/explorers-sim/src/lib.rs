@@ -1379,6 +1379,9 @@ impl World {
         // Each consumer's need-gated expression, read once on the surplus
         // the grow phase is about to mobilise (execution-model.md, Pass 1).
         let consumer_expression = phase::consumption_expressions(&self.agents, &self.params);
+        // And its nutrient deficit, read at the same point: what the surplus
+        // is waiting on caps the nutrient it keeps from a bite (flow 3).
+        let consumer_deficit = phase::retention_deficits(&self.agents, &self.params);
 
         // 4. Grow
         let (grow_events, grow_dissipated) = phase::grow(&mut self.agents, &self.params);
@@ -1393,6 +1396,7 @@ impl World {
             &self.params,
             &mut self.nutrient_grid,
             &consumer_expression,
+            &consumer_deficit,
         );
         self.dissipated_energy += drain_result.dissipated;
         events.extend(drain_result.events);
