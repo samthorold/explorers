@@ -905,7 +905,7 @@ fn rollout(
         }
         let intakes = tick_intakes(&pre, params, &tail);
         let start = pre.drain_start(params);
-        let bites = realised_bites(&start.agents, pre.carcasses(), params, &tail);
+        let bites = realised_bites(&start, pre.carcasses(), params, &tail);
         // C. Routes into living agents, by recipient bucket at the start of
         // the tick (drain-time effective heterotrophy, as the drain reads it).
         let drain_eff: HashMap<u64, (f32, f32)> = start

@@ -92,7 +92,7 @@ fn reproject_writes_the_recipe_the_writing_run_projected() {
 
 #[test]
 fn reproject_keeps_the_fallback_warning_when_no_refined_cell_clears_the_floor() {
-    // One live cell whose elite (mid-cube, one knob at its floor) does not
+    // One live cell whose elite (mid-cube, two knobs at their bounds) does not
     // coexist when refined at a 100-tick horizon: the projection falls back to
     // the argmax-fitness straddler — and must still say so on this path.
     let horizon = 100;
@@ -105,12 +105,16 @@ fn reproject_keeps_the_fallback_warning_when_no_refined_cell_clears_the_floor() 
     atlas.cells.truncate(1);
     let dims = atlas.cells[0].unit.len();
     atlas.cells[0].unit = vec![0.5; dims];
-    // `solar_flux_magnitude` at its floor: a light-starved world. (The
+    // `solar_flux_magnitude` at its floor and `photo_maintenance_cost` at
+    // its ceiling: a light-starved world whose light machinery is dear. (The
     // knob was `world_extent` until #600's need-gated consumption, then
     // `light_competition_radius` until #604's recognition, let each of those
-    // worlds clear the floor; starving the whole world of light does not
-    // depend on how consumers feed.)
+    // worlds clear the floor. Light alone sufficed until #666: once a
+    // nutrient-short producer keeps the drained nutrient its surplus waits
+    // on, the light-starved mid-cube world coexists for 100 ticks, so the
+    // cost of the light machinery is raised too.)
     atlas.cells[0].unit[0] = 0.0;
+    atlas.cells[0].unit[14] = 1.0;
     let in_run = refined_best_recipe(
         &atlas,
         &default_ranges(),

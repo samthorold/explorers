@@ -57,7 +57,7 @@ pub fn tick_intakes(
     events: &[Event],
 ) -> HashMap<u64, TickIntake> {
     let start = pre.drain_start(params);
-    let drains = realised_drains(&start.agents, pre.carcasses(), params, events);
+    let drains = realised_drains(&start, pre.carcasses(), params, events);
     start
         .agents
         .iter()
@@ -1059,8 +1059,9 @@ mod tests {
 
     /// A consumer beside a large prey takes in the energy it received and,
     /// on the nutrient side, the bound nutrient released capped at its ratio
-    /// × that energy, whatever its body size (the drain pass's retention,
-    /// #652); its light and uptake count too.
+    /// × that energy, whatever its body size, plus its tick-start nutrient
+    /// deficit (the drain pass's retention, #652, #666); its light and uptake
+    /// count too.
     #[test]
     fn a_consumer_books_drain_energy_received_and_nutrient_retained() {
         let params = params();
@@ -1071,7 +1072,8 @@ mod tests {
                 spec((10.01, 10.0), 400.0, traits(1.0, 0.0)),
             ],
         );
-        let drain_time = PreStep::capture(&w).drain_start(&params).agents;
+        let start = PreStep::capture(&w).drain_start(&params);
+        let drain_time = start.agents;
         let (intakes, events) = step(&mut w);
         let drained = income(&events, 0, EventKind::Consumed);
         assert!(drained > 0.0, "the consumer fed");
@@ -1083,16 +1085,18 @@ mod tests {
             "a body whose size would show in a whole-body cap"
         );
         let need = explorers_sim::stoichiometric_demand(&c, 1.0, &params) * gained;
-        assert!(need < released, "the cap binds on this bite");
+        assert!(need < released, "the energy match alone binds on this bite");
+        // This light-fed mixotroph's surplus waits on nutrient: its deficit
+        // raises the cap (#666).
+        let deficit = start.deficit[&0];
+        assert!(deficit > 0.0, "a deficit to fill");
+        let kept = released.min(need + deficit);
         let i = intakes[&0];
         assert!(close(i.drained_energy, gained, 1e-6), "{i:?}");
-        assert!(
-            close(i.retained_nutrient, released.min(need), 1e-6),
-            "{i:?}"
-        );
+        assert!(close(i.retained_nutrient, kept, 1e-6), "{i:?}");
         assert_eq!(i.light, income(&events, 0, EventKind::Photosynthesized));
         assert!(close(i.energy(), i.light + gained, 1e-6));
-        assert!(close(i.nutrient(), i.uptake + released.min(need), 1e-6));
+        assert!(close(i.nutrient(), i.uptake + kept, 1e-6));
         let m = phase::metabolic_cost(&drain_time[0], &params);
         assert!(close(i.maintenance, m, 1e-6));
         assert!(i.nutrient_per_energy > 0.0);

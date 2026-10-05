@@ -52,14 +52,19 @@ fn recipe() -> WorldRecipe {
 /// cell [5, 19, 7], `b` ≈ 0.67), so every value is new — a different world,
 /// not a changed read. Seeds 1 and 3 lock up (ticks 1600 and 1800) and read
 /// zero; seed 2 reaches the horizon and carries the pin.
+/// Re-pinned under #666: retention adds the consumer's nutrient deficit to
+/// its ratio × energy gained, so light-fed mixotrophs on poor ground keep
+/// the drained nutrient their surplus waits on — a physics change, not a
+/// changed read. Seed 1 no longer locks up and now reaches the horizon;
+/// seed 2 moved (it now scores coexistence); seed 3 still reads zero.
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
-    (1, [0, 0, 0, 0, 0, 0]),
+    (1, [1048582270, 1055513292, 0, 0, 1057702806, 1050003902]),
     (
         2,
         [
-            1058295333, 1057380173, 1065353216, 0, 1061871944, 1048760021,
+            1058902120, 1052667590, 1065353216, 1035489772, 1065353216, 1043525939,
         ],
     ),
     (3, [0, 0, 0, 0, 0, 0]),

@@ -56,6 +56,9 @@ pub struct DrainStart {
     pub agents: Vec<Agent>,
     pub light: HashMap<u64, f32>,
     pub uptake: HashMap<u64, f32>,
+    /// Each agent's nutrient deficit as the stepper reads it for retention
+    /// (`phase::retention_deficit`, after metabolise and before grow), by id.
+    pub deficit: HashMap<u64, f32>,
 }
 
 impl PreStep {
@@ -100,11 +103,16 @@ impl PreStep {
             EventKind::NutrientAbsorbed,
         );
         phase::metabolise(&mut agents, params);
+        let deficit = agents
+            .iter()
+            .map(|a| (a.id, phase::retention_deficit(a, params)))
+            .collect();
         phase::grow(&mut agents, params);
         DrainStart {
             agents,
             light,
             uptake,
+            deficit,
         }
     }
 

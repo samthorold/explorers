@@ -2070,7 +2070,9 @@ mod resume_tests {
     /// holds it through tick 7: the tie resolves to the first. (Re-pinned
     /// under #601: the decoded world now founds in aggregated patches; it was
     /// 27 at ticks 12 and 16 under the well-mixed scatter. Re-pinned under
-    /// #623: under the surplus need gate the peak holds to tick 7, not 5.)
+    /// #623: under the surplus need gate the peak holds to tick 7, not 5.
+    /// Re-pinned under #666: with the nutrient deficit in retention the
+    /// world regains its peak at ticks 11 and 12; the first is still 4.)
     #[test]
     fn peak_tick_is_the_first_tick_reaching_the_peak_population() {
         let ranges = sample_box();
@@ -2097,7 +2099,7 @@ mod resume_tests {
         assert_eq!(outcome.peak_population, *series.iter().max().unwrap());
         assert_eq!(
             (outcome.peak_population, &ticks_at_peak[..]),
-            (20, &[4, 5, 6, 7][..])
+            (20, &[4, 5, 6, 7, 11, 12][..])
         );
         assert_eq!(outcome.peak_tick, Some(4));
         let line = serde_json::to_string(&outcome).unwrap();
@@ -2182,16 +2184,17 @@ mod resume_tests {
     /// The first tick at which the search's incremental stop (`early_stop`)
     /// would have fired, and its mode, pinned against an independent replay
     /// that asks `early_stop` after every tick — without the rollout being
-    /// stopped there. `sample@9421:110` seed 1008 is verdicted energy death
-    /// at the horizon (seed 1002 was the witness until #600's need-gated
+    /// stopped there. `sample@9421:110` seed 1002 is verdicted energy death
+    /// at the horizon (it was the witness until #600's need-gated
     /// consumption moved it off energy death, then 1003 until #623's surplus
-    /// gate made it go extinct at tick 37; 1008 is the nearest seed that
-    /// still fires, at the same tick, and runs on to the horizon).
+    /// gate made it go extinct at tick 37, then 1008 until #666's retention
+    /// deficit left that seed ungated; under #666 1002 fires again, at the
+    /// same tick, and runs on to the horizon).
     #[test]
     fn early_stop_records_where_the_search_would_have_stopped_without_stopping() {
         let ranges = sample_box();
         let (params, dist) = decode(&sample_draw(9421)[110], &ranges);
-        let seed = 1008;
+        let seed = 1002;
         let horizon = 400;
         let outcome = run_seed(&params, &dist, seed, horizon, Duration::MAX, Duration::MAX);
         let eval_config = EvalConfig::default();

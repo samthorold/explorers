@@ -10,7 +10,10 @@
 //! with the gate. Re-pinned again for #652, which moved the consumer's
 //! nutrient retention cap from whole-body demand × energy gained to its
 //! ratio × energy gained: every drain's retained/excreted split moves, so the
-//! kin-blind world moves with it. Recognition is unchanged and still
+//! kin-blind world moves with it. Re-pinned for #666, which adds the consumer's nutrient
+//! deficit to that cap: only the closed web moves, where light-fed facultative
+//! detritivores (autotrophy 0.25 + heterotrophy 0.6) now keep the carcass
+//! nutrient their surplus is waiting on. Recognition is unchanged and still
 //! subtracts nothing at `recognition_distance = 0`.
 
 use explorers_sim::{World, WorldRecipe};
@@ -71,7 +74,7 @@ const PINNED: [(&str, u64, u64, u64); 5] = [
         200,
         0x3a6b_7328_5ec0_bab9,
     ),
-    ("example13_closed_web.json", 5, 200, 0x8c20_2be9_1e34_1a58),
+    ("example13_closed_web.json", 5, 200, 0x5a22_e5a0_80ea_e07b),
     (
         "example11_branching_coexistence.json",
         2,
