@@ -65,7 +65,9 @@
 //! world's need-gate and recognition scales (#619), recorded likewise.
 //! `--uptake-structure-exponent b` and `--uptake-reference-structure s_ref`
 //! pin every world's size-scaled uptake (#644; for re-reading the region at
-//! b = 1, #655), recorded likewise.
+//! b = 1, #655), recorded likewise. `--cross-trait-cost c` pins every
+//! world's autotrophy × heterotrophy cross-trait cost `c_AH` (#667, #668),
+//! recorded likewise.
 //!
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --atlas atlas.json
 //!   cargo run --release -p explorers-search --bin role_diet_census -- --configs sample:31,sample:110
@@ -83,8 +85,8 @@ use rayon::prelude::*;
 use explorers_genesis::EvalConfig;
 use explorers_search::config_source::{
     ConfigSource, parse_founder_aggregation, parse_non_negative, parse_positive, parse_selector,
-    resolve_config, sampled_units, with_consumption_scales, with_founder_aggregation,
-    with_uptake_scaling,
+    resolve_config, sampled_units, with_consumption_scales, with_cross_trait_cost,
+    with_founder_aggregation, with_uptake_scaling,
 };
 use explorers_search::fullness::{FullnessGrid, fullness_report};
 use explorers_search::grazer_hunger::SurplusDistribution;
@@ -138,6 +140,10 @@ struct Row {
     uptake_structure_exponent: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     uptake_reference_structure: Option<f32>,
+    /// The cross-trait cost `c_AH` every world was pinned to
+    /// (`--cross-trait-cost`, #668); absent when worlds ran as decoded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cross_trait_cost: Option<f32>,
     seeds: Vec<SeedDiet>,
 }
 
@@ -267,6 +273,8 @@ struct Args {
     /// structure `s_ref` (#644, #655); `None` as decoded.
     uptake_structure_exponent: Option<f32>,
     uptake_reference_structure: Option<f32>,
+    /// Pin every world's cross-trait cost `c_AH` (#668); `None` as decoded.
+    cross_trait_cost: Option<f32>,
     /// Evaluate the `(k_a, k_h)` ceiling region over the rows' gate samples
     /// and print it after the summary (#634).
     region: bool,
@@ -293,6 +301,7 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
         intake_ceiling_k: None,
         uptake_structure_exponent: None,
         uptake_reference_structure: None,
+        cross_trait_cost: None,
         region: false,
         fullness: false,
         fullness_region: false,
@@ -334,6 +343,9 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Result<Args, String> {
             "--uptake-reference-structure" => {
                 args.uptake_reference_structure = Some(parse_positive(&flag, &value()?)?)
             }
+            "--cross-trait-cost" => {
+                args.cross_trait_cost = Some(parse_non_negative(&flag, &value()?)?)
+            }
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -364,6 +376,7 @@ fn run_row(
         args.uptake_structure_exponent,
         args.uptake_reference_structure,
     );
+    let config = with_cross_trait_cost(config, args.cross_trait_cost);
     let seeds = (0..args.ensemble)
         .into_par_iter()
         .map(|i| {
@@ -389,6 +402,7 @@ fn run_row(
         intake_ceiling_k: args.intake_ceiling_k,
         uptake_structure_exponent: args.uptake_structure_exponent,
         uptake_reference_structure: args.uptake_reference_structure,
+        cross_trait_cost: args.cross_trait_cost,
         seeds,
     }
 }
@@ -1040,6 +1054,7 @@ mod tests {
             intake_ceiling_k: None,
             uptake_structure_exponent: None,
             uptake_reference_structure: None,
+            cross_trait_cost: None,
             seeds: vec![
                 seed([true; 3], [true; 3], None),
                 seed([true; 3], [true; 3], None),
@@ -1117,6 +1132,7 @@ mod tests {
             intake_ceiling_k: None,
             uptake_structure_exponent: None,
             uptake_reference_structure: None,
+            cross_trait_cost: None,
             seeds: vec![
                 seed([true, true, false], [true, false, false], None),
                 seed([true, true, false], [true, false, false], None),
@@ -1335,6 +1351,30 @@ mod tests {
         let back: Row = serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
         assert_eq!(back, pinned);
     }
+
+    /// `--cross-trait-cost c` pins every resolved world's `c_AH` (#668), and
+    /// each row records it; unpinned rows read and write as before.
+    #[test]
+    fn a_cross_trait_cost_pin_reaches_the_world_and_the_row() {
+        let parse = |a: &[&str]| parse_args(a.iter().map(|s| s.to_string()));
+        assert_eq!(parse(&[]).unwrap().cross_trait_cost, None);
+        assert!(parse(&["--cross-trait-cost", "-1"]).is_err());
+        let base = ["--max-ticks", "60", "--ensemble", "1"];
+        let args = parse(&[&["--cross-trait-cost", "5"][..], &base[..]].concat()).unwrap();
+        assert_eq!(args.cross_trait_cost, Some(5.0));
+
+        let sampled = sampled_units();
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        let pinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &args);
+        assert_eq!(pinned.cross_trait_cost, Some(5.0));
+        let unpinned = run_row(ConfigSource::SAMPLE, 31, &decoded, &parse(&base).unwrap());
+        let json = serde_json::to_string(&unpinned).unwrap();
+        assert!(!json.contains("cross_trait_cost"));
+        assert_ne!(pinned.seeds, unpinned.seeds, "the pin changes the rollout");
+        let back: Row = serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
+        assert_eq!(back, pinned);
+    }
+
     /// #656: the fullness region's header names the uptake scaling, so a
     /// report says which `b` it was read at without its filename.
     #[test]
@@ -1350,6 +1390,7 @@ mod tests {
             intake_ceiling_k: None,
             uptake_structure_exponent: b,
             uptake_reference_structure: s,
+            cross_trait_cost: None,
             seeds: Vec::new(),
         };
         let pinned = [row(Some(1.0), Some(100.0)), row(Some(1.0), Some(100.0))];

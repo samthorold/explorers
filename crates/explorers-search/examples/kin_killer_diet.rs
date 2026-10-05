@@ -74,6 +74,23 @@
 //! persistence with #642 only on #642's atlas (rows without one predate the
 //! fingerprint and ran there); otherwise it prints "no reference (different
 //! atlas)".
+//!
+//! #668 calibrates the range of the autotrophy × heterotrophy cross-trait
+//! cost `c_AH` (#667; world-rules.md, trade-off #5) and reads the deficit
+//! rule (#666) alone. I. **Calibration**: per light-fed mixotroph (C's
+//! bucket: Producer by recent-income role at the start of the tick, drain-time
+//! h_eff > 0.05), over its second-half ticks in that bucket, its mean drain
+//! energy income per tick (`realised_bites`' energy gained, living and
+//! carcass) and its cross-trait term `(A·H)^(p/2)` (raw photosynthetic
+//! absorption and heterotrophy, `p` = the config's
+//! `maintenance_cost_exponent`); `c_max`, the `c_AH` at which a typical one's
+//! cross-trait cost is twice its drain income, two ways. J. **Carcass
+//! nutrient retained** by light-fed mixotrophs in the second half, and
+//! Spearman ρ(retained per unit drained, pool N under the drainer) per
+//! carcass bite, pooled and median per config. `--cross-trait-cost <c>` pins
+//! `c_AH` on every decoded config (unset, each keeps its decoded value: 0),
+//! for the probe at `c_max`; rows record the effective value. Rows from
+//! before #668 read back with I and J empty.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -85,7 +102,7 @@ use explorers_genesis_eval::{EvalConfig, RolloutObservations};
 use explorers_search::config_source::{
     ConfigSource, NetworkPins, parse_founder_aggregation, parse_non_negative, parse_positive,
     parse_selector, parse_unit_interval, resolve_config, sampled_units, with_consumption_scales,
-    with_founder_aggregation, with_network, with_uptake_scaling,
+    with_cross_trait_cost, with_founder_aggregation, with_network, with_uptake_scaling,
 };
 use explorers_search::fullness::{FullnessBank, FullnessTracker, k_grid, tau_grid, tick_intakes};
 use explorers_search::grazer_hunger::PreStep;
@@ -640,6 +657,22 @@ struct Ext {
     carcass_drained_all: f64,
     #[serde(default)]
     carcass_drained_all_second_half: f64,
+    /// I (#668): one entry per light-fed mixotroph per seed, over the
+    /// second-half ticks it spent in C's light-fed mixotroph bucket, as
+    /// `[mean drain energy income per such tick, (A·H)^(p/2), ticks]`.
+    #[serde(default)]
+    lfm_calibration: Vec<[f32; 3]>,
+    /// J (#668): every second-half carcass bite by a light-fed mixotroph
+    /// that drained structure, as `[structure drained, nutrient retained,
+    /// pool N in the cell under the drainer before the step]`.
+    #[serde(default)]
+    lfm_carcass_bites: Vec<[f32; 3]>,
+    /// J: such bites with no pre-step pool reading (should be zero).
+    #[serde(default)]
+    lfm_carcass_bites_no_pool: u64,
+    /// Second-half ticks run, summed over seeds (J's per-tick denominator).
+    #[serde(default)]
+    second_half_ticks: u64,
 }
 
 impl Ext {
@@ -681,6 +714,11 @@ impl Ext {
         self.het_pool.extend_from_slice(&o.het_pool);
         self.carcass_drained_all += o.carcass_drained_all;
         self.carcass_drained_all_second_half += o.carcass_drained_all_second_half;
+        self.lfm_calibration.extend_from_slice(&o.lfm_calibration);
+        self.lfm_carcass_bites
+            .extend_from_slice(&o.lfm_carcass_bites);
+        self.lfm_carcass_bites_no_pool += o.lfm_carcass_bites_no_pool;
+        self.second_half_ticks += o.second_half_ticks;
     }
 }
 
@@ -831,6 +869,10 @@ fn rollout(
     let mut last_bin: HashMap<u64, usize> = HashMap::new();
     let mut stopped = None;
     let network_on = params.network_connection_cap > 0;
+    // I (#668): per light-fed mixotroph, (second-half ticks in the bucket,
+    // Σ drain energy gained on them, its cross-trait term).
+    let mut calibration: HashMap<u64, (u32, f64, f32)> = HashMap::new();
+    let p = params.maintenance_cost_exponent;
     let mut live_connections: HashSet<(u64, u64)> = HashSet::new();
     for _ in 0..max_ticks {
         let tick_before = world.tick();
@@ -994,6 +1036,22 @@ fn rollout(
                 let o = if e.target_was_carcass { 2 } else { 0 };
                 s[o] += d.energy;
                 s[o + 1] += d.retained_nutrient;
+                // J: a light-fed mixotroph's carcass bite, against the pool
+                // under it.
+                if second_half
+                    && e.target_was_carcass
+                    && e.energy_delta > 0.0
+                    && matches!(bucket_of(e.source), Some((0, _)))
+                {
+                    match pool_at.get(&e.source) {
+                        Some(&pool) => tally.ext.lfm_carcass_bites.push([
+                            e.energy_delta,
+                            d.retained_nutrient,
+                            pool,
+                        ]),
+                        None => tally.ext.lfm_carcass_bites_no_pool += 1,
+                    }
+                }
             }
             let carcass: Vec<&Event> = tail
                 .iter()
@@ -1006,6 +1064,29 @@ fn rollout(
             if second_half {
                 tally.ext.carcass_events_second_half += carcass_events;
                 tally.ext.carcass_drained_all_second_half += carcass_drained;
+            }
+        }
+        // I. Each light-fed mixotroph's drain energy income on its
+        // second-half ticks in the bucket (ticks without a drain count as 0).
+        if second_half {
+            tally.ext.second_half_ticks += 1;
+            for a in &start.agents {
+                if matches!(bucket_of(a.id), Some((0, _))) {
+                    let s = split.get(&a.id).copied().unwrap_or_default();
+                    let c = calibration.entry(a.id).or_insert_with(|| {
+                        (
+                            0,
+                            0.0,
+                            cross_trait_term(
+                                a.traits.photosynthetic_absorption,
+                                a.traits.heterotrophy,
+                                p,
+                            ),
+                        )
+                    });
+                    c.0 += 1;
+                    c.1 += f64::from(s[0] + s[2]);
+                }
             }
         }
         // B. Births and agent-ticks by Producer-role parents / agents at the
@@ -1260,6 +1341,12 @@ fn rollout(
     let failure = census_failure(&world, &observations, eval_config, max_ticks, stopped);
     tally.outcomes.record(failure.as_ref());
     tally.termination_ticks = world.tick();
+    let mut calibration: Vec<(u64, (u32, f64, f32))> = calibration.into_iter().collect();
+    calibration.sort_by_key(|(id, _)| *id);
+    tally.ext.lfm_calibration = calibration
+        .into_iter()
+        .map(|(_, (n, e, term))| [(e / f64::from(n)) as f32, term, n as f32])
+        .collect();
     for (id, (m, d)) in lfm_ever {
         if killers.contains(&id) {
             tally.killers += 1;
@@ -1299,6 +1386,15 @@ struct Row {
     /// in hex. Absent on older rows, which all ran on #642's atlas.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     atlas: Option<String>,
+    /// The config's effective cross-trait cost `c_AH` (#668: pinned by
+    /// `--cross-trait-cost`, else as decoded). Absent on older rows, which
+    /// ran without the term (0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cross_trait_cost: Option<f32>,
+    /// The config's `maintenance_cost_exponent` p (#668: I's term is
+    /// `(A·H)^(p/2)`). Absent on older rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    maintenance_cost_exponent: Option<f32>,
     /// Kin kills per seed (for the cross-check).
     seed_kin_kills: Vec<u64>,
     /// Summed over the seeds.
@@ -1354,6 +1450,7 @@ struct Args {
     uptake_structure_exponent: Option<f32>,
     uptake_reference_structure: Option<f32>,
     network: NetworkPins,
+    cross_trait_cost: Option<f32>,
     crosscheck: bool,
 }
 
@@ -1372,6 +1469,7 @@ fn parse_args() -> Result<Args, String> {
         uptake_structure_exponent: None,
         uptake_reference_structure: None,
         network: NetworkPins::default(),
+        cross_trait_cost: None,
         crosscheck: false,
     };
     let mut it = std::env::args().skip(1);
@@ -1421,6 +1519,9 @@ fn parse_args() -> Result<Args, String> {
             }
             "--network-transfer-efficiency" => {
                 args.network.transfer_efficiency = Some(parse_unit_interval(&flag, &value()?)?)
+            }
+            "--cross-trait-cost" => {
+                args.cross_trait_cost = Some(parse_non_negative(&flag, &value()?)?)
             }
             other => return Err(format!("unknown argument {other:?}")),
         }
@@ -1472,6 +1573,7 @@ fn main() {
                 args.uptake_reference_structure,
             );
             let config = with_network(config, &args.network);
+            let config = with_cross_trait_cost(config, args.cross_trait_cost);
             let tallies: Vec<Tally> = (0..args.ensemble)
                 .into_par_iter()
                 .map(|i| rollout(&config.0, &config.1, args.seed + i, args.horizon, &eval))
@@ -1520,6 +1622,8 @@ fn main() {
                     uptake_reference_structure: Some(config.0.uptake_reference_structure),
                     network: Some(NetworkRecord::of(&config.0)),
                     atlas: (source == ConfigSource::Atlas).then(|| atlas_fingerprint.clone()),
+                    cross_trait_cost: Some(config.0.cross_trait_cost),
+                    maintenance_cost_exponent: Some(config.0.maintenance_cost_exponent),
                     seed_kin_kills,
                     tally,
                 },
@@ -1712,6 +1816,7 @@ fn summary(rows: &[Row]) {
     );
     println!("{}\n", uptake_label(rows));
     println!("{}\n", network_label(rows));
+    println!("{}\n", cross_trait_label(rows));
     verdict(rows, &t);
     println!(
         "Population: heterotrophy > 0 and recent-income role Producer at the start of the tick. Fullness state at k = {k}, τ = {:.2} (index {j}), n = {N}: (i) E_E < 0.5 ≤ E_N; (ii) E_E ≥ 0.5; (iii) both < 0.5; from the fullness carried into the tick. Kin = parent, offspring or sibling (`DietLedger::is_kin`). Non-kin targets by recent-income role at the start of the tick.\n",
@@ -1765,6 +1870,8 @@ fn summary(rows: &[Row]) {
     }
     conditionality(rows, &t.ext);
     niche_share(&t.ext);
+    calibration(rows, &t.ext);
+    retention(rows, &t.ext);
 }
 
 /// The uptake scaling the rows ran at, each distinct value listed.
@@ -2597,6 +2704,279 @@ fn niche_share(x: &Ext) {
     }
 }
 
+/// The cross-trait term the stepper charges `c_AH` against
+/// (`phase::metabolic_cost`, world-rules.md trade-off #5): `(A·H)^(p/2)` on
+/// the raw autotrophy `A` and heterotrophy `H`, `p` the config's
+/// `maintenance_cost_exponent`. The same expression as the sim's (which is
+/// crate-private), so `c_AH × term` is what the agent would pay.
+fn cross_trait_term(a: f32, h: f32, p: f32) -> f32 {
+    (a * h).powf(0.5 * p)
+}
+
+/// Linear-interpolation quantile (type 7) of an ascending slice; agrees
+/// with [`median`] at `q = 0.5`.
+fn quantile(sorted: &[f64], q: f64) -> Option<f64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let x = q * (sorted.len() - 1) as f64;
+    let (lo, hi) = (x.floor() as usize, x.ceil() as usize);
+    Some(sorted[lo] + (x - lo as f64) * (sorted[hi] - sorted[lo]))
+}
+
+/// `(n, p25, median, p75)` of `v`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Spread {
+    n: usize,
+    p25: f64,
+    median: f64,
+    p75: f64,
+}
+
+impl Spread {
+    fn of(mut v: Vec<f64>) -> Option<Self> {
+        v.sort_by(f64::total_cmp);
+        Some(Self {
+            n: v.len(),
+            p25: quantile(&v, 0.25)?,
+            median: quantile(&v, 0.5)?,
+            p75: quantile(&v, 0.75)?,
+        })
+    }
+}
+
+/// The cost multiple `c_max` is set at: a typical light-fed mixotroph's
+/// cross-trait cost is this many times its drain income (world-rules.md,
+/// trade-off #5).
+const COST_MULTIPLE: f64 = 2.0;
+
+/// I (#668): the scale of `c_AH`'s search range, over one entry per light-fed
+/// mixotroph per seed (`Ext::lfm_calibration`: `[mean drain energy income per
+/// tick in the bucket, (A·H)^(p/2), ticks]`).
+#[derive(Clone, Debug, PartialEq)]
+struct Calibration {
+    agents: usize,
+    /// Agents with no drain income on any of their ticks in the bucket.
+    zero_income: usize,
+    income: Option<Spread>,
+    term: Option<Spread>,
+    /// Memo: Σ income × ticks / Σ ticks — the agent-tick-weighted mean.
+    income_per_agent_tick: Option<f64>,
+    /// (a) `2 × median(income) / median(term)`; `None` when the median term
+    /// is zero.
+    c_max_ratio_of_medians: Option<f64>,
+    /// (b) the median over agents with a non-zero term of `2 × income_i /
+    /// term_i`.
+    c_max_median_of_ratios: Option<f64>,
+    /// Agents (b) reads (term > 0).
+    ratio_agents: usize,
+}
+
+impl Calibration {
+    fn of(agents: &[[f32; 3]]) -> Self {
+        let income: Vec<f64> = agents.iter().map(|a| f64::from(a[0])).collect();
+        let term: Vec<f64> = agents.iter().map(|a| f64::from(a[1])).collect();
+        let ticks: f64 = agents.iter().map(|a| f64::from(a[2])).sum();
+        let weighted: f64 = agents
+            .iter()
+            .map(|a| f64::from(a[0]) * f64::from(a[2]))
+            .sum();
+        let ratios: Vec<f64> = agents
+            .iter()
+            .filter(|a| a[1] > 0.0)
+            .map(|a| COST_MULTIPLE * f64::from(a[0]) / f64::from(a[1]))
+            .collect();
+        let (income, term) = (Spread::of(income), Spread::of(term));
+        Self {
+            agents: agents.len(),
+            zero_income: agents.iter().filter(|a| a[0] <= 0.0).count(),
+            income_per_agent_tick: (ticks > 0.0).then(|| weighted / ticks),
+            c_max_ratio_of_medians: match (income, term) {
+                (Some(i), Some(t)) if t.median > 0.0 => Some(COST_MULTIPLE * i.median / t.median),
+                _ => None,
+            },
+            ratio_agents: ratios.len(),
+            c_max_median_of_ratios: median(ratios),
+            income,
+            term,
+        }
+    }
+}
+
+fn spread_cells(s: Option<Spread>) -> String {
+    s.map_or("– | – | – | 0".into(), |s| {
+        format!("{:.4} | {:.4} | {:.4} | {}", s.p25, s.median, s.p75, s.n)
+    })
+}
+
+fn g4(x: Option<f64>) -> String {
+    x.map_or("–".into(), |v| format!("{v:.4}"))
+}
+
+/// The cross-trait cost the rows ran at, each distinct value listed.
+fn cross_trait_label(rows: &[Row]) -> String {
+    let mut v: Vec<String> = Vec::new();
+    for r in rows {
+        let s = r
+            .cross_trait_cost
+            .map_or("unrecorded (pre-#668 row: 0)".into(), |c| format!("{c}"));
+        if !v.contains(&s) {
+            v.push(s);
+        }
+    }
+    format!(
+        "Cross-trait cost (#667): c_AH = **{}**",
+        if v.is_empty() {
+            "–".into()
+        } else {
+            v.join(" / ")
+        }
+    )
+}
+
+/// I (#668): calibration of `c_AH`'s range.
+fn calibration(rows: &[Row], x: &Ext) {
+    println!(
+        "\n### I. Calibration (#668): light-fed mixotrophs' drain energy income against the cross-trait term (second half)\n"
+    );
+    if x.lfm_calibration.is_empty() {
+        println!(
+            "No calibration entries on these rows (pre-#668 rows, or no light-fed mixotroph in the second half)."
+        );
+        return;
+    }
+    let c = Calibration::of(&x.lfm_calibration);
+    println!(
+        "Unit: **one light-fed mixotroph per seed** (an agent-lifetime), over the second-half ticks it spent in C's light-fed mixotroph bucket (Producer by recent-income role at the start of the tick, drain-time h_eff > 0.05). Income: its mean drain energy gained per such tick (`realised_bites`' energy, living and carcass; a tick without a drain counts 0). Term: `(A·H)^(p/2)` on its raw photosynthetic absorption A and heterotrophy H, p = its config's `maintenance_cost_exponent` (the expression `phase::metabolic_cost` charges `c_AH` against). Quantiles interpolate linearly. c_max: the c_AH at which a typical light-fed mixotroph's cross-trait cost `c_AH × term` is {COST_MULTIPLE}× its drain income (world-rules.md, trade-off #5) — (a) **ratio of medians** `{COST_MULTIPLE} × median(income) / median(term)`; (b) **median of per-agent ratios** `median_i({COST_MULTIPLE} × income_i / term_i)` over agents with term > 0.\n"
+    );
+    println!("| quantity | p25 | median | p75 | agents |");
+    println!("|---|---:|---:|---:|---:|");
+    println!(
+        "| drain energy income per tick | {} |",
+        spread_cells(c.income)
+    );
+    println!("| (A·H)^(p/2) | {} |", spread_cells(c.term));
+    println!(
+        "\nAgents with zero drain income: {} of {} ({} %). Memo, agent-tick-weighted mean income per tick: {}.\n",
+        c.zero_income,
+        c.agents,
+        pct(c.zero_income as u64, c.agents as u64),
+        g4(c.income_per_agent_tick)
+    );
+    println!(
+        "c_max (a) ratio of medians = **{}**; (b) median of per-agent ratios = **{}** (over {} agents with term > 0).\n",
+        g4(c.c_max_ratio_of_medians),
+        g4(c.c_max_median_of_ratios),
+        c.ratio_agents
+    );
+    println!("Per config:\n");
+    println!("| config | p | agents | median income | median term | c_max (a) | c_max (b) |");
+    println!("|---|---:|---:|---:|---:|---:|---:|");
+    for r in rows {
+        let c = Calibration::of(&r.tally.ext.lfm_calibration);
+        println!(
+            "| {}:{} | {} | {} | {} | {} | {} | {} |",
+            r.source,
+            r.config_index,
+            r.maintenance_cost_exponent
+                .map_or("–".into(), |p| format!("{p}")),
+            c.agents,
+            g4(c.income.map(|s| s.median)),
+            g4(c.term.map(|s| s.median)),
+            g4(c.c_max_ratio_of_medians),
+            g4(c.c_max_median_of_ratios),
+        );
+    }
+}
+
+/// J (#668): carcass nutrient light-fed mixotrophs retain, and whether the
+/// share retained depends on the pool under them.
+#[derive(Clone, Debug, PartialEq)]
+struct Retention {
+    bites: usize,
+    drained: f64,
+    retained: f64,
+    /// Spearman ρ(retained / drained, pool N) per bite; `Conditionality`'s
+    /// pooled and per-config machinery.
+    rho: Conditionality,
+}
+
+impl Retention {
+    fn of(per_config: &[&[[f32; 3]]]) -> Self {
+        let pairs: Vec<Vec<[f32; 2]>> = per_config
+            .iter()
+            .map(|c| {
+                c.iter()
+                    .filter(|b| b[0] > 0.0)
+                    .map(|b| [b[1] / b[0], b[2]])
+                    .collect()
+            })
+            .collect();
+        let refs: Vec<&[[f32; 2]]> = pairs.iter().map(|p| &p[..]).collect();
+        let all = per_config.iter().flat_map(|c| c.iter());
+        Self {
+            bites: per_config.iter().map(|c| c.len()).sum(),
+            drained: all.clone().map(|b| f64::from(b[0])).sum(),
+            retained: all.map(|b| f64::from(b[1])).sum(),
+            rho: Conditionality::of(&refs),
+        }
+    }
+}
+
+fn retention(rows: &[Row], x: &Ext) {
+    println!("\n### J. Carcass nutrient retained by light-fed mixotrophs (#668, second half)\n");
+    let ticks: u64 = x.lfm_calibration.iter().map(|a| a[2] as u64).sum();
+    let total = x.routes_second_half.carcass_retained[0];
+    println!(
+        "From C's second-half routes (bucket: light-fed mixotroph): carcass nutrient retained **{total:.2}**, carcass structure drained {:.1} (retained per unit drained {}); per second-half tick run (Σ over seeds, {} ticks) {}; per light-fed mixotroph agent-tick ({ticks} agent-ticks, I's unit) {}.\n",
+        x.routes_second_half.carcass_drained[0],
+        ratio(total, x.routes_second_half.carcass_drained[0]),
+        x.second_half_ticks,
+        per(total, x.second_half_ticks),
+        per(total, ticks),
+    );
+    if x.lfm_carcass_bites.is_empty() {
+        println!(
+            "No per-bite entries on these rows (pre-#668 rows, or no light-fed mixotroph carcass bite in the second half)."
+        );
+        return;
+    }
+    let per_config: Vec<&[[f32; 3]]> = rows
+        .iter()
+        .map(|r| &r.tally.ext.lfm_carcass_bites[..])
+        .collect();
+    let j = Retention::of(&per_config);
+    println!(
+        "Per bite (every second-half carcass bite by a light-fed mixotroph that drained structure; {} without a pool reading left out): {} bites, drained {:.1}, retained {:.2}, retained per unit drained {}. Spearman ρ(retained / drained, pool N in the cell under the drainer before the step), as G computes it: pooled ρ = **{}** (n = {}); per config (≥ {MIN_CONFIG_SAMPLES} bites) median ρ = **{}** over {} configs ({} with ρ < 0). Negative ρ = the drainer keeps less of a carcass's nutrient where the pool under it is richer.\n",
+        x.lfm_carcass_bites_no_pool,
+        j.bites,
+        j.drained,
+        j.retained,
+        ratio(j.retained, j.drained),
+        rho(j.rho.pooled),
+        j.rho.samples,
+        rho(j.rho.median),
+        j.rho.configs,
+        j.rho.negative,
+    );
+    println!("| config | bites | retained | retained / drained | ρ(retained / drained, pool N) |");
+    println!("|---|---:|---:|---:|---:|");
+    for (r, c) in rows.iter().zip(&j.rho.per_config) {
+        let b = &r.tally.ext.lfm_carcass_bites;
+        let (d, n): (f64, f64) = b.iter().fold((0.0, 0.0), |(d, n), x| {
+            (d + f64::from(x[0]), n + f64::from(x[1]))
+        });
+        println!(
+            "| {}:{} | {} | {n:.2} | {} | {} |",
+            r.source,
+            r.config_index,
+            b.len(),
+            ratio(n, d),
+            rho(*c)
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2771,6 +3151,8 @@ mod tests {
             uptake_reference_structure: None,
             network: None,
             atlas: atlas.map(str::to_string),
+            cross_trait_cost: None,
+            maintenance_cost_exponent: None,
             seed_kin_kills: Vec::new(),
             tally: Tally::new(),
         }
@@ -2800,5 +3182,124 @@ mod tests {
             reference(&[sampled], 475),
             Err("no reference (different atlas)".to_string())
         );
+    }
+
+    /// #668: the term `c_AH` is charged against is `(A·H)^(p/2)`, of degree
+    /// p like the per-trait terms, and zero for a specialist.
+    #[test]
+    fn the_cross_trait_term_is_of_degree_p() {
+        assert!(close(f64::from(cross_trait_term(4.0, 1.0, 2.0)), 4.0));
+        // p = 3: (2 × 8)^1.5 = 64.
+        assert!(close(f64::from(cross_trait_term(2.0, 8.0, 3.0)), 64.0));
+        // p = 1: √(0.25 × 0.04) = 0.1.
+        assert!((cross_trait_term(0.25, 0.04, 1.0) - 0.1).abs() < 1e-6);
+        assert_eq!(cross_trait_term(0.0, 3.0, 1.5), 0.0);
+        assert_eq!(cross_trait_term(3.0, 0.0, 2.5), 0.0);
+    }
+
+    #[test]
+    fn quantiles_interpolate_and_agree_with_the_median() {
+        let v = [1.0, 2.0, 3.0, 4.0];
+        assert_eq!(quantile(&v, 0.5), median(v.to_vec()));
+        assert!(close(quantile(&v, 0.25).unwrap(), 1.75));
+        assert!(close(quantile(&v, 0.75).unwrap(), 3.25));
+        assert_eq!(quantile(&[], 0.5), None);
+        assert_eq!(quantile(&[7.0], 0.25), Some(7.0));
+    }
+
+    /// c_max two ways: the ratio of medians, and the median of per-agent
+    /// ratios (agents with a zero term left out of the latter only).
+    #[test]
+    fn c_max_is_read_as_a_ratio_of_medians_and_a_median_of_ratios() {
+        // [income per tick, term, ticks].
+        let agents = [
+            [1.0, 1.0, 10.0],
+            [2.0, 4.0, 10.0],
+            [3.0, 0.5, 20.0],
+            [0.0, 2.0, 60.0],
+            [5.0, 0.0, 1.0],
+        ];
+        let c = Calibration::of(&agents);
+        assert_eq!((c.agents, c.zero_income, c.ratio_agents), (5, 1, 4));
+        // income [0, 1, 2, 3, 5] median 2; term [0, 0.5, 1, 2, 4] median 1.
+        assert!(close(c.income.unwrap().median, 2.0));
+        assert!(close(c.term.unwrap().median, 1.0));
+        assert!(close(c.c_max_ratio_of_medians.unwrap(), 4.0));
+        // 2 × income / term over term > 0: [2, 1, 12, 0] -> median 1.5.
+        assert!(close(c.c_max_median_of_ratios.unwrap(), 1.5));
+        // Weighted: (10 + 20 + 60 + 0 + 5) / 101.
+        assert!(close(c.income_per_agent_tick.unwrap(), 95.0 / 101.0));
+        // With p ≠ 2 the term comes from cross_trait_term at that p.
+        let term = cross_trait_term(0.5, 0.5, 3.0);
+        let one = Calibration::of(&[[0.25, term, 4.0]]);
+        assert!(close(
+            one.c_max_ratio_of_medians.unwrap(),
+            2.0 * 0.25 / f64::from(term)
+        ));
+        let none = Calibration::of(&[]);
+        assert_eq!(
+            (
+                none.income,
+                none.c_max_ratio_of_medians,
+                none.c_max_median_of_ratios
+            ),
+            (None, None, None)
+        );
+        let zero_term = Calibration::of(&[[1.0, 0.0, 1.0]]);
+        assert_eq!(zero_term.c_max_ratio_of_medians, None);
+        assert_eq!(zero_term.c_max_median_of_ratios, None);
+    }
+
+    /// J: retained per unit drained against the pool, per bite, through
+    /// G's pooled and per-config ρ.
+    #[test]
+    fn retention_ranks_retained_per_unit_drained_against_the_pool() {
+        // Retained share falls as the pool rises: ρ = −1 in each config.
+        let falling: Vec<[f32; 3]> = (0..12)
+            .map(|i| [2.0, 1.0 / (1.0 + i as f32), i as f32])
+            .collect();
+        let rising: Vec<[f32; 3]> = (0..12)
+            .map(|i| [1.0, i as f32 / 12.0, 100.0 + i as f32])
+            .collect();
+        let zero_drain = [[0.0, 0.0, 5.0]];
+        let j = Retention::of(&[&falling, &rising, &zero_drain]);
+        assert_eq!(j.bites, 25);
+        assert!(close(j.drained, 36.0));
+        assert_eq!(j.rho.samples, 24, "a zero drain has no ratio");
+        assert_eq!(j.rho.per_config, vec![Some(-1.0), Some(1.0), None]);
+        assert_eq!(j.rho.median, Some(0.0));
+    }
+
+    /// Rows from before #668 (target/656) read back with I and J empty.
+    #[test]
+    fn rows_without_the_668_fields_still_read_back() {
+        let mut r = row(Some("0123456789abcdef"), None);
+        r.cross_trait_cost = Some(0.5);
+        r.maintenance_cost_exponent = Some(2.0);
+        r.tally.ext.lfm_calibration.push([1.0, 2.0, 3.0]);
+        r.tally.ext.lfm_carcass_bites.push([1.0, 0.5, 4.0]);
+        r.tally.ext.lfm_carcass_bites_no_pool = 1;
+        r.tally.ext.second_half_ticks = 9;
+        let mut json = serde_json::to_value(&r).unwrap();
+        let o = json.as_object_mut().unwrap();
+        for k in ["cross_trait_cost", "maintenance_cost_exponent"] {
+            assert!(o.remove(k).is_some(), "{k} is serialised");
+        }
+        let ext = json["tally"]["ext"].as_object_mut().unwrap();
+        for k in [
+            "lfm_calibration",
+            "lfm_carcass_bites",
+            "lfm_carcass_bites_no_pool",
+            "second_half_ticks",
+        ] {
+            assert!(ext.remove(k).is_some(), "{k} is serialised");
+        }
+        let back: Row = serde_json::from_value(json).unwrap();
+        assert_eq!(back.cross_trait_cost, None);
+        assert_eq!(back.maintenance_cost_exponent, None);
+        assert!(back.tally.ext.lfm_calibration.is_empty());
+        assert!(back.tally.ext.lfm_carcass_bites.is_empty());
+        assert_eq!(back.tally.ext.second_half_ticks, 0);
+        assert!(cross_trait_label(&[back]).contains("pre-#668"));
     }
 }
