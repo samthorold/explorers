@@ -42,7 +42,7 @@ emitter and archive are implementation; the illumination contract is the design.
 ## The search box: the full box by default, a narrowed box held in reserve
 
 A config is a point of the unit cube, and `decode` maps it onto 34 raw fields — 25 world parameters
-and 9 founder-distribution fields — each linearly over a range. The set of ranges is the **search
+and 9 founder-distribution fields — each over a range, linearly unless the coordinate's scale says otherwise. The set of ranges is the **search
 box**. The full box, `default_ranges()`, spans every field's plausible range, and the search runs over
 it by default.
 
@@ -55,6 +55,8 @@ reference structure, stays out of the box at 100. The reasons are in world-rules
 drawn under it still names the world it always named.
 
 The **cross-trait cost** `c_AH` is not in the box. Its default 0 holds in every world genesis searches, so the box is the 33-coordinate **untaxed box** (`untaxed_ranges()`). The term is latent (world-rules.md trade-off #5): it was specified as the lever for a signature that is now reported rather than required, genesis did not select on it when it was searched, and a dimension the search does not select on only adds noise. If it comes out of reserve, its range is linear over `[0, 0.14]`. That range holds `c_AH = 0` exactly, which rules out a log scale. Its top is measured, not copied from the per-trait costs: it is the `c_AH` at which a typical light-fed mixotroph that drains pays about twice its median drain income ([`668-cross-trait-calibration.md`](../research/668-cross-trait-calibration.md)). `decode` reads a box without `c_AH`'s coordinate as `c_AH = 0`, so an atlas searched under the untaxed box names the same worlds whether or not the coordinate exists. *Current state: the committed atlas (#677) was searched under a 34-coordinate box with `c_AH` over `[0, 0.14]`, so each of its cells and the committed recipe (atlas:90, `c_AH` ≈ 0.139) carry their own `c_AH`, and the search still defaults to that box. The next re-search (#686) runs the untaxed box.*
+
+The **leaching rate** `λ` is the box's last coordinate, over `[0, 0.01]` on a square scale: `λ = 0.01 · u²` for the coordinate `u`. world-rules.md (*Carcass energy decays only through agents; carcass nutrient leaches*, *The range*) gives the top and the reason for the square. Its coordinate is the only one with a nonlinear scale, so a coordinate's scale is part of the box, and the atlas records it with each range. A range recorded without a scale is linear, so every atlas searched before the scale existed decodes as it always did. `decode` reads a box without `λ`'s coordinate as `λ = 0`, the default every earlier world ran. #686's read of `λ` is made in `u`, not in `λ`, because `u` is what the search spreads evenly when it does not select on `λ`. *Current state (2026-10-06): not yet in the box. #701 adds it and drops `c_AH`.*
 
 A **narrowed box** (`narrowed_ranges()`) keeps the same raw coordinates and narrows
 only the box. It is opt-in: it keeps outcome prediction but costs the illumination (below).
