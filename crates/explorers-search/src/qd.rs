@@ -684,6 +684,9 @@ pub fn carcass_seed_unit(ranges: &[ParameterRange]) -> Vec<f64> {
     // Little standing structure in the living pool; many founders to drain the grid.
     set("mean_kappa", 0.05);
     set("initial_population_size", 1.0);
+    // No leaching (#701): the dead pool's soluble nutrient stays where it fell,
+    // which is the lockup the seed is aimed at.
+    set("leaching_rate", 0.0);
     unit
 }
 
@@ -2249,6 +2252,8 @@ mod tests {
         // Nutrient rides into structure (and thus carcasses) at a high ratio.
         assert!(at("base_nutrient_ratio") > 0.9);
         assert!(at("specification_nutrient_coefficient") > 0.9);
+        // Nothing leaches the stranded nutrient back out (#701).
+        assert_eq!(at("leaching_rate"), 0.0);
     }
 
     fn atlas_cell(carcass: f32) -> AtlasCell {

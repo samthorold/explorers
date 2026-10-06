@@ -4,7 +4,9 @@
 //! `config_source::resolve_config`; these tests pin that an atlas drawn under
 //! the narrowed box decodes, in a research bin, to exactly the worlds the
 //! search evaluated, while `sample:i` / `sample@S:i` stay draws over the
-//! instruments' own box (`sample_box`, the size-blind box since #653).
+//! instruments' own box (`sample_box`, the size-blind box since #653). The
+//! committed atlas and the atlases cut from it keep decoding, bit for bit, to
+//! the worlds they named before #701 changed the default box.
 
 use std::path::PathBuf;
 
@@ -14,7 +16,7 @@ use explorers_search::config_source::{
 };
 use explorers_search::search::{
     SearchConfig, decode, default_ranges, narrowed_ranges, run_search, size_blind_ranges,
-    untaxed_ranges,
+    taxed_ranges, untaxed_ranges,
 };
 use explorers_search::sweep::read_atlas_units;
 use rand::SeedableRng;
@@ -92,25 +94,62 @@ fn sample_keys_stay_draws_over_the_sample_box() {
 const COMMITTED_ATLAS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
 
 /// The committed atlas (#677) was searched with `b` and `c_AH` in the box
-/// and records it: the full 34-dimension box, so every `atlas:i` decodes with
-/// its own `b` and `c_AH`.
+/// and records it: the 34-dimension taxed box, with no scales recorded. It is
+/// as long as the full box since #701, whose 34th coordinate is `λ`, so it
+/// must decode by name: every `atlas:i` keeps its own `b` and `c_AH`, and
+/// `λ = 0`.
 #[test]
-fn the_committed_atlas_records_its_34_dimension_box() {
+fn the_committed_atlas_records_its_34_dimension_taxed_box() {
     let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
     let read = read_atlas_units(std::path::Path::new(COMMITTED_ATLAS));
-    assert_eq!(read.search_box(), default_ranges().as_slice());
-    assert_eq!(read.search_box().len(), 34);
+    assert_eq!(read.search_box(), taxed_ranges().as_slice());
+    assert_eq!(read.search_box().len(), default_ranges().len());
+    assert!(read.check_search_box(&default_ranges()).is_err());
     // #677's atlas, the seed-42 one #670 searched and read
     // (`670-cross-trait-verdict.md`).
     assert_eq!(format!("{:016x}", read.fingerprint()), "aa2662b26da489a3");
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(!raw["search_box"].to_string().contains("scale"));
     for i in 0..read.len() {
         let unit: Vec<f64> = serde_json::from_value(raw["cells"][i]["unit"].clone()).unwrap();
         assert_eq!(unit.len(), 34);
         let world = read.decode(i);
-        assert_eq!(world, decode(&unit, &default_ranges()), "atlas:{i}");
+        assert_eq!(world, decode(&unit, &taxed_ranges()), "atlas:{i}");
+        // `c_AH` read off the 34th coordinate as it always was, linearly.
+        assert_eq!(
+            world.0.cross_trait_cost,
+            (0.0 + unit[33] * (0.14 - 0.0)) as f32,
+            "atlas:{i}"
+        );
         assert!(world.0.cross_trait_cost > 0.0, "atlas:{i}");
+        assert_eq!(world.0.leaching_rate, 0.0, "atlas:{i}");
     }
+}
+
+/// A stable FNV-1a digest of every decoded world of an atlas, read off the
+/// worlds' `Debug` form (which prints each `f32` round-trip exactly), so two
+/// decodes share it exactly when they name bit-identical worlds.
+fn decoded_worlds_digest(read: &explorers_search::sweep::AtlasUnits) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for i in 0..read.len() {
+        for b in format!("{:?}", read.decode(i)).bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// #701: the committed atlas (#677) keeps naming exactly the worlds it was
+/// searched as, `c_AH` included, after its box stopped being the default.
+/// The digest was read on main before #701 changed `decode`.
+#[test]
+fn the_committed_atlas_decodes_to_the_same_worlds_bit_for_bit() {
+    let read = read_atlas_units(std::path::Path::new(COMMITTED_ATLAS));
+    assert_eq!(
+        format!("{:016x}", decoded_worlds_digest(&read)),
+        "ca34fca622d21e99"
+    );
 }
 
 /// An atlas searched under the untaxed box (#663's, committed until #677):
@@ -136,6 +175,11 @@ fn an_untaxed_atlas_reads_as_its_33_dimension_box_with_c_ah_zero() {
     let text = std::fs::read_to_string(&path).unwrap();
     let read = read_atlas_units(&path);
     assert_eq!(read.search_box(), untaxed_ranges().as_slice());
+    // Read on main before #701 changed `decode`.
+    assert_eq!(
+        format!("{:016x}", decoded_worlds_digest(&read)),
+        "72b6936aa89d5e9d"
+    );
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(!read.is_empty());
     for i in 0..read.len() {
@@ -144,6 +188,7 @@ fn an_untaxed_atlas_reads_as_its_33_dimension_box_with_c_ah_zero() {
         let world = read.decode(i);
         assert_eq!(world, decode(&unit, &untaxed_ranges()), "atlas:{i}");
         assert_eq!(world.0.cross_trait_cost, 0.0, "atlas:{i}");
+        assert_eq!(world.0.leaching_rate, 0.0, "atlas:{i}");
     }
 }
 
@@ -172,6 +217,11 @@ fn a_legacy_atlas_reads_as_the_size_blind_box() {
     let text = std::fs::read_to_string(&path).unwrap();
     let read = read_atlas_units(&path);
     assert_eq!(read.search_box(), size_blind_ranges().as_slice());
+    // Read on main before #701 changed `decode`.
+    assert_eq!(
+        format!("{:016x}", decoded_worlds_digest(&read)),
+        "cf685d15accc0ce4"
+    );
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(!read.is_empty());
     for i in 0..read.len() {

@@ -30,7 +30,8 @@ use explorers_genesis::{InitialDistribution, WorldParameters};
 
 use crate::config_source::ConfigSource;
 use crate::search::{
-    ParameterRange, SearchBoxMismatch, check_search_box, decode, default_ranges, size_blind_ranges,
+    ParameterRange, Scale, SearchBoxMismatch, check_search_box, decode, default_ranges,
+    size_blind_ranges,
 };
 
 /// The mode a run records when its step loop exhausted the simulation budget
@@ -168,7 +169,8 @@ impl AtlasUnits {
         check_search_box(&self.search_box, ranges)
     }
 
-    /// A stable 64-bit FNV-1a digest of the box (names and bounds) and every
+    /// A stable 64-bit FNV-1a digest of the box (names, bounds and any
+    /// non-linear scale) and every
     /// cell's unit vector, in file order (#656): rows record it so a readout
     /// can tell which atlas they ran on. Two atlases share it exactly when
     /// they decode the same worlds at the same indices.
@@ -184,6 +186,12 @@ impl AtlasUnits {
             eat(r.name.as_bytes());
             eat(&r.min.to_bits().to_le_bytes());
             eat(&r.max.to_bits().to_le_bytes());
+            // A linear range eats nothing more, so every box recorded before
+            // scales existed (#701) keeps its fingerprint.
+            match r.scale {
+                Scale::Linear => {}
+                Scale::Square => eat(b"square"),
+            }
         }
         for u in &self.units {
             eat(&(u.len() as u64).to_le_bytes());
@@ -325,6 +333,11 @@ mod tests {
         let full = default_ranges();
         let wide = AtlasUnits::new(full.clone(), vec![vec![0.5; full.len()]; 2]);
         assert_ne!(a.fingerprint(), wide.fingerprint());
+        // #701: the scale is part of the box.
+        let mut linear = full.clone();
+        linear.last_mut().unwrap().scale = Scale::Linear;
+        let relinear = AtlasUnits::new(linear, vec![vec![0.5; full.len()]; 2]);
+        assert_ne!(wide.fingerprint(), relinear.fingerprint());
     }
 
     /// A filter may name configs of another LHS draw (`sample@S:i`): they
