@@ -349,19 +349,39 @@ disagree, the seed-to-seed fitness spread (median sd 0.149) is close to the medi
 (0.191), and flip rate rises with fitness (ρ +0.27). A search that ranks on a 5-seed median keeps
 fragile worlds that drew well.
 
-**A cell's fitness is its expected fitness over the seed ensemble**: the mean of its seeds'
-fitness, with a seed that hits a gate (extinction, energy death, lockup, monoculture, generalist
-dominance, bloom stop) scoring 0, as the evaluator already scores it. That is the probability that the
-world's parameters produce a sensible world times how good it is when they do. A world that lives on 3
-of 5 seeds at 0.30 scores 0.18, and one that lives on all 5 at 0.25 scores 0.25. It is smooth in the
-share of seeds that live, as the arithmetic mean across the sensible-world criteria is smooth, so the
-emitters see a gradient toward robustness rather than a cliff. It is an aggregation over seeds, not a
-new criterion, so it stays inside the authority boundary below. The tempting alternatives each fail:
+**A cell's fitness is its live fraction squared times its live seeds' mean fitness**: `L² · F`,
+where `L` is the share of its seed ensemble whose runs pass every gate (extinction, energy death,
+lockup, monoculture, generalist dominance, bloom stop) and `F` is the mean fitness of those live
+seeds. A cell with no live seed scores 0. The score has two factors because a world's quality has
+two parts: how reliably its parameters produce a sensible world, and how good that world is when
+they do. The power on `L` sets how much reliability counts against quality. At power 1 the score is
+the plain mean over seeds with gated seeds at 0, the expected fitness, which trades the two parts
+one for one. A world live on 9 of 10 seeds then needs only 11 % more `F` to beat one live on all 10.
 
-- **The median over seeds** ignores how the losing seeds lose. It reaches 0 only once most seeds die, so
-  a world that dies on 2 of 5 scores as if it never did.
-- **Median × live fraction** penalises dying seeds twice, once in the factor and again once the median
-  falls to 0.
+**The power is 2 because the plain mean lets quality buy fragility.** Across a searched atlas, `L`
+and `F` are uncorrelated, but `F` varies far more: 5.5× the variance of `L` on a log scale, with `F`
+spanning 0.09–0.44 between deciles while `L` sits in 0.7–1.0. So the mean ranks cells almost wholly
+by `F`, and a niche keeps whichever world drew the highest `F`, however often it dies. Equal leverage
+for the two factors on the log score needs a power of `√(var log F / var log L)`, which measures 2.3.
+That is measured on an atlas a power-1 search had already narrowed in `L`, so 2 is used, the round
+value just below it. At power 2, one dead seed in ten costs about a fifth of the score and three
+cost half. A higher power puts reliability first and drifts toward dull worlds that never die, which
+the game and flow 1's signatures cannot use. The score stays smooth in `L`, as the smooth-landscape
+constraint requires, so the emitters see a gradient toward robustness rather than a cliff. It is an
+aggregation over seeds, not a new criterion, so it stays inside the authority boundary below. A world
+that lives on 3 of 5 seeds at 0.30 scores 0.108, and one that lives on all 5 at 0.25 scores 0.25.
+The tempting alternatives each fail:
+
+- **The plain mean over seeds** (power 1) is the expected fitness. It is the natural reading of
+  "how reliably, times how good", but `F`'s spread swamps `L`'s, so a search ranked on it climbs
+  `F` and leaves the archive no more robust than an unscored one.
+- **The median over seeds** ignores how the losing seeds lose. It reaches 0 only once most seeds
+  die, so a world that dies on 2 of 5 scores as if it never did.
+- **A lower tail of the seeds** (the mean of the worst few) punishes fitness spread among live seeds
+  as well as death, and it is flat at 0, with no gradient, once that many seeds die. Robustness here
+  means the verdict holding across seeds, which `L` measures directly.
+- **The mean less a multiple of the seed spread** mixes the noise of a world that dies with the noise
+  of one that lives unevenly, and its multiple has no natural scale.
 - **A floor on the live fraction** is a cliff in parameter space, which the smooth-landscape
   constraint forbids ([world rules](world-rules.md), *Smooth parameter landscape*).
 - **The live fraction as a behaviour axis** would make fragility a niche the archive preserves,
@@ -396,6 +416,7 @@ deciding on the screen alone. A config whose screen is dead goes to the dead fro
 a live one is turned away on a 5-seed estimate — the lucky draw the mean over 10 exists to discount.
 No recorded cell rests on the screen, but the frontier and the emitter's signal do.
 
+*Current state (2026-10-06): the search still scores a cell by the plain mean (power 1). The `L² · F` score is not yet implemented, and an atlas will record which score ranked it. #686's atlas, searched under the mean, failed its robustness rule: all seeds agree in 43.4 % of worlds, against 57.6 % on the committed atlas ([686-robust-atlas.md](../research/686-robust-atlas.md)). The variance figures above are measured on that atlas's audit seeds.*
 *Current state (#699, 2026-10-06): the search scores a cell by the mean over a 10-seed ensemble
 (`config_eval_from_ensemble` and `SEARCH_ENSEMBLE_SIZE` in `qd.rs`). The atlas records its scoring as
 `provenance.scoring` (`mean_over_seeds`, the ensemble size, and the top-up screen when one ran). An
