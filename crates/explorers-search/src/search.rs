@@ -15,11 +15,49 @@ use crate::qd::{Atlas, GenerationReport, QdConfig, SEARCH_ROLLOUT_BUDGET, run_qd
 /// alias the consumers name; `best_recipe` / `recipe_for_cell` live on `Atlas`.
 pub type SearchResult = Atlas;
 
+/// One coordinate of the search box: the raw field it decodes to (`name`),
+/// its bounds, and the scale the unit coordinate is mapped on (#701).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ParameterRange {
     pub name: String,
     pub min: f64,
     pub max: f64,
+    /// How the unit coordinate `u` maps onto `[min, max]`. Part of the box:
+    /// the same `u` over another scale is another world. Serialised only when
+    /// it is not linear, so a range recorded without one (every atlas and
+    /// checkpoint from before #701) reads as linear, and a linear box writes
+    /// exactly as it did.
+    #[serde(default, skip_serializing_if = "Scale::is_linear")]
+    pub scale: Scale,
+}
+
+/// The scale a [`ParameterRange`] maps its unit coordinate on (#701).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scale {
+    /// `min + u · (max − min)`.
+    #[default]
+    Linear,
+    /// `min + u² · (max − min)`: holds `min` exactly, like the linear scale,
+    /// and gives a quarter of the coordinate to the bottom sixteenth of the
+    /// range. The leaching rate's scale (world-rules.md, *The range*).
+    Square,
+}
+
+impl Scale {
+    pub fn is_linear(&self) -> bool {
+        *self == Scale::Linear
+    }
+}
+
+impl ParameterRange {
+    /// The raw value the unit coordinate `u` names over this range.
+    pub fn value_at(&self, u: f64) -> f64 {
+        match self.scale {
+            Scale::Linear => self.min + u * (self.max - self.min),
+            Scale::Square => self.min + u * u * (self.max - self.min),
+        }
+    }
 }
 
 /// Configuration for the genesis outer search. Post-#365 the outer loop is the
@@ -102,162 +140,239 @@ pub fn parse_bloom_stop(value: &str) -> Result<BloomStop, String> {
     Ok(BloomStop { tick, factor })
 }
 
+/// The full box (#701): the 33 coordinates of the untaxed box
+/// ([`untaxed_ranges`]), then the leaching rate `λ` over `[0, 0.01]` on a
+/// square scale, `λ = 0.01 · u²` (world-rules.md, *Carcass energy decays only
+/// through agents; carcass nutrient leaches*, *The range*). The range holds
+/// `λ = 0` exactly, which a log scale cannot; the square gives a quarter of
+/// the coordinate to `λ < 0.01 / 16`, where nutrient lockup still bites. The
+/// cross-trait cost is not in it: its default 0 holds (trade-off #5).
 pub fn default_ranges() -> Vec<ParameterRange> {
+    let mut ranges = untaxed_ranges();
+    ranges.push(ParameterRange {
+        name: "leaching_rate".into(),
+        min: 0.0,
+        max: 0.01,
+        scale: Scale::Square,
+    });
+    ranges
+}
+
+/// The box the committed atlas (#677) was searched under: the untaxed box
+/// ([`untaxed_ranges`]) with the cross-trait cost `c_AH` as its 34th
+/// coordinate, linear over `[0, 0.14]`, and no leaching (`λ = 0`, which
+/// [`decode`] gives any box without `λ`'s coordinate). It is the box `c_AH`
+/// is searched over if it comes out of reserve.
+pub fn taxed_ranges() -> Vec<ParameterRange> {
+    let mut ranges = untaxed_ranges();
+    ranges.push(ParameterRange {
+        name: "cross_trait_cost".into(),
+        // Cross-trait cost `c_AH` (trade-off #5, #669), linear over
+        // [0, 0.14]: the range must hold `c_AH = 0` exactly — the latent
+        // default every world before #669 ran — so a log scale is out.
+        // The top is measured, not copied from the per-trait costs: the
+        // `c_AH` at which a typical light-fed mixotroph that drains pays
+        // about twice its median drain income
+        // (`docs/research/668-cross-trait-calibration.md`).
+        min: 0.0,
+        max: 0.14,
+        scale: Scale::Linear,
+    });
+    ranges
+}
+
+/// The full box as it stood before the cross-trait cost joined it (#669),
+/// which is the full box without the leaching rate (#701): 33 coordinates,
+/// with mixotrophy untaxed (`c_AH = 0`) and no leaching (`λ = 0`), which
+/// [`decode`] gives any box without those coordinates. #663's atlas,
+/// committed until #677, was searched under this one.
+pub fn untaxed_ranges() -> Vec<ParameterRange> {
     vec![
         ParameterRange {
             name: "solar_flux_magnitude".into(),
             min: 1.0,
             max: 20.0,
+            scale: Scale::Linear,
         }, // 0
         ParameterRange {
             name: "base_trophic_efficiency".into(),
             min: 0.1,
             max: 0.9,
+            scale: Scale::Linear,
         }, // 1
         ParameterRange {
             name: "trophic_distance_decay".into(),
             min: 0.1,
             max: 5.0,
+            scale: Scale::Linear,
         }, // 2
         ParameterRange {
             name: "reproduction_efficiency".into(),
             min: 0.1,
             max: 0.9,
+            scale: Scale::Linear,
         }, // 3
         ParameterRange {
             name: "base_metabolic_rate".into(),
             min: 0.01,
             max: 0.5,
+            scale: Scale::Linear,
         }, // 4
         ParameterRange {
             name: "movement_cost_coefficient".into(),
             min: 0.001,
             max: 0.1,
+            scale: Scale::Linear,
         }, // 5
         ParameterRange {
             name: "sensing_range_coefficient".into(),
             min: 1.0,
             max: 30.0,
+            scale: Scale::Linear,
         }, // 6
         ParameterRange {
             name: "reproduction_energy_threshold".into(),
             min: 5.0,
             max: 50.0,
+            scale: Scale::Linear,
         }, // 7
         ParameterRange {
             name: "mutation_rate".into(),
             min: 0.01,
             max: 0.5,
+            scale: Scale::Linear,
         }, // 8
         ParameterRange {
             name: "mutation_magnitude".into(),
             min: 0.01,
             max: 0.5,
+            scale: Scale::Linear,
         }, // 9
         ParameterRange {
             name: "contact_range_coefficient".into(),
             min: 0.5,
             max: 5.0,
+            scale: Scale::Linear,
         }, // 10
         ParameterRange {
             name: "world_extent".into(),
             min: 20.0,
             max: 100.0,
+            scale: Scale::Linear,
         }, // 11
         ParameterRange {
             name: "initial_population_size".into(),
             min: 5.0,
             max: 50.0,
+            scale: Scale::Linear,
         }, // 12
         ParameterRange {
             name: "light_competition_radius".into(),
             min: 1.0,
             max: 20.0,
+            scale: Scale::Linear,
         }, // 13
         ParameterRange {
             name: "photo_maintenance_cost".into(),
             min: 0.001,
             max: 0.1,
+            scale: Scale::Linear,
         }, // 14
         ParameterRange {
             name: "heterotrophy_maintenance_cost".into(),
             min: 0.001,
             max: 0.1,
+            scale: Scale::Linear,
         }, // 15
         ParameterRange {
             name: "reproductive_compatibility_distance".into(),
             min: 0.5,
             max: 5.0,
+            scale: Scale::Linear,
         }, // 16
         ParameterRange {
             name: "mean_photosynthetic_absorption".into(),
             min: 0.0,
             max: 1.0,
+            scale: Scale::Linear,
         }, // 17
         ParameterRange {
             name: "mean_heterotrophy".into(),
             min: 0.0,
             max: 1.0,
+            scale: Scale::Linear,
         }, // 18
         ParameterRange {
             name: "mean_mobility".into(),
             min: 0.0,
             max: 1.0,
+            scale: Scale::Linear,
         }, // 19
         ParameterRange {
             name: "mean_kappa".into(),
             min: 0.0,
             max: 1.0,
+            scale: Scale::Linear,
         }, // 20
         ParameterRange {
             name: "trait_covariance".into(),
             min: 0.1,
             max: 1.0,
+            scale: Scale::Linear,
         }, // 21
         ParameterRange {
             name: "initial_cluster_count".into(),
             min: 1.0,
             max: 5.0,
+            scale: Scale::Linear,
         }, // 22
         ParameterRange {
             name: "initial_energy_per_agent".into(),
             min: 1.0,
             max: 50.0,
+            scale: Scale::Linear,
         }, // 23
         ParameterRange {
             name: "base_nutrient_ratio".into(),
             min: 0.01,
             max: 0.5,
+            scale: Scale::Linear,
         }, // 24
         ParameterRange {
             name: "specification_nutrient_coefficient".into(),
             min: 0.01,
             max: 0.5,
+            scale: Scale::Linear,
         }, // 25
         ParameterRange {
             name: "mean_asexual_propensity".into(),
             min: 0.0,
             max: 1.0,
+            scale: Scale::Linear,
         }, // 26
         ParameterRange {
             name: "mean_dispersal".into(),
             min: 0.0,
             max: 2.0,
+            scale: Scale::Linear,
         }, // 27
         ParameterRange {
             name: "maintenance_cost_exponent".into(),
             min: 1.5,
             max: 3.0,
+            scale: Scale::Linear,
         }, // 28
         ParameterRange {
             name: "growth_retention_multiplier".into(),
             min: 1.0,
             max: 5.0,
+            scale: Scale::Linear,
         }, // 29
         ParameterRange {
             name: "offspring_structure_fraction".into(),
             min: 0.05,
             max: 0.5,
+            scale: Scale::Linear,
         }, // 30
         ParameterRange {
             name: "reserve_mobilisation_rate".into(),
@@ -268,6 +383,7 @@ pub fn default_ranges() -> Vec<ParameterRange> {
             // lets discrete-meal consumers survive between meals.
             min: 0.05,
             max: 1.0,
+            scale: Scale::Linear,
         }, // 31
         ParameterRange {
             name: "uptake_structure_exponent".into(),
@@ -279,47 +395,23 @@ pub fn default_ranges() -> Vec<ParameterRange> {
             // `s_ref` stays out of the box at its default, 100.
             min: 0.0,
             max: 1.0,
+            scale: Scale::Linear,
         }, // 32
-        ParameterRange {
-            name: "cross_trait_cost".into(),
-            // Cross-trait cost `c_AH` (trade-off #5, #669), linear over
-            // [0, 0.14]: the range must hold `c_AH = 0` exactly — the latent
-            // default every world before #669 ran — so a log scale is out.
-            // The top is measured, not copied from the per-trait costs: the
-            // `c_AH` at which a typical light-fed mixotroph that drains pays
-            // about twice its median drain income
-            // (`docs/research/668-cross-trait-calibration.md`).
-            min: 0.0,
-            max: 0.14,
-        }, // 33
     ]
 }
 
 /// The full box as it stood before the uptake structure exponent joined it
-/// (#653): the first 32 [`default_ranges`] dims, with uptake size-blind
+/// (#653): the first 32 [`untaxed_ranges`] dims, with uptake size-blind
 /// (`b = 0`, which [`decode`] gives any box without `b`'s coordinate). An
 /// atlas from before #559 records no box and was searched under this one.
 pub fn size_blind_ranges() -> Vec<ParameterRange> {
-    let mut ranges = default_ranges();
+    let mut ranges = untaxed_ranges();
     ranges.truncate(SIZE_BLIND_DIMS);
     ranges
 }
 
 /// The raw coordinates of [`size_blind_ranges`].
 const SIZE_BLIND_DIMS: usize = 32;
-
-/// The full box as it stood before the cross-trait cost joined it (#669):
-/// the first 33 [`default_ranges`] dims, with mixotrophy untaxed
-/// (`c_AH = 0`, which [`decode`] gives any box without `c_AH`'s coordinate).
-/// #663's atlas, committed until #677, was searched under this one.
-pub fn untaxed_ranges() -> Vec<ParameterRange> {
-    let mut ranges = default_ranges();
-    ranges.truncate(UNTAXED_DIMS);
-    ranges
-}
-
-/// The raw coordinates of [`untaxed_ranges`].
-const UNTAXED_DIMS: usize = 33;
 
 /// The dims the narrowed search box keeps at their full [`default_ranges`]
 /// width (#559). The first eight are the raw core both LHS draws select on
@@ -397,7 +489,8 @@ pub fn narrowed_ranges() -> Vec<ParameterRange> {
 /// | `offspring_structure_fraction` | 0.2 |
 /// | `reserve_mobilisation_rate` | 1.0 (the full range's top, so the band is its top quarter) |
 /// | `uptake_structure_exponent` | 0.0 (size-blind uptake, the range's bottom, so the band is its bottom quarter) |
-/// | `cross_trait_cost` | 0.0 (untaxed mixotrophy, the range's bottom, so the band is its bottom quarter) |
+/// | `cross_trait_cost` | 0.0 (untaxed mixotrophy, the range's bottom, so the band is its bottom quarter; only in a narrowing of [`taxed_ranges`]) |
+/// | `leaching_rate` | 0.0 (no leaching, the range's bottom, so the band is its bottom quarter, `[0, 0.0025]`, still on the square scale) |
 ///
 /// The founder-distribution dims have no inherited value — `decode` sets the
 /// whole `InitialDistribution` from the unit vector — so their centre is the
@@ -428,6 +521,7 @@ pub fn band_centre(range: &ParameterRange) -> f64 {
         "reserve_mobilisation_rate" => b.reserve_mobilisation_rate,
         "uptake_structure_exponent" => b.uptake_structure_exponent,
         "cross_trait_cost" => b.cross_trait_cost,
+        "leaching_rate" => b.leaching_rate,
         _ => return (range.min + range.max) / 2.0,
     };
     // The baseline holds f32; read it back at the decimal it was written as,
@@ -479,8 +573,8 @@ pub fn check_search_box(
             .filter(|(a, b)| a != b)
             .map(|(a, b)| {
                 format!(
-                    "{}: recorded [{}, {}] vs reader {} [{}, {}]",
-                    a.name, a.min, a.max, b.name, b.min, b.max
+                    "{}: recorded [{}, {}] {:?} vs reader {} [{}, {}] {:?}",
+                    a.name, a.min, a.max, a.scale, b.name, b.min, b.max, b.scale
                 )
             })
             .collect()
@@ -552,70 +646,81 @@ fn viable_baseline() -> WorldParameters {
     }
 }
 
+/// The world a unit vector `values` names over the box `ranges`.
+///
+/// Each coordinate is read **by its range's name**, never by its position
+/// (#701): boxes of the same length can hold different fields at the same
+/// index (the committed atlas's 34th coordinate is `c_AH`, the full box's is
+/// `λ`), so a box is identified by the names it records, not its length. A
+/// field the box has no coordinate for keeps the known-viable baseline's
+/// value, which for the fields later boxes added (`b`, `c_AH`, `λ`) is the
+/// latent default 0 every world before them ran. The 32 fields every box has
+/// carried since the size-blind box must be present.
 pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, InitialDistribution) {
-    let v = |i: usize| -> f64 {
-        let r = &ranges[i];
-        r.min + values[i] * (r.max - r.min)
+    let field = |name: &str| -> Option<f64> {
+        ranges
+            .iter()
+            .position(|r| r.name == name)
+            .map(|i| ranges[i].value_at(values[i]))
+    };
+    let v = |name: &str| -> f64 {
+        field(name).unwrap_or_else(|| panic!("the search box has no `{name}` coordinate"))
     };
 
     // Start from the known-viable baseline and override only the searched
     // dimensions, so non-searched fields inherit sane values rather than zero.
     let params = WorldParameters {
-        solar_flux_magnitude: v(0) as f32,
-        base_trophic_efficiency: v(1) as f32,
-        trophic_distance_decay: v(2) as f32,
-        reproduction_efficiency: v(3) as f32,
-        base_metabolic_rate: v(4) as f32,
-        movement_cost_coefficient: v(5) as f32,
-        sensing_range_coefficient: v(6) as f32,
-        reproduction_energy_threshold: v(7) as f32,
-        mutation_rate: v(8) as f32,
-        mutation_magnitude: v(9) as f32,
-        contact_range_coefficient: v(10) as f32,
-        world_extent: v(11) as f32,
-        initial_population_size: v(12).round() as u32,
-        light_competition_radius: v(13) as f32,
-        photo_maintenance_cost: v(14) as f32,
-        heterotrophy_maintenance_cost: v(15) as f32,
-        reproductive_compatibility_distance: v(16) as f32,
-        base_nutrient_ratio: v(24) as f32,
-        specification_nutrient_coefficient: v(25) as f32,
-        maintenance_cost_exponent: v(28) as f32,
-        growth_retention_multiplier: v(29) as f32,
-        offspring_structure_fraction: v(30) as f32,
-        reserve_mobilisation_rate: v(31) as f32,
+        solar_flux_magnitude: v("solar_flux_magnitude") as f32,
+        base_trophic_efficiency: v("base_trophic_efficiency") as f32,
+        trophic_distance_decay: v("trophic_distance_decay") as f32,
+        reproduction_efficiency: v("reproduction_efficiency") as f32,
+        base_metabolic_rate: v("base_metabolic_rate") as f32,
+        movement_cost_coefficient: v("movement_cost_coefficient") as f32,
+        sensing_range_coefficient: v("sensing_range_coefficient") as f32,
+        reproduction_energy_threshold: v("reproduction_energy_threshold") as f32,
+        mutation_rate: v("mutation_rate") as f32,
+        mutation_magnitude: v("mutation_magnitude") as f32,
+        contact_range_coefficient: v("contact_range_coefficient") as f32,
+        world_extent: v("world_extent") as f32,
+        initial_population_size: v("initial_population_size").round() as u32,
+        light_competition_radius: v("light_competition_radius") as f32,
+        photo_maintenance_cost: v("photo_maintenance_cost") as f32,
+        heterotrophy_maintenance_cost: v("heterotrophy_maintenance_cost") as f32,
+        reproductive_compatibility_distance: v("reproductive_compatibility_distance") as f32,
+        base_nutrient_ratio: v("base_nutrient_ratio") as f32,
+        specification_nutrient_coefficient: v("specification_nutrient_coefficient") as f32,
+        maintenance_cost_exponent: v("maintenance_cost_exponent") as f32,
+        growth_retention_multiplier: v("growth_retention_multiplier") as f32,
+        offspring_structure_fraction: v("offspring_structure_fraction") as f32,
+        reserve_mobilisation_rate: v("reserve_mobilisation_rate") as f32,
         // A box from before #653 has no coordinate for `b`: its worlds keep
         // the baseline's size-blind uptake, `b = 0`.
-        uptake_structure_exponent: if ranges.len() > SIZE_BLIND_DIMS {
-            v(32) as f32
-        } else {
-            0.0
-        },
-        // A box from before #669 has no coordinate for `c_AH`: its worlds keep
-        // the baseline's untaxed mixotrophy, `c_AH = 0`.
-        cross_trait_cost: if ranges.len() > UNTAXED_DIMS {
-            v(33) as f32
-        } else {
-            0.0
-        },
+        uptake_structure_exponent: field("uptake_structure_exponent").map_or(0.0, |x| x as f32),
+        // Only the committed atlas's box (#677, `taxed_ranges`) has a
+        // coordinate for `c_AH`; every other box's worlds keep the baseline's
+        // untaxed mixotrophy, `c_AH = 0`.
+        cross_trait_cost: field("cross_trait_cost").map_or(0.0, |x| x as f32),
+        // A box from before #701 has no coordinate for `λ`: its worlds keep
+        // the baseline's `λ = 0`, no leaching.
+        leaching_rate: field("leaching_rate").map_or(0.0, |x| x as f32),
         ..viable_baseline()
     };
 
     let dist = InitialDistribution {
         mean_traits: TraitVector {
-            photosynthetic_absorption: v(17) as f32,
-            heterotrophy: v(18) as f32,
-            mobility: v(19) as f32,
-            kappa: v(20) as f32,
+            photosynthetic_absorption: v("mean_photosynthetic_absorption") as f32,
+            heterotrophy: v("mean_heterotrophy") as f32,
+            mobility: v("mean_mobility") as f32,
+            kappa: v("mean_kappa") as f32,
             // Founder fecundity inherits the known-viable template value; the
             // search does not vary it, so it must not default to sterile (0.0).
             fecundity: 0.35,
-            asexual_propensity: v(26) as f32,
-            dispersal: v(27) as f32,
+            asexual_propensity: v("mean_asexual_propensity") as f32,
+            dispersal: v("mean_dispersal") as f32,
         },
-        trait_covariance: v(21) as f32,
-        initial_cluster_count: v(22).round() as u32,
-        initial_energy_per_agent: v(23) as f32,
+        trait_covariance: v("trait_covariance") as f32,
+        initial_cluster_count: v("initial_cluster_count").round() as u32,
+        initial_energy_per_agent: v("initial_energy_per_agent") as f32,
         // Founder aggregation is not yet searched (#607): decoded worlds found
         // at the aggregated design default.
         founder_aggregation: explorers_sim::DEFAULT_FOUNDER_AGGREGATION,
@@ -892,34 +997,26 @@ mod tests {
         assert_eq!(d.initial_cluster_count, 3);
     }
 
+    /// A range maps its unit coordinate onto `[min, max]` on its scale:
+    /// linearly, or as `min + u² · (max − min)` on the square scale (#701).
     #[test]
-    fn decode_maps_unit_interval_to_parameter_ranges() {
-        let ranges = vec![
-            ParameterRange {
-                name: "a".into(),
-                min: 10.0,
-                max: 20.0,
-            },
-            ParameterRange {
-                name: "b".into(),
-                min: 0.0,
-                max: 1.0,
-            },
-        ];
-
-        let values_at_zero = vec![0.0, 0.0];
-        let values_at_one = vec![1.0, 1.0];
-        let values_at_half = vec![0.5, 0.5];
-
-        let r = &ranges;
-        let decode_val = |vals: &[f64], i: usize| -> f64 {
-            let range = &r[i];
-            range.min + vals[i] * (range.max - range.min)
+    fn a_range_maps_the_unit_interval_on_its_scale() {
+        let linear = ParameterRange {
+            name: "a".into(),
+            min: 10.0,
+            max: 20.0,
+            scale: Scale::Linear,
         };
-
-        assert!((decode_val(&values_at_zero, 0) - 10.0).abs() < 1e-10);
-        assert!((decode_val(&values_at_one, 0) - 20.0).abs() < 1e-10);
-        assert!((decode_val(&values_at_half, 1) - 0.5).abs() < 1e-10);
+        assert_eq!(linear.value_at(0.0), 10.0);
+        assert_eq!(linear.value_at(0.5), 15.0);
+        assert_eq!(linear.value_at(1.0), 20.0);
+        let square = ParameterRange {
+            scale: Scale::Square,
+            ..linear
+        };
+        assert_eq!(square.value_at(0.0), 10.0);
+        assert_eq!(square.value_at(0.5), 12.5);
+        assert_eq!(square.value_at(1.0), 20.0);
     }
 
     #[test]
@@ -1000,24 +1097,39 @@ mod tests {
         }
     }
 
-    /// #669: the cross-trait cost `c_AH` is searched linearly over
-    /// `[0, 0.14]` (the top measured in #668; the range must hold `c_AH = 0`
-    /// exactly, the latent default, so a log scale is out), as the last
-    /// coordinate of the full box.
+    /// #701: the leaching rate `λ` is the full box's last coordinate, over
+    /// `[0, 0.01]` on a square scale, and the cross-trait cost is out of it.
     #[test]
-    fn decode_spans_the_cross_trait_cost_over_zero_to_its_measured_top() {
+    fn the_default_box_ends_in_the_leaching_rate_on_a_square_scale() {
         let ranges = default_ranges();
-        let idx = ranges
-            .iter()
-            .position(|r| r.name == "cross_trait_cost")
-            .expect("cross_trait_cost must be a searched parameter");
-        assert_eq!(idx, ranges.len() - 1, "appended last");
-        assert_eq!((ranges[idx].min, ranges[idx].max), (0.0, 0.14));
+        assert_eq!(ranges.len(), 34);
+        assert!(
+            !ranges.iter().any(|r| r.name == "cross_trait_cost"),
+            "c_AH is out of the box"
+        );
+        let last = ranges.last().unwrap();
+        assert_eq!(last.name, "leaching_rate");
+        assert_eq!((last.min, last.max), (0.0, 0.01));
+        assert_eq!(last.scale, Scale::Square);
+        assert!(
+            ranges[..33].iter().all(|r| r.scale == Scale::Linear),
+            "every other coordinate is linear"
+        );
+        assert_eq!(ranges[..33], untaxed_ranges()[..]);
+    }
+
+    /// #701: `λ = 0.01 · u²` for the coordinate `u`, holding 0 exactly; and
+    /// with `c_AH` out of the box every searched world keeps `c_AH = 0`.
+    #[test]
+    fn decode_reads_the_leaching_rate_as_its_top_times_u_squared() {
+        let ranges = default_ranges();
+        let idx = ranges.len() - 1;
         let mut unit = vec![0.5; ranges.len()];
-        for (u, want) in [(0.0, 0.0), (0.5, 0.07), (1.0, 0.14)] {
+        for (u, want) in [(0.0, 0.0), (0.5, 0.0025), (1.0, 0.01)] {
             unit[idx] = u;
             let (params, _) = decode(&unit, &ranges);
-            assert_eq!(params.cross_trait_cost, want as f32, "unit {u}");
+            assert_eq!(params.leaching_rate, want as f32, "unit {u}");
+            assert_eq!(params.cross_trait_cost, 0.0, "unit {u}");
         }
     }
 
@@ -1044,26 +1156,77 @@ mod tests {
         }
     }
 
-    /// #669: a unit vector drawn under the untaxed box (the full box before
-    /// `c_AH` joined it, 33 raw coordinates — #663's atlas's) still
-    /// decodes to the world it named, with `c_AH = 0`: the same world as the
-    /// full box at `c_AH`'s raw coordinate 0.
+    /// #669, #701: a unit vector drawn under the untaxed box (33 raw
+    /// coordinates, #663's atlas's) still decodes to the world it named, with
+    /// `c_AH = 0` and `λ = 0`: the same world as the full box at `λ`'s
+    /// coordinate 0 and as the taxed box at `c_AH`'s.
     #[test]
-    fn an_untaxed_box_still_decodes_its_worlds_with_c_ah_zero() {
+    fn an_untaxed_box_still_decodes_its_worlds_with_c_ah_and_lambda_zero() {
         let old = untaxed_ranges();
-        let full = default_ranges();
         assert_eq!(old.len(), 33);
-        assert_eq!(old[..], full[..33]);
         for u in [0.0, 0.3, 1.0] {
             let unit: Vec<f64> = (0..33).map(|i| (u + i as f64 * 0.017) % 1.0).collect();
             let (params, dist) = decode(&unit, &old);
             assert_eq!(params.cross_trait_cost, 0.0);
+            assert_eq!(params.leaching_rate, 0.0);
             let mut extended = unit.clone();
             extended.push(0.0);
-            let (p34, d34) = decode(&extended, &full);
-            assert_eq!(format!("{params:?}"), format!("{p34:?}"));
-            assert_eq!(format!("{dist:?}"), format!("{d34:?}"));
+            for full in [default_ranges(), taxed_ranges()] {
+                assert_eq!(old[..], full[..33]);
+                let (p34, d34) = decode(&extended, &full);
+                assert_eq!(format!("{params:?}"), format!("{p34:?}"));
+                assert_eq!(format!("{dist:?}"), format!("{d34:?}"));
+            }
         }
+    }
+
+    /// #701: the committed atlas's box (#677) has as many coordinates as the
+    /// full box, and its 34th is `c_AH`, not `λ`. `decode` tells them apart by
+    /// name: over the taxed box the 34th coordinate is `c_AH`, linear over
+    /// `[0, 0.14]`, with `λ = 0`; the same unit over the full box is `λ`, with
+    /// `c_AH = 0`.
+    #[test]
+    fn the_taxed_box_decodes_its_last_coordinate_as_c_ah_with_lambda_zero() {
+        let taxed = taxed_ranges();
+        assert_eq!(taxed.len(), default_ranges().len());
+        let last = taxed.last().unwrap();
+        assert_eq!(last.name, "cross_trait_cost");
+        assert_eq!((last.min, last.max), (0.0, 0.14));
+        assert_eq!(last.scale, Scale::Linear);
+        let mut unit = vec![0.5; taxed.len()];
+        for (u, want) in [(0.0, 0.0), (0.5, 0.07), (1.0, 0.14)] {
+            unit[33] = u;
+            let (params, _) = decode(&unit, &taxed);
+            assert_eq!(params.cross_trait_cost, want as f32, "unit {u}");
+            assert_eq!(params.leaching_rate, 0.0, "unit {u}");
+            let (full, _) = decode(&unit, &default_ranges());
+            assert_eq!(full.cross_trait_cost, 0.0, "unit {u}");
+        }
+    }
+
+    /// #701: a range serialised without a scale (every box recorded before
+    /// the scale existed) reads as linear, and a linear range writes no scale,
+    /// so a linear box is written exactly as before. A square range writes its
+    /// scale and reads back as written.
+    #[test]
+    fn a_range_without_a_scale_reads_as_linear_and_a_square_one_round_trips() {
+        let legacy: ParameterRange =
+            serde_json::from_str(r#"{"name":"cross_trait_cost","min":0.0,"max":0.14}"#).unwrap();
+        assert_eq!(legacy, taxed_ranges()[33]);
+        assert_eq!(
+            serde_json::to_string(&legacy).unwrap(),
+            r#"{"name":"cross_trait_cost","min":0.0,"max":0.14}"#
+        );
+        let lambda = default_ranges().pop().unwrap();
+        let text = serde_json::to_string(&lambda).unwrap();
+        assert_eq!(
+            text,
+            r#"{"name":"leaching_rate","min":0.0,"max":0.01,"scale":"square"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<ParameterRange>(&text).unwrap(),
+            lambda
+        );
     }
 
     #[test]

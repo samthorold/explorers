@@ -181,8 +181,10 @@ const CELLS: [usize; 8] = [15, 21, 22, 27, 49, 66, 69, 80];
 const SEEDS: [u64; 2] = [1000, 1001];
 
 /// The committed atlas's live cells, each decoded over the atlas's own search
-/// box (#559), which it records: the full 34-dimension box with `b` (#653)
-/// and `c_AH` (#669), so every cell decodes with its own `b` and `c_AH` (#677).
+/// box (#559), which it records: the 34-dimension taxed box with `b` (#653)
+/// and `c_AH` (#669), so every cell decodes with its own `b` and `c_AH` (#677)
+/// and `λ = 0`. Since #701 that is not the full box, which has `λ` in place of
+/// `c_AH`; `decode` reads coordinates by name, so these worlds are unchanged.
 fn atlas_units() -> AtlasUnits {
     read_atlas_units(Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),

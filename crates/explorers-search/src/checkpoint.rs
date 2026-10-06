@@ -14,6 +14,7 @@ use explorers_genesis::BloomStop;
 use rand_chacha::ChaCha8Rng;
 
 use crate::qd::{Atlas, GenerationReport, QdConfig, SearchState};
+use crate::search::Scale;
 
 /// The checkpoint format version. Bump it whenever the written form of
 /// [`SearchState`] or the stamp changes; a checkpoint from any other version is
@@ -174,6 +175,10 @@ struct RangeStamp {
     name: String,
     min: f64,
     max: f64,
+    /// Absent from a checkpoint written before #701, whose ranges were all
+    /// linear; written only when not linear, as the atlas writes it.
+    #[serde(default, skip_serializing_if = "Scale::is_linear")]
+    scale: Scale,
 }
 
 impl Stamp {
@@ -187,6 +192,7 @@ impl Stamp {
                     name: r.name.clone(),
                     min: r.min,
                     max: r.max,
+                    scale: r.scale,
                 })
                 .collect(),
             max_ticks: config.max_ticks,
@@ -388,6 +394,34 @@ mod tests {
         let old: Stamp = serde_json::from_value(old).unwrap();
         assert!(old.mismatches(&Stamp::of(&without, 42)).is_empty());
         assert_eq!(old.mismatches(&Stamp::of(&tiny(), 42)).len(), 1);
+    }
+
+    /// #701: a checkpoint written under the committed atlas's box (34
+    /// coordinates, the last `c_AH`, no scales recorded) is refused by a search
+    /// under the full box, which has as many coordinates with `λ` last; so is
+    /// one whose box differs only in a coordinate's scale. A pre-#701 stamp
+    /// still resumes under its own box.
+    #[test]
+    fn a_checkpoint_from_another_box_of_the_same_length_is_refused() {
+        let taxed = QdConfig {
+            ranges: crate::search::taxed_ranges(),
+            ..tiny()
+        };
+        let old = serde_json::to_value(Stamp::of(&taxed, 42)).unwrap();
+        assert!(
+            !old.to_string().contains("scale"),
+            "a linear box stamps no scale"
+        );
+        let old: Stamp = serde_json::from_value(old).unwrap();
+        assert!(old.mismatches(&Stamp::of(&taxed, 42)).is_empty());
+        let refused = old.mismatches(&Stamp::of(&tiny(), 42));
+        assert_eq!(refused.len(), 1);
+        assert!(refused[0].contains("cross_trait_cost"), "{refused:?}");
+
+        let mut linear = tiny();
+        linear.ranges.last_mut().unwrap().scale = Scale::Linear;
+        let refused = Stamp::of(&linear, 42).mismatches(&Stamp::of(&tiny(), 42));
+        assert_eq!(refused.len(), 1, "{refused:?}");
     }
 
     #[test]

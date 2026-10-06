@@ -91,9 +91,12 @@ pub fn viable_baseline() -> WorldParameters {
 }
 
 /// Strategy over the searched `WorldParameters` dimensions (ranges copied from
-/// `explorers-search::default_ranges()`, indices 0..=16, 24..=25 and 28..=33), plus the
-/// recognition distance, spanning the kin-blind limit to a wide one, and the
-/// leaching rate (#698), from off to a half-life of about three ticks.
+/// `explorers-search::default_ranges()`, indices 0..=16, 24..=25 and 28..=32),
+/// plus the cross-trait cost over the range it is searched on if it comes out
+/// of reserve (`taxed_ranges()`, index 33), the recognition distance, spanning
+/// the kin-blind limit to a wide one, and the leaching rate (#698), from off
+/// to a half-life of about three ticks: far past the searched top of 0.01
+/// (#701), so the stepper is checked well beyond where genesis looks.
 pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
     let searched = (
         (
@@ -125,9 +128,9 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
             0.05f32..=0.5, // 30 offspring_structure_fraction
             0.05f32..=1.0, // 31 reserve_mobilisation_rate
             0.0f32..=1.0,  // 32 uptake_structure_exponent (#653)
-            0.0f32..=0.14, // 33 cross_trait_cost (#669)
+            0.0f32..=0.14, // cross_trait_cost (#669; out of the box since #701)
             0.0f32..=1.5,  // recognition_distance (not searched): kin-blind to wide
-            0.0f32..=0.2,  // leaching_rate (#698, not yet searched): off to a ~3-tick half-life
+            0.0f32..=0.2, // leaching_rate (#698; searched over [0, 0.01] since #701): off to a ~3-tick half-life
         ),
     );
     searched.prop_map(|(a, b, c)| WorldParameters {

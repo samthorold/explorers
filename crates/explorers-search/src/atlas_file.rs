@@ -360,7 +360,8 @@ mod tests {
     /// #559: an atlas written by a search records the box it was searched
     /// under, so reading it back names the same box; an atlas from before
     /// the box was recorded reads as the box it was searched under: the full
-    /// box before #653, the size-blind box.
+    /// box before #653, the size-blind box. Each range is recorded with its
+    /// scale (#701).
     #[test]
     fn an_atlas_records_the_search_box_it_was_drawn_under() {
         let config = QdConfig {
@@ -375,10 +376,11 @@ mod tests {
                 .map(|r| (r.name.clone(), r.min, r.max))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(
-            bounds(&read_atlas(&path).unwrap().search_box()),
-            bounds(&config.ranges)
-        );
+        // The whole box, scales included (#701): the narrowed box keeps the
+        // leaching rate on its square scale.
+        let read_box = read_atlas(&path).unwrap().search_box();
+        assert_eq!(read_box, config.ranges);
+        assert_eq!(read_box.last().unwrap().scale, crate::search::Scale::Square);
 
         let mut legacy: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
