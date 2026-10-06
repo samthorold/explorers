@@ -332,6 +332,10 @@ _Avoid_: search result, ranked list (the atlas is a map onto behaviour, not an o
 A reported per-cell distribution: the fraction of a cell's seed ensemble that lands in the coexisting regime — alive, with trait clusters genuinely co-present. Recorded alongside the **heterotroph guild** fractions and, like them, **never folded into the cell's score** nor used as a **behaviour axis** (the monoculture↔coexistence axis is still the representative run's clustering strength). Its job is to surface regime-straddlers: a cell whose representative run coexists on a lucky seed draw but whose ensemble mostly collapses to monoculture reads a low fraction. The **world recipe** projection reads it to avoid certifying such a straddler as the playable world.
 _Avoid_: coexistence score, clustering strength (the fraction is a count over seeds, not the per-run axis value)
 
+**Live fraction**:
+The share of a world's seed ensemble whose runs end without hitting any **degenerate configuration**: how reliably the world's parameters produce a functioning ecology, regardless of how good it is when they do. A world whose seeds all agree has a live fraction of 1 or 0.
+_Avoid_: survival rate (agents survive; seeds are live or dead), robustness (robustness is the property; the live fraction is one measure of it)
+
 **Behaviour axis**:
 One of the three coordinates the atlas bins surviving worlds on, each a cheap per-run observable that indexes a dynamics failure mode: **oscillation strength** (frozen ↔ oscillating), **clustering strength** (monoculture ↔ coexistence), and **carcass-locked fraction** (healthy throughput ↔ nutrient lockup). Distinct from a fitness criterion — an axis locates *what kind* of world a parameterisation produces, whether or not that world is good. Two of the three (oscillation, clustering) are also **sensible-world** criteria; the carcass-locked fraction is an axis only.
 _Avoid_: behaviour descriptor (acceptable, but "axis" names its role in the atlas), feature, dimension (overloaded with trait-space dimensions)
