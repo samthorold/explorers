@@ -45,13 +45,16 @@ use std::collections::HashMap;
 pub struct PreStep {
     agents: Vec<Agent>,
     nutrient_grid: NutrientGrid,
+    /// The carcasses as the step found them, before leaching.
+    start_carcasses: Vec<Carcass>,
+    /// The carcasses the drain pass reads: `start_carcasses` leached.
     carcasses: Vec<Carcass>,
 }
 
 /// The state at the start of drain resolution (#629): the drain-time roster
 /// ([`PreStep::drain_time_agents`]) with each agent's photosynthesis and
-/// nutrient uptake this tick, by id (absent = none). Carcasses are untouched
-/// by the phases before the drain pass, so [`PreStep::carcasses`] is theirs.
+/// nutrient uptake this tick, by id (absent = none). Before the drain pass
+/// carcasses only leach (#698), so [`PreStep::carcasses`] is theirs.
 #[derive(Clone, Debug)]
 pub struct DrainStart {
     pub agents: Vec<Agent>,
@@ -65,11 +68,26 @@ pub struct DrainStart {
 impl PreStep {
     /// Capture `world` before it steps.
     pub fn capture(world: &World) -> Self {
+        let start_carcasses = world.carcasses().to_vec();
+        let mut carcasses = start_carcasses.clone();
+        let mut scratch = world.nutrient_grid().clone();
+        phase::leach_carcasses(&mut carcasses, &mut scratch, world.params());
         PreStep {
             agents: world.agents().to_vec(),
             nutrient_grid: world.nutrient_grid().clone(),
-            carcasses: world.carcasses().to_vec(),
+            start_carcasses,
+            carcasses,
         }
+    }
+
+    /// The nutrient grid as uptake reads it: the pre-step grid with this
+    /// tick's leaching (#698) added, as the stepper leaches after
+    /// photosynthesis and before uptake.
+    fn leached_grid(&self, params: &WorldParameters) -> NutrientGrid {
+        let mut grid = self.nutrient_grid.clone();
+        let mut carcasses = self.start_carcasses.clone();
+        phase::leach_carcasses(&mut carcasses, &mut grid, params);
+        grid
     }
 
     /// The agents before the step.
@@ -77,7 +95,8 @@ impl PreStep {
         &self.agents
     }
 
-    /// The carcasses before the step: those the drain pass reads.
+    /// The carcasses the drain pass reads: those before the step, less what
+    /// each leached this tick (none at `leaching_rate` 0).
     pub fn carcasses(&self) -> &[Carcass] {
         &self.carcasses
     }
@@ -87,7 +106,7 @@ impl PreStep {
     /// events' `energy_delta`).
     pub fn drain_start(&self, params: &WorldParameters) -> DrainStart {
         let mut agents = self.agents.clone();
-        let mut nutrient_grid = self.nutrient_grid.clone();
+        let mut nutrient_grid = self.leached_grid(params);
         let cell_size = params.light_competition_radius.max(1.0);
         let mut grid = SpatialGrid::new(params.world_extent, cell_size);
         for (i, a) in agents.iter().enumerate() {
@@ -128,7 +147,7 @@ impl PreStep {
     /// read (#622).
     pub fn metabolised_agents(&self, params: &WorldParameters) -> Vec<Agent> {
         let mut agents = self.agents.clone();
-        let mut nutrient_grid = self.nutrient_grid.clone();
+        let mut nutrient_grid = self.leached_grid(params);
         let cell_size = params.light_competition_radius.max(1.0);
         let mut grid = SpatialGrid::new(params.world_extent, cell_size);
         for (i, a) in agents.iter().enumerate() {
@@ -667,6 +686,57 @@ mod tests {
             world.compact_event_log_before(world.event_log().len());
         }
         assert!(checked > 10, "only {checked} drains checked");
+    }
+
+    /// With carcass leaching on (#698, #700), the replay leaches as the
+    /// stepper does before uptake: each agent's replayed uptake is the
+    /// stepper's `NutrientAbsorbed`, bit for bit, and the drain-time
+    /// carcasses are the pre-step ones less what each leached.
+    #[test]
+    fn replay_leaches_carcasses_before_uptake_as_the_stepper_does() {
+        let mut world = sample_31_world(1000);
+        world.params_mut().leaching_rate = 0.2;
+        world.retain_event_kinds(&[EventKind::NutrientAbsorbed, EventKind::Leached]);
+        let params = world.params().clone();
+        let (mut leached, mut absorbed) = (0, 0);
+        for _ in 0..150 {
+            let pre = PreStep::capture(&world);
+            let raw: HashMap<u64, f32> = world
+                .carcasses()
+                .iter()
+                .map(|c| (c.id, c.nutrient))
+                .collect();
+            let cursor = world.event_log().len();
+            world.step();
+            let events = world.event_log().since(cursor).to_vec();
+            let start = pre.drain_start(&params);
+            let drain_time: HashMap<u64, f32> =
+                pre.carcasses().iter().map(|c| (c.id, c.nutrient)).collect();
+            for e in &events {
+                match e.kind {
+                    EventKind::NutrientAbsorbed => {
+                        assert_eq!(
+                            start.uptake.get(&e.source).map(|u| u.to_bits()),
+                            Some(e.energy_delta.to_bits()),
+                            "{e:?}"
+                        );
+                        absorbed += 1;
+                    }
+                    EventKind::Leached => {
+                        assert_eq!(
+                            drain_time[&e.source].to_bits(),
+                            (raw[&e.source] - e.nutrient_delta).to_bits(),
+                            "{e:?}"
+                        );
+                        leached += 1;
+                    }
+                    _ => {}
+                }
+            }
+            world.compact_event_log_before(world.event_log().len());
+        }
+        assert!(leached > 10, "only {leached} leaching events");
+        assert!(absorbed > 10, "only {absorbed} uptakes");
     }
 
     /// Satiation reads both currencies in ticks of maintenance, the reading

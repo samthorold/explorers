@@ -134,6 +134,24 @@
 //! `GUILD_MIN_SIZE` on every second-half sample tick of a run that reached the
 //! horizon, plus at least one such birth. Per config and pooled; rows from
 //! before #683 read back with L empty. `scripts/683-census.sh` drives it.
+//!
+//! #700 adds M. **Carcass leaching calibration** (world-rules.md, *Carcass
+//! energy decays only through agents; carcass nutrient leaches*: the top of
+//! λ's range is set by a calibration read). Per seed, a
+//! `explorers_search::leaching::LeachRun`: every carcass formed in the run
+//! timed from death to the first bite any drainer takes (censored at the
+//! run's end), tagged *bitten to death* when it was drained while living in
+//! the step it died; carcass nutrient out by leaching against drains; the
+//! carcass-locked fraction off the lockup gate's series, on every run; and
+//! H's second-half light-fed mixotroph share. M1 pools the time to first
+//! drain (quantiles over the drained, the Kaplan–Meier median with the
+//! undrained censored), whole run and settled half, by how the carcass died;
+//! M2 the λ_max = ln 2 / t* readings; M3 per config; M4 the sweep's
+//! quantities at the rows' λ. `--leaching-rate <λ>` pins λ on every decoded
+//! config (unset, each keeps its decoded value: 0). `--leaching-sweep
+//! a.jsonl,b.jsonl,…` prints M4's line for each rows file as one table and
+//! exits. `PreStep` replays the tick's leaching, so C–J read the drain-time
+//! carcasses and pool at λ > 0. `scripts/700-leaching.sh` drives it.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -146,7 +164,7 @@ use explorers_genesis_eval::{EvalConfig, RolloutObservations};
 use explorers_search::config_source::{
     ConfigSource, NetworkPins, parse_founder_aggregation, parse_non_negative, parse_positive,
     parse_selector, parse_unit_interval, resolve_config, sampled_units, with_cross_trait_cost,
-    with_founder_aggregation, with_network, with_uptake_scaling,
+    with_founder_aggregation, with_leaching_rate, with_network, with_uptake_scaling,
 };
 use explorers_search::flow1_verdict::{
     COIN_ALPHA, Conditionality as Flow1Conditionality, DrainShift, Drains, LINEAGE_CLUSTERS,
@@ -155,7 +173,12 @@ use explorers_search::flow1_verdict::{
 use explorers_search::fullness::{FullnessBank, FullnessTracker, k_grid, tau_grid, tick_intakes};
 use explorers_search::grazer_hunger::PreStep;
 use explorers_search::intake_ceiling::realised_bites;
-use explorers_search::role_diet::{DietLedger, Outcomes, census_failure, rollout_with_fullness};
+use explorers_search::leaching::{
+    CarcassNutrient, DrainClock, FirstDrain, LeachRun, SweepReading, lambda_max,
+};
+use explorers_search::role_diet::{
+    DietLedger, Outcomes, census_failure, failure_label, rollout_with_fullness,
+};
 use explorers_search::sweep::{
     AtlasUnits, append_row, done_configs, plan_tasks, read_atlas_units, read_rows,
 };
@@ -821,6 +844,10 @@ struct Tally {
     outcomes: Outcomes,
     #[serde(default)]
     termination_ticks: u64,
+    /// M (#700): one leaching readout per seed, in seed order. Empty on
+    /// pre-#700 rows.
+    #[serde(default)]
+    leach_runs: Vec<LeachRun>,
     /// `--crosscheck` (#681): K's charges against the stepper's. Not on the
     /// rows.
     #[serde(skip)]
@@ -886,6 +913,7 @@ impl Tally {
         self.producer_agent_ticks += o.producer_agent_ticks;
         self.outcomes.merge(&o.outcomes);
         self.termination_ticks += o.termination_ticks;
+        self.leach_runs.extend_from_slice(&o.leach_runs);
         self.charge_check.merge(&o.charge_check);
     }
 }
@@ -946,6 +974,7 @@ fn rollout(
         EventKind::Born,
         EventKind::Died,
         EventKind::Redistributed,
+        EventKind::Leached,
     ]
     .into_iter()
     .chain(crosscheck.then_some(EventKind::Metabolized))
@@ -990,6 +1019,11 @@ fn rollout(
     // since the last sample tick, over second-half ticks.
     let mut mobile = MobileTracker::default();
     let mut moved: HashMap<u64, (f64, u32)> = HashMap::new();
+    // M (#700): each carcass timed to its first drain, and carcass nutrient
+    // out by route (whole run and second half).
+    let mut drain_clock = DrainClock::default();
+    let (mut leach_n, mut leach_n_second_half) =
+        (CarcassNutrient::default(), CarcassNutrient::default());
     for _ in 0..max_ticks {
         let tick_before = world.tick();
         let second_half_tick = tick_before + 1 >= window_start;
@@ -1043,9 +1077,19 @@ fn rollout(
             .filter(|r| **r == Some(TrophicRole::Producer))
             .count() as u64;
         let pre = PreStep::capture(&world);
+        let carcasses_before = world.carcasses().to_vec();
         world.step();
         let tail: Vec<Event> = world.event_log().since(cursor).to_vec();
         cursor = world.event_log().len();
+        drain_clock.observe(world.tick(), &tail);
+        {
+            let mut step = CarcassNutrient::default();
+            step.observe(&carcasses_before, world.carcasses(), &tail);
+            leach_n.merge(&step);
+            if world.tick() >= window_start {
+                leach_n_second_half.merge(&step);
+            }
+        }
         ledger.ingest(&world, &tail, Some(&pre));
         let mut kin_killers = Vec::new();
         for (g, heterotrophy, _) in ledger.take_kin_kill_readings() {
@@ -1552,6 +1596,17 @@ fn rollout(
     let failure = census_failure(&world, &observations, eval_config, max_ticks, stopped);
     tally.outcomes.record(failure.as_ref());
     tally.termination_ticks = world.tick();
+    tally.leach_runs.push(leach_run(
+        seed,
+        &world,
+        &observations,
+        eval_config,
+        window_start,
+        failure.as_ref(),
+        [leach_n, leach_n_second_half],
+        &tally.ext.routes_second_half,
+        drain_clock,
+    ));
     for (g, by_agent) in charge.into_iter().enumerate() {
         let mut by_agent: Vec<(u64, [f64; 4])> = by_agent.into_iter().collect();
         by_agent.sort_by_key(|(id, _)| *id);
@@ -1578,6 +1633,44 @@ fn rollout(
         }
     }
     tally
+}
+
+/// M (#700): one seed's leaching readout. The carcass-locked fraction is
+/// read off the series the lockup gate reads (`observations.carcass_fraction`,
+/// entry `i` at tick `i + 1`), on every run; the light-fed mixotrophs' share
+/// off H's second-half buckets.
+#[allow(clippy::too_many_arguments)]
+fn leach_run(
+    seed: u64,
+    world: &World,
+    observations: &RolloutObservations,
+    eval_config: &EvalConfig,
+    window_start: u64,
+    failure: Option<&explorers_genesis_eval::FailureMode>,
+    [nutrient, nutrient_settled]: [CarcassNutrient; 2],
+    second_half: &Routes,
+    clock: DrainClock,
+) -> LeachRun {
+    let series = &observations.carcass_fraction;
+    let tail = &series[series
+        .len()
+        .saturating_sub(eval_config.nutrient_lock_window)..];
+    let settled = series
+        .get(window_start.saturating_sub(1) as usize..)
+        .unwrap_or(&[]);
+    let mean = |v: &[f32]| (!v.is_empty()).then(|| v.iter().sum::<f32>() / v.len() as f32);
+    LeachRun {
+        seed,
+        end_tick: world.tick(),
+        outcome: failure.map_or("persisted", failure_label).to_string(),
+        carcass_locked_tail: mean(tail).unwrap_or(0.0),
+        carcass_locked_settled: mean(settled),
+        nutrient,
+        nutrient_settled,
+        lfm_drained_settled: second_half.carcass_drained[0],
+        attributed_drained_settled: second_half.carcass_drained[..MEMO].iter().sum(),
+        carcasses: clock.finish(),
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -1613,6 +1706,10 @@ struct Row {
     /// `(A·H)^(p/2)`). Absent on older rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     maintenance_cost_exponent: Option<f32>,
+    /// The config's effective carcass leaching rate λ (#700: pinned by
+    /// `--leaching-rate`, else as decoded). Absent on older rows (λ = 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    leaching_rate: Option<f32>,
     /// Kin kills per seed (for the cross-check).
     seed_kin_kills: Vec<u64>,
     /// Summed over the seeds.
@@ -1668,6 +1765,8 @@ struct Args {
     uptake_reference_structure: Option<f32>,
     network: NetworkPins,
     cross_trait_cost: Option<f32>,
+    leaching_rate: Option<f32>,
+    leaching_sweep: Option<Vec<PathBuf>>,
     crosscheck: bool,
     baseline: Option<PathBuf>,
 }
@@ -1687,6 +1786,8 @@ fn parse_args() -> Result<Args, String> {
         uptake_reference_structure: None,
         network: NetworkPins::default(),
         cross_trait_cost: None,
+        leaching_rate: None,
+        leaching_sweep: None,
         crosscheck: false,
         baseline: None,
     };
@@ -1739,6 +1840,10 @@ fn parse_args() -> Result<Args, String> {
             "--cross-trait-cost" => {
                 args.cross_trait_cost = Some(parse_non_negative(&flag, &value()?)?)
             }
+            "--leaching-rate" => args.leaching_rate = Some(parse_unit_interval(&flag, &value()?)?),
+            "--leaching-sweep" => {
+                args.leaching_sweep = Some(value()?.split(',').map(PathBuf::from).collect())
+            }
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -1750,6 +1855,10 @@ fn main() {
         eprintln!("kin_killer_diet: {e}");
         std::process::exit(2)
     });
+    if let Some(files) = &args.leaching_sweep {
+        leaching_sweep(files);
+        return;
+    }
     if !args.summary_only {
         let atlas_units = args
             .atlas
@@ -1789,6 +1898,7 @@ fn main() {
             );
             let config = with_network(config, &args.network);
             let config = with_cross_trait_cost(config, args.cross_trait_cost);
+            let config = with_leaching_rate(config, args.leaching_rate);
             let tallies: Vec<Tally> = (0..args.ensemble)
                 .into_par_iter()
                 .map(|i| {
@@ -1861,6 +1971,7 @@ fn main() {
                     atlas: (source == ConfigSource::Atlas).then(|| atlas_fingerprint.clone()),
                     cross_trait_cost: Some(config.0.cross_trait_cost),
                     maintenance_cost_exponent: Some(config.0.maintenance_cost_exponent),
+                    leaching_rate: Some(config.0.leaching_rate),
                     seed_kin_kills,
                     tally,
                 },
@@ -2124,6 +2235,7 @@ fn summary(rows: &[Row], clusters: &Result<Vec<usize>, String>, baseline: Option
     retention(rows, &t.ext);
     charge_by_role(rows, &t.ext);
     mobile_autotrophy(rows, &t.ext);
+    leaching(rows);
 }
 
 /// The uptake scaling the rows ran at, each distinct value listed.
@@ -3926,6 +4038,262 @@ impl MobileTracker {
     }
 }
 
+/// The leaching rates the rows ran at, each distinct value listed.
+fn leaching_label(rows: &[Row]) -> String {
+    let mut seen: Vec<f32> = Vec::new();
+    for r in rows {
+        let l = r.leaching_rate.unwrap_or(0.0);
+        if !seen.contains(&l) {
+            seen.push(l);
+        }
+    }
+    let list: Vec<String> = seen.iter().map(|l| format!("{l}")).collect();
+    if list.is_empty() {
+        "–".into()
+    } else {
+        list.join(", ")
+    }
+}
+
+/// The settled half's first tick (the census's second half).
+fn settled_from(rows: &[Row]) -> u64 {
+    rows.first().map_or(1, |r| r.horizon / 2 + 1)
+}
+
+/// Which carcasses a reading keeps, by how they died.
+#[derive(Clone, Copy, PartialEq)]
+enum Deaths {
+    All,
+    /// Not drained while living in the step they died: a drainer must find
+    /// them.
+    Unbitten,
+    /// Drained while living in the step they died (mostly kills).
+    Bitten,
+}
+
+impl Deaths {
+    fn keeps(self, f: &explorers_search::leaching::CarcassFate) -> bool {
+        match self {
+            Deaths::All => true,
+            Deaths::Unbitten => !f.bitten,
+            Deaths::Bitten => f.bitten,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Deaths::All => "all carcasses",
+            Deaths::Unbitten => "not bitten to death",
+            Deaths::Bitten => "bitten to death",
+        }
+    }
+}
+
+fn first_drain_of(rows: &[Row], settled: bool, deaths: Deaths) -> FirstDrain {
+    let from = if settled { settled_from(rows) } else { 0 };
+    FirstDrain::of(
+        rows.iter()
+            .flat_map(|r| &r.tally.leach_runs)
+            .map(|run| (&run.carcasses[..], run.end_tick)),
+        |f| f.died >= from && deaths.keeps(f),
+    )
+}
+
+fn ticks_cell(x: Option<f64>) -> String {
+    x.map_or("–".into(), |v| format!("{v:.1}"))
+}
+
+fn rate_cell(x: Option<f64>) -> String {
+    x.map_or("–".into(), |v| format!("{v:.4}"))
+}
+
+/// Verdicts other than persisted and nutrient lockup, as `label n, …`.
+fn other_verdicts(r: &SweepReading) -> String {
+    let parts: Vec<String> = r
+        .outcomes
+        .iter()
+        .filter(|(k, _)| k.as_str() != "persisted" && k.as_str() != "nutrient_lockup")
+        .map(|(k, n)| format!("{k} {n}"))
+        .collect();
+    if parts.is_empty() {
+        "–".into()
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn frac_cell(x: Option<f64>) -> String {
+    x.map_or("–".into(), |v| format!("{v:.4}"))
+}
+
+/// M (#700): time to first drain, the proposed top of λ's range, and the
+/// sweep's quantities at the rows' λ.
+fn leaching(rows: &[Row]) {
+    println!("\n### M. Carcass leaching calibration (#700)\n");
+    let runs: Vec<&LeachRun> = rows.iter().flat_map(|r| &r.tally.leach_runs).collect();
+    if runs.is_empty() {
+        println!("No leaching readout on these rows (pre-#700).\n");
+        return;
+    }
+    let from = settled_from(rows);
+    println!(
+        "Leaching rate λ: {}. Carcasses formed in the run (`Died`), from death to the first bite any drainer takes (`Consumed` on the carcass), in ticks; an undrained carcass is censored at its run's end (the horizon or an early stop). Settled half: died at tick ≥ {from}. *Bitten to death*: drained while living in the step it died (a kill, or a death a drain hastened), whose drainer is usually on it already; the others a drainer has to find. Per-carcass rows: `tally.leach_runs[].carcasses` as `[died, drained | null, bitten]`.\n",
+        leaching_label(rows)
+    );
+    println!("#### M1. Time to first drain, pooled\n");
+    println!(
+        "| deaths | window | carcasses | drained | never drained % | p25 | median (t*) | p75 | p90 | Kaplan–Meier median (censored) |"
+    );
+    println!("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|");
+    let whole = first_drain_of(rows, false, Deaths::All);
+    let settled = first_drain_of(rows, true, Deaths::All);
+    let found = first_drain_of(rows, false, Deaths::Unbitten);
+    let found_settled = first_drain_of(rows, true, Deaths::Unbitten);
+    for deaths in [Deaths::All, Deaths::Unbitten, Deaths::Bitten] {
+        for (window, settled) in [("whole run", false), ("settled half", true)] {
+            let d = first_drain_of(rows, settled, deaths);
+            println!(
+                "| {} | {window} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                deaths.name(),
+                d.carcasses,
+                d.drained,
+                pct_of(d.never_share()),
+                ticks_cell(d.drained_quantile(0.25)),
+                ticks_cell(d.drained_quantile(0.5)),
+                ticks_cell(d.drained_quantile(0.75)),
+                ticks_cell(d.drained_quantile(0.9)),
+                ticks_cell(d.km_median()),
+            );
+        }
+    }
+    println!("\n#### M2. Proposed λ_max = ln 2 / t*\n");
+    println!("| reading | t* | λ_max |");
+    println!("|---|---:|---:|");
+    for (name, t) in [
+        (
+            "median over drained carcasses, whole run (#700's reading)",
+            whole.drained_quantile(0.5),
+        ),
+        (
+            "median over drained carcasses, settled half",
+            settled.drained_quantile(0.5),
+        ),
+        (
+            "Kaplan–Meier median, undrained censored, whole run",
+            whole.km_median(),
+        ),
+        (
+            "Kaplan–Meier median, undrained censored, settled half",
+            settled.km_median(),
+        ),
+        (
+            "not bitten to death: median over drained, whole run",
+            found.drained_quantile(0.5),
+        ),
+        (
+            "not bitten to death: median over drained, settled half",
+            found_settled.drained_quantile(0.5),
+        ),
+        (
+            "not bitten to death: Kaplan–Meier median, whole run",
+            found.km_median(),
+        ),
+        (
+            "not bitten to death: Kaplan–Meier median, settled half",
+            found_settled.km_median(),
+        ),
+    ] {
+        println!(
+            "| {name} | {} | {} |",
+            ticks_cell(t),
+            rate_cell(lambda_max(t))
+        );
+    }
+    println!("\n#### M3. Time to first drain per config\n");
+    println!(
+        "| config | runs | carcasses | bitten to death % | never drained % | t* whole | t* settled | KM median whole | KM median settled | t* not bitten | KM median not bitten |"
+    );
+    println!("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for r in rows {
+        let one = std::slice::from_ref(r);
+        let (w, st) = (
+            first_drain_of(one, false, Deaths::All),
+            first_drain_of(one, true, Deaths::All),
+        );
+        let (b, f) = (
+            first_drain_of(one, false, Deaths::Bitten),
+            first_drain_of(one, false, Deaths::Unbitten),
+        );
+        println!(
+            "| {}:{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            r.source,
+            r.config_index,
+            r.tally.leach_runs.len(),
+            w.carcasses,
+            pct_of((w.carcasses > 0).then(|| b.carcasses as f64 / w.carcasses as f64)),
+            pct_of(w.never_share()),
+            ticks_cell(w.drained_quantile(0.5)),
+            ticks_cell(st.drained_quantile(0.5)),
+            ticks_cell(w.km_median()),
+            ticks_cell(st.km_median()),
+            ticks_cell(f.drained_quantile(0.5)),
+            ticks_cell(f.km_median()),
+        );
+    }
+    let sweep = SweepReading::of(runs.iter().copied());
+    println!("\n#### M4. The sweep's quantities at this λ\n");
+    sweep_header();
+    sweep_line(&leaching_label(rows), &sweep, &whole, &found);
+    println!();
+}
+
+fn sweep_header() {
+    println!(
+        "| λ | runs | persisted | nutrient lockup | other verdicts | carcass-locked (gate window) | carcass-locked (settled mean) | leached % of carcass N out | leached %, settled | light-fed mixotroph % of settled carcass structure | t* | never drained % | t* not bitten | KM median not bitten |"
+    );
+    println!("|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+}
+
+fn sweep_line(label: &str, r: &SweepReading, d: &FirstDrain, found: &FirstDrain) {
+    println!(
+        "| {label} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+        r.runs,
+        r.count("persisted"),
+        r.count("nutrient_lockup"),
+        other_verdicts(r),
+        frac_cell(r.carcass_locked_tail),
+        frac_cell(r.carcass_locked_settled),
+        pct_of(r.nutrient.leached_share()),
+        pct_of(r.nutrient_settled.leached_share()),
+        pct_of(r.lfm_share_settled),
+        ticks_cell(d.drained_quantile(0.5)),
+        pct_of(d.never_share()),
+        ticks_cell(found.drained_quantile(0.5)),
+        ticks_cell(found.km_median()),
+    );
+}
+
+/// `--leaching-sweep a.jsonl,b.jsonl,…` (#700): M4's line per file, one
+/// file per λ, as one table.
+fn leaching_sweep(files: &[PathBuf]) {
+    println!("## Carcass leaching sweep (#700)\n");
+    println!(
+        "One line per rows file. Verdicts are the census's per seed; carcass-locked is the dead pool's share of conserved nutrient (the lockup gate's series), its trailing mean over the gate's window and its settled-half mean, averaged over runs; leached % is carcass nutrient out by leaching against drains; the light-fed mixotrophs' share is H's second-half bucket; t* is the median time to first drain over drained carcasses, whole run; *not bitten* keeps the carcasses not drained while living in the step they died (KM: undrained censored).\n"
+    );
+    sweep_header();
+    for f in files {
+        let rows: Vec<Row> = read_rows(f);
+        let runs = rows.iter().flat_map(|r| &r.tally.leach_runs);
+        let label = format!("{} ({})", leaching_label(&rows), f.display());
+        sweep_line(
+            &label,
+            &SweepReading::of(runs),
+            &first_drain_of(&rows, false, Deaths::All),
+            &first_drain_of(&rows, false, Deaths::Unbitten),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4211,9 +4579,53 @@ mod tests {
             atlas: atlas.map(str::to_string),
             cross_trait_cost: None,
             maintenance_cost_exponent: None,
+            leaching_rate: None,
             seed_kin_kills: Vec::new(),
             tally: Tally::new(),
         }
+    }
+
+    /// #700: section M's readings pool every seed's carcasses, censored at
+    /// that seed's end, split by window (settled half from T/2 + 1) and by
+    /// how the carcass died; rows from before #700 read back with none.
+    #[test]
+    fn leaching_readings_split_by_window_and_by_how_the_carcass_died() {
+        use explorers_search::leaching::CarcassFate;
+        let fate = |died, drained, bitten| CarcassFate {
+            died,
+            drained,
+            bitten,
+        };
+        let mut r = row(None, Some(0.0));
+        r.tally.leach_runs = vec![
+            LeachRun {
+                end_tick: 2000,
+                carcasses: vec![fate(10, Some(11), true), fate(1500, Some(1540), false)],
+                ..Default::default()
+            },
+            LeachRun {
+                end_tick: 900,
+                carcasses: vec![fate(800, None, false)],
+                ..Default::default()
+            },
+        ];
+        let rows = [r];
+        let all = first_drain_of(&rows, false, Deaths::All);
+        assert_eq!((all.carcasses, all.drained), (3, 2));
+        let settled = first_drain_of(&rows, true, Deaths::All);
+        assert_eq!(
+            (settled.carcasses, settled.drained_quantile(0.5)),
+            (1, Some(40.0))
+        );
+        let unbitten = first_drain_of(&rows, false, Deaths::Unbitten);
+        // 40 drained; 100 censored at its seed's end (900): S(40) = 1/2.
+        assert_eq!(unbitten.km_median(), Some(40.0));
+        assert_eq!(first_drain_of(&rows, false, Deaths::Bitten).carcasses, 1);
+
+        let mut json = serde_json::to_value(Tally::new()).unwrap();
+        json.as_object_mut().unwrap().remove("leach_runs").unwrap();
+        let back: Tally = serde_json::from_value(json).unwrap();
+        assert!(back.leach_runs.is_empty());
     }
 
     fn unit_atlas(units: &[f64]) -> AtlasUnits {
