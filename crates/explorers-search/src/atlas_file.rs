@@ -145,6 +145,7 @@ fn provenance(
                 seed,
                 max_ticks,
                 bloom_stop: None,
+                scoring: None,
             }),
             _ => Err(AtlasFileError::MissingProvenance),
         };
@@ -318,6 +319,7 @@ mod tests {
             seed: 7,
             max_ticks: 20,
             bloom_stop: None,
+            scoring: None,
         }));
         assert_eq!(
             serde_json::to_string(&reproject(&legacy, &given).unwrap().recipe).unwrap(),
@@ -333,6 +335,7 @@ mod tests {
             seed: 7,
             max_ticks: 20,
             bloom_stop: None,
+            scoring: None,
         }));
         let agreeing = ReprojectSettings {
             seed: Some(7),
@@ -482,6 +485,7 @@ mod tests {
                 seed: 7,
                 max_ticks: 20,
                 bloom_stop: None,
+                scoring: None,
             }))
         };
         let path = scratch("all-dead").join("atlas.json");
@@ -520,7 +524,7 @@ mod tests {
                         r.refined_fractions,
                         r.refined_decomposer_fraction,
                         r.refined_consumer_fraction,
-                        r.refined_median_fitness.to_bits(),
+                        r.refined_fitness.to_bits(),
                     )
                 })
                 .collect::<Vec<_>>()

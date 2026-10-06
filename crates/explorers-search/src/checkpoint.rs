@@ -17,8 +17,10 @@ use crate::qd::{Atlas, GenerationReport, QdConfig, SearchState};
 
 /// The checkpoint format version. Bump it whenever the written form of
 /// [`SearchState`] or the stamp changes; a checkpoint from any other version is
-/// refused rather than parsed.
-pub const SCHEMA_VERSION: u32 = 1;
+/// refused rather than parsed. Version 2 (#699): a cell's recorded fitness is
+/// the mean over its seeds, not the median seed's, so a version-1 archive
+/// cannot be continued without building a hybrid atlas.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Why a checkpoint could not be written or resumed from.
 #[derive(Debug)]
@@ -162,6 +164,9 @@ struct Stamp {
     /// Absent from a checkpoint written before #573, which ran without one.
     #[serde(default)]
     bloom_stop: Option<BloomStop>,
+    /// Absent from a checkpoint written before #699, which ran no top-up.
+    #[serde(default)]
+    top_up_screen: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -194,6 +199,7 @@ impl Stamp {
             early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
             carcass_seed_count: config.carcass_seed_count,
             bloom_stop: config.bloom_stop,
+            top_up_screen: config.top_up_screen,
         }
     }
 
@@ -224,7 +230,8 @@ impl Stamp {
             prefilter_crosscheck_fraction,
             early_stop_crosscheck_fraction,
             carcass_seed_count,
-            bloom_stop
+            bloom_stop,
+            top_up_screen
         );
         if self.ranges != invocation.ranges {
             out.push(match self.ranges.len() == invocation.ranges.len() {
@@ -563,6 +570,14 @@ mod tests {
                         tick: 300,
                         factor: 5.0,
                     }),
+                    ..tiny()
+                },
+                42,
+            ),
+            (
+                "top_up_screen",
+                QdConfig {
+                    top_up_screen: Some(1),
                     ..tiny()
                 },
                 42,
