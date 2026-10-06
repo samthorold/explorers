@@ -245,6 +245,7 @@ mod tests {
                 seed: 7,
                 max_ticks: 1500,
                 bloom_stop: None,
+                scoring: None,
             }),
             ..atlas()
         };

@@ -370,9 +370,40 @@ and the one world given to the player already gets that precision from refinemen
 search avoids paying for 10 seeds on a hopeless candidate is implementation. It may, for example,
 evaluate 5 and add the other 5 only to a candidate that could enter or replace an archive elite. But
 no cell's recorded fitness rests on fewer than 10 seeds, since a 5-seed estimate is the lucky draw
-this section exists to discount. *Current state: the search ranks on the median-fitness seed
-(`median_fitness` in `qd.rs`) of a 5-seed ensemble. Neither the mean nor the 10 seeds is implemented
-yet.*
+this section exists to discount.
+
+A live cell's descriptors come from its **median-fitness live seed**. The gated seeds score 0 and sit
+at the bottom of the fitness order, so the median of the whole ensemble can be a dead seed, or a live
+one well below the live seeds' typical world. The median of the live seeds is the world the cell is
+when it lives. A dead cell's descriptors are never read. "Most" is strictly more than half, so a 5–5
+split stays live and pays for its dead half in the mean. A dead cell is tallied on the cliff most of
+its dead seeds hit.
+
+Adaptive top-up is opt-in (`--top-up-screen 5`), not the default. A config's seeds roll out in
+parallel, so 10 seeds cost far less than twice the wall clock of 5, and the mean over 10 keeps a
+search inside the half hour this section budgets. Top-up saves only part of the remainder: a 5 + 5
+top-up runs as two sequential waves, each paying for its slowest seed. And its saving comes from
+deciding on the screen alone. A config whose screen is dead goes to the dead frontier on 5 seeds, and
+a live one is turned away on a 5-seed estimate — the lucky draw the mean over 10 exists to discount.
+No recorded cell rests on the screen, but the frontier and the emitter's signal do.
+
+*Current state (#699, 2026-10-06): the search scores a cell by the mean over a 10-seed ensemble
+(`config_eval_from_ensemble` and `SEARCH_ENSEMBLE_SIZE` in `qd.rs`). The atlas records its scoring as
+`provenance.scoring` (`mean_over_seeds`, the ensemble size, and the top-up screen when one ran). An
+atlas without it, the committed one (#677) included, was ranked on the median-fitness seed of 5. The
+committed atlas has not been re-searched under the mean; the next re-search (#686) will be.*
+*Measured (#699): re-reduced on the fragility audit's 10 seeds per cell (seeds 1000–1009, radius 0;
+[693-fragility-audit.md](../research/693-fragility-audit.md)), the committed atlas's 99 cells move
+from a median cell fitness of 0.130 under the median seed of the first 5 to 0.200 under the mean of
+10 (best 0.424 → 0.445; per-cell change median +0.014, median |Δ| 0.066, range −0.171 to +0.240).
+The ranking mostly holds (Spearman ρ 0.84 between the two reductions; 6 of the top 10 cells stay
+there), 1 cell goes dead and 2 come alive, and the recipe's cell (atlas:90) rises from 0.102 to 0.255.
+On 32 identical bootstrap configs at `T = 2000`, 10 seeds took 392 s against 280 s for 5 (×1.40),
+and 300 s with a 5-seed top-up screen (×1.07). A standard search (`--batch 32 --generations 10
+--max-ticks 2000`) is therefore expected at ~18–27 min from the 13–19 min it took at 5 seeds, or
+~14–20 min with top-up, and its dense-generation tail grows by the same factor. The top-up run's dead
+frontier matched the 5-seed run's exactly (5 lockup, 1 energy death), where the full 10 seeds read
+4 lockup and 1 bloom stop.*
 
 ## Authority boundary: the heterotroph guilds are reported, never optimised
 
@@ -467,16 +498,16 @@ A **further** reported per-seed distribution rides under the *same* boundary: th
 fraction** — the share of a cell's seed ensemble that lands in the coexisting regime (alive, and either
 clustering or coexisting; the `||` is the #359 small-N disjunction so clustering's silent zero below
 n≈4 does not under-count). Like the decomposer fraction it is recorded with the sample count and is
-**never** a behaviour axis nor a fitness term; the monoculture↔coexistence *axis* is still the median
-seed's `clustering_strength`. Note that a coexisting seed need not hold a guild: `coexistence_fraction`
+**never** a behaviour axis nor a fitness term; the monoculture↔coexistence *axis* is still the
+representative seed's `clustering_strength` (the median-fitness live seed). Note that a coexisting seed need not hold a guild: `coexistence_fraction`
 reads separated trait clusters, which one heterotrophy-dominant individual already supplies — the guild
 fractions are what say whether a second trophic *level* is present. What the fraction adds is visibility into how a cell's ensemble splits
 across the regime — the raw material the projection reads (below).
 
-Because each cell's elite is selected on a noisy median-over-seeds, a lucky elite can misrepresent its
+Because each cell's elite is selected on a noisy estimate over seeds, a lucky elite can misrepresent its
 cell. The archive tolerates this descriptor noise by design (a soft per-cell acceptance threshold rather
 than a single sticky occupant) rather than pretending each cell is a noise-free point. The coexistence
-fraction makes that noise *visible*: a cell whose median seed coexists on a lucky 5-seed draw but whose
+fraction makes that noise *visible*: a cell whose representative seed coexists on a lucky draw but whose
 ensemble mostly monocultures reads a low fraction, and the projection (below) now reads it.
 
 ## Predicted bifurcation coordinates and the cross-check
@@ -562,7 +593,7 @@ operationalizing CONTEXT.md's bar *"accepted only when most runs in the ensemble
 worlds"*). When no live cell clears the floor the projection **falls back to plain argmax-fitness**, so a
 live atlas always yields a world; the search warns when it had to.
 
-The why is #401: the 5-seed median that ranks cells is high-variance near the monoculture↔coexistence
+The why is #401: the 5-seed median that ranked cells then is high-variance near the monoculture↔coexistence
 bifurcation, so a **straddler** — a cell that coexists on only a minority of initial conditions — can win
 a lucky draw and top the leaderboard while its typical outcome is monoculture (the live #401 leader scored
 fitness 0.67 yet re-evaluated to median 0 over an independent 8-seed ensemble, coexisting on ~3/8 ICs).
@@ -572,12 +603,12 @@ honest. The atlas's honest stance is that *many* worlds across the manifold are 
 elite is reachable as a recipe, not only the projected one. "The best recipe" is one pick from a map, not
 the search's output.
 
-**Gated elite refinement hardens the pick (#404).** The floor above reads the *same* in-run 5-seed
+**Gated elite refinement hardens the pick (#404).** The floor above reads the *same* in-run
 ensemble that ranks the cell, and that estimate is itself high-variance near the bifurcation — so a lucky
-5-seed draw can both top the leaderboard *and* clear the floor (the #401 leader read 0.60 = 3/5 in-run yet
+draw can both top the leaderboard *and* clear the floor (the #401 leader read 0.60 = 3/5 in-run yet
 re-evaluated to ~3/8 over an independent draw). Before projecting, the search therefore **re-evaluates the
 top-K live cells** (K = `REFINE_TOP_K`, small) at a **larger, independent ensemble** (`REFINE_ENSEMBLE_SIZE`,
-≫ 5) and applies the floor to that **refined** fraction. The refinement seeds are deterministic but drawn
+≫ the search's 10) and applies the floor to that **refined** fraction. The refinement seeds are deterministic but drawn
 far above any seed the search used (offset `2^40`), so the re-evaluation is an *independent* draw, not a
 re-read of the in-run seeds, and a fixed `(atlas, seed)` refines bit-reproducibly. The pick is the
 highest **recorded**-fitness top-K cell whose refined fraction clears the floor; it falls back to plain

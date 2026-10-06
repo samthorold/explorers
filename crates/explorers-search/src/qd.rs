@@ -34,7 +34,7 @@
 //! solution is accepted into a cell when its fitness clears that threshold (not
 //! merely the sitting elite), and the threshold is then nudged toward the new
 //! fitness by an archive learning rate. This tolerates the descriptor noise the
-//! design names (a cell's elite is a noisy median-over-seeds) instead of letting
+//! design names (a cell's elite is a noisy mean-over-seeds) instead of letting
 //! one lucky draw stick (genesis-search.md, "soft per-cell acceptance threshold").
 //!
 //! ## Covariance-adapting emitter
@@ -130,18 +130,20 @@ pub fn cell_of(d: &Descriptors) -> (usize, usize, usize) {
     (bin(d.oscillation), bin(d.clustering), bin(d.carcass))
 }
 
-/// One config's ensemble verdict, reduced exactly as the incumbent reduced
-/// (median fitness over the seed ensemble). The median-fitness seed decides
-/// dead-vs-live and supplies the descriptors; the decomposer fraction is the
-/// share of the ensemble that sprouted a persistent guild.
+/// One config's ensemble verdict (#699). Its fitness is the expected fitness
+/// over the seed ensemble — the mean of the seeds' fitness, a gated seed
+/// scoring 0. The majority of seeds decides dead-vs-live, and the
+/// median-fitness live seed supplies the descriptors; the decomposer fraction
+/// is the share of the ensemble that sprouted a persistent guild.
 #[derive(Clone, Debug)]
 pub struct ConfigEval {
-    pub median_fitness: f32,
-    /// `Some(cliff)` if the median-fitness seed is gated (→ dead frontier),
-    /// `None` if it is a live world (→ a behaviour cell).
+    /// The mean of the seeds' fitness, a gated seed scoring 0.
+    pub fitness: f32,
+    /// `Some(cliff)` if most seeds are gated (→ dead frontier, on the cliff
+    /// most of them hit), `None` if it is a live world (→ a behaviour cell).
     pub cliff: Option<Cliff>,
-    /// Descriptors of the median-fitness seed (meaningful only when `cliff` is
-    /// `None`).
+    /// Descriptors of the median-fitness live seed (meaningful only when
+    /// `cliff` is `None`).
     pub descriptors: Descriptors,
     /// Fraction of the ensemble whose seed read a decomposer guild — a sustained,
     /// recruiting population (`has_decomposer_guild`, #490). A reported
@@ -163,7 +165,7 @@ pub struct ConfigEval {
     pub heterotroph_shares: Vec<HeterotrophShares>,
     /// The per-cell sample count (the seed-ensemble size).
     pub sample_count: u32,
-    /// Observed coexistence duration of the median seed
+    /// Observed coexistence duration of the representative seed
     /// ([`FitnessBreakdown::coexistence_duration`]) — carried only to tag the
     /// branching cross-check's regime (the #359 small-N borderline signature).
     pub coexistence_duration: f32,
@@ -282,10 +284,34 @@ impl CoexistenceFractions {
     }
 }
 
+/// The cliff a config is dead on, or `None` if it is live (#699). Live or dead
+/// stays with the majority of its seeds: a config is on a cliff when *most*
+/// of its seeds fall off — strictly more than half, so an even split stays
+/// live — and it is tallied on the cliff most of its dead seeds hit, a tie
+/// going to the cliff first in [`Cliff`]'s order.
+fn majority_cliff(run_results: &[RunResult]) -> Option<Cliff> {
+    let mut tally: std::collections::BTreeMap<Cliff, usize> = std::collections::BTreeMap::new();
+    for f in run_results.iter().filter_map(|r| r.failure.as_ref()) {
+        *tally.entry(Cliff::from_failure(f)).or_insert(0) += 1;
+    }
+    let dead: usize = tally.values().sum();
+    if 2 * dead <= run_results.len() {
+        return None;
+    }
+    // `max_by_key` keeps the last of equal maxima; reversing the ascending
+    // order makes that the first cliff in `Cliff`'s order.
+    tally
+        .into_iter()
+        .rev()
+        .max_by_key(|&(_, n)| n)
+        .map(|(cliff, _)| cliff)
+}
+
 /// Reduce a `run_ensemble` result to a [`ConfigEval`], reading the three axes and
 /// the decomposer signal off the per-seed [`FitnessBreakdown`] — no `run_single`
-/// mirror. The median-fitness seed (lower-middle for an even ensemble) is the
-/// representative, matching the incumbent's median reduction.
+/// mirror. Fitness is the mean over seeds with gated seeds at 0, live-or-dead
+/// is the majority's ([`majority_cliff`]), and the median-fitness live seed is
+/// the representative (#699).
 pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
     let sample_count = result.run_results.len() as u32;
     let seed_fraction = |read: fn(&FitnessBreakdown) -> bool| {
@@ -313,19 +339,11 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
         .filter_map(|r| r.breakdown.heterotroph_shares)
         .collect();
 
-    // Order the seeds by fitness; the lower-middle element is the representative
-    // (the median seed). An empty ensemble degenerates to a zero-fitness extinct
-    // verdict so the archive simply ignores it.
-    let mut idx: Vec<usize> = (0..result.run_results.len()).collect();
-    idx.sort_by(|&a, &b| {
-        result.run_results[a]
-            .fitness
-            .partial_cmp(&result.run_results[b].fitness)
-            .unwrap()
-    });
-    if idx.is_empty() {
+    // An empty ensemble degenerates to a zero-fitness extinct verdict so the
+    // archive simply ignores it.
+    if result.run_results.is_empty() {
         return ConfigEval {
-            median_fitness: 0.0,
+            fitness: 0.0,
             cliff: Some(Cliff::Extinction),
             descriptors: Descriptors {
                 oscillation: 0.0,
@@ -343,10 +361,34 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
             early_stop_crosscheck: EarlyStopCrosscheck::default(),
         };
     }
-    let rep = &result.run_results[idx[idx.len() / 2]];
+    // The cell's fitness is its expected fitness over the ensemble: the mean of
+    // its seeds' fitness, a gated seed scoring 0 (#699).
+    let seed_fitness = |r: &RunResult| if r.failure.is_some() { 0.0 } else { r.fitness };
+    let fitness = result.run_results.iter().map(seed_fitness).sum::<f32>() / sample_count as f32;
+    let cliff = majority_cliff(&result.run_results);
+    // The representative seed supplies the descriptors: the median-fitness
+    // live seed (the upper-middle for an even count, ties in seed order). A
+    // dead config's descriptors are never read; it takes the first seed on
+    // its cliff, whose gated descriptors are zero.
+    let rep = match cliff {
+        None => {
+            let mut live: Vec<&RunResult> = result
+                .run_results
+                .iter()
+                .filter(|r| r.failure.is_none())
+                .collect();
+            live.sort_by(|a, b| a.fitness.partial_cmp(&b.fitness).unwrap());
+            live[live.len() / 2]
+        }
+        Some(c) => result
+            .run_results
+            .iter()
+            .find(|r| r.failure.as_ref().map(Cliff::from_failure) == Some(c))
+            .expect("a dead config has a seed on its cliff"),
+    };
     ConfigEval {
-        median_fitness: rep.fitness,
-        cliff: rep.failure.as_ref().map(Cliff::from_failure),
+        fitness,
+        cliff,
         descriptors: Descriptors {
             oscillation: rep.breakdown.oscillation_strength,
             clustering: rep.breakdown.clustering_strength,
@@ -455,7 +497,7 @@ impl Archive {
                         self.cells.insert(
                             cell,
                             CellRecord {
-                                fitness: eval.median_fitness,
+                                fitness: eval.fitness,
                                 descriptors: eval.descriptors,
                                 unit: unit.to_vec(),
                                 decomposer_fraction: eval.decomposer_fraction,
@@ -465,22 +507,22 @@ impl Archive {
                                 sample_count: eval.sample_count,
                                 predicted_oscillation_distance: eval.predicted_oscillation_distance,
                                 predicted_branching_distance: eval.predicted_branching_distance,
-                                threshold: eval.median_fitness,
+                                threshold: eval.fitness,
                             },
                         );
-                        eval.median_fitness.max(0.0)
+                        eval.fitness.max(0.0)
                     }
                     Some(rec) => {
-                        let improvement = eval.median_fitness - rec.threshold;
+                        let improvement = eval.fitness - rec.threshold;
                         if improvement > 0.0 {
                             // Soft acceptance: clears the rolling threshold. Raise
                             // the threshold toward the accepted fitness; replace the
                             // sitting elite if this also beats it (the elite tracks
                             // the best seen, the threshold lags it by α).
                             rec.threshold +=
-                                self.archive_learning_rate * (eval.median_fitness - rec.threshold);
-                            if eval.median_fitness > rec.fitness {
-                                rec.fitness = eval.median_fitness;
+                                self.archive_learning_rate * (eval.fitness - rec.threshold);
+                            if eval.fitness > rec.fitness {
+                                rec.fitness = eval.fitness;
                                 rec.descriptors = eval.descriptors;
                                 rec.unit = unit.to_vec();
                                 rec.decomposer_fraction = eval.decomposer_fraction;
@@ -501,6 +543,19 @@ impl Archive {
                 }
             }
         }
+    }
+
+    /// Whether a config with this (screen) eval could enter or replace an
+    /// archive elite — the adaptive top-up's gate (#699).
+    /// A dead config enters no cell; a live one enters an empty cell, or an
+    /// occupied one whose acceptance threshold it clears, as [`Archive::insert`]
+    /// would accept it.
+    pub fn could_enter(&self, eval: &ConfigEval) -> bool {
+        eval.cliff.is_none()
+            && self
+                .cells
+                .get(&cell_of(&eval.descriptors))
+                .is_none_or(|rec| eval.fitness > rec.threshold)
     }
 
     /// Filled-cell count.
@@ -802,10 +857,10 @@ fn crosscheck_disagreement(
     rollout: &ConfigEval,
     unit: &[f64],
 ) -> Option<PrefilterDisagreement> {
-    if rollout.cliff.is_none() && rollout.median_fitness > 0.0 {
+    if rollout.cliff.is_none() && rollout.fitness > 0.0 {
         Some(PrefilterDisagreement {
             predicted_cliff: predicted.label().to_string(),
-            observed_fitness: rollout.median_fitness,
+            observed_fitness: rollout.fitness,
             unit: unit.to_vec(),
         })
     } else {
@@ -822,7 +877,7 @@ fn crosscheck_disagreement(
 pub struct PrefilterDisagreement {
     /// The cliff the prefilter predicted (the gate that fired).
     pub predicted_cliff: String,
-    /// The median fitness the cross-check rollout actually observed.
+    /// The fitness (mean over seeds) the cross-check rollout actually observed.
     pub observed_fitness: f32,
     /// The unit-cube point that disagreed.
     pub unit: Vec<f64>,
@@ -1061,6 +1116,33 @@ pub struct AtlasProvenance {
     /// never applies it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bloom_stop: Option<BloomStop>,
+    /// How the search scored its cells (#699). `None` on an atlas written
+    /// before it was recorded, which ranked each cell on its median-fitness
+    /// seed over the ensemble its cells' `sample_count` gives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scoring: Option<Scoring>,
+}
+
+/// How a search reduced each config's seed ensemble to a cell fitness (#699).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Scoring {
+    pub aggregation: Aggregation,
+    /// Seeds behind each recorded cell fitness.
+    pub ensemble_size: u32,
+    /// The adaptive top-up's screen ([`QdConfig::top_up_screen`]), absent
+    /// when every config rolled out the whole ensemble.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_up_screen: Option<u32>,
+}
+
+/// The reduction over seeds a cell's fitness is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Aggregation {
+    /// The fitness of the median-fitness seed: every atlas before #699.
+    MedianSeed,
+    /// The mean of the seeds' fitness, a gated seed scoring 0 (#699).
+    MeanOverSeeds,
 }
 
 /// The search's default [`BloomStop`] (#573), owned by the evaluator beside
@@ -1232,7 +1314,7 @@ fn recipe_from_unit(unit: &[f64], ranges: &[ParameterRange], max_ticks: u64) -> 
 pub const REFINE_TOP_K: usize = 10;
 
 /// Default refinement ensemble size: the larger, independent draw that hardens the
-/// high-variance in-run n=5 estimate the floor reads (#404). 32 ≫ the 5-seed search
+/// high-variance in-run estimate the floor reads (#404). 32 ≫ the 10-seed search
 /// ensemble. It is sized as a *separator*, not an estimator (#434,
 /// `docs/research/434-ensemble-confidence.md`): the fixed rule `k/n ≥ 0.5` at n=32
 /// tells a straddler at p=0.35 (the #401 leader re-read ~3/8) from a robust cell at
@@ -1261,7 +1343,7 @@ pub struct RefinedCell {
     /// The cell's recorded (atlas) elite fitness — the ranking authority, untouched
     /// by refinement.
     pub recorded_fitness: f32,
-    /// The in-run coexistence fraction (the high-variance n=5 estimate the floor
+    /// The in-run coexistence fraction (the high-variance in-run estimate the floor
     /// read before #404).
     pub recorded_coexistence_fraction: f32,
     /// The refined coexistence fraction over the larger independent ensemble,
@@ -1273,9 +1355,10 @@ pub struct RefinedCell {
     pub refined_decomposer_fraction: f32,
     /// The consumer twin of `refined_decomposer_fraction`.
     pub refined_consumer_fraction: f32,
-    /// The refined median fitness over the larger ensemble (reported for audit;
-    /// never the ranking key — that stays the recorded fitness).
-    pub refined_median_fitness: f32,
+    /// The refined fitness (the mean over seeds, gated seeds at 0) over the
+    /// larger ensemble — reported for audit; never the ranking key, which
+    /// stays the recorded fitness.
+    pub refined_fitness: f32,
     /// The finished refinement seeds behind the refined fraction.
     pub refined_sample_count: u32,
     /// Refinement seeds that exhausted a wall-clock budget (#562), excluded
@@ -1290,7 +1373,7 @@ pub struct RefinedCell {
 /// What the refinement reads off one cell's larger ensemble.
 struct RefinedEval {
     fractions: CoexistenceFractions,
-    median_fitness: f32,
+    fitness: f32,
     sample_count: u32,
     unfinished: usize,
     decomposer_fraction: f32,
@@ -1399,7 +1482,7 @@ fn project_with_refinement(
                 refined_fractions: eval.fractions,
                 refined_decomposer_fraction: eval.decomposer_fraction,
                 refined_consumer_fraction: eval.consumer_fraction,
-                refined_median_fitness: eval.median_fitness,
+                refined_fitness: eval.fitness,
                 refined_sample_count: eval.sample_count,
                 refined_unfinished: eval.unfinished,
                 clears_floor: eval.fractions.under(floor) >= COEXISTENCE_FLOOR,
@@ -1430,7 +1513,7 @@ fn project_with_refinement(
 
 /// Re-evaluate the atlas's top-K live cells at the larger refinement ensemble and
 /// project the recipe from the highest-fitness cell that clears the refined
-/// coexistence floor (#404). Hardens the high-variance in-run n=5 estimate that
+/// coexistence floor (#404). Hardens the high-variance in-run estimate that
 /// both fitness and the floor depend on, using deterministic seeds disjoint from
 /// the search's (see [`REFINEMENT_SEED_OFFSET`]). Selection only — never rewrites
 /// the atlas map's binning or per-cell fitness (genesis-search.md, the authority
@@ -1476,7 +1559,7 @@ pub fn refined_best_recipe(
             let eval = config_eval_from_ensemble(&result);
             RefinedEval {
                 fractions: CoexistenceFractions::of_seeds(&result.run_results),
-                median_fitness: eval.median_fitness,
+                fitness: eval.fitness,
                 sample_count: eval.sample_count,
                 unfinished: result.unfinished,
                 decomposer_fraction: eval.decomposer_fraction,
@@ -1534,6 +1617,13 @@ pub struct QdConfig {
     /// `bloom_stop`, and the early-stop cross-check carries a sample of
     /// them. The refinement never applies it.
     pub bloom_stop: Option<BloomStop>,
+    /// Adaptive top-up (#699): `Some(k)` rolls out each config's first `k`
+    /// seeds as a screen and the rest of the ensemble only for a config the
+    /// screen says could enter or replace an archive elite
+    /// ([`Archive::could_enter`]). A screened-out config is never recorded
+    /// in a cell, so every recorded cell still rests on the whole ensemble.
+    /// `None` (the default) rolls out the whole ensemble for every config.
+    pub top_up_screen: Option<u32>,
 }
 
 /// The search's and the refinement's default [`RolloutBudget`] (#562):
@@ -1545,6 +1635,13 @@ pub const SEARCH_ROLLOUT_BUDGET: RolloutBudget = RolloutBudget {
     evaluation: std::time::Duration::from_secs(DEFAULT_SEARCH_TIMEOUT_SECS),
 };
 
+/// The search's seed ensemble (#699): a cell's recorded fitness, the mean
+/// over its seeds, rests on 10 of them. The mean's standard error at the
+/// committed atlas's seed-to-seed sd (~0.15) is ~0.047, against ~0.067 at 5
+/// (genesis-search.md, *Genesis selects for worlds that are sensible across
+/// initial conditions*).
+pub const SEARCH_ENSEMBLE_SIZE: u32 = 10;
+
 /// Both halves of [`SEARCH_ROLLOUT_BUDGET`], in seconds.
 pub const DEFAULT_SEARCH_TIMEOUT_SECS: u64 = 600;
 
@@ -1553,6 +1650,18 @@ fn is_zero(n: &usize) -> bool {
 }
 
 impl QdConfig {
+    /// The search's rollout of `ensemble_size` seeds.
+    pub fn ensemble_config(&self, ensemble_size: u32) -> EnsembleConfig {
+        EnsembleConfig {
+            ensemble_size,
+            run_config: RunConfig {
+                max_ticks: self.max_ticks,
+                eval_config: self.eval_config(),
+                early_stop_crosscheck_fraction: self.early_stop_crosscheck_fraction,
+            },
+        }
+    }
+
     /// The evaluator the search's rollouts run: the evaluator's defaults with
     /// this search's bloom stop. With the default [`QdConfig`] it is
     /// [`EvalConfig::search`], the one the app's verdict panel reads with.
@@ -1568,7 +1677,7 @@ impl Default for QdConfig {
     fn default() -> Self {
         QdConfig {
             ranges: default_ranges(),
-            ensemble_size: 5,
+            ensemble_size: SEARCH_ENSEMBLE_SIZE,
             max_ticks: 2000,
             batch: 32,
             generations: 10,
@@ -1579,6 +1688,7 @@ impl Default for QdConfig {
             carcass_seed_count: 2,
             rollout_budget: SEARCH_ROLLOUT_BUDGET,
             bloom_stop: Some(DEFAULT_BLOOM_STOP),
+            top_up_screen: None,
         }
     }
 }
@@ -1652,6 +1762,66 @@ fn clock(d: std::time::Duration) -> String {
     } else {
         format!("{s}s")
     }
+}
+
+/// Roll out one config's seed ensemble from `seed` and reduce it to a
+/// [`ConfigEval`], returning it with the count of seeds that exhausted their
+/// budget. `None` when no seed finished (#562): such a config has no verdict.
+///
+/// With [`QdConfig::top_up_screen`] set, the screen's seeds run first and the
+/// rest of the ensemble only when `could_enter` accepts the screen's eval
+/// (#699). The top-up rolls out seeds `seed + k ..`, so a topped-up config is
+/// scored on exactly the seeds the whole ensemble rolls out.
+fn roll_out(
+    config: &QdConfig,
+    unit: &[f64],
+    seed: u64,
+    could_enter: impl Fn(&ConfigEval) -> bool,
+) -> (Option<ConfigEval>, usize) {
+    let (wp, dist) = decode(unit, &config.ranges);
+    let run = |size: u32, from: u64| {
+        run_ensemble_within(
+            &wp,
+            &dist,
+            &config.ensemble_config(size),
+            from,
+            config.rollout_budget,
+        )
+    };
+    let screen = config
+        .top_up_screen
+        .filter(|&k| k < config.ensemble_size)
+        .unwrap_or(config.ensemble_size);
+    let mut result = run(screen, seed);
+    if screen < config.ensemble_size
+        && !result.run_results.is_empty()
+        && could_enter(&config_eval_from_ensemble(&result))
+    {
+        let rest = run(
+            config.ensemble_size - screen,
+            seed.wrapping_add(screen as u64),
+        );
+        result.run_results.extend(rest.run_results);
+        result.unfinished += rest.unfinished;
+    }
+    // A config no seed finished has no verdict (#562): it is placed nowhere,
+    // and only its unfinished seeds count.
+    if result.run_results.is_empty() {
+        return (None, result.unfinished);
+    }
+    let mut eval = config_eval_from_ensemble(&result);
+    // The early-stop cross-check rides on every rolled-out ensemble: seeds a
+    // dead-pool gate stopped that the carry took to the horizon are compared,
+    // and a stopped-dead / alive-at-T disagreement is surfaced (#506). The
+    // verdict the archive sees is unchanged by the carry.
+    eval.early_stop_crosscheck = early_stop_crosscheck(&result, unit);
+    // Predicted bifurcation coordinates — a closed-form reading of the decoded
+    // `(WorldParameters, founder mean)`, negligible vs the rollout (~5–10 ms vs
+    // ~0.85 s). Surfaced only for live cells; a gated cross-check rollout
+    // discards them.
+    eval.predicted_oscillation_distance = oscillation_distance(&wp, &dist.mean_traits);
+    eval.predicted_branching_distance = branching_distance(&wp, &dist.mean_traits);
+    (Some(eval), result.unfinished)
 }
 
 /// Run the QD outer search and return the illuminated [`Atlas`]. Reuses
@@ -1751,15 +1921,6 @@ impl<R: Rng> SearchState<R> {
         observer: &mut impl FnMut(&GenerationReport),
         boundary: &mut impl FnMut(&Self) -> Result<(), E>,
     ) -> Result<Atlas, E> {
-        let ensemble_config = EnsembleConfig {
-            ensemble_size: config.ensemble_size,
-            run_config: RunConfig {
-                max_ticks: config.max_ticks,
-                eval_config: config.eval_config(),
-                early_stop_crosscheck_fraction: config.early_stop_crosscheck_fraction,
-            },
-        };
-
         // Wall-clock for the per-generation report only (#529); never read by the
         // search. A resumed search counts from the resume.
         let started = std::time::Instant::now();
@@ -1768,8 +1929,7 @@ impl<R: Rng> SearchState<R> {
         while self.generation <= config.generations {
             let generation = self.generation;
             let unfinished_before = self.rollouts_unfinished;
-            let (improvements, rolled_out, skipped) =
-                self.evaluate_batch(config, base_seed, &ensemble_config);
+            let (improvements, rolled_out, skipped) = self.evaluate_batch(config, base_seed);
 
             if generation < config.generations {
                 // Adapt the emitter toward the improvers, then emit the next batch.
@@ -1803,6 +1963,11 @@ impl<R: Rng> SearchState<R> {
             seed: base_seed,
             max_ticks: config.max_ticks,
             bloom_stop: config.bloom_stop,
+            scoring: Some(Scoring {
+                aggregation: Aggregation::MeanOverSeeds,
+                ensemble_size: config.ensemble_size,
+                top_up_screen: config.top_up_screen,
+            }),
         });
         atlas.search_box = Some(config.ranges.clone());
         Ok(atlas)
@@ -1811,12 +1976,7 @@ impl<R: Rng> SearchState<R> {
     /// Evaluate the current batch and route every config into the archive, the
     /// frontier and the cross-check tallies. Returns the emitter's improvement
     /// signal and `(rolled_out, skipped)` for the generation's report.
-    fn evaluate_batch(
-        &mut self,
-        config: &QdConfig,
-        base_seed: u64,
-        ensemble_config: &EnsembleConfig,
-    ) -> (Vec<f32>, usize, usize) {
+    fn evaluate_batch(&mut self, config: &QdConfig, base_seed: u64) -> (Vec<f32>, usize, usize) {
         let skipped_before = self.rollouts_skipped;
         // Distinct per-config ensemble base seeds, derived from a monotonic config
         // counter so evaluation order is immaterial (each config's seed is fixed).
@@ -1852,6 +2012,7 @@ impl<R: Rng> SearchState<R> {
         // Run only the rollouts that are actually needed: cleared configs, and the
         // gated configs sampled for the cross-check. Gated-and-skipped configs run
         // no sim — that is the saved budget.
+        let archive = &self.archive;
         let evals: Vec<(Option<ConfigEval>, usize)> = self
             .batch
             .iter()
@@ -1861,34 +2022,13 @@ impl<R: Rng> SearchState<R> {
                 if cliff.is_some() && !crosscheck {
                     (None, 0)
                 } else {
-                    let (wp, dist) = decode(unit, &config.ranges);
-                    let result = run_ensemble_within(
-                        &wp,
-                        &dist,
-                        ensemble_config,
-                        seed,
-                        config.rollout_budget,
-                    );
-                    // A config no seed finished has no verdict (#562): it is
-                    // placed nowhere, and only its unfinished seeds count.
-                    if result.run_results.is_empty() {
-                        return (None, result.unfinished);
-                    }
-                    let mut eval = config_eval_from_ensemble(&result);
-                    // The early-stop cross-check rides on every rolled-out
-                    // ensemble: seeds a dead-pool gate stopped that the carry
-                    // took to the horizon are compared, and a stopped-dead /
-                    // alive-at-T disagreement is surfaced (#506). The verdict
-                    // the archive sees is unchanged by the carry.
-                    eval.early_stop_crosscheck = early_stop_crosscheck(&result, unit);
-                    // Predicted bifurcation coordinates — a closed-form reading of
-                    // the decoded `(WorldParameters, founder mean)`, negligible vs
-                    // the rollout (~5–10 ms vs ~0.85 s). Surfaced only for live
-                    // cells; a gated cross-check rollout discards them.
-                    eval.predicted_oscillation_distance =
-                        oscillation_distance(&wp, &dist.mean_traits);
-                    eval.predicted_branching_distance = branching_distance(&wp, &dist.mean_traits);
-                    (Some(eval), result.unfinished)
+                    // A gated config never enters the archive, so its
+                    // cross-check rollout is never topped up. The screen is
+                    // read against the archive as it stood before this
+                    // batch, so evaluation order is immaterial.
+                    roll_out(config, unit, seed, |screen| {
+                        cliff.is_none() && archive.could_enter(screen)
+                    })
                 }
             })
             .collect();
@@ -2065,7 +2205,7 @@ mod tests {
 
     fn live(fitness: f32, d: Descriptors) -> ConfigEval {
         ConfigEval {
-            median_fitness: fitness,
+            fitness: fitness,
             cliff: None,
             descriptors: d,
             decomposer_fraction: 0.0,
@@ -2367,6 +2507,63 @@ mod tests {
             restored.insert(&[0.52; 3], &next),
             archive.insert(&[0.52; 3], &next)
         );
+    }
+
+    #[test]
+    fn a_topped_up_config_is_scored_on_exactly_its_ensembles_seeds() {
+        // Adaptive top-up (#699): the screen rolls out the ensemble's first
+        // seeds and the top-up the rest, so a topped-up config is scored on
+        // the very seeds the whole ensemble would have rolled out — the
+        // ensemble's seeds are deterministic in the config's base seed.
+        let config = QdConfig {
+            ensemble_size: 4,
+            top_up_screen: Some(2),
+            max_ticks: 30,
+            ..Default::default()
+        };
+        let unit = vec![0.5; config.ranges.len()];
+        let (wp, dist) = decode(&unit, &config.ranges);
+        let whole = config_eval_from_ensemble(&run_ensemble_within(
+            &wp,
+            &dist,
+            &config.ensemble_config(4),
+            1000,
+            config.rollout_budget,
+        ));
+
+        let (topped, unfinished) = roll_out(&config, &unit, 1000, |_| true);
+        let topped = topped.expect("every seed finishes");
+        assert_eq!(unfinished, 0);
+        assert_eq!(topped.sample_count, 4);
+        assert_eq!(topped.fitness.to_bits(), whole.fitness.to_bits());
+        assert_eq!(topped.cliff, whole.cliff);
+        assert_eq!(
+            topped.descriptors.clustering.to_bits(),
+            whole.descriptors.clustering.to_bits()
+        );
+
+        // A config the screen rules out of the archive is never topped up.
+        let (screened, _) = roll_out(&config, &unit, 1000, |_| false);
+        assert_eq!(screened.unwrap().sample_count, 2);
+    }
+
+    #[test]
+    fn the_screen_tops_up_only_a_config_that_could_enter_or_replace_an_elite() {
+        let mut archive = Archive::new(0.0);
+        let d = descr(0.1, 0.1, 0.1);
+        // An empty cell takes any live config.
+        assert!(archive.could_enter(&live(0.2, d)));
+        archive.insert(&[0.1; 3], &live(0.4, d));
+        // An occupied cell takes one that clears its acceptance threshold.
+        assert!(archive.could_enter(&live(0.5, d)));
+        assert!(!archive.could_enter(&live(0.4, d)));
+        assert!(!archive.could_enter(&live(0.3, d)));
+        // A screen most of whose seeds die enters no cell.
+        let dead = ConfigEval {
+            cliff: Some(Cliff::Monoculture),
+            ..live(0.9, descr(0.9, 0.9, 0.9))
+        };
+        assert!(!archive.could_enter(&dead));
     }
 
     #[test]
@@ -2687,6 +2884,38 @@ mod tests {
     }
 
     #[test]
+    fn slow_a_topped_up_search_records_every_cell_on_the_whole_ensemble() {
+        // Adaptive top-up (#699): a screened-out config is never recorded, so
+        // every recorded cell rests on the whole ensemble, and the search
+        // stays bit-reproducible. `slow_` — it steps real sims.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let config = QdConfig {
+            ensemble_size: 4,
+            top_up_screen: Some(2),
+            max_ticks: 60,
+            batch: 8,
+            generations: 2,
+            ..QdConfig::default()
+        };
+        let atlas = run_qd(&config, 42, &mut ChaCha8Rng::seed_from_u64(42));
+        assert!(!atlas.cells.is_empty(), "the smoke search fills a cell");
+        for cell in &atlas.cells {
+            assert_eq!(cell.sample_count, 4, "cell {:?}", cell.cell);
+        }
+        assert_eq!(
+            atlas.provenance.unwrap().scoring.unwrap().top_up_screen,
+            Some(2)
+        );
+        let again = run_qd(&config, 42, &mut ChaCha8Rng::seed_from_u64(42));
+        assert_eq!(
+            serde_json::to_string(&atlas).unwrap(),
+            serde_json::to_string(&again).unwrap()
+        );
+    }
+
+    #[test]
     fn slow_run_qd_produces_an_atlas_reproducibly() {
         // End-to-end tracer bullet: a tiny QD search illuminates into an Atlas,
         // routing every config to either a live cell or the dead frontier, and is
@@ -2920,9 +3149,9 @@ mod tests {
             eval.cliff
         );
         assert!(
-            eval.median_fitness > 0.0,
+            eval.fitness > 0.0,
             "the known-viable midpoint should score positive fitness, got {}",
-            eval.median_fitness
+            eval.fitness
         );
     }
 
@@ -3251,6 +3480,102 @@ mod tests {
         assert_eq!(d.unit, unit);
     }
 
+    fn ensemble(run_results: Vec<RunResult>) -> EnsembleResult {
+        EnsembleResult {
+            median_fitness: 0.0,
+            run_results,
+            unfinished: 0,
+        }
+    }
+
+    #[test]
+    fn a_cell_scores_its_mean_fitness_over_seeds_with_dead_seeds_as_zero() {
+        // genesis-search.md, *Genesis selects for worlds that are sensible
+        // across initial conditions*: alive on 3 of 5 seeds at 0.30, dead on
+        // 2, the cell scores 0.18 and stays live.
+        let eval = config_eval_from_ensemble(&ensemble(vec![
+            run_result(0.3, None, 0.4, 8.0),
+            run_result(0.0, Some(FailureMode::Monoculture), 0.0, 0.0),
+            run_result(0.3, None, 0.4, 8.0),
+            run_result(0.0, Some(FailureMode::Extinction), 0.0, 0.0),
+            run_result(0.3, None, 0.4, 8.0),
+        ]));
+        assert!((eval.fitness - 0.18).abs() < 1e-6, "{}", eval.fitness);
+        assert_eq!(eval.cliff, None);
+    }
+
+    #[test]
+    fn a_cell_most_of_whose_seeds_die_is_dead_on_the_majoritys_cliff() {
+        // Live or dead stays with the majority of seeds: three of five fall
+        // off, two of them on lockup, so the cell is dead on lockup — whatever
+        // the median-fitness seed happens to be.
+        let eval = config_eval_from_ensemble(&ensemble(vec![
+            run_result(0.0, Some(FailureMode::NutrientLockup), 0.0, 0.0),
+            run_result(0.0, Some(FailureMode::NutrientLockup), 0.0, 0.0),
+            run_result(0.0, Some(FailureMode::Monoculture), 0.0, 0.0),
+            run_result(0.9, None, 0.4, 8.0),
+            run_result(0.9, None, 0.4, 8.0),
+        ]));
+        assert_eq!(eval.cliff, Some(Cliff::NutrientLockup));
+        assert!((eval.fitness - 0.36).abs() < 1e-6, "{}", eval.fitness);
+    }
+
+    #[test]
+    fn the_search_scores_a_cell_on_ten_seeds_by_default() {
+        // genesis-search.md: a cell's recorded fitness rests on 10 seeds.
+        assert_eq!(QdConfig::default().ensemble_size, 10);
+        assert_eq!(crate::search::SearchConfig::default().ensemble_size, 10);
+    }
+
+    #[test]
+    fn the_atlas_records_the_aggregation_and_ensemble_it_was_scored_with() {
+        // An empty batch rolls nothing out, so this reads only what the
+        // search stamps on its atlas.
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+        let config = QdConfig {
+            batch: 0,
+            generations: 0,
+            ..Default::default()
+        };
+        let atlas = run_qd(&config, 7, &mut ChaCha8Rng::seed_from_u64(7));
+        let scoring = atlas.provenance.unwrap().scoring;
+        assert_eq!(
+            scoring,
+            Some(Scoring {
+                aggregation: Aggregation::MeanOverSeeds,
+                ensemble_size: 10,
+                top_up_screen: None,
+            })
+        );
+        let json = serde_json::to_value(scoring).unwrap();
+        assert_eq!(json["aggregation"], "mean_over_seeds");
+    }
+
+    #[test]
+    fn an_atlas_from_before_the_scoring_was_recorded_reads_back_without_it() {
+        let provenance: AtlasProvenance =
+            serde_json::from_str(r#"{"seed": 42, "max_ticks": 2000}"#).unwrap();
+        assert_eq!(provenance.scoring, None);
+    }
+
+    #[test]
+    fn a_live_cells_descriptors_come_from_its_median_fitness_live_seed() {
+        // The dead seeds score 0 and sit at the bottom of the fitness order,
+        // so the ensemble's median seed (0.2) is not the live seeds' median
+        // (0.6). The live seeds' median places the cell.
+        let eval = config_eval_from_ensemble(&ensemble(vec![
+            run_result(0.2, None, 0.1, 1.0),
+            run_result(0.0, Some(FailureMode::Monoculture), 0.0, 0.0),
+            run_result(0.0, Some(FailureMode::EnergyDeath), 0.0, 0.0),
+            run_result(0.8, None, 0.8, 3.0),
+            run_result(0.6, None, 0.6, 2.0),
+        ]));
+        assert_eq!(eval.cliff, None);
+        assert_eq!(eval.descriptors.clustering, 0.6);
+        assert_eq!(eval.coexistence_duration, 2.0);
+    }
+
     #[test]
     fn config_eval_computes_consumer_fraction_alongside_decomposer_fraction() {
         // Both heterotroph guild fractions (#490) are the share of the ensemble
@@ -3406,13 +3731,13 @@ mod tests {
 
     /// A stub refinement read at n = 32 whose seeds coexist at `plain` and hold
     /// no guild — all the plain-floor tests need.
-    fn plain_eval(plain: f32, median_fitness: f32) -> RefinedEval {
+    fn plain_eval(plain: f32, fitness: f32) -> RefinedEval {
         RefinedEval {
             fractions: CoexistenceFractions {
                 plain,
                 ..Default::default()
             },
-            median_fitness,
+            fitness,
             sample_count: 32,
             unfinished: 0,
             decomposer_fraction: 0.0,
@@ -3510,7 +3835,7 @@ mod tests {
                     consumer: 0.0,
                     either: decomposer,
                 },
-                median_fitness: 0.5,
+                fitness: 0.5,
                 sample_count: 32,
                 unfinished: 0,
                 decomposer_fraction: decomposer,
@@ -3823,7 +4148,7 @@ mod tests {
         for (a, b) in p1.refined.iter().zip(p2.refined.iter()) {
             assert_eq!(a.cell, b.cell);
             assert_eq!(a.refined_fractions, b.refined_fractions);
-            assert_eq!(a.refined_median_fitness, b.refined_median_fitness);
+            assert_eq!(a.refined_fitness, b.refined_fitness);
         }
     }
 

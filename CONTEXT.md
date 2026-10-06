@@ -329,7 +329,7 @@ The output of world genesis — a map from world-parameter space onto the failur
 _Avoid_: search result, ranked list (the atlas is a map onto behaviour, not an ordering by fitness), archive (the archive is the live half of the atlas; the atlas also holds the dead frontier)
 
 **Coexistence fraction**:
-A reported per-cell distribution: the fraction of a cell's seed ensemble that lands in the coexisting regime — alive, with trait clusters genuinely co-present. Recorded alongside the **heterotroph guild** fractions and, like them, **never folded into the cell's score** nor used as a **behaviour axis** (the monoculture↔coexistence axis is still the median run's clustering strength). Its job is to surface regime-straddlers: a cell whose median run coexists on a lucky seed draw but whose ensemble mostly collapses to monoculture reads a low fraction. The **world recipe** projection reads it to avoid certifying such a straddler as the playable world.
+A reported per-cell distribution: the fraction of a cell's seed ensemble that lands in the coexisting regime — alive, with trait clusters genuinely co-present. Recorded alongside the **heterotroph guild** fractions and, like them, **never folded into the cell's score** nor used as a **behaviour axis** (the monoculture↔coexistence axis is still the representative run's clustering strength). Its job is to surface regime-straddlers: a cell whose representative run coexists on a lucky seed draw but whose ensemble mostly collapses to monoculture reads a low fraction. The **world recipe** projection reads it to avoid certifying such a straddler as the playable world.
 _Avoid_: coexistence score, clustering strength (the fraction is a count over seeds, not the per-run axis value)
 
 **Behaviour axis**:

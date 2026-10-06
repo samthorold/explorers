@@ -101,6 +101,7 @@ fn reproject_keeps_the_fallback_warning_when_no_refined_cell_clears_the_floor() 
         seed: SEED,
         max_ticks: horizon,
         bloom_stop: None,
+        scoring: None,
     });
     atlas.cells.truncate(1);
     let dims = atlas.cells[0].unit.len();

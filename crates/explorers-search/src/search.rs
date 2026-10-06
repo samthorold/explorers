@@ -58,13 +58,16 @@ pub struct SearchConfig {
     /// The predictive bloom stop (`bloom_stop` in [`QdConfig`], #573):
     /// `DEFAULT_BLOOM_STOP` unless turned off.
     pub bloom_stop: Option<BloomStop>,
+    /// Adaptive top-up's screen (`top_up_screen` in [`QdConfig`], #699):
+    /// `None` rolls out the whole ensemble for every config.
+    pub top_up_screen: Option<u32>,
 }
 
 impl Default for SearchConfig {
     fn default() -> Self {
         SearchConfig {
             ranges: default_ranges(),
-            ensemble_size: 5,
+            ensemble_size: crate::qd::SEARCH_ENSEMBLE_SIZE,
             max_ticks: 2000,
             batch: 32,
             generations: 10,
@@ -75,6 +78,7 @@ impl Default for SearchConfig {
             carcass_seed_count: 2,
             rollout_budget: SEARCH_ROLLOUT_BUDGET,
             bloom_stop: Some(crate::qd::DEFAULT_BLOOM_STOP),
+            top_up_screen: None,
         }
     }
 }
@@ -679,6 +683,7 @@ impl SearchConfig {
             carcass_seed_count: self.carcass_seed_count,
             rollout_budget: self.rollout_budget,
             bloom_stop: self.bloom_stop,
+            top_up_screen: self.top_up_screen,
         }
     }
 }

@@ -20,7 +20,7 @@ use explorers_search::sweep::{EVAL_TIMEOUT_FLAG, RUN_TIMEOUT_FLAG};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    let mut ensemble_size = 5;
+    let mut ensemble_size = SearchConfig::default().ensemble_size;
     let mut max_ticks: Option<u64> = None;
     let mut batch = 32;
     let mut generations = 10;
@@ -36,6 +36,7 @@ fn main() {
     let mut rollout_budget = SEARCH_ROLLOUT_BUDGET;
     let mut bloom_stop = SearchConfig::default().bloom_stop;
     let mut early_stop_crosscheck_fraction: Option<f32> = None;
+    let mut top_up_screen: Option<u32> = None;
     // Flags that configure the search itself, refused on --reproject (which
     // runs no search) rather than silently ignored.
     let mut search_flags: Vec<&str> = Vec::new();
@@ -60,6 +61,11 @@ fn main() {
             "--ensemble" => {
                 i += 1;
                 ensemble_size = args[i].parse().unwrap();
+            }
+            "--top-up-screen" => {
+                i += 1;
+                search_flags.push("--top-up-screen");
+                top_up_screen = Some(args[i].parse().unwrap());
             }
             "--max-ticks" => {
                 i += 1;
@@ -188,6 +194,7 @@ fn main() {
         generations,
         rollout_budget,
         bloom_stop,
+        top_up_screen,
         early_stop_crosscheck_fraction: early_stop_crosscheck_fraction
             .unwrap_or(SearchConfig::default().early_stop_crosscheck_fraction),
         ..Default::default()
@@ -198,7 +205,10 @@ fn main() {
     eprintln!("Running QD genesis search (CMA-MAE atlas)...");
     eprintln!("  Batch size: {batch}");
     eprintln!("  Generations: {generations}");
-    eprintln!("  Ensemble size: {ensemble_size}");
+    eprintln!("  Ensemble size: {ensemble_size} (a cell scores its seeds' mean)");
+    if let Some(k) = top_up_screen {
+        eprintln!("  Top-up screen: {k} seeds, the rest only for a would-be elite");
+    }
     eprintln!("  Max ticks: {max_ticks}");
     eprintln!("  Seed: {seed}");
     eprintln!(
@@ -284,7 +294,7 @@ fn main() {
     eprintln!("Atlas written to {}", output_path.display());
 
     // Gated elite refinement (#404): re-evaluate the top-K live cells at a larger,
-    // independent-seeded ensemble before projecting, so the high-variance in-run n=5
+    // independent-seeded ensemble before projecting, so the high-variance in-run
     // estimate that both fitness and the coexistence floor depend on is hardened.
     // Selection only — the atlas map (binning, per-cell fitness) is untouched.
     let refinement = RefinementConfig {
@@ -450,7 +460,7 @@ fn report_projection(
                 } else {
                     String::new()
                 },
-                r.refined_median_fitness,
+                r.refined_fitness,
                 if r.clears_floor { " ✓" } else { "" },
             );
         }
@@ -505,7 +515,9 @@ fn print_usage() {
     eprintln!("Options:");
     eprintln!("  --batch N           Solutions evaluated per generation (default: 32)");
     eprintln!("  --generations N     Adaptation generations after bootstrap (default: 10)");
-    eprintln!("  --ensemble N        Ensemble size per parameterisation (default: 5)");
+    eprintln!(
+        "  --ensemble N        Seeds per parameterisation; a cell scores their mean (default: 10)"
+    );
     eprintln!("  --max-ticks N       Max simulation ticks per run (default: 2000)");
     eprintln!("  --seed N            Random seed (default: 42)");
     eprintln!("  --output PATH       Atlas JSON path (default: atlas.json)");
