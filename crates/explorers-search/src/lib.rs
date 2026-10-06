@@ -12,6 +12,7 @@ pub mod grazer_hunger;
 pub mod heterotroph_margin;
 pub mod intake_ceiling;
 pub mod invasion;
+pub mod leaching;
 pub mod lhs;
 pub mod prefilter;
 pub mod qd;

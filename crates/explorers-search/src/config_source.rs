@@ -190,6 +190,20 @@ pub fn with_cross_trait_cost(
     (params, dist)
 }
 
+/// Pin a resolved world's **carcass leaching rate** λ (#698; world-rules.md,
+/// *Carcass energy decays only through agents; carcass nutrient leaches*)
+/// when given, leaving everything else as decoded: #700's sweep of λ on the
+/// atlas, whose worlds all decode at λ = 0.
+pub fn with_leaching_rate(
+    (mut params, dist): (WorldParameters, InitialDistribution),
+    pin: Option<f32>,
+) -> (WorldParameters, InitialDistribution) {
+    if let Some(l) = pin {
+        params.leaching_rate = l;
+    }
+    (params, dist)
+}
+
 /// Pins for the five **network** parameters (flow 5); `None` keeps the
 /// decoded value (every decoded world has the network off: cap 0).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -350,6 +364,22 @@ mod tests {
         assert_eq!(dist, decoded.1);
         let mut want = decoded.0.clone();
         want.cross_trait_cost = 0.3;
+        assert_eq!(params, want);
+    }
+
+    /// #700 sweeps carcass leaching's rate λ on the atlas: a pinned rate
+    /// overrides only that parameter, and no pin leaves the world as decoded
+    /// (λ = 0).
+    #[test]
+    fn a_pinned_leaching_rate_overrides_only_its_own_parameter() {
+        let sampled = sampled_units();
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        assert_eq!(with_leaching_rate(decoded.clone(), None), decoded);
+
+        let (params, dist) = with_leaching_rate(decoded.clone(), Some(0.02));
+        assert_eq!(dist, decoded.1);
+        let mut want = decoded.0.clone();
+        want.leaching_rate = 0.02;
         assert_eq!(params, want);
     }
 
