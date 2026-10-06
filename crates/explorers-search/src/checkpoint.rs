@@ -20,8 +20,10 @@ use crate::search::Scale;
 /// [`SearchState`] or the stamp changes; a checkpoint from any other version is
 /// refused rather than parsed. Version 2 (#699): a cell's recorded fitness is
 /// the mean over its seeds, not the median seed's, so a version-1 archive
-/// cannot be continued without building a hybrid atlas.
-pub const SCHEMA_VERSION: u32 = 2;
+/// cannot be continued without building a hybrid atlas. Version 3 (#710): the
+/// same again for `L² · F` over the plain mean, so a mean-scored archive does
+/// not resume into a live-fraction-scored search.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Why a checkpoint could not be written or resumed from.
 #[derive(Debug)]
@@ -646,6 +648,27 @@ mod tests {
             assert!(err.to_string().contains(knob), "{knob} not named in: {err}");
         }
         assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn slow_a_checkpoint_from_a_mean_scored_search_does_not_resume_under_the_live_fraction_score() {
+        // Version 2 archives hold cells scored by the plain mean (#699). The
+        // search now scores by `L² · F` (#710), so continuing one would build
+        // an atlas ranked by two scores at once.
+        let path = finished_checkpoint("mean-scored", 42);
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        json["schema_version"] = serde_json::json!(2);
+        std::fs::write(&path, json.to_string()).unwrap();
+
+        let err = resume_qd(&tiny(), 42, &path, &mut |_: &GenerationReport| {}).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                CheckpointError::UnsupportedSchema { found: Some(2), .. }
+            ),
+            "{err}"
+        );
     }
 
     #[test]

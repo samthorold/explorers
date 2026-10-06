@@ -98,9 +98,11 @@ struct CensusRow {
     /// The plain coexistence fraction — the atlas cell's `coexistence_fraction`.
     coexistence_fraction: f32,
     guild_coexistence: GuildCoexistence,
-    /// The cell's fitness as the archive scores it: the mean over seeds, a
-    /// gated seed scoring 0 (#699). Rows written before #699 hold the
-    /// median-fitness seed's fitness under `median_fitness`.
+    /// The cell's fitness as the archive scores it: `L² · F`, the live
+    /// fraction squared times the live seeds' mean fitness (#710). Rows
+    /// written under #699 hold the mean over seeds here, and rows written
+    /// before #699 hold the median-fitness seed's fitness under
+    /// `median_fitness`.
     #[serde(alias = "median_fitness")]
     fitness: f32,
     /// The majority's cliff, `None` for a config most of whose seeds live —
@@ -536,9 +538,10 @@ mod tests {
                 either: 0.5
             }
         );
-        // The mean over seeds, the monoculture seed scoring 0: (0.9 + 0 + 0.5
-        // + 0.7) / 4. Three of four seeds live, so the config is live.
-        assert!((r.fitness - 0.525).abs() < 1e-6, "{}", r.fitness);
+        // `L² · F` (#710): three of four seeds live, at a mean of (0.9 + 0.5 +
+        // 0.7) / 3 = 0.7, so 0.75² · 0.7 = 0.39375 (the plain mean read 0.525).
+        // Three of four seeds live, so the config is live.
+        assert!((r.fitness - 0.39375).abs() < 1e-6, "{}", r.fitness);
         assert_eq!(r.cliff, None);
         assert_eq!(r.seeds.len(), 4);
         assert_eq!(

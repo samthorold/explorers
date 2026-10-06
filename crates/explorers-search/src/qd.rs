@@ -130,14 +130,14 @@ pub fn cell_of(d: &Descriptors) -> (usize, usize, usize) {
     (bin(d.oscillation), bin(d.clustering), bin(d.carcass))
 }
 
-/// One config's ensemble verdict (#699). Its fitness is the expected fitness
-/// over the seed ensemble — the mean of the seeds' fitness, a gated seed
-/// scoring 0. The majority of seeds decides dead-vs-live, and the
+/// One config's ensemble verdict (#699). Its fitness is `L² · F`, its live
+/// fraction squared times its live seeds' mean fitness
+/// ([`live_fraction_score`], #710). The majority of seeds decides dead-vs-live, and the
 /// median-fitness live seed supplies the descriptors; the decomposer fraction
 /// is the share of the ensemble that sprouted a persistent guild.
 #[derive(Clone, Debug)]
 pub struct ConfigEval {
-    /// The mean of the seeds' fitness, a gated seed scoring 0.
+    /// `L² · F` over the seeds ([`live_fraction_score`]).
     pub fitness: f32,
     /// `Some(cliff)` if most seeds are gated (→ dead frontier, on the cliff
     /// most of them hit), `None` if it is a live world (→ a behaviour cell).
@@ -307,9 +307,34 @@ fn majority_cliff(run_results: &[RunResult]) -> Option<Cliff> {
         .map(|(cliff, _)| cliff)
 }
 
+/// The power on a cell's live fraction in its fitness, `L² · F` (#710).
+/// genesis-search.md, *The power is 2 because the plain mean lets quality buy
+/// fragility*: equal leverage for `L` and `F` on the log score measures 2.3 on
+/// an atlas a power-1 search had already narrowed in `L`, so 2, the round
+/// value just below it.
+pub const LIVE_FRACTION_POWER: u32 = 2;
+
+/// A cell's fitness over its seed ensemble (#710): `L^power · F`, where `L` is
+/// the share of the seeds that pass every gate (no failure, as in
+/// [`majority_cliff`]) and `F` is the mean fitness of those live seeds. A
+/// cell with no live seed, or no seed, scores 0. At power 1 it is exactly the
+/// plain mean over seeds with gated seeds at 0 (#699), so it is computed as
+/// `L^(power−1)` times that mean.
+pub fn live_fraction_score(run_results: &[RunResult], power: u32) -> f32 {
+    if run_results.is_empty() {
+        return 0.0;
+    }
+    let n = run_results.len() as f32;
+    let live = run_results.iter().filter(|r| r.failure.is_none());
+    let live_count = live.clone().count();
+    let mean_over_seeds = live.map(|r| r.fitness).sum::<f32>() / n;
+    let live_fraction = live_count as f32 / n;
+    live_fraction.powi(power.saturating_sub(1) as i32) * mean_over_seeds
+}
+
 /// Reduce a `run_ensemble` result to a [`ConfigEval`], reading the three axes and
 /// the decomposer signal off the per-seed [`FitnessBreakdown`] — no `run_single`
-/// mirror. Fitness is the mean over seeds with gated seeds at 0, live-or-dead
+/// mirror. Fitness is `L² · F` ([`live_fraction_score`], #710), live-or-dead
 /// is the majority's ([`majority_cliff`]), and the median-fitness live seed is
 /// the representative (#699).
 pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
@@ -361,10 +386,7 @@ pub fn config_eval_from_ensemble(result: &EnsembleResult) -> ConfigEval {
             early_stop_crosscheck: EarlyStopCrosscheck::default(),
         };
     }
-    // The cell's fitness is its expected fitness over the ensemble: the mean of
-    // its seeds' fitness, a gated seed scoring 0 (#699).
-    let seed_fitness = |r: &RunResult| if r.failure.is_some() { 0.0 } else { r.fitness };
-    let fitness = result.run_results.iter().map(seed_fitness).sum::<f32>() / sample_count as f32;
+    let fitness = live_fraction_score(&result.run_results, LIVE_FRACTION_POWER);
     let cliff = majority_cliff(&result.run_results);
     // The representative seed supplies the descriptors: the median-fitness
     // live seed (the upper-middle for an even count, ties in seed order). A
@@ -880,7 +902,7 @@ fn crosscheck_disagreement(
 pub struct PrefilterDisagreement {
     /// The cliff the prefilter predicted (the gate that fired).
     pub predicted_cliff: String,
-    /// The fitness (mean over seeds) the cross-check rollout actually observed.
+    /// The fitness (`L² · F` over seeds) the cross-check rollout actually observed.
     pub observed_fitness: f32,
     /// The unit-cube point that disagreed.
     pub unit: Vec<f64>,
@@ -1119,7 +1141,7 @@ pub struct AtlasProvenance {
     /// never applies it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bloom_stop: Option<BloomStop>,
-    /// How the search scored its cells (#699). `None` on an atlas written
+    /// How the search scored its cells (#699, #710). `None` on an atlas written
     /// before it was recorded, which ranked each cell on its median-fitness
     /// seed over the ensemble its cells' `sample_count` gives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1146,6 +1168,10 @@ pub enum Aggregation {
     MedianSeed,
     /// The mean of the seeds' fitness, a gated seed scoring 0 (#699).
     MeanOverSeeds,
+    /// The live fraction to this power times the live seeds' mean fitness,
+    /// `L^power · F` ([`live_fraction_score`], #710). Written
+    /// `{"live_fraction_power": 2}`.
+    LiveFractionPower(u32),
 }
 
 /// The search's default [`BloomStop`] (#573), owned by the evaluator beside
@@ -1358,7 +1384,7 @@ pub struct RefinedCell {
     pub refined_decomposer_fraction: f32,
     /// The consumer twin of `refined_decomposer_fraction`.
     pub refined_consumer_fraction: f32,
-    /// The refined fitness (the mean over seeds, gated seeds at 0) over the
+    /// The refined fitness (`L² · F`, as the search scores a cell) over the
     /// larger ensemble — reported for audit; never the ranking key, which
     /// stays the recorded fitness.
     pub refined_fitness: f32,
@@ -1638,8 +1664,8 @@ pub const SEARCH_ROLLOUT_BUDGET: RolloutBudget = RolloutBudget {
     evaluation: std::time::Duration::from_secs(DEFAULT_SEARCH_TIMEOUT_SECS),
 };
 
-/// The search's seed ensemble (#699): a cell's recorded fitness, the mean
-/// over its seeds, rests on 10 of them. The mean's standard error at the
+/// The search's seed ensemble (#699): a cell's recorded fitness, `L² · F`
+/// over its seeds (#710), rests on 10 of them. The mean's standard error at the
 /// committed atlas's seed-to-seed sd (~0.15) is ~0.047, against ~0.067 at 5
 /// (genesis-search.md, *Genesis selects for worlds that are sensible across
 /// initial conditions*).
@@ -1967,7 +1993,7 @@ impl<R: Rng> SearchState<R> {
             max_ticks: config.max_ticks,
             bloom_stop: config.bloom_stop,
             scoring: Some(Scoring {
-                aggregation: Aggregation::MeanOverSeeds,
+                aggregation: Aggregation::LiveFractionPower(LIVE_FRACTION_POWER),
                 ensemble_size: config.ensemble_size,
                 top_up_screen: config.top_up_screen,
             }),
@@ -2778,8 +2804,11 @@ mod tests {
         // its last generation, a knife-edge config whose second ensemble seed
         // blooms past 5,000 agents by tick 200 (the sibling seed peaks at 41)
         // and the sim then costs seconds per tick — a cost problem at high
-        // density, not a property this test is about.
-        for &seed in &[11_u64, 23, 41, 5, 19] {
+        // density, not a property this test is about. Seed 19 gave way to 29
+        // under `L² · F` (#710): the square on the live fraction discounts the
+        // fragile configs near the lockup cliff, so the emitters' paths move,
+        // and of a 12-seed sweep only 29 still reached the layer.
+        for &seed in &[11_u64, 23, 41, 5, 29] {
             let mut rng = ChaCha8Rng::seed_from_u64(seed);
             let atlas = run_qd(&config, seed, &mut rng);
             let check = atlas.lockup_boundary_crosscheck();
@@ -3494,10 +3523,10 @@ mod tests {
     }
 
     #[test]
-    fn a_cell_scores_its_mean_fitness_over_seeds_with_dead_seeds_as_zero() {
+    fn a_cell_scores_its_live_fraction_squared_times_its_live_seeds_mean_fitness() {
         // genesis-search.md, *Genesis selects for worlds that are sensible
         // across initial conditions*: alive on 3 of 5 seeds at 0.30, dead on
-        // 2, the cell scores 0.18 and stays live.
+        // 2, the cell scores 0.6² · 0.30 = 0.108 and stays live.
         let eval = config_eval_from_ensemble(&ensemble(vec![
             run_result(0.3, None, 0.4, 8.0),
             run_result(0.0, Some(FailureMode::Monoculture), 0.0, 0.0),
@@ -3505,8 +3534,53 @@ mod tests {
             run_result(0.0, Some(FailureMode::Extinction), 0.0, 0.0),
             run_result(0.3, None, 0.4, 8.0),
         ]));
-        assert!((eval.fitness - 0.18).abs() < 1e-6, "{}", eval.fitness);
+        assert!((eval.fitness - 0.108).abs() < 1e-6, "{}", eval.fitness);
         assert_eq!(eval.cliff, None);
+    }
+
+    #[test]
+    fn a_cell_live_on_every_seed_scores_its_live_seeds_mean_fitness() {
+        // genesis-search.md: live on all 5 seeds at 0.25, the cell scores 0.25
+        // — and so beats the 3-of-5 world at 0.30 (0.108) the mean ranked above it.
+        let eval = config_eval_from_ensemble(&ensemble(
+            (0..5).map(|_| run_result(0.25, None, 0.4, 8.0)).collect(),
+        ));
+        assert!((eval.fitness - 0.25).abs() < 1e-6, "{}", eval.fitness);
+    }
+
+    #[test]
+    fn a_cell_with_no_live_seed_scores_zero() {
+        let eval = config_eval_from_ensemble(&ensemble(vec![
+            run_result(0.4, Some(FailureMode::Monoculture), 0.0, 0.0),
+            run_result(0.0, Some(FailureMode::Extinction), 0.0, 0.0),
+            run_result(0.0, Some(FailureMode::NutrientLockup), 0.0, 0.0),
+        ]));
+        assert_eq!(eval.fitness, 0.0);
+        assert_eq!(live_fraction_score(&[], LIVE_FRACTION_POWER), 0.0);
+    }
+
+    #[test]
+    fn power_one_is_exactly_the_plain_mean_over_seeds_with_gated_seeds_at_zero() {
+        // At power 1 the score is the expected fitness (#699's reduction): the
+        // mean over all seeds, a gated seed counting 0 whatever fitness it read.
+        let seeds = vec![
+            run_result(0.31, None, 0.4, 8.0),
+            run_result(0.7, Some(FailureMode::Monoculture), 0.0, 0.0),
+            run_result(0.17, None, 0.4, 8.0),
+            run_result(0.0, Some(FailureMode::EnergyDeath), 0.0, 0.0),
+            run_result(0.443, None, 0.4, 8.0),
+            run_result(0.29, None, 0.4, 8.0),
+            run_result(0.05, None, 0.4, 8.0),
+        ];
+        let mean = seeds
+            .iter()
+            .map(|r| if r.failure.is_some() { 0.0 } else { r.fitness })
+            .sum::<f32>()
+            / seeds.len() as f32;
+        assert_eq!(live_fraction_score(&seeds, 1), mean);
+        assert_eq!(LIVE_FRACTION_POWER, 2);
+        let squared = live_fraction_score(&seeds, LIVE_FRACTION_POWER);
+        assert!((squared - mean * 5.0 / 7.0).abs() < 1e-6, "{squared}");
     }
 
     #[test]
@@ -3522,7 +3596,8 @@ mod tests {
             run_result(0.9, None, 0.4, 8.0),
         ]));
         assert_eq!(eval.cliff, Some(Cliff::NutrientLockup));
-        assert!((eval.fitness - 0.36).abs() < 1e-6, "{}", eval.fitness);
+        // Two live seeds of five at 0.9: 0.4² · 0.9 = 0.144.
+        assert!((eval.fitness - 0.144).abs() < 1e-6, "{}", eval.fitness);
     }
 
     #[test]
@@ -3548,13 +3623,34 @@ mod tests {
         assert_eq!(
             scoring,
             Some(Scoring {
-                aggregation: Aggregation::MeanOverSeeds,
+                aggregation: Aggregation::LiveFractionPower(2),
                 ensemble_size: 10,
                 top_up_screen: None,
             })
         );
         let json = serde_json::to_value(scoring).unwrap();
-        assert_eq!(json["aggregation"], "mean_over_seeds");
+        assert_eq!(
+            json["aggregation"],
+            serde_json::json!({"live_fraction_power": 2})
+        );
+    }
+
+    #[test]
+    fn an_atlas_scored_by_the_plain_mean_reads_back_as_it_was() {
+        // #699's atlases record `mean_over_seeds`; #710 leaves them readable.
+        let provenance: AtlasProvenance = serde_json::from_str(
+            r#"{"seed": 42, "max_ticks": 2000,
+                "scoring": {"aggregation": "mean_over_seeds", "ensemble_size": 10}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            provenance.scoring,
+            Some(Scoring {
+                aggregation: Aggregation::MeanOverSeeds,
+                ensemble_size: 10,
+                top_up_screen: None,
+            })
+        );
     }
 
     #[test]

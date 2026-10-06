@@ -8,8 +8,9 @@ use rand_chacha::ChaCha8Rng;
 use explorers_search::atlas_file::{ReprojectSettings, read_atlas, reproject, write_atlas};
 use explorers_search::checkpoint::inspect;
 use explorers_search::qd::{
-    COEXISTENCE_FLOOR, CoexistenceFloor, DEFAULT_SEARCH_TIMEOUT_SECS, REFINE_ENSEMBLE_SIZE,
-    REFINE_TOP_K, RefinedProjection, RefinementConfig, SEARCH_ROLLOUT_BUDGET, refined_best_recipe,
+    COEXISTENCE_FLOOR, CoexistenceFloor, DEFAULT_SEARCH_TIMEOUT_SECS, LIVE_FRACTION_POWER,
+    REFINE_ENSEMBLE_SIZE, REFINE_TOP_K, RefinedProjection, RefinementConfig, SEARCH_ROLLOUT_BUDGET,
+    refined_best_recipe,
 };
 use explorers_search::search::{
     BLOOM_STOP_FLAG, NO_BLOOM_STOP_FLAG, SearchConfig, parse_bloom_stop, resume_search,
@@ -205,7 +206,9 @@ fn main() {
     eprintln!("Running QD genesis search (CMA-MAE atlas)...");
     eprintln!("  Batch size: {batch}");
     eprintln!("  Generations: {generations}");
-    eprintln!("  Ensemble size: {ensemble_size} (a cell scores its seeds' mean)");
+    eprintln!(
+        "  Ensemble size: {ensemble_size} (a cell scores L^{LIVE_FRACTION_POWER} * F: live fraction, live seeds' mean)"
+    );
     if let Some(k) = top_up_screen {
         eprintln!("  Top-up screen: {k} seeds, the rest only for a would-be elite");
     }
@@ -516,7 +519,7 @@ fn print_usage() {
     eprintln!("  --batch N           Solutions evaluated per generation (default: 32)");
     eprintln!("  --generations N     Adaptation generations after bootstrap (default: 10)");
     eprintln!(
-        "  --ensemble N        Seeds per parameterisation; a cell scores their mean (default: 10)"
+        "  --ensemble N        Seeds per parameterisation; a cell scores L^2 * F over them (default: 10)"
     );
     eprintln!("  --max-ticks N       Max simulation ticks per run (default: 2000)");
     eprintln!("  --seed N            Random seed (default: 42)");
