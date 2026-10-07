@@ -56,7 +56,7 @@ drawn under it still names the world it always named.
 
 The **cross-trait cost** `c_AH` is not in the box. Its default 0 holds in every world genesis searches, so the box is the 33-coordinate **untaxed box** (`untaxed_ranges()`) with the leaching rate after it. The term is latent (world-rules.md trade-off #5): it was specified as the lever for a signature that is now reported rather than required, genesis did not select on it when it was searched, and a dimension the search does not select on only adds noise. If it comes out of reserve, its range is linear over `[0, 0.14]`. That range holds `c_AH = 0` exactly, which rules out a log scale. Its top is measured, not copied from the per-trait costs: it is the `c_AH` at which a typical light-fed mixotroph that drains pays about twice its median drain income ([`668-cross-trait-calibration.md`](../research/668-cross-trait-calibration.md)). `decode` reads a box without `c_AH`'s coordinate as `c_AH = 0`, so an atlas searched under the untaxed box names the same worlds whether or not the coordinate exists. The box with `c_AH` as its 34th coordinate is the **taxed box** (`taxed_ranges()`), the one it is searched over if it comes out of reserve. *Current state (#701, 2026-10-06): the search defaults to the untaxed box with `λ` (below). The committed atlas (#677) was searched under the taxed box and records it, so each of its cells and the committed recipe (atlas:90, `c_AH` ≈ 0.139) keep their own `c_AH`, with `λ = 0`. The next re-search (#686) runs the default box.*
 
-The **leaching rate** `λ` is the box's last coordinate, over `[0, 0.01]` on a square scale: `λ = 0.01 · u²` for the coordinate `u`. world-rules.md (*Carcass energy decays only through agents; carcass nutrient leaches*, *The range*) gives the top and the reason for the square. Its coordinate is the only one with a nonlinear scale, so a coordinate's scale is part of the box, and the atlas records it with each range. A range recorded without a scale is linear, so every atlas searched before the scale existed decodes as it always did. `decode` reads a box without `λ`'s coordinate as `λ = 0`, the default every earlier world ran. #686's read of `λ` is made in `u`, not in `λ`, because `u` is what the search spreads evenly when it does not select on `λ`. The atlas writes a range's scale as `"scale": "square"` beside its bounds and writes nothing for a linear range, so a linear box is written exactly as it was before scales existed, and its fingerprint is unchanged. *Current state (#701, 2026-10-06): in the box, with `c_AH` out of it. No atlas has been searched with it yet; #686 is the first.*
+The **leaching rate** `λ` is not in the box. Genesis's worlds run at a fixed `λ = 0.0025`; world-rules.md (*Carcass energy decays only through agents; carcass nutrient leaches*, *The rate*) gives the value and why it is fixed rather than searched. The stepper's own default stays `λ = 0`, so a world that names no rate, and every atlas searched before leaching, keeps running as it was named. An atlas therefore records the fixed rate its worlds ran at, and a reader decodes each atlas at the rate it records, or at 0 when it records none. #686's and #711's atlases were searched with `λ` as a box coordinate on a square scale, `λ = 0.01 · u²`. A coordinate's scale is part of the box, and the atlas records it with each range as `"scale": "square"`, writing nothing for a linear range, so a linear box is written exactly as before scales existed and its fingerprint is unchanged. A range recorded without a scale is linear. *Current state (#701, 2026-10-07): λ is still the default box's last coordinate. Taking it out at a fixed 0.0025 is not yet implemented.*
 
 **`decode` reads a coordinate by its name, not its position.** Each range carries the name of the field it decodes to, and `decode` looks every field up by that name. A field the box has no coordinate for keeps the known-viable baseline's value, which for the fields later boxes added (`b`, `c_AH`, `λ`) is the latent 0 every earlier world ran. A box cannot be identified by its length: the taxed box and the default box both have 34 coordinates, and the 34th is `c_AH` in one and `λ` in the other. Read by position, every cell of the committed atlas would have decoded with its `c_AH` coordinate as a leaching rate and no cross-trait cost. Read by name, the committed atlas and the atlases cut from it (the untaxed and size-blind boxes) decode to the same worlds bit for bit, which a digest of their decoded worlds pins. A search checkpoint stamps its box the same way, scales included, so a checkpoint from the taxed box is refused by a search under the default box (the 34th coordinate's name differs) rather than resumed into it.
 
@@ -349,6 +349,20 @@ disagree, the seed-to-seed fitness spread (median sd 0.149) is close to the medi
 (0.191), and flip rate rises with fitness (ρ +0.27). A search that ranks on a 5-seed median keeps
 fragile worlds that drew well.
 
+**Robustness is required of the world the player is given, and read of the map.** The player gets one
+world, the recipe, and replays it on new seeds, so that world must coexist on nearly every initial
+condition (*The recipe is a projection of the atlas*). The atlas only has to hold enough robust worlds
+for the pick to draw from, and it does: the committed atlas and both robustness-scored ones (#686,
+#711) each hold 36–57 worlds that live on all 10 fresh audit seeds. Robustness across the whole map
+is not a target, because the map exists to show the cliffs too. A requirement that most of its worlds
+agree across seeds asks every region to be robust, which no region near a cliff can be. It is also
+nearly out of reach at 10 seeds whatever the score: a world that lives with probability p agrees on
+all 10 with probability p¹⁰ + (1 − p)¹⁰, which is 0.60 at p = 0.95. The share of the atlas whose
+seeds all agree, its mean live fraction and its flip rates under jitter are therefore **readouts**
+that describe how robust the map is, not bars a search must clear. The score still steers the search
+toward robust worlds (below), because a pick needs robust candidates near the top of the fitness
+order, where it looks first.
+
 **A cell's fitness is its live fraction squared times its live seeds' mean fitness**: `L² · F`,
 where `L` is the share of its seed ensemble whose runs pass every gate (extinction, energy death,
 lockup, monoculture, generalist dominance, bloom stop) and `F` is the mean fitness of those live
@@ -619,11 +633,24 @@ same existence-vs-distributional boundary the rest of the atlas respects.
 ## The recipe is a projection of the atlas
 
 A single playable [world recipe](../../CONTEXT.md) is still drawn from the search, because the app needs
-one world to drop the player into. It is the elite of the highest-fitness live cell **that clears the
-coexistence-fraction floor** — most of its seed ensemble coexists (`COEXISTENCE_FLOOR = 0.5`,
-operationalizing CONTEXT.md's bar *"accepted only when most runs in the ensemble produce sensible
-worlds"*). When no live cell clears the floor the projection **falls back to plain argmax-fitness**, so a
-live atlas always yields a world; the search warns when it had to.
+one world to drop the player into. It is the elite of the highest-fitness live cell **whose refined coexistence fraction
+clears 0.90**: at least 29 of 32 independent seeds coexist (`COEXISTENCE_FLOOR`). That is CONTEXT.md's
+bar, *"accepted only when most runs in the ensemble produce sensible worlds"*, read for the one world a
+player replays. The player meets the world one playthrough at a time, in an open sandbox with no reset,
+so one playthrough in ten failing to coexist is the most the world can afford. The floor reads
+coexistence rather than the live fraction, because a world that lives as a monoculture is alive but is
+not the world the game needs. At n = 32 the floor passes a world that coexists 95 % of the time with
+probability 0.93, and one at 80 % with probability 0.09. A world at exactly 90 % passes only 60 % of
+the time, so the floor in effect asks for about 95 %. A floor at a half, the bar's literal reading,
+would hand over a world that fails to coexist on half of its playthroughs.
+
+**The pick refines in fitness order until a world clears.** The search refines live cells in order of
+recorded fitness and stops at the first whose refined fraction clears the floor, up to a cap of about
+40 cells. That keeps the pick the highest-fitness world that clears while bounding its cost. On
+#711's atlas, the first cell to clear was the 7th in fitness order. A fixed top-K would find none
+whenever every robust world sits just below the cut. When no refined cell clears, the pick falls back
+to the refined cell with the **highest refined coexistence fraction**, with a warning, so the player is
+given the most robust world found rather than the one that drew the highest fitness.
 
 The why is #401: the 5-seed median that ranked cells then is high-variance near the monoculture↔coexistence
 bifurcation, so a **straddler** — a cell that coexists on only a minority of initial conditions — can win
@@ -635,22 +662,22 @@ honest. The atlas's honest stance is that *many* worlds across the manifold are 
 elite is reachable as a recipe, not only the projected one. "The best recipe" is one pick from a map, not
 the search's output.
 
+*Current state (2026-10-07): the floor is still 0.5 and the search refines a fixed top 10, falling back to plain argmax-fitness. The 0.90 floor, the refinement in fitness order and the coexistence fallback are not yet implemented. #711's recipe coexists on 0.88 of its refined seeds, and #686's top 10 hold five cells above 0.90.*
+
 **Gated elite refinement hardens the pick (#404).** The floor above reads the *same* in-run
 ensemble that ranks the cell, and that estimate is itself high-variance near the bifurcation — so a lucky
 draw can both top the leaderboard *and* clear the floor (the #401 leader read 0.60 = 3/5 in-run yet
-re-evaluated to ~3/8 over an independent draw). Before projecting, the search therefore **re-evaluates the
-top-K live cells** (K = `REFINE_TOP_K`, small) at a **larger, independent ensemble** (`REFINE_ENSEMBLE_SIZE`,
-≫ the search's 10) and applies the floor to that **refined** fraction. The refinement seeds are deterministic but drawn
+re-evaluated to ~3/8 over an independent draw). Before projecting, the search therefore **re-evaluates live
+cells** at a **larger, independent ensemble** (`REFINE_ENSEMBLE_SIZE`, ≫ the search's 10), in fitness
+order as above, and applies the floor to that **refined** fraction. The refinement seeds are deterministic but drawn
 far above any seed the search used (offset `2^40`), so the re-evaluation is an *independent* draw, not a
 re-read of the in-run seeds, and a fixed `(atlas, seed)` refines bit-reproducibly. The pick is the
-highest **recorded**-fitness top-K cell whose refined fraction clears the floor; it falls back to plain
-argmax-fitness (with a warning) when none does. This stays inside the authority boundary: refinement
+highest **recorded**-fitness refined cell whose refined fraction clears the floor. This stays inside the authority boundary: refinement
 **never** rewrites the atlas map's binning or per-cell fitness — the recorded fitness remains the ranking
 key, the refined fraction feeds only the pick, and the straddler stays a recorded cell. Its cost is
-bounded (top-K only) and logged, including the lower-fitness live cells below the cut that were not
-refined. The refinement size is a *separator*, not an estimator: at n = 32 the floor rule tells a
-straddler at p ≈ 0.35 from a robust cell at p ≈ 0.65 with ≈ 5 % error either way, but its two-sided
-interval at 16/32 is still [0.32, 0.68], and a sequential (SPRT) alternative was evaluated and not
+bounded by the cap and logged, including the live cells that were not refined. The refinement size is
+a *separator*, not an estimator: at n = 32 the 0.90 floor tells a world at p ≈ 0.95 from one at
+p ≈ 0.80 with under 10 % error either way, and a sequential (SPRT) alternative was evaluated and not
 adopted — the arithmetic is in [`docs/research/434-ensemble-confidence.md`](../research/434-ensemble-confidence.md).
 
 **The projection re-runs without the search (#531).** Because the pick is a function of `(atlas, seed)`
