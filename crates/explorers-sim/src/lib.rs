@@ -2231,11 +2231,16 @@ mod tests {
     #[test]
     fn a_recipe_carrying_the_withdrawn_satiation_sensitivity_still_loads() {
         // The surplus gate and its parameter are gone (#684), but recipes
-        // written before then carry `satiation_sensitivity`; the committed
-        // recipe is one. Unknown fields are ignored on load.
+        // written before then carry `satiation_sensitivity` (the committed
+        // recipe did until #687): here the committed recipe with the field
+        // put back at its old default. Unknown fields are ignored on load.
         let committed = include_str!("../../../recipe.json");
-        assert!(committed.contains("\"satiation_sensitivity\""));
-        let recipe: WorldRecipe = serde_json::from_str(committed).expect("recipe.json loads");
+        assert!(!committed.contains("\"satiation_sensitivity\""));
+        let mut old: serde_json::Value = serde_json::from_str(committed).unwrap();
+        old["parameters"]["satiation_sensitivity"] = serde_json::json!(33.0);
+        let old = old.to_string();
+        assert!(old.contains("\"satiation_sensitivity\""));
+        let recipe: WorldRecipe = serde_json::from_str(&old).expect("the old recipe loads");
         let round_trip = serde_json::to_string(&recipe).unwrap();
         assert!(!round_trip.contains("satiation_sensitivity"));
     }

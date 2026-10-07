@@ -238,7 +238,7 @@ The weight on the structure-derived body-extent term of **feeding reach**: `cons
 _Avoid_: mycelium coefficient (too literal — the mechanism is general to all consumers, not decomposer-only)
 
 **Uptake structure exponent**:
-The exponent `b` by which **nutrient uptake** grows with body size: demand `= effective_autotrophy × u_A × (structure / uptake_reference_structure)^b`, the root-mass counterpart of structure's weight in **light competition**. A world parameter (dimensionless). Default 0.0 disables it — uptake is size-blind; at `b > 0` a body with no structure takes up nothing. Genesis searches it linearly over `[0, 1]` (#653), so each cell of the committed atlas (#677) and the committed recipe carries its own `b`; every world of an atlas searched before #653, and every `sample:i` instrument world, has `b = 0`.
+The exponent `b` by which **nutrient uptake** grows with body size: demand `= effective_autotrophy × u_A × (structure / uptake_reference_structure)^b`, the root-mass counterpart of structure's weight in **light competition**. A world parameter (dimensionless). Default 0.0 disables it — uptake is size-blind; at `b > 0` a body with no structure takes up nothing. Genesis searches it linearly over `[0, 1]` (#653), so each cell of the committed atlas (#687) and the committed recipe carries its own `b`; every world of an atlas searched before #653, and every `sample:i` instrument world, has `b = 0`.
 _Avoid_: root coefficient (there is no separate root organ; the body is the uptake surface)
 
 **Uptake reference structure**:

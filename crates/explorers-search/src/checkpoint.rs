@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(old.mismatches(&Stamp::of(&tiny(), 42)).len(), 1);
     }
 
-    /// #701: a checkpoint written under the committed atlas's box (34
+    /// #701: a checkpoint written under #677's atlas's box (34
     /// coordinates, the last `c_AH`, no scales recorded) is refused by a search
     /// under the leached box, which has as many coordinates with `λ` last; so
     /// is one whose box differs only in a coordinate's scale. A pre-#701 stamp

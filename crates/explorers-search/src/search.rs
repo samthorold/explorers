@@ -214,11 +214,11 @@ pub fn leached_ranges() -> Vec<ParameterRange> {
     ranges
 }
 
-/// The box the committed atlas (#677) was searched under: the untaxed box
-/// ([`untaxed_ranges`]) with the cross-trait cost `c_AH` as its 34th
-/// coordinate, linear over `[0, 0.14]`, and no leaching (`λ = 0`, which
+/// The box #677's atlas (committed until #687) was searched under: the
+/// untaxed box ([`untaxed_ranges`]) with the cross-trait cost `c_AH` as its
+/// 34th coordinate, linear over `[0, 0.14]`, and no leaching (`λ = 0`, which
 /// [`decode`] gives any box without `λ`'s coordinate when no fixed rate is
-/// recorded, as the committed atlas records none). It is the box `c_AH` is
+/// recorded, as #677's atlas records none). It is the box `c_AH` is
 /// searched over if it comes out of reserve.
 pub fn taxed_ranges() -> Vec<ParameterRange> {
     let mut ranges = untaxed_ranges();
@@ -709,7 +709,7 @@ fn viable_baseline() -> WorldParameters {
 ///
 /// Each coordinate is read **by its range's name**, never by its position
 /// (#701): boxes of the same length can hold different fields at the same
-/// index (the committed atlas's 34th coordinate is `c_AH`, the leached box's
+/// index (#677's atlas's 34th coordinate is `c_AH`, the leached box's
 /// is `λ`), so a box is identified by the names it records, not its length. A
 /// field the box has no coordinate for keeps the known-viable baseline's
 /// value, which for the fields later boxes added (`b`, `c_AH`, `λ`) is the
@@ -761,14 +761,14 @@ pub fn decode(
         // A box from before #653 has no coordinate for `b`: its worlds keep
         // the baseline's size-blind uptake, `b = 0`.
         uptake_structure_exponent: field("uptake_structure_exponent").map_or(0.0, |x| x as f32),
-        // Only the committed atlas's box (#677, `taxed_ranges`) has a
+        // Only #677's atlas's box (`taxed_ranges`) has a
         // coordinate for `c_AH`; every other box's worlds keep the baseline's
         // untaxed mixotrophy, `c_AH = 0`.
         cross_trait_cost: field("cross_trait_cost").map_or(0.0, |x| x as f32),
         // #686's and #711's boxes have a coordinate for `λ`; genesis's box
-        // since #716 holds it fixed. A box with neither (every atlas from
-        // before #701, the committed one included) keeps the baseline's
-        // `λ = 0`, no leaching.
+        // since #716 holds it fixed (the committed atlas, #687, records it).
+        // A box with neither (every atlas from before #701, #677's included)
+        // keeps the baseline's `λ = 0`, no leaching.
         leaching_rate: field("leaching_rate").map_or(0.0, |x| x as f32),
         ..viable_baseline()
     };
@@ -1265,7 +1265,7 @@ mod tests {
         }
     }
 
-    /// #701: the committed atlas's box (#677) has as many coordinates as the
+    /// #701: #677's atlas's box (committed until #687) has as many coordinates as the
     /// leached box (#686's and #711's), and its 34th is `c_AH`, not `λ`.
     /// `decode` tells them apart by name: over the taxed box the 34th
     /// coordinate is `c_AH`, linear over `[0, 0.14]`, with `λ = 0`; the same

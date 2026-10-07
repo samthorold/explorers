@@ -66,12 +66,33 @@ fn recipe() -> WorldRecipe {
 /// and recognition restraint is 1 — a physics change, not a changed read.
 /// The recipe was found under the gate. Seed 1 moved (fitness 0.108 → 0.177);
 /// seed 2 no longer reads zero (fitness 0.104), and seed 3 now does (was 0.320).
+/// Re-pinned under #687 on the recipe of #719's atlas, searched on genesis's
+/// box at the fixed leaching rate: `recipe.json` itself was replaced
+/// (atlas:31, cell [5, 19, 1], `λ = 0.0025`, `c_AH = 0`), so every value is
+/// new — a different world, not a changed read. All three seeds now score,
+/// at fitness 0.744, 0.725 and 0.720 (refined 0.704 at n = 32), with full
+/// clustering and coexistence 1.0, 0.99 and 1.0.
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
-    (1, [1043700327, 1056340067, 0, 0, 1047099605, 1052697981]),
-    (2, [1037368820, 0, 0, 0, 1054146036, 1054440732]),
-    (3, [0, 0, 0, 0, 0, 0]),
+    (
+        1,
+        [
+            1061051518, 1051978254, 1065353216, 1065353216, 1059028206, 1036442166,
+        ],
+    ),
+    (
+        2,
+        [
+            1060746356, 1043317283, 1065353216, 1065185444, 1060991140, 1032010827,
+        ],
+    ),
+    (
+        3,
+        [
+            1060660819, 1051251803, 1065353216, 1065353216, 1057828635, 1037270525,
+        ],
+    ),
 ];
 
 fn readings(seed: u64) -> [u32; 6] {

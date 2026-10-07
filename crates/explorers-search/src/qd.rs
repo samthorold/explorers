@@ -1769,8 +1769,9 @@ pub struct QdConfig {
 
 /// The search's and the refinement's default [`RolloutBudget`] (#562):
 /// generous against the seconds a `T = 2000` rollout usually takes, so only a
-/// stalled one — a dense world — ever reaches it, and the committed atlas
-/// reproduces unbudgeted.
+/// stalled one — a dense world — ever reaches it. The committed atlas (#687,
+/// #719's search) left 5 rollouts unfinished, none in a recorded cell, so
+/// every cell it records rests on finished seeds (`719-fixed-leaching-atlas.md`).
 pub const SEARCH_ROLLOUT_BUDGET: RolloutBudget = RolloutBudget {
     simulation: std::time::Duration::from_secs(DEFAULT_SEARCH_TIMEOUT_SECS),
     evaluation: std::time::Duration::from_secs(DEFAULT_SEARCH_TIMEOUT_SECS),
@@ -1778,7 +1779,7 @@ pub const SEARCH_ROLLOUT_BUDGET: RolloutBudget = RolloutBudget {
 
 /// The search's seed ensemble (#699): a cell's recorded fitness, `L² · F`
 /// over its seeds (#710), rests on 10 of them. The mean's standard error at the
-/// committed atlas's seed-to-seed sd (~0.15) is ~0.047, against ~0.067 at 5
+/// seed-to-seed sd of #677's atlas (~0.15) is ~0.047, against ~0.067 at 5
 /// (genesis-search.md, *Genesis selects for worlds that are sensible across
 /// initial conditions*).
 pub const SEARCH_ENSEMBLE_SIZE: u32 = 10;

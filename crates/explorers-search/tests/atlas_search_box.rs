@@ -5,8 +5,9 @@
 //! the narrowed box decodes, in a research bin, to exactly the worlds the
 //! search evaluated, while `sample:i` / `sample@S:i` stay draws over the
 //! instruments' own box (`sample_box`, the size-blind box since #653). The
-//! committed atlas and the atlases cut from it keep decoding, bit for bit, to
-//! the worlds they named before #701 changed the default box.
+//! committed atlas decodes, bit for bit, to the worlds its search evaluated,
+//! and the older atlases cut from it (untaxed, taxed, leached, legacy) to the
+//! worlds main named before #701 and #716 changed `decode`.
 
 use std::path::PathBuf;
 
@@ -93,42 +94,38 @@ fn sample_keys_stay_draws_over_the_sample_box() {
 
 const COMMITTED_ATLAS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
 
-/// The committed atlas (#677) was searched with `b` and `c_AH` in the box
-/// and records it: the 34-dimension taxed box, with no scales recorded. It is
-/// as long as the leached box #686 and #711 searched (#701), whose 34th
-/// coordinate is `λ`, so it must decode by name: every `atlas:i` keeps its
-/// own `b` and `c_AH`, and `λ = 0`, since it records no fixed rate (#716).
+/// The committed atlas (#687, #719's seed-42 search) was searched under
+/// genesis's box since #716 and records it: the 33-coordinate untaxed box,
+/// with no scales recorded, and the leaching rate held outside it at
+/// `λ = 0.0025`, which it records as `fixed`. Every `atlas:i` decodes over
+/// that box at that rate, with `c_AH = 0`.
 #[test]
-fn the_committed_atlas_records_its_34_dimension_taxed_box() {
+fn the_committed_atlas_records_its_33_dimension_box_and_fixed_leaching_rate() {
     let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
     let read = read_atlas_units(std::path::Path::new(COMMITTED_ATLAS));
-    assert_eq!(read.search_box(), taxed_ranges().as_slice());
-    assert!(read.fixed().is_empty(), "it records no fixed rate");
-    assert_eq!(read.search_box().len(), leached_ranges().len());
+    assert_eq!(read.search_box(), default_ranges().as_slice());
+    assert_eq!(read.search_box(), untaxed_ranges().as_slice());
+    assert_eq!(read.fixed(), &FixedParameters::genesis());
+    assert!(read.check_search_box(&default_ranges()).is_ok());
     assert!(read.check_search_box(&leached_ranges()).is_err());
-    assert!(read.check_search_box(&default_ranges()).is_err());
-    // #677's atlas, the seed-42 one #670 searched and read
-    // (`670-cross-trait-verdict.md`).
-    assert_eq!(format!("{:016x}", read.fingerprint()), "aa2662b26da489a3");
+    assert!(read.check_search_box(&taxed_ranges()).is_err());
+    // #719's atlas, the seed-42 one read in `719-fixed-leaching-atlas.md`;
+    // its fragility audit's rows record the same fingerprint.
+    assert_eq!(format!("{:016x}", read.fingerprint()), "823db6be9c5ec9ba");
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(!raw["search_box"].to_string().contains("scale"));
+    assert_eq!(raw["fixed"], serde_json::json!({ "leaching_rate": 0.0025 }));
     for i in 0..read.len() {
         let unit: Vec<f64> = serde_json::from_value(raw["cells"][i]["unit"].clone()).unwrap();
-        assert_eq!(unit.len(), 34);
+        assert_eq!(unit.len(), 33);
         let world = read.decode(i);
         assert_eq!(
             world,
-            decode(&unit, &taxed_ranges(), &FixedParameters::none()),
+            decode(&unit, &default_ranges(), &FixedParameters::genesis()),
             "atlas:{i}"
         );
-        // `c_AH` read off the 34th coordinate as it always was, linearly.
-        assert_eq!(
-            world.0.cross_trait_cost,
-            (0.0 + unit[33] * (0.14 - 0.0)) as f32,
-            "atlas:{i}"
-        );
-        assert!(world.0.cross_trait_cost > 0.0, "atlas:{i}");
-        assert_eq!(world.0.leaching_rate, 0.0, "atlas:{i}");
+        assert_eq!(world.0.cross_trait_cost, 0.0, "atlas:{i}");
+        assert_eq!(world.0.leaching_rate, 0.0025, "atlas:{i}");
     }
 }
 
@@ -146,28 +143,33 @@ fn decoded_worlds_digest(read: &explorers_search::sweep::AtlasUnits) -> u64 {
     h
 }
 
-/// #701: the committed atlas (#677) keeps naming exactly the worlds it was
-/// searched as, `c_AH` included, after its box stopped being the default.
-/// The digest was read on main before #701 changed `decode`.
+/// The committed atlas (#687) names exactly the worlds #719's search
+/// evaluated. The digest was read on this tree, whose `decode` is the one
+/// the search ran (main `1ff1fdd`).
 #[test]
 fn the_committed_atlas_decodes_to_the_same_worlds_bit_for_bit() {
     let read = read_atlas_units(std::path::Path::new(COMMITTED_ATLAS));
     assert_eq!(
         format!("{:016x}", decoded_worlds_digest(&read)),
-        "ca34fca622d21e99"
+        "316a7b03c3fa1af1"
     );
 }
 
-/// An atlas searched under the untaxed box (#663's, committed until #677):
-/// the committed atlas with its box and units cut to the first 33
-/// dimensions, written to scratch.
-fn untaxed_atlas(name: &str) -> PathBuf {
+/// The committed atlas with its `fixed` record dropped, as an atlas from
+/// before #716 records none, written to scratch as JSON for the fixtures
+/// below to cut.
+fn committed_atlas_without_fixed_rate() -> serde_json::Value {
     let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
     let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
-    raw["search_box"].as_array_mut().unwrap().truncate(33);
-    for cell in raw["cells"].as_array_mut().unwrap() {
-        cell["unit"].as_array_mut().unwrap().truncate(33);
-    }
+    raw.as_object_mut().unwrap().remove("fixed");
+    raw
+}
+
+/// An atlas searched under the untaxed box with no fixed rate (#663's,
+/// committed until #677): the committed atlas, which records that box, with
+/// its fixed rate dropped, written to scratch.
+fn untaxed_atlas(name: &str) -> PathBuf {
+    let raw = committed_atlas_without_fixed_rate();
     let path = scratch(name).join("atlas.json");
     std::fs::write(&path, raw.to_string()).unwrap();
     path
@@ -184,7 +186,7 @@ fn an_untaxed_atlas_reads_as_its_33_dimension_box_with_c_ah_zero() {
     // Read on main before #701 changed `decode`.
     assert_eq!(
         format!("{:016x}", decoded_worlds_digest(&read)),
-        "72b6936aa89d5e9d"
+        "db732abd6e4d010d"
     );
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(!read.is_empty());
@@ -203,11 +205,10 @@ fn an_untaxed_atlas_reads_as_its_33_dimension_box_with_c_ah_zero() {
 }
 
 /// A legacy atlas (before #559, as the committed atlas was until #663): the
-/// committed atlas with its box, its coordinates past the 32nd and its
-/// heterotroph shares (#602) stripped, written to scratch.
+/// committed atlas with its box, its fixed rate, its coordinates past the
+/// 32nd and its heterotroph shares (#602) stripped, written to scratch.
 fn legacy_atlas(name: &str) -> PathBuf {
-    let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
-    let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut raw = committed_atlas_without_fixed_rate();
     raw.as_object_mut().unwrap().remove("search_box");
     for cell in raw["cells"].as_array_mut().unwrap() {
         cell["unit"].as_array_mut().unwrap().truncate(32);
@@ -230,7 +231,7 @@ fn a_legacy_atlas_reads_as_the_size_blind_box() {
     // Read on main before #701 changed `decode`.
     assert_eq!(
         format!("{:016x}", decoded_worlds_digest(&read)),
-        "cf685d15accc0ce4"
+        "28ebd538d2879ee9"
     );
     let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(!read.is_empty());
@@ -334,16 +335,15 @@ fn an_atlas_without_a_fixed_rate_writes_none_and_decodes_at_zero() {
 }
 
 /// An atlas searched with `λ` in the box (#686's, #711's): the committed
-/// atlas with its box cut to the untaxed 33 coordinates and `λ` appended on
-/// its square scale, each cell's 34th coordinate a spread of `u`, written to
-/// scratch. It records no fixed rate, as those atlases do not.
+/// atlas, whose box is the untaxed 33 coordinates, with `λ` appended on its
+/// square scale, each cell's 34th coordinate a spread of `u`, and its fixed
+/// rate dropped, as those atlases record none; written to scratch.
 fn leached_atlas(name: &str) -> PathBuf {
-    let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
-    let mut raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut raw = committed_atlas_without_fixed_rate();
     raw["search_box"] = serde_json::to_value(leached_ranges()).unwrap();
     for (i, cell) in raw["cells"].as_array_mut().unwrap().iter_mut().enumerate() {
         let unit = cell["unit"].as_array_mut().unwrap();
-        unit.truncate(33);
+        assert_eq!(unit.len(), 33);
         unit.push(serde_json::json!((i as f64 * 0.137) % 1.0));
     }
     let path = scratch(name).join("atlas.json");
@@ -364,7 +364,7 @@ fn a_leached_atlas_decodes_with_its_own_coordinate_lambda() {
     // Read on main before #716.
     assert_eq!(
         format!("{:016x}", decoded_worlds_digest(&read)),
-        "4fef460557d45834"
+        "4fc466933a23bd54"
     );
     let mut leaching = 0;
     for i in 0..read.len() {
@@ -375,4 +375,59 @@ fn a_leached_atlas_decodes_with_its_own_coordinate_lambda() {
         leaching += usize::from(world.0.leaching_rate != 0.0025);
     }
     assert!(leaching > 0, "the cells keep their own rates");
+}
+
+/// An atlas searched with `c_AH` in the box (#677's, committed until #687):
+/// the committed atlas with `c_AH` appended as its 34th coordinate, each
+/// cell's a spread of `u`, and its fixed rate dropped, as #677's records
+/// none; written to scratch.
+fn taxed_atlas(name: &str) -> PathBuf {
+    let mut raw = committed_atlas_without_fixed_rate();
+    raw["search_box"] = serde_json::to_value(taxed_ranges()).unwrap();
+    for (i, cell) in raw["cells"].as_array_mut().unwrap().iter_mut().enumerate() {
+        let unit = cell["unit"].as_array_mut().unwrap();
+        assert_eq!(unit.len(), 33);
+        unit.push(serde_json::json!((i as f64 * 0.137) % 1.0));
+    }
+    let path = scratch(name).join("atlas.json");
+    std::fs::write(&path, raw.to_string()).unwrap();
+    path
+}
+
+/// An atlas that records the 34-coordinate taxed box (#677's) is as long as
+/// a leached one, so it must decode by name: every `atlas:i` keeps its own
+/// `c_AH`, read linearly off the 34th coordinate, and `λ = 0`, since it
+/// records no fixed rate (#716).
+#[test]
+fn a_taxed_atlas_decodes_its_own_c_ah_by_name() {
+    let path = taxed_atlas("taxed-box");
+    let read = read_atlas_units(&path);
+    assert_eq!(read.search_box(), taxed_ranges().as_slice());
+    assert!(read.fixed().is_empty(), "it records no fixed rate");
+    assert_eq!(read.search_box().len(), leached_ranges().len());
+    assert!(read.check_search_box(&leached_ranges()).is_err());
+    assert!(read.check_search_box(&default_ranges()).is_err());
+    // Read on main before #701 changed `decode`.
+    assert_eq!(
+        format!("{:016x}", decoded_worlds_digest(&read)),
+        "994dcb89ca16176e"
+    );
+    let mut taxed = 0;
+    for i in 0..read.len() {
+        let unit = &read.units()[i];
+        let world = read.decode(i);
+        assert_eq!(
+            world,
+            decode(unit, &taxed_ranges(), &FixedParameters::none()),
+            "atlas:{i}"
+        );
+        assert_eq!(
+            world.0.cross_trait_cost,
+            (0.0 + unit[33] * (0.14 - 0.0)) as f32,
+            "atlas:{i}"
+        );
+        assert_eq!(world.0.leaching_rate, 0.0, "atlas:{i}");
+        taxed += usize::from(world.0.cross_trait_cost > 0.0);
+    }
+    assert!(taxed > 0, "the cells keep their own c_AH");
 }
