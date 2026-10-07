@@ -12,7 +12,7 @@
 
 use explorers_genesis::WorldParameters;
 use explorers_search::prefilter::{fails_energy_death_gate, prefilter_cliff};
-use explorers_search::search::{decode, default_ranges};
+use explorers_search::search::{FixedParameters, decode, default_ranges};
 use explorers_search::sweep::read_atlas_units;
 use std::path::Path;
 
@@ -61,7 +61,7 @@ fn energy_death_gate_is_its_pi_form_with_structure_min_as_its_own_group() {
     let tau = 1.0_f32;
     for step in 0..=8 {
         let u = step as f64 / 8.0;
-        let (mut params, _) = decode(&vec![u; ranges.len()], &ranges);
+        let (mut params, _) = decode(&vec![u; ranges.len()], &ranges, &FixedParameters::genesis());
         for scale in [0.25_f32, 1.0, 4.0] {
             params.base_metabolic_rate *= scale;
             // Put the pool near the floor so the comparison is discriminating.

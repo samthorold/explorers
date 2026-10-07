@@ -14,7 +14,7 @@ use std::path::Path;
 
 use explorers_sim::WorldRecipe;
 
-use crate::config_source::{ConfigSource, parse_config_key, sample_box, sample_draw};
+use crate::config_source::{ConfigSource, parse_config_key, sample_box, sample_draw, sample_fixed};
 use crate::qd::Atlas;
 use crate::search::{SearchConfig, decode};
 
@@ -96,7 +96,7 @@ pub fn export_recipe(
                 let unit = units
                     .get(index)
                     .ok_or_else(|| fail(format!("a sample draw has {} configs", units.len())))?;
-                let (parameters, initial) = decode(unit, &full);
+                let (parameters, initial) = decode(unit, &full, &sample_fixed());
                 return Ok(WorldRecipe {
                     parameters,
                     initial_distribution: Some(initial),
@@ -152,6 +152,7 @@ mod tests {
         Atlas {
             provenance: None,
             search_box: Some(narrowed_ranges()),
+            fixed: crate::search::FixedParameters::genesis(),
             cells: vec![cell([0, 1, 2], 0.25), cell([3, 4, 5], 0.75)],
             dead_frontier: Default::default(),
             dead_frontier_apriori: Default::default(),
@@ -179,7 +180,8 @@ mod tests {
         let units = AtlasUnits::new(
             narrowed_ranges(),
             atlas.cells.iter().map(|c| c.unit.clone()).collect(),
-        );
+        )
+        .with_fixed(atlas.fixed.clone());
         let (parameters, initial) = resolve_config(ConfigSource::Atlas, 1, &units, &[]);
         assert_eq!(recipe.parameters, parameters);
         assert_eq!(recipe.initial_distribution, Some(initial));

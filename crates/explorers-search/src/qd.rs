@@ -57,7 +57,8 @@ use explorers_sim::WorldRecipe;
 use crate::bifurcation::{branching_distance, oscillation_distance};
 use crate::prefilter::prefilter_cliff;
 use crate::search::{
-    ParameterRange, SearchBoxMismatch, check_search_box, decode, default_ranges, size_blind_ranges,
+    FixedParameters, ParameterRange, SearchBoxMismatch, check_search_box, decode, default_ranges,
+    size_blind_ranges,
 };
 
 /// Bins per behaviour axis. Coarse, per the spike (20×20×20).
@@ -1117,6 +1118,14 @@ pub struct Atlas {
     /// the size-blind box, `size_blind_ranges()` (#653).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search_box: Option<Vec<ParameterRange>>,
+    /// The parameters the search held fixed outside its box (#716): the
+    /// leaching rate its worlds ran at, for a search under genesis's box. A
+    /// cell's `unit` decodes over the box at these values. Written only when
+    /// not empty, so an atlas from before #716 is written as before and reads
+    /// back with none, which decodes every held field, `λ` included, at the
+    /// known-viable baseline's 0.
+    #[serde(default, skip_serializing_if = "FixedParameters::is_empty")]
+    pub fixed: FixedParameters,
     /// The live cells in cell-index order, so the same search writes the same
     /// atlas bytes and `atlas:N` in the research sweeps names the same config
     /// (#536) — not in the archive's `HashMap` order.
@@ -1298,6 +1307,11 @@ impl Atlas {
         self.search_box.clone().unwrap_or_else(size_blind_ranges)
     }
 
+    /// The parameters this atlas's cells decode at outside its box (#716).
+    pub fn fixed(&self) -> &FixedParameters {
+        &self.fixed
+    }
+
     /// Check that `ranges`, the box a reader would decode this atlas's cells
     /// over, is the atlas's own [`Atlas::search_box`] (#559).
     pub fn check_search_box(&self, ranges: &[ParameterRange]) -> Result<(), SearchBoxMismatch> {
@@ -1363,7 +1377,7 @@ impl Atlas {
                     .iter()
                     .max_by(|a, b| a.fitness.partial_cmp(&b.fitness).unwrap())
             })?;
-        Some(recipe_from_unit(&pick.unit, ranges, max_ticks))
+        Some(recipe_from_unit(&pick.unit, ranges, &self.fixed, max_ticks))
     }
 
     /// The world recipe for a specific live cell index, if that cell is filled —
@@ -1378,12 +1392,17 @@ impl Atlas {
     ) -> Option<WorldRecipe> {
         self.assert_search_box(ranges);
         let c = self.cells.iter().find(|c| c.cell == cell)?;
-        Some(recipe_from_unit(&c.unit, ranges, max_ticks))
+        Some(recipe_from_unit(&c.unit, ranges, &self.fixed, max_ticks))
     }
 }
 
-fn recipe_from_unit(unit: &[f64], ranges: &[ParameterRange], max_ticks: u64) -> WorldRecipe {
-    let (parameters, initial_distribution) = decode(unit, ranges);
+fn recipe_from_unit(
+    unit: &[f64],
+    ranges: &[ParameterRange],
+    fixed: &FixedParameters,
+    max_ticks: u64,
+) -> WorldRecipe {
+    let (parameters, initial_distribution) = decode(unit, ranges, fixed);
     WorldRecipe {
         parameters,
         initial_distribution: Some(initial_distribution),
@@ -1601,7 +1620,12 @@ fn project_with_refinement(
         most_coexisting(&counts, floor)
     };
     RefinedProjection {
-        recipe: Some(recipe_from_unit(&ranked[pick].unit, ranges, max_ticks)),
+        recipe: Some(recipe_from_unit(
+            &ranked[pick].unit,
+            ranges,
+            &atlas.fixed,
+            max_ticks,
+        )),
         cleared_floor,
         floor,
         pick: Some(pick),
@@ -1658,7 +1682,7 @@ pub fn refined_best_recipe(
         config.cap,
         config.floor,
         |rank, unit| {
-            let (wp, dist) = decode(unit, ranges);
+            let (wp, dist) = decode(unit, ranges, &atlas.fixed);
             // Disjoint, deterministic refinement seeds: a block per rank, far above
             // any search seed (independent draw, reproducible for a fixed seed).
             let refine_seed = base_seed
@@ -1692,6 +1716,8 @@ pub fn refined_best_recipe(
 #[derive(Clone, Debug)]
 pub struct QdConfig {
     pub ranges: Vec<ParameterRange>,
+    /// The parameters held fixed outside the box (#716).
+    pub fixed: FixedParameters,
     pub ensemble_size: u32,
     pub max_ticks: u64,
     /// Solutions evaluated per generation.
@@ -1792,6 +1818,7 @@ impl Default for QdConfig {
     fn default() -> Self {
         QdConfig {
             ranges: default_ranges(),
+            fixed: FixedParameters::genesis(),
             ensemble_size: SEARCH_ENSEMBLE_SIZE,
             max_ticks: 2000,
             batch: 32,
@@ -1893,7 +1920,7 @@ fn roll_out(
     seed: u64,
     could_enter: impl Fn(&ConfigEval) -> bool,
 ) -> (Option<ConfigEval>, usize) {
-    let (wp, dist) = decode(unit, &config.ranges);
+    let (wp, dist) = decode(unit, &config.ranges, &config.fixed);
     let run = |size: u32, from: u64| {
         run_ensemble_within(
             &wp,
@@ -2085,6 +2112,7 @@ impl<R: Rng> SearchState<R> {
             }),
         });
         atlas.search_box = Some(config.ranges.clone());
+        atlas.fixed = config.fixed.clone();
         Ok(atlas)
     }
 
@@ -2115,7 +2143,7 @@ impl<R: Rng> SearchState<R> {
             .batch
             .iter()
             .map(|unit| {
-                let (wp, _) = decode(unit, &config.ranges);
+                let (wp, _) = decode(unit, &config.ranges, &config.fixed);
                 let cliff = prefilter_cliff(&wp);
                 let crosscheck = cliff.is_some()
                     && crosscheck_fraction > 0.0
@@ -2275,6 +2303,7 @@ impl<R> SearchState<R> {
         Atlas {
             provenance: None,
             search_box: None,
+            fixed: FixedParameters::none(),
             coverage: self.archive.coverage(),
             total_cells: RESOLUTION.pow(3),
             qd_score: self.archive.qd_score(),
@@ -2364,8 +2393,12 @@ mod tests {
         // Nutrient rides into structure (and thus carcasses) at a high ratio.
         assert!(at("base_nutrient_ratio") > 0.9);
         assert!(at("specification_nutrient_coefficient") > 0.9);
-        // Nothing leaches the stranded nutrient back out (#701).
-        assert_eq!(at("leaching_rate"), 0.0);
+        // Over a box with `λ` in it (#701), nothing leaches the stranded
+        // nutrient back out; the default box has no `λ` coordinate (#716).
+        assert!(!ranges.iter().any(|r| r.name == "leaching_rate"));
+        let leached = crate::search::leached_ranges();
+        let unit = carcass_seed_unit(&leached);
+        assert_eq!(unit[leached.len() - 1], 0.0);
     }
 
     fn atlas_cell(carcass: f32) -> AtlasCell {
@@ -2395,6 +2428,7 @@ mod tests {
             provenance: None,
             // As a search writes it: drawn under the full box.
             search_box: Some(default_ranges()),
+            fixed: FixedParameters::genesis(),
             coverage: cells.len(),
             total_cells: RESOLUTION.pow(3),
             qd_score: 0.0,
@@ -2639,7 +2673,7 @@ mod tests {
             ..Default::default()
         };
         let unit = vec![0.5; config.ranges.len()];
-        let (wp, dist) = decode(&unit, &config.ranges);
+        let (wp, dist) = decode(&unit, &config.ranges, &config.fixed);
         let whole = config_eval_from_ensemble(&run_ensemble_within(
             &wp,
             &dist,
@@ -2893,8 +2927,12 @@ mod tests {
         // density, not a property this test is about. Seed 19 gave way to 29
         // under `L² · F` (#710): the square on the live fraction discounts the
         // fragile configs near the lockup cliff, so the emitters' paths move,
-        // and of a 12-seed sweep only 29 still reached the layer.
-        for &seed in &[11_u64, 23, 41, 5, 29] {
+        // and of a 12-seed sweep only 29 still reached the layer. Seed 41 was
+        // retired under #716, as 37 was: with `λ` out of the box at a fixed
+        // 0.0025 the emitters' paths move again, its path reaches a dense
+        // config that took ~90 s of the sweep, and seed 11 now reaches the
+        // layer (best live carcass 0.25).
+        for &seed in &[11_u64, 23, 5, 29] {
             let mut rng = ChaCha8Rng::seed_from_u64(seed);
             let atlas = run_qd(&config, seed, &mut rng);
             let check = atlas.lockup_boundary_crosscheck();
@@ -2974,7 +3012,7 @@ mod tests {
         // is fully populated) and reproduce the guild reads the cell carries.
         for cell in &atlas.cells {
             assert_eq!(cell.sample_count, 1);
-            let (wp, dist) = decode(&cell.unit, &config.ranges);
+            let (wp, dist) = decode(&cell.unit, &config.ranges, &config.fixed);
             let run_config = RunConfig {
                 max_ticks: horizon,
                 eval_config: EvalConfig::default(),
@@ -3250,7 +3288,7 @@ mod tests {
 
         let ranges = default_ranges();
         let unit = vec![0.5_f64; ranges.len()];
-        let (wp, dist) = decode(&unit, &ranges);
+        let (wp, dist) = decode(&unit, &ranges, &FixedParameters::genesis());
         let ensemble_config = EnsembleConfig {
             ensemble_size: 5,
             run_config: RunConfig {
@@ -3888,7 +3926,7 @@ mod tests {
 
         let atlas = atlas_with(vec![straddler, robust.clone()], 0);
         let recipe = atlas.best_recipe(&ranges, 100).unwrap();
-        let expected = recipe_from_unit(&robust.unit, &ranges, 100);
+        let expected = recipe_from_unit(&robust.unit, &ranges, &FixedParameters::genesis(), 100);
         assert_eq!(recipe, expected);
     }
 
@@ -3912,7 +3950,7 @@ mod tests {
         let atlas = atlas_with(vec![a, b.clone()], 0);
         let recipe = atlas.best_recipe(&ranges, 100).unwrap();
         // Fallback is plain argmax-fitness — the higher-fitness sub-floor cell.
-        let expected = recipe_from_unit(&b.unit, &ranges, 100);
+        let expected = recipe_from_unit(&b.unit, &ranges, &FixedParameters::genesis(), 100);
         assert_eq!(recipe, expected);
     }
 
@@ -3968,7 +4006,7 @@ mod tests {
         assert!(projection.cleared_floor);
         assert_eq!(
             projection.recipe.unwrap(),
-            recipe_from_unit(&cells[1].unit, &ranges, 100)
+            recipe_from_unit(&cells[1].unit, &ranges, &FixedParameters::genesis(), 100)
         );
     }
 
@@ -4004,7 +4042,7 @@ mod tests {
         assert_eq!(projection.pick, Some(2));
         assert_eq!(
             projection.recipe.unwrap(),
-            recipe_from_unit(&cells[2].unit, &ranges, 100)
+            recipe_from_unit(&cells[2].unit, &ranges, &FixedParameters::genesis(), 100)
         );
         assert_eq!(projection.unrefined_live_cells, 2);
     }
@@ -4062,7 +4100,7 @@ mod tests {
         );
         assert_eq!(
             projection.recipe.unwrap(),
-            recipe_from_unit(&robust.unit, &ranges, 100),
+            recipe_from_unit(&robust.unit, &ranges, &FixedParameters::genesis(), 100),
             "the robust cell is projected, not the refined-out straddler"
         );
         assert_eq!(projection.refined.len(), 2);
@@ -4140,11 +4178,11 @@ mod tests {
 
         assert_eq!(
             plain.recipe.unwrap(),
-            recipe_from_unit(&cells[0].unit, &ranges, 100)
+            recipe_from_unit(&cells[0].unit, &ranges, &FixedParameters::genesis(), 100)
         );
         assert_eq!(
             guild.recipe.unwrap(),
-            recipe_from_unit(&cells[1].unit, &ranges, 100)
+            recipe_from_unit(&cells[1].unit, &ranges, &FixedParameters::genesis(), 100)
         );
         assert!(plain.cleared_floor && guild.cleared_floor);
         assert_eq!(plain.floor, CoexistenceFloor::Plain);
@@ -4200,7 +4238,7 @@ mod tests {
         assert_eq!(projection.pick, Some(1));
         assert_eq!(
             projection.recipe.unwrap(),
-            recipe_from_unit(&cells[1].unit, &ranges, 100),
+            recipe_from_unit(&cells[1].unit, &ranges, &FixedParameters::genesis(), 100),
             "fallback is the highest refined coexistence"
         );
     }

@@ -841,6 +841,7 @@ fn write_artifacts(artifact: &Artifact) {
 mod tests {
     use super::*;
     use explorers_genesis_eval::guild::GUILD_MIN_SIZE;
+    use explorers_search::search::FixedParameters;
     use explorers_search::search::decode;
     use explorers_search::search::default_ranges;
 
@@ -850,7 +851,12 @@ mod tests {
     fn run_produces_a_record() {
         let ranges = default_ranges();
         let unit = vec![0.5f64; ranges.len()];
-        let rec = run(ConfigSource::SAMPLE, 0, decode(&unit, &ranges), SEED_BASE);
+        let rec = run(
+            ConfigSource::SAMPLE,
+            0,
+            decode(&unit, &ranges, &FixedParameters::genesis()),
+            SEED_BASE,
+        );
         assert!(rec.ran_ticks > 0, "the run must advance at least one tick");
         assert!(
             rec.ran_ticks <= EXTENDED_HORIZON,
@@ -876,7 +882,12 @@ mod tests {
     fn run_records_role_series_consistent_with_terminal_counts_and_guild_read() {
         let ranges = default_ranges();
         let unit = vec![0.5f64; ranges.len()];
-        let rec = run(ConfigSource::SAMPLE, 0, decode(&unit, &ranges), SEED_BASE);
+        let rec = run(
+            ConfigSource::SAMPLE,
+            0,
+            decode(&unit, &ranges, &FixedParameters::genesis()),
+            SEED_BASE,
+        );
         assert!(!rec.role_series.is_empty());
         for w in rec.role_series.windows(2) {
             assert!(w[0].tick < w[1].tick, "series ticks strictly increase");

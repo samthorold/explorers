@@ -48,7 +48,7 @@ use explorers_genesis::{EvalConfig, FailureMode};
 use explorers_genesis_eval::{
     EVALUATOR_EVENT_KINDS, RolloutObservations, early_stop, sustainable_stock,
 };
-use explorers_search::config_source::{sample_box, sampled_units};
+use explorers_search::config_source::{sample_box, sample_fixed, sampled_units};
 use explorers_search::search::{SearchConfig, decode};
 use explorers_search::sweep::{
     DEFAULT_EVAL_TIMEOUT_SECS, EVAL_TIMEOUT_FLAG, EVAL_TIMEOUT_MODE, TIMEOUT_MODE, append_row,
@@ -98,7 +98,7 @@ impl Baseline {
                 (recipe.parameters, dist)
             }
             Baseline::Atlas(i) => read_atlas_units(atlas).decode(*i),
-            Baseline::Sample(i) => decode(&sampled_units()[*i], &sample_box()),
+            Baseline::Sample(i) => decode(&sampled_units()[*i], &sample_box(), &sample_fixed()),
         }
     }
 }

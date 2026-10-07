@@ -3,12 +3,13 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use explorers_search::config_source::sample_fixed;
 use explorers_search::config_source::{
     ConfigSource, SAMPLE_CONFIGS, parse_selector, sampled_units,
 };
 use explorers_search::heterotroph_margin::{HeterotrophLine, LineRead};
 use explorers_search::search::default_ranges;
-use explorers_search::search::{ParameterRange, decode};
+use explorers_search::search::{FixedParameters, ParameterRange, decode};
 use explorers_search::sweep::plan_tasks;
 use explorers_sim::TraitVector;
 use serde_json::Value;
@@ -59,8 +60,9 @@ fn margin_row(
     config_index: usize,
     unit: &[f64],
     search_box: &[ParameterRange],
+    fixed: &FixedParameters,
 ) -> MarginRow {
-    let (params, dist) = decode(unit, search_box);
+    let (params, dist) = decode(unit, search_box, fixed);
     let line = HeterotrophLine::from_founders(&dist);
     let mean = dist.mean_traits;
     MarginRow {
@@ -123,6 +125,9 @@ fn join_sweep(rows: &mut [MarginRow], sweep: &[Value]) -> Result<usize, String> 
 /// (a legacy atlas, with no box recorded: the full box).
 struct LooseAtlas {
     search_box: Vec<ParameterRange>,
+    /// The parameters held fixed outside the box (#716); none on an atlas
+    /// from before it.
+    fixed: FixedParameters,
     units: Vec<Vec<f64>>,
     outcomes: Vec<AtlasCellOutcome>,
 }
@@ -135,6 +140,10 @@ fn read_loose_atlas(path: &Path) -> LooseAtlas {
     let search_box = match atlas.get("search_box") {
         Some(b) if !b.is_null() => serde_json::from_value(b.clone()).expect("a search box"),
         _ => explorers_search::search::size_blind_ranges(),
+    };
+    let fixed = match atlas.get("fixed") {
+        Some(f) if !f.is_null() => serde_json::from_value(f.clone()).expect("fixed parameters"),
+        _ => FixedParameters::none(),
     };
     let cells = atlas["cells"].as_array().expect("an atlas has cells");
     let units = cells
@@ -155,6 +164,7 @@ fn read_loose_atlas(path: &Path) -> LooseAtlas {
         .collect();
     LooseAtlas {
         search_box,
+        fixed,
         units,
         outcomes,
     }
@@ -177,14 +187,21 @@ fn all_rows(atlas_path: &Path, filter: Option<&HashSet<(ConfigSource, usize)>>) 
     .map(|(source, index)| match source {
         ConfigSource::Atlas => MarginRow {
             atlas_cell: Some(atlas.outcomes[index]),
-            ..margin_row(source, index, &atlas.units[index], &atlas.search_box)
+            ..margin_row(
+                source,
+                index,
+                &atlas.units[index],
+                &atlas.search_box,
+                &atlas.fixed,
+            )
         },
-        ConfigSource::SAMPLE => margin_row(source, index, &sampled[index], &full),
+        ConfigSource::SAMPLE => margin_row(source, index, &sampled[index], &full, &sample_fixed()),
         ConfigSource::Sample(seed) => margin_row(
             source,
             index,
             &explorers_search::config_source::sample_draw(seed)[index],
             &full,
+            &sample_fixed(),
         ),
     })
     .collect()
@@ -219,10 +236,16 @@ fn slice(x_axis: &str, y_axis: &str, n: usize) -> Slice {
                     let mut unit = vec![0.5; box_.len()];
                     unit[xi] = u;
                     unit[yi] = v;
-                    margin_row(ConfigSource::SAMPLE, 0, &unit, &box_)
-                        .line
-                        .best
-                        .margin
+                    margin_row(
+                        ConfigSource::SAMPLE,
+                        0,
+                        &unit,
+                        &box_,
+                        &FixedParameters::genesis(),
+                    )
+                    .line
+                    .best
+                    .margin
                 })
                 .collect()
         })
@@ -377,6 +400,7 @@ mod tests {
             index,
             &units[index],
             &explorers_search::config_source::sample_box(),
+            &sample_fixed(),
         )
     }
 
@@ -494,7 +518,13 @@ mod tests {
         let mut unit = vec![0.5; box_.len()];
         unit[1] = 1.0; // base_trophic_efficiency at its max
         unit[2] = 0.0; // trophic_distance_decay at its min
-        let row = margin_row(ConfigSource::SAMPLE, 0, &unit, &box_);
+        let row = margin_row(
+            ConfigSource::SAMPLE,
+            0,
+            &unit,
+            &box_,
+            &FixedParameters::genesis(),
+        );
         assert_eq!(s.margins[0][4], row.line.best.margin);
         assert_eq!(s.x_values[4], 0.9);
         assert_eq!(s.y_values[0], 0.1);

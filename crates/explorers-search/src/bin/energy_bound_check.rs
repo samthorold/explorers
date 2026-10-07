@@ -874,13 +874,17 @@ fn print_summary(s: &Summary) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use explorers_search::search::{decode, default_ranges};
+    use explorers_search::search::{FixedParameters, decode, default_ranges};
 
     /// A search-domain config (unit-cube midpoint) with the four fields the bound
     /// reads pinned to the viable baseline of the B1 note.
     fn baseline() -> WorldParameters {
         let ranges = default_ranges();
-        let (params, _) = decode(&vec![0.5; ranges.len()], &ranges);
+        let (params, _) = decode(
+            &vec![0.5; ranges.len()],
+            &ranges,
+            &FixedParameters::genesis(),
+        );
         WorldParameters {
             world_extent: 100.0,
             light_competition_radius: 8.0,
@@ -1007,6 +1011,7 @@ mod tests {
 #[cfg(test)]
 mod resume_tests {
     use super::*;
+    use explorers_search::search::FixedParameters;
     use explorers_search::search::decode;
     use explorers_search::search::default_ranges;
 
@@ -1099,7 +1104,7 @@ mod resume_tests {
         let row = run_config(
             ConfigSource::SAMPLE,
             0,
-            &decode(&unit, &default_ranges()),
+            &decode(&unit, &default_ranges(), &FixedParameters::genesis()),
             1,
             20,
             Duration::ZERO,
@@ -1118,7 +1123,7 @@ mod resume_tests {
         let mut row = run_config(
             ConfigSource::SAMPLE,
             0,
-            &decode(&unit, &default_ranges()),
+            &decode(&unit, &default_ranges(), &FixedParameters::genesis()),
             1,
             20,
             Duration::MAX,

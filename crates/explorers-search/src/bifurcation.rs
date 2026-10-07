@@ -493,12 +493,13 @@ pub fn branching_distance(params: &WorldParameters, founder_mean: &TraitVector) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::FixedParameters;
     use crate::search::{decode, default_ranges};
 
     fn baseline_params() -> WorldParameters {
         let ranges = default_ranges();
         let unit = vec![0.5_f64; ranges.len()];
-        decode(&unit, &ranges).0
+        decode(&unit, &ranges, &FixedParameters::genesis()).0
     }
 
     fn founder(photo: f32, het: f32, kappa: f32) -> TraitVector {
@@ -552,7 +553,8 @@ mod tests {
         let ranges = default_ranges();
         for step in 0..=4 {
             let u = step as f64 / 4.0;
-            let (params, dist) = decode(&vec![u; ranges.len()], &ranges);
+            let (params, dist) =
+                decode(&vec![u; ranges.len()], &ranges, &FixedParameters::genesis());
             let d = branching_distance(&params, &dist.mean_traits);
             assert!(d.is_finite(), "D must be finite at unit {u}, got {d}");
         }
@@ -621,7 +623,8 @@ mod tests {
         let ranges = default_ranges();
         for step in 0..=4 {
             let u = step as f64 / 4.0;
-            let (params, dist) = decode(&vec![u; ranges.len()], &ranges);
+            let (params, dist) =
+                decode(&vec![u; ranges.len()], &ranges, &FixedParameters::genesis());
             let d = oscillation_distance(&params, &dist.mean_traits);
             assert!(d.is_finite(), "|λ|−1 must be finite at unit {u}, got {d}");
         }

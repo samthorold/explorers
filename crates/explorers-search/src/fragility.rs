@@ -254,7 +254,7 @@ pub fn evaluate_row(
     jitter_seed: u64,
 ) -> FragilityRow {
     let (moved, delta) = perturbed(atlas, key, jitter_seed);
-    let (params, dist) = decode(&moved, atlas.search_box());
+    let (params, dist) = decode(&moved, atlas.search_box(), atlas.fixed());
     let seeds = seeds
         .iter()
         .map(|&s| evaluate_seed(&params, &dist, s, rollouts))
@@ -285,7 +285,11 @@ pub fn evaluate_rows(
         .iter()
         .map(|&key| {
             let (moved, delta) = perturbed(atlas, key, jitter_seed);
-            (key, delta, decode(&moved, atlas.search_box()))
+            (
+                key,
+                delta,
+                decode(&moved, atlas.search_box(), atlas.fixed()),
+            )
         })
         .collect();
     let verdicts: Vec<SeedVerdict> = (0..worlds.len() * seeds.len())
@@ -1305,7 +1309,7 @@ mod tests {
         let atlas = atlas();
         let row0 = evaluate_row(&atlas, jittered_key(0, 0.1, 0), &[1000], &quick(3), 7);
         let (moved, _) = perturbed(&atlas, jittered_key(0, 0.1, 0), 7);
-        let (params, _) = decode(&moved, atlas.search_box());
+        let (params, _) = decode(&moved, atlas.search_box(), atlas.fixed());
         assert_eq!(
             row0.prefilter_cliff.as_deref(),
             crate::prefilter::prefilter_cliff(&params).map(|c| c.label())
