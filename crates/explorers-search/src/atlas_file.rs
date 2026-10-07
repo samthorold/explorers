@@ -91,8 +91,8 @@ pub fn read_atlas(path: &Path) -> Result<Atlas, AtlasFileError> {
 /// The projection settings a re-projection runs under.
 #[derive(Clone, Debug)]
 pub struct ReprojectSettings {
-    /// Top live cells to refine ([`RefinementConfig::top_k`]).
-    pub top_k: usize,
+    /// The most live cells to refine ([`RefinementConfig::cap`]).
+    pub cap: usize,
     /// Refinement ensemble size ([`RefinementConfig::ensemble_size`]).
     pub ensemble_size: u32,
     /// The search seed, for an atlas that does not record it.
@@ -107,7 +107,7 @@ pub struct ReprojectSettings {
     pub rollout_budget: RolloutBudget,
 }
 
-/// Refine the atlas's top live cells and project the recipe exactly as the run
+/// Refine the atlas's live cells in fitness order and project the recipe exactly as the run
 /// that drew the atlas does ([`refined_best_recipe`]), under the search seed and
 /// horizon it records (or, for an atlas that records none, the ones given),
 /// its cells decoded over the search box it records ([`Atlas::search_box`]).
@@ -119,7 +119,7 @@ pub fn reproject(
         seed, max_ticks, ..
     } = provenance(atlas, settings)?;
     let refinement = RefinementConfig {
-        top_k: settings.top_k,
+        cap: settings.cap,
         ensemble_size: settings.ensemble_size,
         max_ticks,
         floor: settings.floor,
@@ -196,9 +196,9 @@ mod tests {
         }
     }
 
-    fn settings(top_k: usize, ensemble_size: u32) -> ReprojectSettings {
+    fn settings(cap: usize, ensemble_size: u32) -> ReprojectSettings {
         ReprojectSettings {
-            top_k,
+            cap,
             ensemble_size,
             seed: None,
             max_ticks: None,
@@ -405,7 +405,7 @@ mod tests {
         let atlas = run_qd(&config, seed, &mut ChaCha8Rng::seed_from_u64(seed));
         assert!(!atlas.cells.is_empty());
         let refinement = RefinementConfig {
-            top_k: 1,
+            cap: 1,
             ensemble_size: 1,
             max_ticks: config.max_ticks,
             floor: CoexistenceFloor::Plain,
@@ -498,11 +498,13 @@ mod tests {
     }
 
     #[test]
-    fn every_floor_refines_the_same_cells_on_the_same_seeds() {
+    fn every_floor_refines_each_cell_on_the_same_seeds() {
         // #538: the floor is a selection setting. Re-projecting one atlas under
-        // each floor refines the same cells on the same seeds — identical
-        // fractions and guild reads — and differs only in which cells clear and
-        // the pick. Every guild-aware fraction is at most the plain one.
+        // each floor refines each cell on the same seeds — identical fractions
+        // and guild reads — and differs only in which cells clear, the pick and
+        // so where refinement stops (#715): each floor's refined cells are a
+        // prefix of the longest run's. Every guild-aware fraction is at most
+        // the plain one.
         let seed = 7;
         let atlas = run_qd(&tiny(), seed, &mut ChaCha8Rng::seed_from_u64(seed));
         let projections: Vec<_> = CoexistenceFloor::ALL
@@ -531,11 +533,11 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let plain = &projections[0];
-        assert!(!plain.refined.is_empty());
+        let longest = projections.iter().max_by_key(|p| p.refined.len()).unwrap();
+        assert!(!longest.refined.is_empty());
         for (floor, p) in CoexistenceFloor::ALL.into_iter().zip(&projections) {
             assert_eq!(p.floor, floor);
-            assert_eq!(audit(p), audit(plain), "{floor:?}");
+            assert_eq!(audit(p), audit(longest)[..p.refined.len()], "{floor:?}");
             for r in &p.refined {
                 let f = r.refined_fractions;
                 assert!(f.decomposer <= f.plain && f.consumer <= f.plain);
@@ -545,7 +547,38 @@ mod tests {
                     f.under(floor) >= crate::qd::COEXISTENCE_FLOOR
                 );
             }
+            // Refinement stops at the first cell that clears.
+            for r in p.refined.iter().rev().skip(1) {
+                assert!(!r.clears_floor, "{floor:?}");
+            }
         }
+    }
+
+    #[test]
+    fn refinement_is_deterministic_for_a_fixed_atlas_and_seed() {
+        // #715: the pick is a function of (atlas, seed, settings). Two runs
+        // refine the same cells to the same reads and pick the same cell; and a
+        // cell's refinement seeds depend on its rank alone, so a smaller cap
+        // refines a prefix of the same reads.
+        let seed = 7;
+        let atlas = run_qd(&tiny(), seed, &mut ChaCha8Rng::seed_from_u64(seed));
+        let given = |cap| ReprojectSettings {
+            seed: Some(seed),
+            max_ticks: Some(tiny().max_ticks),
+            ..settings(cap, 4)
+        };
+        let first = reproject(&atlas, &given(3)).unwrap();
+        let again = reproject(&atlas, &given(3)).unwrap();
+        let capped = reproject(&atlas, &given(1)).unwrap();
+        let audit = |p: &RefinedProjection| serde_json::to_value(&p.refined).unwrap();
+        assert!(!first.refined.is_empty());
+        assert_eq!(audit(&first), audit(&again));
+        assert_eq!(first.pick, again.pick);
+        assert_eq!(
+            serde_json::to_string(&first.recipe).unwrap(),
+            serde_json::to_string(&again.recipe).unwrap()
+        );
+        assert_eq!(audit(&capped)[0], audit(&first)[0]);
     }
 
     #[test]
@@ -561,7 +594,7 @@ mod tests {
             "the tiny search must yield a live cell"
         );
         let refinement = RefinementConfig {
-            top_k: 2,
+            cap: 2,
             ensemble_size: 2,
             max_ticks: config.max_ticks,
             floor: CoexistenceFloor::Plain,

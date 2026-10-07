@@ -53,7 +53,7 @@ fn reproject_writes_the_recipe_the_writing_run_projected() {
         &atlas,
         &default_ranges(),
         &RefinementConfig {
-            top_k: 2,
+            cap: 2,
             ensemble_size: 2,
             max_ticks: config.max_ticks,
             floor: CoexistenceFloor::Plain,
@@ -71,7 +71,7 @@ fn reproject_writes_the_recipe_the_writing_run_projected() {
         atlas_path.to_str().unwrap(),
         "--recipe-output",
         recipe_path.to_str().unwrap(),
-        "--refine-top-k",
+        "--refine-cap",
         "2",
         "--refine-ensemble",
         "2",
@@ -82,6 +82,15 @@ fn reproject_writes_the_recipe_the_writing_run_projected() {
         "the search must not run: {}",
         stderr(&output)
     );
+
+    // #715: the log names the pick and how many cells were refined to reach it.
+    let pick = &in_run.refined[in_run.pick.unwrap()];
+    let reported = format!(
+        "Picked cell {:?} after {} refinement(s)",
+        pick.cell,
+        in_run.refined.len()
+    );
+    assert!(stderr(&output).contains(&reported), "{}", stderr(&output));
 
     // Byte-for-byte: the recipe file the full run would have written.
     assert_eq!(
@@ -120,7 +129,7 @@ fn reproject_keeps_the_fallback_warning_when_no_refined_cell_clears_the_floor() 
         &atlas,
         &default_ranges(),
         &RefinementConfig {
-            top_k: 1,
+            cap: 1,
             ensemble_size: 1,
             max_ticks: horizon,
             floor: CoexistenceFloor::Plain,
@@ -138,7 +147,7 @@ fn reproject_keeps_the_fallback_warning_when_no_refined_cell_clears_the_floor() 
         atlas_path.to_str().unwrap(),
         "--recipe-output",
         dir.join("recipe.json").to_str().unwrap(),
-        "--refine-top-k",
+        "--refine-cap",
         "1",
         "--refine-ensemble",
         "1",
@@ -146,7 +155,7 @@ fn reproject_keeps_the_fallback_warning_when_no_refined_cell_clears_the_floor() 
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(
         stderr(&output)
-            .contains("WARNING: no refined top-1 cell clears the plain coexistence floor"),
+            .contains("WARNING: none of the 1 refined cell(s) clears the plain coexistence floor"),
         "{}",
         stderr(&output)
     );
@@ -163,7 +172,7 @@ fn reproject_projects_under_the_coexistence_floor_given() {
         &atlas,
         &default_ranges(),
         &RefinementConfig {
-            top_k: 2,
+            cap: 2,
             ensemble_size: 2,
             max_ticks: config.max_ticks,
             floor: CoexistenceFloor::Either,
@@ -181,7 +190,7 @@ fn reproject_projects_under_the_coexistence_floor_given() {
         atlas_path.to_str().unwrap(),
         "--recipe-output",
         recipe_path.to_str().unwrap(),
-        "--refine-top-k",
+        "--refine-cap",
         "2",
         "--refine-ensemble",
         "2",
