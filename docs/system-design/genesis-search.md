@@ -506,7 +506,8 @@ To put the fold option to that decision on one fixed atlas (#494, #538), the pro
 or with `--reproject`, counts a refinement seed as coexisting only if it also holds that guild. It is a
 comparison instrument, not a change to this boundary. The default is `plain`, the refinement always
 reports the refined fraction under all four floors from the same seeds, and the floor changes only which
-cell the recipe is picked from, never the atlas, its binning or its fitness.
+cell the recipe is picked from (and so where refinement in fitness order stops), never the atlas, its
+binning or its fitness.
 
 This is the same existence-vs-distributional boundary [viability](viability.md) already respects when it
 makes `C*` a *characterisation* rather than a gate: the atlas maps the existence/stability skeleton of
@@ -662,7 +663,7 @@ honest. The atlas's honest stance is that *many* worlds across the manifold are 
 elite is reachable as a recipe, not only the projected one. "The best recipe" is one pick from a map, not
 the search's output.
 
-*Current state (2026-10-07): the floor is still 0.5 and the search refines a fixed top 10, falling back to plain argmax-fitness. The 0.90 floor, the refinement in fitness order and the coexistence fallback are not yet implemented. #711's recipe coexists on 0.88 of its refined seeds, and #686's top 10 hold five cells above 0.90.*
+*Current state (#715, 2026-10-07): the projection runs this rule. `COEXISTENCE_FLOOR` is 0.90, tested exactly in integers (`clears_coexistence_floor`: 29 of 32 clears, 28 does not); refinement runs in recorded-fitness order and stops at the first cell that clears, up to `REFINE_CAP` = 40 (`--refine-cap`, which replaces `--refine-top-k`); and the fallback is the refined cell with the highest refined coexistence, a tie going to the higher fitness. A cell's refinement seeds depend on its rank alone, so the cells #711's top-10 refinement read are read again on the same seeds. The search log names the pick and how many cells were refined to reach it. #711's recipe, picked under the old rule, coexists on 0.88 of its refined seeds; #711's top 10 put the first cell clearing 0.90 seventh ([12, 19, 1], 0.97), and #686's top 10 hold five above 0.90.*
 
 **Gated elite refinement hardens the pick (#404).** The floor above reads the *same* in-run
 ensemble that ranks the cell, and that estimate is itself high-variance near the bifurcation — so a lucky
@@ -683,6 +684,6 @@ adopted — the arithmetic is in [`docs/research/434-ensemble-confidence.md`](..
 **The projection re-runs without the search (#531).** Because the pick is a function of `(atlas, seed)`
 and the projection settings alone, the atlas records the search's seed and horizon (`provenance`), and
 `explorers-search --reproject ATLAS` runs refinement and projection against an atlas file with no search.
-It yields exactly the recipe the run that wrote the atlas projected under the same `--refine-top-k` /
+It yields exactly the recipe the run that wrote the atlas projected under the same `--refine-cap` /
 `--refine-ensemble`, so a refinement that dies costs minutes rather than a regeneration, and projection
 settings can be compared on one fixed atlas instead of across two searches' draws.

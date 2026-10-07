@@ -9,7 +9,7 @@ use explorers_search::atlas_file::{ReprojectSettings, read_atlas, reproject, wri
 use explorers_search::checkpoint::inspect;
 use explorers_search::qd::{
     COEXISTENCE_FLOOR, CoexistenceFloor, DEFAULT_SEARCH_TIMEOUT_SECS, LIVE_FRACTION_POWER,
-    REFINE_ENSEMBLE_SIZE, REFINE_TOP_K, RefinedProjection, RefinementConfig, SEARCH_ROLLOUT_BUDGET,
+    REFINE_CAP, REFINE_ENSEMBLE_SIZE, RefinedProjection, RefinementConfig, SEARCH_ROLLOUT_BUDGET,
     refined_best_recipe,
 };
 use explorers_search::search::{
@@ -28,7 +28,7 @@ fn main() {
     let mut seed: Option<u64> = None;
     let mut output_path = PathBuf::from("atlas.json");
     let mut recipe_output_path = PathBuf::from("recipe.json");
-    let mut refine_top_k = REFINE_TOP_K;
+    let mut refine_cap = REFINE_CAP;
     let mut refine_ensemble = REFINE_ENSEMBLE_SIZE;
     let mut coexistence_floor = CoexistenceFloor::Plain;
     let mut checkpoint_path: Option<PathBuf> = None;
@@ -84,9 +84,9 @@ fn main() {
                 i += 1;
                 recipe_output_path = PathBuf::from(&args[i]);
             }
-            "--refine-top-k" => {
+            "--refine-cap" => {
                 i += 1;
-                refine_top_k = args[i].parse().unwrap();
+                refine_cap = args[i].parse().unwrap();
             }
             "--early-stop-crosscheck-fraction" => {
                 i += 1;
@@ -162,7 +162,7 @@ fn main() {
             std::process::exit(1);
         }
         let settings = ReprojectSettings {
-            top_k: refine_top_k,
+            cap: refine_cap,
             ensemble_size: refine_ensemble,
             seed,
             max_ticks,
@@ -177,7 +177,7 @@ fn main() {
             reproject(&atlas, &settings)
         });
         match reprojected {
-            Ok(projection) => report_projection(&projection, refine_top_k, &recipe_output_path),
+            Ok(projection) => report_projection(&projection, refine_cap, &recipe_output_path),
             Err(e) => {
                 eprintln!("Re-projection stopped: {e}");
                 std::process::exit(1);
@@ -296,24 +296,26 @@ fn main() {
     }
     eprintln!("Atlas written to {}", output_path.display());
 
-    // Gated elite refinement (#404): re-evaluate the top-K live cells at a larger,
-    // independent-seeded ensemble before projecting, so the high-variance in-run
+    // Gated elite refinement (#404, #715): re-evaluate live cells in fitness
+    // order, up to the cap, at a larger independent-seeded ensemble until one
+    // clears the floor, before projecting, so the high-variance in-run
     // estimate that both fitness and the coexistence floor depend on is hardened.
     // Selection only — the atlas map (binning, per-cell fitness) is untouched.
     let refinement = RefinementConfig {
-        top_k: refine_top_k,
+        cap: refine_cap,
         ensemble_size: refine_ensemble,
         max_ticks: config.max_ticks,
         floor: coexistence_floor,
         rollout_budget,
     };
     eprintln!(
-        "\nRefining top-{} live cells at ensemble n={} (independent seeds)...",
-        refine_top_k, refine_ensemble
+        "\nRefining live cells in fitness order until one clears (at most {}) at ensemble \
+         n={} (independent seeds)...",
+        refine_cap, refine_ensemble
     );
     let projection = refined_best_recipe(&atlas, &config.ranges, &refinement, seed);
 
-    report_projection(&projection, refine_top_k, &recipe_output_path);
+    report_projection(&projection, refine_cap, &recipe_output_path);
 
     // Atlas summary: coverage / QD-score, the top live cells, and the dead
     // frontier (the failure tally) — the search's output is a map, not a ranked
@@ -428,18 +430,15 @@ fn main() {
     }
 }
 
-/// Report the refined top-K, write the projected recipe, and warn when the pick
-/// fell back below the coexistence floor — shared by the full run and
-/// `--reproject`, so the two report a projection identically.
-fn report_projection(
-    projection: &RefinedProjection,
-    refine_top_k: usize,
-    recipe_output_path: &Path,
-) {
+/// Report the refined cells and the pick, write the projected recipe, and warn
+/// when the pick fell back below the coexistence floor — shared by the full
+/// run and `--reproject`, so the two report a projection identically.
+fn report_projection(projection: &RefinedProjection, refine_cap: usize, recipe_output_path: &Path) {
     if !projection.refined.is_empty() {
         eprintln!(
-            "Refined cells (coexist recorded → refined; the same seeds under the guild-aware \
-             floors dec/cons/either; guild reads dec/cons). Floor: {} (✓ clears {:.2}):",
+            "Refined cells, in fitness order (coexist recorded → refined; the same seeds under \
+             the guild-aware floors dec/cons/either; guild reads dec/cons). Floor: {} (✓ clears \
+             {:.2}):",
             projection.floor.label(),
             COEXISTENCE_FLOOR
         );
@@ -469,10 +468,31 @@ fn report_projection(
         }
         if projection.unrefined_live_cells > 0 {
             eprintln!(
-                "  ({} lower-fitness live cell(s) below the top-{} cut were not refined)",
-                projection.unrefined_live_cells, refine_top_k
+                "  ({} lower-fitness live cell(s) were not refined: {})",
+                projection.unrefined_live_cells,
+                if projection.cleared_floor {
+                    "refinement stops at the first cell that clears".to_string()
+                } else {
+                    format!("refinement stops at the cap of {refine_cap}")
+                }
             );
         }
+    }
+    if let Some(pick) = projection.pick {
+        let picked = &projection.refined[pick];
+        eprintln!(
+            "Picked cell {:?} after {} refinement(s): {}",
+            picked.cell,
+            projection.refined.len(),
+            if projection.cleared_floor {
+                format!(
+                    "the first in fitness order to clear the {} floor",
+                    projection.floor.label()
+                )
+            } else {
+                "no cell cleared, so the highest refined coexistence".to_string()
+            }
+        );
     }
 
     match &projection.recipe {
@@ -487,16 +507,17 @@ fn report_projection(
                 projection.floor.label(),
                 recipe_output_path.display()
             );
-            // Warn when the refinement had to fall back below the floor: no top-K
-            // cell stays robustly sensible under the larger ensemble, so the recipe
-            // is a bifurcation straddler — most of its ensemble does NOT coexist
-            // (#401, #404).
+            // Warn when the refinement had to fall back below the floor: no
+            // refined cell stays robustly sensible under the larger ensemble,
+            // so the recipe is the most robust world found, and it fails to
+            // coexist on more than a tenth of its seeds (#401, #404, #715).
             if !projection.cleared_floor {
                 eprintln!(
-                    "  WARNING: no refined top-{} cell clears the {} coexistence floor ({:.2}); \
-                     the recipe is the argmax-fitness straddler (a lucky-draw world). Try a \
-                     larger budget, ensemble, or --refine-top-k.",
-                    refine_top_k,
+                    "  WARNING: none of the {} refined cell(s) clears the {} coexistence floor \
+                     ({:.2}); the recipe is the refined cell with the highest refined \
+                     coexistence, which falls short of it. Try a larger budget, ensemble, or \
+                     --refine-cap.",
+                    projection.refined.len(),
                     projection.floor.label(),
                     COEXISTENCE_FLOOR
                 );
@@ -525,7 +546,9 @@ fn print_usage() {
     eprintln!("  --seed N            Random seed (default: 42)");
     eprintln!("  --output PATH       Atlas JSON path (default: atlas.json)");
     eprintln!("  --recipe-output PATH  Recipe JSON path (default: recipe.json)");
-    eprintln!("  --refine-top-k N    Top live cells to refine before projecting (default: 10)");
+    eprintln!("  --refine-cap N      Most live cells to refine, in fitness order, before");
+    eprintln!("                      projecting; refinement stops at the first that clears");
+    eprintln!("                      the 0.90 coexistence floor (default: {REFINE_CAP})");
     eprintln!("  --refine-ensemble N Refinement ensemble size, independent seeds (default: 32)");
     eprintln!("  --early-stop-crosscheck-fraction F");
     eprintln!("                      Fraction of early-stopped rollouts carried to the horizon");
@@ -560,7 +583,7 @@ fn print_usage() {
     eprintln!("                      --seed as the original run; a mismatch is refused.");
     eprintln!("  --reproject PATH    Skip the search: read the atlas at PATH and run only the");
     eprintln!("                      refinement and recipe projection against it, writing");
-    eprintln!("                      --recipe-output. Takes --refine-top-k, --refine-ensemble");
+    eprintln!("                      --recipe-output. Takes --refine-cap, --refine-ensemble");
     eprintln!("                      and --coexistence-floor (same defaults); the recipe is the");
     eprintln!("                      one the run that wrote");
     eprintln!("                      the atlas projects under the same settings. The seed and");

@@ -1677,7 +1677,7 @@ mod tests {
         let cell = AtlasCellIn {
             cell: [0, 0, 0],
             fitness: 0.5,
-            coexistence_fraction: 0.8,
+            coexistence_fraction: 1.0,
             sample_count: 5,
             decomposer_fraction: 0.0,
         };
