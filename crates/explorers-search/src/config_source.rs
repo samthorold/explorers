@@ -19,7 +19,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use crate::lhs;
-use crate::search::{ParameterRange, decode, size_blind_ranges};
+use crate::search::{FixedParameters, ParameterRange, decode, size_blind_ranges};
 use crate::sweep::AtlasUnits;
 
 /// Low-discrepancy configs drawn in addition to the atlas cells — same count
@@ -95,11 +95,19 @@ impl std::str::FromStr for ConfigSource {
 /// recorded rows and research notes; drawing them over a box with another
 /// coordinate would give every one of those worlds a nonzero exponent, so
 /// they keep the size-blind box and every sample world keeps `b = 0` (and,
-/// since #669, the cross-trait cost `c_AH = 0`; since #701, the leaching rate
-/// `λ = 0`). Its ranges are the full box's own, scales included: all 32 are
+/// since #669, the cross-trait cost `c_AH = 0`; and the leaching rate
+/// `λ = 0`, [`sample_fixed`]). Its ranges are the full box's own, scales included: all 32 are
 /// linear.
 pub fn sample_box() -> Vec<ParameterRange> {
     size_blind_ranges()
+}
+
+/// The parameters the LHS draws hold fixed outside [`sample_box`]: none
+/// (#716). A `sample:i` key names a fixed world in recorded rows and research
+/// notes, so its world keeps the leaching rate it always ran at, the
+/// stepper's `λ = 0`, rather than genesis's fixed rate.
+pub fn sample_fixed() -> FixedParameters {
+    FixedParameters::none()
 }
 
 /// The seed-421 LHS draw of `SAMPLE_CONFIGS` unit vectors over [`sample_box`].
@@ -128,8 +136,8 @@ pub fn resolve_config(
     let box_ = sample_box();
     match source {
         ConfigSource::Atlas => atlas.decode(index),
-        ConfigSource::SAMPLE => decode(&sampled[index], &box_),
-        ConfigSource::Sample(seed) => decode(&sample_draw(seed)[index], &box_),
+        ConfigSource::SAMPLE => decode(&sampled[index], &box_, &sample_fixed()),
+        ConfigSource::Sample(seed) => decode(&sample_draw(seed)[index], &box_, &sample_fixed()),
     }
 }
 
@@ -559,15 +567,23 @@ mod tests {
         let world = |source, i| resolve_config(source, i, &AtlasUnits::default(), &sampled);
         assert_eq!(
             world(ConfigSource::Sample(9421), 12),
-            decode(&other[12], &box_)
+            decode(&other[12], &box_, &sample_fixed())
         );
-        assert_eq!(world(ConfigSource::SAMPLE, 12), decode(&sampled[12], &box_));
+        assert_eq!(
+            world(ConfigSource::SAMPLE, 12),
+            decode(&sampled[12], &box_, &sample_fixed())
+        );
         let narrowed = crate::search::narrowed_ranges();
-        let atlas = AtlasUnits::new(narrowed.clone(), vec![vec![0.25; narrowed.len()]]);
+        let atlas = AtlasUnits::new(narrowed.clone(), vec![vec![0.25; narrowed.len()]])
+            .with_fixed(FixedParameters::genesis());
         let cell = resolve_config(ConfigSource::Atlas, 0, &atlas, &sampled);
         assert_eq!(
             cell,
-            decode(&vec![0.25; narrowed.len()], &narrowed),
+            decode(
+                &vec![0.25; narrowed.len()],
+                &narrowed,
+                &FixedParameters::genesis()
+            ),
             "atlas cells: their own box"
         );
     }
@@ -576,7 +592,8 @@ mod tests {
     /// draws stay over the size-blind box, so `sample:i` and `sample@S:i` keep
     /// naming the worlds every recorded row names, all with `b = 0` — and,
     /// since the cross-trait cost joined it too (#669), with `c_AH = 0`, and
-    /// since the leaching rate joined it (#701), with `λ = 0`.
+    /// since the leaching rate joined it (#701) and since genesis has held it
+    /// fixed at 0.0025 (#716), with `λ = 0` ([`sample_fixed`]).
     #[test]
     fn sample_keys_keep_naming_their_size_blind_worlds() {
         assert_eq!(sample_box(), crate::search::size_blind_ranges());
@@ -588,7 +605,7 @@ mod tests {
         ] {
             for i in [0, 31, 199] {
                 let world = resolve_config(source, i, &AtlasUnits::default(), &sampled);
-                assert_eq!(world, decode(&units[i], &sample_box()));
+                assert_eq!(world, decode(&units[i], &sample_box(), &sample_fixed()));
                 assert_eq!(world.0.uptake_structure_exponent, 0.0);
                 assert_eq!(world.0.cross_trait_cost, 0.0);
                 assert_eq!(world.0.leaching_rate, 0.0);

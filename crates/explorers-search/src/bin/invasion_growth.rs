@@ -1449,6 +1449,7 @@ fn write_artifact(artifact: &Artifact) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use explorers_search::search::FixedParameters;
     use explorers_search::search::decode;
     use explorers_search::search::default_ranges;
     use explorers_sim::TraitVector;
@@ -1464,7 +1465,7 @@ mod tests {
         // Founded well-mixed: the smoke check needs a resident whose producers
         // breed inside 30 ticks, and the box-centre world founded in tight
         // patches (the #601 default) has not bred yet at 30.
-        let (params, mut dist) = decode(&unit, &ranges);
+        let (params, mut dist) = decode(&unit, &ranges, &FixedParameters::genesis());
         dist.founder_aggregation = 0.0;
         let config = (params, dist);
         let run = || run_cell_seed(&config, SEED_BASE, 30, 30, &[Arm::Intact, Arm::Removed]);
@@ -1684,7 +1685,11 @@ mod tests {
         let record = evaluate_cell(
             ConfigSource::Atlas,
             0,
-            &decode(&vec![0.5; ranges.len()], &ranges),
+            &decode(
+                &vec![0.5; ranges.len()],
+                &ranges,
+                &FixedParameters::genesis(),
+            ),
             Some(cell.meta()),
             2,
             20,
@@ -1740,7 +1745,7 @@ mod tests {
         // At t_inj = 1 no heterotroph has eaten a carcass, so the decomposer
         // role is absent by construction.
         let record = run_cell_seed(
-            &decode(&unit, &ranges),
+            &decode(&unit, &ranges, &FixedParameters::genesis()),
             SEED_BASE,
             1,
             10,
@@ -1788,7 +1793,7 @@ mod tests {
         let ranges = default_ranges();
         let unit = vec![0.5; ranges.len()];
         let record = run_cell_seed(
-            &decode(&unit, &ranges),
+            &decode(&unit, &ranges, &FixedParameters::genesis()),
             SEED_BASE,
             1,
             10,

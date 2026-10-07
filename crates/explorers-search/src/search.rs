@@ -69,6 +69,9 @@ pub struct SearchConfig {
     /// The search box. Defaults to the full box ([`default_ranges`]); the
     /// narrowed box ([`narrowed_ranges`], #559) is opt-in.
     pub ranges: Vec<ParameterRange>,
+    /// The parameters held fixed outside the box (#716). Defaults to
+    /// [`FixedParameters::genesis`].
+    pub fixed: FixedParameters,
     pub ensemble_size: u32,
     pub max_ticks: u64,
     /// Solutions evaluated per generation (the batch size).
@@ -105,6 +108,7 @@ impl Default for SearchConfig {
     fn default() -> Self {
         SearchConfig {
             ranges: default_ranges(),
+            fixed: FixedParameters::genesis(),
             ensemble_size: crate::qd::SEARCH_ENSEMBLE_SIZE,
             max_ticks: 2000,
             batch: 32,
@@ -140,14 +144,66 @@ pub fn parse_bloom_stop(value: &str) -> Result<BloomStop, String> {
     Ok(BloomStop { tick, factor })
 }
 
-/// The full box (#701): the 33 coordinates of the untaxed box
-/// ([`untaxed_ranges`]), then the leaching rate `λ` over `[0, 0.01]` on a
-/// square scale, `λ = 0.01 · u²` (world-rules.md, *Carcass energy decays only
-/// through agents; carcass nutrient leaches*, *The range*). The range holds
-/// `λ = 0` exactly, which a log scale cannot; the square gives a quarter of
-/// the coordinate to `λ < 0.01 / 16`, where nutrient lockup still bites. The
-/// cross-trait cost is not in it: its default 0 holds (trade-off #5).
+/// The leaching rate `λ` every world genesis searches runs at (#716), held
+/// outside the box: `λ_max / 4`, a carcass half-life of about 277 ticks
+/// (world-rules.md, *Carcass energy decays only through agents; carcass
+/// nutrient leaches*, *The rate*). The stepper's own default stays 0.
+pub const GENESIS_LEACHING_RATE: f64 = 0.0025;
+
+/// The world parameters a search holds at a fixed value outside its box
+/// (#716), by the name of the field each sets, as a [`ParameterRange`] names
+/// its field. A unit vector names a world only together with its box and
+/// these, so an atlas records them beside its box and a reader decodes its
+/// cells at the values it records. An atlas that records none decodes with
+/// every such field at the known-viable baseline's value, which for `λ` is
+/// the stepper's 0.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct FixedParameters(pub std::collections::BTreeMap<String, f64>);
+
+impl FixedParameters {
+    /// No fixed parameters: what an atlas from before #716 records.
+    pub fn none() -> Self {
+        FixedParameters::default()
+    }
+
+    /// What genesis's searches hold fixed (#716): `λ` at
+    /// [`GENESIS_LEACHING_RATE`].
+    pub fn genesis() -> Self {
+        FixedParameters(
+            [("leaching_rate".to_string(), GENESIS_LEACHING_RATE)]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The value `name` is held at, if it is held.
+    pub fn get(&self, name: &str) -> Option<f64> {
+        self.0.get(name).copied()
+    }
+}
+
+/// The full box (#716): the 33-coordinate untaxed box ([`untaxed_ranges`]).
+/// Neither the cross-trait cost `c_AH` (trade-off #5) nor the leaching rate
+/// `λ` is in it: genesis selects on neither, and a dimension the search does
+/// not select on only adds noise. `c_AH` keeps its default 0; `λ` is held at
+/// [`GENESIS_LEACHING_RATE`] outside the box, which the search records as one
+/// of its [`FixedParameters`] (world-rules.md, *Carcass energy decays only
+/// through agents; carcass nutrient leaches*, *The rate*).
 pub fn default_ranges() -> Vec<ParameterRange> {
+    untaxed_ranges()
+}
+
+/// The box #686's and #711's atlases were searched under (#701): the untaxed
+/// box ([`untaxed_ranges`]), then the leaching rate `λ` over `[0, 0.01]` on a
+/// square scale, `λ = 0.01 · u²`. The range holds `λ = 0` exactly, which a log
+/// scale cannot; the square gives a quarter of the coordinate to
+/// `λ < 0.01 / 16`, where nutrient lockup still bites.
+pub fn leached_ranges() -> Vec<ParameterRange> {
     let mut ranges = untaxed_ranges();
     ranges.push(ParameterRange {
         name: "leaching_rate".into(),
@@ -161,8 +217,9 @@ pub fn default_ranges() -> Vec<ParameterRange> {
 /// The box the committed atlas (#677) was searched under: the untaxed box
 /// ([`untaxed_ranges`]) with the cross-trait cost `c_AH` as its 34th
 /// coordinate, linear over `[0, 0.14]`, and no leaching (`λ = 0`, which
-/// [`decode`] gives any box without `λ`'s coordinate). It is the box `c_AH`
-/// is searched over if it comes out of reserve.
+/// [`decode`] gives any box without `λ`'s coordinate when no fixed rate is
+/// recorded, as the committed atlas records none). It is the box `c_AH` is
+/// searched over if it comes out of reserve.
 pub fn taxed_ranges() -> Vec<ParameterRange> {
     let mut ranges = untaxed_ranges();
     ranges.push(ParameterRange {
@@ -182,10 +239,11 @@ pub fn taxed_ranges() -> Vec<ParameterRange> {
 }
 
 /// The full box as it stood before the cross-trait cost joined it (#669),
-/// which is the full box without the leaching rate (#701): 33 coordinates,
-/// with mixotrophy untaxed (`c_AH = 0`) and no leaching (`λ = 0`), which
-/// [`decode`] gives any box without those coordinates. #663's atlas,
-/// committed until #677, was searched under this one.
+/// and again since #716: 33 coordinates, with mixotrophy untaxed
+/// (`c_AH = 0`). Its leaching rate is the one held fixed outside it:
+/// [`GENESIS_LEACHING_RATE`] for a search since #716, and the stepper's
+/// `λ = 0` for #663's atlas (committed until #677), which was searched under
+/// this box and records no fixed rate.
 pub fn untaxed_ranges() -> Vec<ParameterRange> {
     vec![
         ParameterRange {
@@ -490,7 +548,7 @@ pub fn narrowed_ranges() -> Vec<ParameterRange> {
 /// | `reserve_mobilisation_rate` | 1.0 (the full range's top, so the band is its top quarter) |
 /// | `uptake_structure_exponent` | 0.0 (size-blind uptake, the range's bottom, so the band is its bottom quarter) |
 /// | `cross_trait_cost` | 0.0 (untaxed mixotrophy, the range's bottom, so the band is its bottom quarter; only in a narrowing of [`taxed_ranges`]) |
-/// | `leaching_rate` | 0.0 (no leaching, the range's bottom, so the band is its bottom quarter, `[0, 0.0025]`, still on the square scale) |
+/// | `leaching_rate` | 0.0 (no leaching, the range's bottom, so the band is its bottom quarter, `[0, 0.0025]`, still on the square scale; only in a narrowing of [`leached_ranges`]) |
 ///
 /// The founder-distribution dims have no inherited value — `decode` sets the
 /// whole `InitialDistribution` from the unit vector — so their centre is the
@@ -646,22 +704,29 @@ fn viable_baseline() -> WorldParameters {
     }
 }
 
-/// The world a unit vector `values` names over the box `ranges`.
+/// The world a unit vector `values` names over the box `ranges`, with the
+/// parameters `fixed` holds outside it (#716).
 ///
 /// Each coordinate is read **by its range's name**, never by its position
 /// (#701): boxes of the same length can hold different fields at the same
-/// index (the committed atlas's 34th coordinate is `c_AH`, the full box's is
-/// `λ`), so a box is identified by the names it records, not its length. A
+/// index (the committed atlas's 34th coordinate is `c_AH`, the leached box's
+/// is `λ`), so a box is identified by the names it records, not its length. A
 /// field the box has no coordinate for keeps the known-viable baseline's
 /// value, which for the fields later boxes added (`b`, `c_AH`, `λ`) is the
-/// latent default 0 every world before them ran. The 32 fields every box has
-/// carried since the size-blind box must be present.
-pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, InitialDistribution) {
+/// latent default 0 every world before them ran, unless `fixed` holds it at
+/// a value of its own. The 32 fields every box has carried since the
+/// size-blind box must be present.
+pub fn decode(
+    values: &[f64],
+    ranges: &[ParameterRange],
+    fixed: &FixedParameters,
+) -> (WorldParameters, InitialDistribution) {
     let field = |name: &str| -> Option<f64> {
         ranges
             .iter()
             .position(|r| r.name == name)
             .map(|i| ranges[i].value_at(values[i]))
+            .or_else(|| fixed.get(name))
     };
     let v = |name: &str| -> f64 {
         field(name).unwrap_or_else(|| panic!("the search box has no `{name}` coordinate"))
@@ -700,8 +765,10 @@ pub fn decode(values: &[f64], ranges: &[ParameterRange]) -> (WorldParameters, In
         // coordinate for `c_AH`; every other box's worlds keep the baseline's
         // untaxed mixotrophy, `c_AH = 0`.
         cross_trait_cost: field("cross_trait_cost").map_or(0.0, |x| x as f32),
-        // A box from before #701 has no coordinate for `λ`: its worlds keep
-        // the baseline's `λ = 0`, no leaching.
+        // #686's and #711's boxes have a coordinate for `λ`; genesis's box
+        // since #716 holds it fixed. A box with neither (every atlas from
+        // before #701, the committed one included) keeps the baseline's
+        // `λ = 0`, no leaching.
         leaching_rate: field("leaching_rate").map_or(0.0, |x| x as f32),
         ..viable_baseline()
     };
@@ -777,6 +844,7 @@ impl SearchConfig {
     fn qd(&self) -> QdConfig {
         QdConfig {
             ranges: self.ranges.clone(),
+            fixed: self.fixed.clone(),
             ensemble_size: self.ensemble_size,
             max_ticks: self.max_ticks,
             batch: self.batch,
@@ -890,9 +958,8 @@ mod tests {
             .zip(&full)
             .filter(|(n, _)| !FULL_WIDTH_DIMS.contains(&n.name.as_str()))
             .collect();
-        // 22 dims at #559, plus the uptake structure exponent (#653) and the
-        // cross-trait cost (#669).
-        assert_eq!(shrunk.len(), 24);
+        // 22 dims at #559, plus the uptake structure exponent (#653).
+        assert_eq!(shrunk.len(), 23);
         for (n, f) in shrunk {
             let centre = band_centre(f);
             assert!(f.min <= n.min && n.max <= f.max, "{} outside", f.name);
@@ -923,7 +990,7 @@ mod tests {
             .iter()
             .map(|r| (band_centre(r) - r.min) / (r.max - r.min))
             .collect();
-        let (p, d) = decode(&unit, &full);
+        let (p, d) = decode(&unit, &full, &FixedParameters::genesis());
         let b = viable_baseline();
         let close = |got: f32, want: f32, name: &str| {
             assert!(
@@ -1027,7 +1094,7 @@ mod tests {
         let ranges = default_ranges();
         for &u in &[0.0, 0.5, 1.0] {
             let unit = vec![u; ranges.len()];
-            let (params, dist) = decode(&unit, &ranges);
+            let (params, dist) = decode(&unit, &ranges, &FixedParameters::genesis());
             assert!(
                 params.growth_efficiency > 0.0,
                 "growth_efficiency must be > 0 at unit input {u}, got {}",
@@ -1050,7 +1117,7 @@ mod tests {
     fn decode_produces_valid_world_parameters() {
         let ranges = default_ranges();
         let unit = vec![0.5; ranges.len()];
-        let (params, dist) = decode(&unit, &ranges);
+        let (params, dist) = decode(&unit, &ranges, &FixedParameters::genesis());
 
         assert!(params.solar_flux_magnitude > 0.0);
         assert!(params.initial_population_size > 0);
@@ -1063,11 +1130,11 @@ mod tests {
         let ranges = default_ranges();
 
         let zeros = vec![0.0; ranges.len()];
-        let (params_lo, _) = decode(&zeros, &ranges);
+        let (params_lo, _) = decode(&zeros, &ranges, &FixedParameters::genesis());
         assert!((params_lo.solar_flux_magnitude - 1.0).abs() < 1e-5);
 
         let ones = vec![1.0; ranges.len()];
-        let (params_hi, _) = decode(&ones, &ranges);
+        let (params_hi, _) = decode(&ones, &ranges, &FixedParameters::genesis());
         assert!((params_hi.solar_flux_magnitude - 20.0).abs() < 1e-5);
     }
 
@@ -1091,30 +1158,48 @@ mod tests {
         let mut unit = vec![0.5; ranges.len()];
         for (u, want) in [(0.0, 0.0), (0.25, 0.25), (0.5, 0.5), (1.0, 1.0)] {
             unit[idx] = u;
-            let (params, _) = decode(&unit, &ranges);
+            let (params, _) = decode(&unit, &ranges, &FixedParameters::genesis());
             assert_eq!(params.uptake_structure_exponent, want, "unit {u}");
             assert_eq!(params.uptake_reference_structure, 100.0, "unit {u}");
         }
     }
 
-    /// #701: the leaching rate `λ` is the full box's last coordinate, over
-    /// `[0, 0.01]` on a square scale, and the cross-trait cost is out of it.
+    /// #716: the default box is the 33-coordinate untaxed box again: neither
+    /// the cross-trait cost nor the leaching rate is a coordinate of it.
     #[test]
-    fn the_default_box_ends_in_the_leaching_rate_on_a_square_scale() {
+    fn the_default_box_is_the_untaxed_box_without_a_leaching_rate() {
         let ranges = default_ranges();
+        assert_eq!(ranges, untaxed_ranges());
+        assert_eq!(ranges.len(), 33);
+        assert!(!ranges.iter().any(|r| r.name == "leaching_rate"));
+        assert!(!ranges.iter().any(|r| r.name == "cross_trait_cost"));
+    }
+
+    /// #716: every world genesis decodes from the default box runs at the
+    /// fixed leaching rate 0.0025, which the search holds outside the box.
+    #[test]
+    fn a_world_decoded_from_the_default_box_leaches_at_the_genesis_rate() {
+        assert_eq!(GENESIS_LEACHING_RATE, 0.0025);
+        let config = SearchConfig::default();
+        assert_eq!(config.fixed, FixedParameters::genesis());
+        for u in [0.0, 0.5, 1.0] {
+            let unit = vec![u; config.ranges.len()];
+            let (params, _) = decode(&unit, &config.ranges, &config.fixed);
+            assert_eq!(params.leaching_rate, 0.0025, "unit {u}");
+            assert_eq!(params.cross_trait_cost, 0.0, "unit {u}");
+        }
+    }
+
+    /// #701: the box #686's and #711's atlases were searched under ends in
+    /// `λ` over `[0, 0.01]` on a square scale, after the untaxed box.
+    #[test]
+    fn the_leached_box_ends_in_the_leaching_rate_on_a_square_scale() {
+        let ranges = leached_ranges();
         assert_eq!(ranges.len(), 34);
-        assert!(
-            !ranges.iter().any(|r| r.name == "cross_trait_cost"),
-            "c_AH is out of the box"
-        );
         let last = ranges.last().unwrap();
         assert_eq!(last.name, "leaching_rate");
         assert_eq!((last.min, last.max), (0.0, 0.01));
         assert_eq!(last.scale, Scale::Square);
-        assert!(
-            ranges[..33].iter().all(|r| r.scale == Scale::Linear),
-            "every other coordinate is linear"
-        );
         assert_eq!(ranges[..33], untaxed_ranges()[..]);
     }
 
@@ -1122,12 +1207,12 @@ mod tests {
     /// with `c_AH` out of the box every searched world keeps `c_AH = 0`.
     #[test]
     fn decode_reads_the_leaching_rate_as_its_top_times_u_squared() {
-        let ranges = default_ranges();
+        let ranges = leached_ranges();
         let idx = ranges.len() - 1;
         let mut unit = vec![0.5; ranges.len()];
         for (u, want) in [(0.0, 0.0), (0.5, 0.0025), (1.0, 0.01)] {
             unit[idx] = u;
-            let (params, _) = decode(&unit, &ranges);
+            let (params, _) = decode(&unit, &ranges, &FixedParameters::none());
             assert_eq!(params.leaching_rate, want as f32, "unit {u}");
             assert_eq!(params.cross_trait_cost, 0.0, "unit {u}");
         }
@@ -1145,12 +1230,12 @@ mod tests {
         assert_eq!(old[..], full[..32]);
         for u in [0.0, 0.3, 1.0] {
             let unit: Vec<f64> = (0..32).map(|i| (u + i as f64 * 0.017) % 1.0).collect();
-            let (params, dist) = decode(&unit, &old);
+            let (params, dist) = decode(&unit, &old, &FixedParameters::none());
             assert_eq!(params.uptake_structure_exponent, 0.0);
             assert_eq!(params.uptake_reference_structure, 100.0);
             let mut extended = unit.clone();
             extended.push(0.0);
-            let (p33, d33) = decode(&extended, &full);
+            let (p33, d33) = decode(&extended, &full, &FixedParameters::none());
             assert_eq!(format!("{params:?}"), format!("{p33:?}"));
             assert_eq!(format!("{dist:?}"), format!("{d33:?}"));
         }
@@ -1158,7 +1243,7 @@ mod tests {
 
     /// #669, #701: a unit vector drawn under the untaxed box (33 raw
     /// coordinates, #663's atlas's) still decodes to the world it named, with
-    /// `c_AH = 0` and `λ = 0`: the same world as the full box at `λ`'s
+    /// `c_AH = 0` and `λ = 0`: the same world as the leached box at `λ`'s
     /// coordinate 0 and as the taxed box at `c_AH`'s.
     #[test]
     fn an_untaxed_box_still_decodes_its_worlds_with_c_ah_and_lambda_zero() {
@@ -1166,14 +1251,14 @@ mod tests {
         assert_eq!(old.len(), 33);
         for u in [0.0, 0.3, 1.0] {
             let unit: Vec<f64> = (0..33).map(|i| (u + i as f64 * 0.017) % 1.0).collect();
-            let (params, dist) = decode(&unit, &old);
+            let (params, dist) = decode(&unit, &old, &FixedParameters::none());
             assert_eq!(params.cross_trait_cost, 0.0);
             assert_eq!(params.leaching_rate, 0.0);
             let mut extended = unit.clone();
             extended.push(0.0);
-            for full in [default_ranges(), taxed_ranges()] {
+            for full in [leached_ranges(), taxed_ranges()] {
                 assert_eq!(old[..], full[..33]);
-                let (p34, d34) = decode(&extended, &full);
+                let (p34, d34) = decode(&extended, &full, &FixedParameters::none());
                 assert_eq!(format!("{params:?}"), format!("{p34:?}"));
                 assert_eq!(format!("{dist:?}"), format!("{d34:?}"));
             }
@@ -1181,14 +1266,14 @@ mod tests {
     }
 
     /// #701: the committed atlas's box (#677) has as many coordinates as the
-    /// full box, and its 34th is `c_AH`, not `λ`. `decode` tells them apart by
-    /// name: over the taxed box the 34th coordinate is `c_AH`, linear over
-    /// `[0, 0.14]`, with `λ = 0`; the same unit over the full box is `λ`, with
-    /// `c_AH = 0`.
+    /// leached box (#686's and #711's), and its 34th is `c_AH`, not `λ`.
+    /// `decode` tells them apart by name: over the taxed box the 34th
+    /// coordinate is `c_AH`, linear over `[0, 0.14]`, with `λ = 0`; the same
+    /// unit over the leached box is `λ`, with `c_AH = 0`.
     #[test]
     fn the_taxed_box_decodes_its_last_coordinate_as_c_ah_with_lambda_zero() {
         let taxed = taxed_ranges();
-        assert_eq!(taxed.len(), default_ranges().len());
+        assert_eq!(taxed.len(), leached_ranges().len());
         let last = taxed.last().unwrap();
         assert_eq!(last.name, "cross_trait_cost");
         assert_eq!((last.min, last.max), (0.0, 0.14));
@@ -1196,10 +1281,10 @@ mod tests {
         let mut unit = vec![0.5; taxed.len()];
         for (u, want) in [(0.0, 0.0), (0.5, 0.07), (1.0, 0.14)] {
             unit[33] = u;
-            let (params, _) = decode(&unit, &taxed);
+            let (params, _) = decode(&unit, &taxed, &FixedParameters::none());
             assert_eq!(params.cross_trait_cost, want as f32, "unit {u}");
             assert_eq!(params.leaching_rate, 0.0, "unit {u}");
-            let (full, _) = decode(&unit, &default_ranges());
+            let (full, _) = decode(&unit, &leached_ranges(), &FixedParameters::none());
             assert_eq!(full.cross_trait_cost, 0.0, "unit {u}");
         }
     }
@@ -1217,7 +1302,7 @@ mod tests {
             serde_json::to_string(&legacy).unwrap(),
             r#"{"name":"cross_trait_cost","min":0.0,"max":0.14}"#
         );
-        let lambda = default_ranges().pop().unwrap();
+        let lambda = leached_ranges().pop().unwrap();
         let text = serde_json::to_string(&lambda).unwrap();
         assert_eq!(
             text,
@@ -1243,7 +1328,7 @@ mod tests {
             .position(|r| r.name == "reserve_mobilisation_rate")
             .expect("reserve_mobilisation_rate must be a searched parameter");
         unit[idx] = 0.0; // minimum of the range
-        let (params, _) = decode(&unit, &ranges);
+        let (params, _) = decode(&unit, &ranges, &FixedParameters::genesis());
         assert!(
             params.reserve_mobilisation_rate < 1.0,
             "search must be able to reach f < 1 (got {})",
@@ -1251,7 +1336,7 @@ mod tests {
         );
         // And the top of the range reproduces the historical no-op exactly.
         unit[idx] = 1.0;
-        let (params_hi, _) = decode(&unit, &ranges);
+        let (params_hi, _) = decode(&unit, &ranges, &FixedParameters::genesis());
         assert!(
             (params_hi.reserve_mobilisation_rate - 1.0).abs() < 1e-5,
             "f at the top of its range must be 1.0 (historical no-op), got {}",
@@ -1478,7 +1563,7 @@ mod tests {
 
         // decode at midpoint should produce non-zero values
         let unit = vec![0.5; ranges.len()];
-        let (params, _) = decode(&unit, &ranges);
+        let (params, _) = decode(&unit, &ranges, &FixedParameters::genesis());
         assert!(
             params.base_nutrient_ratio > 0.0,
             "decoded base_nutrient_ratio should be positive"

@@ -1419,6 +1419,7 @@ fn print_summary(s: &Summary) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use explorers_search::search::FixedParameters;
     use explorers_search::search::decode;
     use explorers_search::search::default_ranges;
     use explorers_sim::WorldRecipe;
@@ -1840,7 +1841,7 @@ mod tests {
         let record = evaluate_config(
             ConfigSource::SAMPLE,
             0,
-            &decode(&unit, &default_ranges()),
+            &decode(&unit, &default_ranges(), &FixedParameters::genesis()),
             2,
             20,
             Duration::MAX,
@@ -1857,7 +1858,8 @@ mod tests {
 #[cfg(test)]
 mod resume_tests {
     use super::*;
-    use explorers_search::config_source::{sample_box, sample_draw};
+    use explorers_search::config_source::{sample_box, sample_draw, sample_fixed};
+    use explorers_search::search::FixedParameters;
     use explorers_search::search::decode;
     use explorers_search::search::default_ranges;
 
@@ -1938,7 +1940,7 @@ mod resume_tests {
         let expected = evaluate_config(
             ConfigSource::Sample(9421),
             4,
-            &decode(&sample_draw(9421)[4], &sample_box()),
+            &decode(&sample_draw(9421)[4], &sample_box(), &sample_fixed()),
             1,
             20,
             Duration::MAX,
@@ -2007,7 +2009,7 @@ mod resume_tests {
         let record = evaluate_config(
             ConfigSource::SAMPLE,
             0,
-            &decode(&unit, &default_ranges()),
+            &decode(&unit, &default_ranges(), &FixedParameters::genesis()),
             1,
             20,
             Duration::ZERO,
@@ -2036,7 +2038,7 @@ mod resume_tests {
         let record = evaluate_config(
             ConfigSource::SAMPLE,
             0,
-            &decode(&unit, &default_ranges()),
+            &decode(&unit, &default_ranges(), &FixedParameters::genesis()),
             1,
             20,
             Duration::MAX,
@@ -2077,7 +2079,7 @@ mod resume_tests {
     #[test]
     fn peak_tick_is_the_first_tick_reaching_the_peak_population() {
         let ranges = sample_box();
-        let (params, dist) = decode(&sampled_units()[14], &ranges);
+        let (params, dist) = decode(&sampled_units()[14], &ranges, &sample_fixed());
         let horizon = 40;
         let outcome = run_seed(
             &params,
@@ -2116,7 +2118,11 @@ mod resume_tests {
     #[test]
     fn peak_tick_is_absent_on_unfinished_seeds_and_old_rows_parse() {
         let ranges = default_ranges();
-        let (params, dist) = decode(&vec![0.5; ranges.len()], &ranges);
+        let (params, dist) = decode(
+            &vec![0.5; ranges.len()],
+            &ranges,
+            &FixedParameters::genesis(),
+        );
         for (run, eval) in [
             (Duration::ZERO, Duration::MAX),
             (Duration::MAX, Duration::ZERO),
@@ -2141,7 +2147,7 @@ mod resume_tests {
     #[test]
     fn cutoffs_record_the_population_and_running_peak_at_each_reached_cutoff() {
         let ranges = sample_box();
-        let (params, dist) = decode(&sampled_units()[14], &ranges);
+        let (params, dist) = decode(&sampled_units()[14], &ranges, &sample_fixed());
         let horizon = 60;
         let outcome = run_seed(
             &params,
@@ -2173,7 +2179,11 @@ mod resume_tests {
     #[test]
     fn a_seed_stopped_before_the_first_cutoff_records_none_and_old_rows_parse() {
         let ranges = default_ranges();
-        let (params, dist) = decode(&vec![0.5; ranges.len()], &ranges);
+        let (params, dist) = decode(
+            &vec![0.5; ranges.len()],
+            &ranges,
+            &FixedParameters::genesis(),
+        );
         let outcome = run_seed(&params, &dist, SEED_BASE, 20, Duration::MAX, Duration::MAX);
         assert!(outcome.cutoffs.is_empty());
         let line = serde_json::to_string(&outcome).unwrap();
@@ -2195,7 +2205,7 @@ mod resume_tests {
     #[test]
     fn early_stop_records_where_the_search_would_have_stopped_without_stopping() {
         let ranges = sample_box();
-        let (params, dist) = decode(&sample_draw(9421)[110], &ranges);
+        let (params, dist) = decode(&sample_draw(9421)[110], &ranges, &sample_fixed());
         let seed = 1001;
         let horizon = 400;
         let outcome = run_seed(&params, &dist, seed, horizon, Duration::MAX, Duration::MAX);
@@ -2225,7 +2235,11 @@ mod resume_tests {
     #[test]
     fn a_seed_the_gate_never_stops_carries_no_early_stop_keys_and_old_rows_parse() {
         let ranges = default_ranges();
-        let (params, dist) = decode(&vec![0.5; ranges.len()], &ranges);
+        let (params, dist) = decode(
+            &vec![0.5; ranges.len()],
+            &ranges,
+            &FixedParameters::genesis(),
+        );
         let outcome = run_seed(&params, &dist, SEED_BASE, 20, Duration::MAX, Duration::MAX);
         assert_eq!(outcome.early_stop_tick, None);
         assert_eq!(outcome.early_stop_mode, None);
@@ -2244,7 +2258,7 @@ mod resume_tests {
         let record = evaluate_config(
             ConfigSource::SAMPLE,
             0,
-            &decode(&unit, &default_ranges()),
+            &decode(&unit, &default_ranges(), &FixedParameters::genesis()),
             1,
             20,
             Duration::MAX,

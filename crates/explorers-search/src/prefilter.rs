@@ -111,6 +111,7 @@ pub fn prefilter_cliff(params: &WorldParameters) -> Option<Cliff> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::FixedParameters;
     use crate::search::{decode, default_ranges};
 
     fn baseline() -> WorldParameters {
@@ -118,7 +119,7 @@ mod tests {
         // both gates.
         let ranges = default_ranges();
         let unit = vec![0.5_f64; ranges.len()];
-        decode(&unit, &ranges).0
+        decode(&unit, &ranges, &FixedParameters::genesis()).0
     }
 
     #[test]
@@ -209,7 +210,7 @@ mod tests {
         for step in 0..=4 {
             let u = step as f64 / 4.0;
             let unit = vec![u; ranges.len()];
-            let (params, _) = decode(&unit, &ranges);
+            let (params, _) = decode(&unit, &ranges, &FixedParameters::genesis());
             if let Some(cliff) = prefilter_cliff(&params) {
                 assert_ne!(
                     cliff,

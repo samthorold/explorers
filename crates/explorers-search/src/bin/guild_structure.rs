@@ -40,7 +40,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use explorers_genesis::{Rollout, RunConfig, rollout};
-use explorers_search::config_source::{ConfigSource, parse_selector, sample_box, sampled_units};
+use explorers_search::config_source::{
+    ConfigSource, parse_selector, sample_box, sample_fixed, sampled_units,
+};
 use explorers_search::qd::Cliff;
 use explorers_search::search::decode;
 use explorers_search::sweep::{append_row, done_configs, plan_tasks, read_rows};
@@ -405,7 +407,7 @@ struct StructureRow {
 /// `sample_box`, `EvalConfig::default()`, horizon `horizon`, no early-stop
 /// carry) and read its structure.
 fn measure(unit: &[f64], guild_seed: &GuildSeed, horizon: u64) -> SeedStructure {
-    let (params, dist) = decode(unit, &sample_box());
+    let (params, dist) = decode(unit, &sample_box(), &sample_fixed());
     let run_config = RunConfig {
         max_ticks: horizon,
         eval_config: EvalConfig::default(),

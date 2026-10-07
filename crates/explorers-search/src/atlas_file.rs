@@ -376,11 +376,8 @@ mod tests {
                 .map(|r| (r.name.clone(), r.min, r.max))
                 .collect::<Vec<_>>()
         };
-        // The whole box, scales included (#701): the narrowed box keeps the
-        // leaching rate on its square scale.
         let read_box = read_atlas(&path).unwrap().search_box();
         assert_eq!(read_box, config.ranges);
-        assert_eq!(read_box.last().unwrap().scale, crate::search::Scale::Square);
 
         let mut legacy: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

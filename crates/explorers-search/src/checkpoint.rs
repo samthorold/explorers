@@ -14,7 +14,7 @@ use explorers_genesis::BloomStop;
 use rand_chacha::ChaCha8Rng;
 
 use crate::qd::{Atlas, GenerationReport, QdConfig, SearchState};
-use crate::search::Scale;
+use crate::search::{FixedParameters, Scale};
 
 /// The checkpoint format version. Bump it whenever the written form of
 /// [`SearchState`] or the stamp changes; a checkpoint from any other version is
@@ -170,6 +170,10 @@ struct Stamp {
     /// Absent from a checkpoint written before #699, which ran no top-up.
     #[serde(default)]
     top_up_screen: Option<u32>,
+    /// The parameters held fixed outside the box (#716). Absent from a
+    /// checkpoint written before it, whose search held none.
+    #[serde(default)]
+    fixed: FixedParameters,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -208,6 +212,7 @@ impl Stamp {
             carcass_seed_count: config.carcass_seed_count,
             bloom_stop: config.bloom_stop,
             top_up_screen: config.top_up_screen,
+            fixed: config.fixed.clone(),
         }
     }
 
@@ -239,7 +244,8 @@ impl Stamp {
             early_stop_crosscheck_fraction,
             carcass_seed_count,
             bloom_stop,
-            top_up_screen
+            top_up_screen,
+            fixed
         );
         if self.ranges != invocation.ranges {
             out.push(match self.ranges.len() == invocation.ranges.len() {
@@ -400,13 +406,17 @@ mod tests {
 
     /// #701: a checkpoint written under the committed atlas's box (34
     /// coordinates, the last `c_AH`, no scales recorded) is refused by a search
-    /// under the full box, which has as many coordinates with `λ` last; so is
-    /// one whose box differs only in a coordinate's scale. A pre-#701 stamp
+    /// under the leached box, which has as many coordinates with `λ` last; so
+    /// is one whose box differs only in a coordinate's scale. A pre-#701 stamp
     /// still resumes under its own box.
     #[test]
     fn a_checkpoint_from_another_box_of_the_same_length_is_refused() {
         let taxed = QdConfig {
             ranges: crate::search::taxed_ranges(),
+            ..tiny()
+        };
+        let leached = || QdConfig {
+            ranges: crate::search::leached_ranges(),
             ..tiny()
         };
         let old = serde_json::to_value(Stamp::of(&taxed, 42)).unwrap();
@@ -416,14 +426,48 @@ mod tests {
         );
         let old: Stamp = serde_json::from_value(old).unwrap();
         assert!(old.mismatches(&Stamp::of(&taxed, 42)).is_empty());
-        let refused = old.mismatches(&Stamp::of(&tiny(), 42));
+        let refused = old.mismatches(&Stamp::of(&leached(), 42));
         assert_eq!(refused.len(), 1);
         assert!(refused[0].contains("cross_trait_cost"), "{refused:?}");
 
-        let mut linear = tiny();
+        let mut linear = leached();
         linear.ranges.last_mut().unwrap().scale = Scale::Linear;
-        let refused = Stamp::of(&linear, 42).mismatches(&Stamp::of(&tiny(), 42));
+        let refused = Stamp::of(&linear, 42).mismatches(&Stamp::of(&leached(), 42));
         assert_eq!(refused.len(), 1, "{refused:?}");
+    }
+
+    /// #716: a checkpoint from a search with `λ` in its box (#686's, #711's)
+    /// is refused by a search under genesis's box, which holds `λ` fixed
+    /// outside it; so is one written before #716 under the untaxed box, whose
+    /// stamp records no fixed rate and whose worlds ran at `λ = 0`.
+    #[test]
+    fn a_checkpoint_from_a_search_with_lambda_in_the_box_is_refused() {
+        let leached = QdConfig {
+            ranges: crate::search::leached_ranges(),
+            fixed: FixedParameters::none(),
+            ..tiny()
+        };
+        let refused = Stamp::of(&leached, 42).mismatches(&Stamp::of(&tiny(), 42));
+        assert!(
+            refused.iter().any(|m| m.starts_with("ranges")),
+            "{refused:?}"
+        );
+        assert!(
+            refused.iter().any(|m| m.starts_with("fixed")),
+            "{refused:?}"
+        );
+
+        let mut old = serde_json::to_value(Stamp::of(&tiny(), 42)).unwrap();
+        old.as_object_mut().unwrap().remove("fixed");
+        let old: Stamp = serde_json::from_value(old).unwrap();
+        let refused = old.mismatches(&Stamp::of(&tiny(), 42));
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(refused[0].starts_with("fixed"), "{refused:?}");
+        let untaxed_at_zero = QdConfig {
+            fixed: FixedParameters::none(),
+            ..tiny()
+        };
+        assert!(old.mismatches(&Stamp::of(&untaxed_at_zero, 42)).is_empty());
     }
 
     #[test]

@@ -84,7 +84,7 @@
 
 use explorers_genesis::EvalConfig;
 use explorers_genesis_eval::income::IncomeLedger;
-use explorers_search::search::{decode, default_ranges};
+use explorers_search::search::{FixedParameters, decode, default_ranges};
 use explorers_sim::World;
 use explorers_sim::topology::TrophicRole;
 
@@ -134,7 +134,7 @@ impl RunOutcome {
 /// but also threads an `IncomeLedger` so realised income can be read out.
 fn run_seed(unit: &[f64], seed: u64) -> RunOutcome {
     let ranges = default_ranges();
-    let (params, dist) = decode(unit, &ranges);
+    let (params, dist) = decode(unit, &ranges, &FixedParameters::genesis());
     let eval = EvalConfig::default();
     let mut world = World::new(params, dist, seed);
     let mut income = IncomeLedger::new();

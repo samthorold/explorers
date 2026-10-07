@@ -26,7 +26,7 @@
 
 use std::time::Instant;
 
-use explorers_search::config_source::{SAMPLE_CONFIGS, sample_box, sampled_units};
+use explorers_search::config_source::{SAMPLE_CONFIGS, sample_box, sample_fixed, sampled_units};
 use explorers_search::search::decode;
 use explorers_search::sweep::read_atlas_units;
 use explorers_sim::World;
@@ -66,7 +66,7 @@ fn main() {
             let unit = sampled
                 .get(index)
                 .unwrap_or_else(|| panic!("sample index {index} out of range ({SAMPLE_CONFIGS})"));
-            decode(unit, &sample_box())
+            decode(unit, &sample_box(), &sample_fixed())
         }
         other => panic!("source {other:?} must be atlas|sample"),
     };

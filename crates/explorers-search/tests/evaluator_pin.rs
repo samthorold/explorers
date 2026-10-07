@@ -552,11 +552,11 @@ fn fitness_breakdown_is_byte_identical_on_atlas_live_cells_at_the_500_tick_horiz
 #[ignore]
 fn horizon_ensemble_sample_55() {
     use explorers_genesis::{EnsembleConfig, run_ensemble};
-    use explorers_search::config_source::{sample_box, sampled_units};
+    use explorers_search::config_source::{sample_box, sample_fixed, sampled_units};
 
     let ranges = sample_box();
     let unit = &sampled_units()[55];
-    let (params, dist) = decode(unit, &ranges);
+    let (params, dist) = decode(unit, &ranges, &sample_fixed());
     let config = EnsembleConfig {
         ensemble_size: 8,
         run_config: RunConfig {

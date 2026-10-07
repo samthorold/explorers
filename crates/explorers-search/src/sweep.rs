@@ -30,8 +30,8 @@ use explorers_genesis::{InitialDistribution, WorldParameters};
 
 use crate::config_source::ConfigSource;
 use crate::search::{
-    ParameterRange, Scale, SearchBoxMismatch, check_search_box, decode, default_ranges,
-    size_blind_ranges,
+    FixedParameters, ParameterRange, Scale, SearchBoxMismatch, check_search_box, decode,
+    default_ranges, size_blind_ranges,
 };
 
 /// The mode a run records when its step loop exhausted the simulation budget
@@ -93,6 +93,10 @@ pub fn evaluate_within_budget(
 pub struct AtlasFile {
     #[serde(default)]
     pub search_box: Option<Vec<ParameterRange>>,
+    /// The parameters held fixed outside the box (#716); none on an atlas
+    /// from before it.
+    #[serde(default)]
+    pub fixed: FixedParameters,
     pub cells: Vec<AtlasCellUnit>,
 }
 
@@ -102,12 +106,14 @@ pub struct AtlasCellUnit {
 }
 
 /// An atlas's live cells as the research sweeps read them (#559): each
-/// cell's unit vector together with the search box it decodes over. A unit
-/// names a world only with its box, so the cells are decoded here, over the
-/// atlas's own box, and nowhere else.
+/// cell's unit vector together with the search box it decodes over and the
+/// parameters held fixed outside it (#716). A unit names a world only with
+/// its box and those, so the cells are decoded here, over the atlas's own box
+/// at its own fixed parameters, and nowhere else.
 #[derive(Clone, Debug)]
 pub struct AtlasUnits {
     search_box: Vec<ParameterRange>,
+    fixed: FixedParameters,
     units: Vec<Vec<f64>>,
 }
 
@@ -116,6 +122,7 @@ impl Default for AtlasUnits {
     fn default() -> Self {
         AtlasUnits {
             search_box: default_ranges(),
+            fixed: FixedParameters::genesis(),
             units: Vec::new(),
         }
     }
@@ -134,7 +141,17 @@ impl AtlasUnits {
                 search_box.len()
             );
         }
-        AtlasUnits { search_box, units }
+        AtlasUnits {
+            search_box,
+            fixed: FixedParameters::none(),
+            units,
+        }
+    }
+
+    /// These cells, decoded at the parameters `fixed` holds outside the box
+    /// (#716).
+    pub fn with_fixed(self, fixed: FixedParameters) -> Self {
+        AtlasUnits { fixed, ..self }
     }
 
     /// The number of live cells.
@@ -153,6 +170,12 @@ impl AtlasUnits {
         &self.search_box
     }
 
+    /// The parameters the cells decode at outside the box (#716): the ones the
+    /// atlas records, or none for an atlas from before it.
+    pub fn fixed(&self) -> &FixedParameters {
+        &self.fixed
+    }
+
     /// The live cells' unit vectors, in file order.
     pub fn units(&self) -> &[Vec<f64>] {
         &self.units
@@ -160,7 +183,7 @@ impl AtlasUnits {
 
     /// The world live cell `index` names, decoded over the atlas's own box.
     pub fn decode(&self, index: usize) -> (WorldParameters, InitialDistribution) {
-        decode(&self.units[index], &self.search_box)
+        decode(&self.units[index], &self.search_box, &self.fixed)
     }
 
     /// Check that `ranges`, the box a reader would decode the cells over, is
@@ -170,7 +193,7 @@ impl AtlasUnits {
     }
 
     /// A stable 64-bit FNV-1a digest of the box (names, bounds and any
-    /// non-linear scale) and every
+    /// non-linear scale), the parameters held fixed outside it, and every
     /// cell's unit vector, in file order (#656): rows record it so a readout
     /// can tell which atlas they ran on. Two atlases share it exactly when
     /// they decode the same worlds at the same indices.
@@ -192,6 +215,14 @@ impl AtlasUnits {
                 Scale::Linear => {}
                 Scale::Square => eat(b"square"),
             }
+        }
+        // The fixed parameters (#716), by name and value. An atlas that
+        // records none eats nothing, so every atlas from before them keeps
+        // its fingerprint.
+        for (name, value) in &self.fixed.0 {
+            eat(b"fixed");
+            eat(name.as_bytes());
+            eat(&value.to_bits().to_le_bytes());
         }
         for u in &self.units {
             eat(&(u.len() as u64).to_le_bytes());
@@ -215,6 +246,7 @@ pub fn read_atlas_units(path: &Path) -> AtlasUnits {
         atlas.search_box.unwrap_or_else(size_blind_ranges),
         atlas.cells.into_iter().map(|c| c.unit).collect(),
     )
+    .with_fixed(atlas.fixed)
 }
 
 /// The `(source, config_index)` keys already present in a JSON-lines output
@@ -330,7 +362,7 @@ mod tests {
         );
         let fewer = AtlasUnits::new(b.clone(), cells[..1].to_vec());
         assert_ne!(a.fingerprint(), fewer.fingerprint());
-        let full = default_ranges();
+        let full = crate::search::leached_ranges();
         let wide = AtlasUnits::new(full.clone(), vec![vec![0.5; full.len()]; 2]);
         assert_ne!(a.fingerprint(), wide.fingerprint());
         // #701: the scale is part of the box.
@@ -338,6 +370,18 @@ mod tests {
         linear.last_mut().unwrap().scale = Scale::Linear;
         let relinear = AtlasUnits::new(linear, vec![vec![0.5; full.len()]; 2]);
         assert_ne!(wide.fingerprint(), relinear.fingerprint());
+        // #716: so are the parameters held fixed outside it.
+        let default = default_ranges();
+        let units = vec![vec![0.5; default.len()]; 2];
+        let bare = AtlasUnits::new(default.clone(), units.clone());
+        let fixed = bare.clone().with_fixed(FixedParameters::genesis());
+        assert_ne!(bare.fingerprint(), fixed.fingerprint());
+        assert_eq!(
+            bare.fingerprint(),
+            AtlasUnits::new(default, units)
+                .with_fixed(FixedParameters::none())
+                .fingerprint()
+        );
     }
 
     /// A filter may name configs of another LHS draw (`sample@S:i`): they
