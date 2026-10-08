@@ -212,10 +212,10 @@ use rayon::prelude::*;
 use explorers_genesis_eval::guild::GUILD_MIN_SIZE;
 use explorers_genesis_eval::{EvalConfig, RolloutObservations};
 use explorers_search::config_source::{
-    ConfigSource, NetworkPins, parse_founder_aggregation, parse_non_negative, parse_positive,
-    parse_selector, parse_unit_interval, resolve_config, sampled_units, with_cross_trait_cost,
-    with_founder_aggregation, with_hyphal_uptake, with_leaching_rate, with_network,
-    with_uptake_scaling,
+    ConfigSource, NETWORK_FLAGS, NetworkPins, NetworkRecord, parse_founder_aggregation,
+    parse_non_negative, parse_positive, parse_selector, parse_unit_interval, resolve_config,
+    sampled_units, with_cross_trait_cost, with_founder_aggregation, with_hyphal_uptake,
+    with_leaching_rate, with_network, with_uptake_scaling,
 };
 use explorers_search::flow1_verdict::{
     COIN_ALPHA, Conditionality as Flow1Conditionality, DrainShift, Drains, LINEAGE_CLUSTERS,
@@ -2550,41 +2550,6 @@ struct Row {
     tally: Tally,
 }
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
-struct NetworkRecord {
-    connection_cap: u32,
-    creation_cost: f32,
-    maintenance_cost: f32,
-    redistribution_rate: f32,
-    transfer_efficiency: f32,
-}
-
-impl NetworkRecord {
-    fn of(p: &WorldParameters) -> Self {
-        Self {
-            connection_cap: p.network_connection_cap,
-            creation_cost: p.network_creation_cost,
-            maintenance_cost: p.network_maintenance_cost,
-            redistribution_rate: p.network_redistribution_rate,
-            transfer_efficiency: p.network_transfer_efficiency,
-        }
-    }
-
-    fn label(&self) -> String {
-        if self.connection_cap == 0 {
-            return "off (connection cap 0)".into();
-        }
-        format!(
-            "connection cap {}, creation cost {}, maintenance cost {}, redistribution rate {}, transfer efficiency {}",
-            self.connection_cap,
-            self.creation_cost,
-            self.maintenance_cost,
-            self.redistribution_rate,
-            self.transfer_efficiency
-        )
-    }
-}
-
 struct Args {
     limit: Option<usize>,
     horizon: u64,
@@ -2656,25 +2621,7 @@ fn parse_args() -> Result<Args, String> {
             "--uptake-reference-structure" => {
                 args.uptake_reference_structure = Some(parse_positive(&flag, &value()?)?)
             }
-            "--network-connection-cap" => {
-                args.network.connection_cap = Some(
-                    number(value()?)?
-                        .try_into()
-                        .map_err(|_| format!("{flag} is out of range"))?,
-                )
-            }
-            "--network-creation-cost" => {
-                args.network.creation_cost = Some(parse_non_negative(&flag, &value()?)?)
-            }
-            "--network-maintenance-cost" => {
-                args.network.maintenance_cost = Some(parse_non_negative(&flag, &value()?)?)
-            }
-            "--network-redistribution-rate" => {
-                args.network.redistribution_rate = Some(parse_unit_interval(&flag, &value()?)?)
-            }
-            "--network-transfer-efficiency" => {
-                args.network.transfer_efficiency = Some(parse_unit_interval(&flag, &value()?)?)
-            }
+            f if NETWORK_FLAGS.contains(&f) => args.network.set(f, &value()?)?,
             "--cross-trait-cost" => {
                 args.cross_trait_cost = Some(parse_non_negative(&flag, &value()?)?)
             }

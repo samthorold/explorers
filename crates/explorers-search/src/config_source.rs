@@ -243,6 +243,84 @@ pub struct NetworkPins {
     pub transfer_efficiency: Option<f32>,
 }
 
+/// The flags pinning the five network parameters, shared by the census
+/// (#646) and the fragility audit (#741); [`NetworkPins::set`] parses them.
+pub const NETWORK_FLAGS: [&str; 5] = [
+    "--network-connection-cap",
+    "--network-creation-cost",
+    "--network-maintenance-cost",
+    "--network-redistribution-rate",
+    "--network-transfer-efficiency",
+];
+
+impl NetworkPins {
+    /// Pin the parameter a [`NETWORK_FLAGS`] `flag` names to its `raw`
+    /// value: the connection cap an integer, the costs finite and `≥ 0`, the
+    /// redistribution rate and transfer efficiency in `[0, 1]`.
+    pub fn set(&mut self, flag: &str, raw: &str) -> Result<(), String> {
+        match flag {
+            "--network-connection-cap" => {
+                let n: u64 = raw
+                    .parse()
+                    .map_err(|_| format!("{flag} {raw:?} is not an integer"))?;
+                self.connection_cap = Some(
+                    n.try_into()
+                        .map_err(|_| format!("{flag} is out of range"))?,
+                )
+            }
+            "--network-creation-cost" => self.creation_cost = Some(parse_non_negative(flag, raw)?),
+            "--network-maintenance-cost" => {
+                self.maintenance_cost = Some(parse_non_negative(flag, raw)?)
+            }
+            "--network-redistribution-rate" => {
+                self.redistribution_rate = Some(parse_unit_interval(flag, raw)?)
+            }
+            "--network-transfer-efficiency" => {
+                self.transfer_efficiency = Some(parse_unit_interval(flag, raw)?)
+            }
+            other => return Err(format!("{other:?} is not a network flag")),
+        }
+        Ok(())
+    }
+}
+
+/// A world's effective **network** parameters (flow 5), as an instrument
+/// records them in its rows: the census (#646) and the fragility audit (#741).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NetworkRecord {
+    pub connection_cap: u32,
+    pub creation_cost: f32,
+    pub maintenance_cost: f32,
+    pub redistribution_rate: f32,
+    pub transfer_efficiency: f32,
+}
+
+impl NetworkRecord {
+    pub fn of(p: &WorldParameters) -> Self {
+        Self {
+            connection_cap: p.network_connection_cap,
+            creation_cost: p.network_creation_cost,
+            maintenance_cost: p.network_maintenance_cost,
+            redistribution_rate: p.network_redistribution_rate,
+            transfer_efficiency: p.network_transfer_efficiency,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        if self.connection_cap == 0 {
+            return "off (connection cap 0)".into();
+        }
+        format!(
+            "connection cap {}, creation cost {}, maintenance cost {}, redistribution rate {}, transfer efficiency {}",
+            self.connection_cap,
+            self.creation_cost,
+            self.maintenance_cost,
+            self.redistribution_rate,
+            self.transfer_efficiency
+        )
+    }
+}
+
 /// Pin a resolved world's **network** parameters (flow 5) where given,
 /// leaving everything else as decoded: #646's probe of whether a mycorrhizal
 /// route changes who processes detritus.
