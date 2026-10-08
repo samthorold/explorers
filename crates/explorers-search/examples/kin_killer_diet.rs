@@ -202,6 +202,27 @@
 //! flag: it reads every run, network on or off (off, it is the rule's
 //! baseline). Section O is new and printed last; rows from before #740 read
 //! back with no limitation runs.
+//!
+//! #742 reads whether the producer–decomposer trade runs and whether the
+//! pairs exist (#736's reading rule, items 2 and 3), with routed surplus
+//! (#738) and distance-ranked formation (#739) in. P. **Trade and
+//! pairing**, per world (a config, pooled over its seeds), settled half:
+//! the net nutrient from decomposers by role to producers by role (C's
+//! buckets), along the gradient flow (`Redistributed`, `network_n_flow`)
+//! and as routed surplus (`SurplusRouted`, `routed_n_flow`, kept apart: C's
+//! network columns still read the gradient flow only), each and their sum;
+//! the trade runs when the sum is positive, counted over the worlds forming
+//! producer–decomposer links (F's sampled connections), a majority or not.
+//! Pairs: the producer–decomposer share of a world's classified connections
+//! against 2 · p_P · p_D over the role headcounts on the same sample ticks
+//! (`NetCensus::heads`), and the exact sign test over the discordant worlds.
+//! Reported only: of the producers by role with spare connection capacity
+//! (fewer built than the cap), the share with a decomposer by role within
+//! formation's surface-contact radius (`contact_range_coefficient`, not
+//! `--contact-distance`, which is hyphal uptake's `d_c`). No flag; with the
+//! network off the section reports no links. Section P is new and printed
+//! last; rows from before #742 read back with no routed flow, headcounts or
+//! reach.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -623,6 +644,15 @@ struct Routes {
     network_n_unattributed: f64,
     #[serde(default)]
     network_e_unattributed: f64,
+    /// Routed surplus (flow 5, #738; `SurplusRouted`) drainer bucket →
+    /// partner bucket, `[drainer * MEMO + partner]` like `network_n_flow`,
+    /// and kept apart from it: routed nutrient is not a `Redistributed`
+    /// event, so the network columns above leave it out (#742).
+    #[serde(default = "flow_zeros")]
+    routed_n_flow: Vec<f64>,
+    /// Routed nutrient with an endpoint off the drain-time roster.
+    #[serde(default)]
+    routed_n_unattributed: f64,
 }
 
 fn recipient_zeros() -> Vec<f64> {
@@ -654,6 +684,8 @@ impl Default for Routes {
             network_e_flow: flow_zeros(),
             network_n_unattributed: 0.0,
             network_e_unattributed: 0.0,
+            routed_n_flow: flow_zeros(),
+            routed_n_unattributed: 0.0,
         }
     }
 }
@@ -684,6 +716,53 @@ impl Routes {
         add(&mut self.network_e_flow, &o.network_e_flow);
         self.network_n_unattributed += o.network_n_unattributed;
         self.network_e_unattributed += o.network_e_unattributed;
+        add(&mut self.routed_n_flow, &o.routed_n_flow);
+        self.routed_n_unattributed += o.routed_n_unattributed;
+    }
+}
+
+/// The network's events of one tick into `r`, by [`RECIPIENTS`] bucket
+/// (`bucket_of`: an agent's bucket and memo membership, `None` off the
+/// drain-time roster). The gradient flow (flow 5, #646): one `Redistributed`
+/// event per currency, source = donor, target = recipient. Routed surplus
+/// (#738): one `SurplusRouted` event per partner share, source = drainer,
+/// target = partner, into `routed_n_flow` only.
+fn record_network(
+    r: &mut Routes,
+    tail: &[Event],
+    bucket_of: impl Fn(u64) -> Option<(usize, bool)>,
+) {
+    for e in tail {
+        let n = f64::from(e.nutrient_delta);
+        let ends = bucket_of(e.source).zip(e.target.and_then(&bucket_of));
+        match e.kind {
+            EventKind::Redistributed => {
+                let en = f64::from(e.energy_delta);
+                let Some((donor, to)) = ends else {
+                    r.network_n_unattributed += n;
+                    r.network_e_unattributed += en;
+                    continue;
+                };
+                for (b, memo, inflow) in [(to.0, to.1, true), (donor.0, donor.1, false)] {
+                    for b in std::iter::once(b).chain(memo.then_some(MEMO)) {
+                        if inflow {
+                            r.network_n_in[b] += n;
+                            r.network_e_in[b] += en;
+                        } else {
+                            r.network_n_out[b] += n;
+                            r.network_e_out[b] += en;
+                        }
+                    }
+                }
+                r.network_n_flow[donor.0 * MEMO + to.0] += n;
+                r.network_e_flow[donor.0 * MEMO + to.0] += en;
+            }
+            EventKind::SurplusRouted => match ends {
+                Some((drainer, to)) => r.routed_n_flow[drainer.0 * MEMO + to.0] += n,
+                None => r.routed_n_unattributed += n,
+            },
+            _ => {}
+        }
     }
 }
 
@@ -724,6 +803,18 @@ struct NetCensus {
     /// Connections formed / dissolved, from tick-to-tick set differences.
     formed: u64,
     dissolved: u64,
+    /// P (#742): living agents on those sample ticks by the sample's role
+    /// ([`ROLES`]' slots, `role_slot`), the headcount pairing is read
+    /// against. Zero on pre-#742 rows.
+    #[serde(default)]
+    heads: [u64; 4],
+    /// P (#742): producer-by-role samples with spare connection capacity,
+    /// and those with a decomposer by role within surface-contact reach
+    /// ([`decomposers_in_reach`]).
+    #[serde(default)]
+    spare_producers: u64,
+    #[serde(default)]
+    spare_producers_in_reach: u64,
 }
 
 impl NetCensus {
@@ -741,6 +832,11 @@ impl NetCensus {
         self.dangling += o.dangling;
         self.formed += o.formed;
         self.dissolved += o.dissolved;
+        for (a, b) in self.heads.iter_mut().zip(&o.heads) {
+            *a += b;
+        }
+        self.spare_producers += o.spare_producers;
+        self.spare_producers_in_reach += o.spare_producers_in_reach;
     }
 }
 
@@ -1041,6 +1137,7 @@ fn rollout(
         EventKind::Born,
         EventKind::Died,
         EventKind::Redistributed,
+        EventKind::SurplusRouted,
         EventKind::Leached,
     ]
     .into_iter()
@@ -1249,31 +1346,7 @@ fn rollout(
                         }
                     }
                 }
-                // The network (flow 5): one `Redistributed` event per currency,
-                // source = donor, target = recipient.
-                for e in tail.iter().filter(|e| e.kind == EventKind::Redistributed) {
-                    let (n, en) = (f64::from(e.nutrient_delta), f64::from(e.energy_delta));
-                    let (Some(donor), Some(to)) =
-                        (bucket_of(e.source), e.target.and_then(bucket_of))
-                    else {
-                        r.network_n_unattributed += n;
-                        r.network_e_unattributed += en;
-                        continue;
-                    };
-                    for (b, memo, inflow) in [(to.0, to.1, true), (donor.0, donor.1, false)] {
-                        for b in std::iter::once(b).chain(memo.then_some(MEMO)) {
-                            if inflow {
-                                r.network_n_in[b] += n;
-                                r.network_e_in[b] += en;
-                            } else {
-                                r.network_n_out[b] += n;
-                                r.network_e_out[b] += en;
-                            }
-                        }
-                    }
-                    r.network_n_flow[donor.0 * MEMO + to.0] += n;
-                    r.network_e_flow[donor.0 * MEMO + to.0] += en;
-                }
+                record_network(r, &tail, bucket_of);
                 for (e, d) in &bites {
                     let Some((b, memo)) = bucket_of(e.source) else {
                         continue;
@@ -1576,6 +1649,23 @@ fn rollout(
                     let kin = usize::from(ledger.is_kin(c.builder, c.partner));
                     census.pairs[pair(slot(c.builder), slot(c.partner))][kin] += 1;
                 }
+                // P (#742): role headcounts, and producers with spare
+                // capacity against a decomposer in formation's reach.
+                let placed: Vec<(u64, Option<TrophicRole>, (f32, f32))> = world
+                    .agents()
+                    .iter()
+                    .map(|a| (a.id, sample_roles.get(&a.id).copied(), a.position))
+                    .collect();
+                for &(_, role, _) in &placed {
+                    census.heads[role_slot(role)] += 1;
+                }
+                [census.spare_producers, census.spare_producers_in_reach] = decomposers_in_reach(
+                    &placed,
+                    world.connections(),
+                    params.network_connection_cap,
+                    params.contact_range_coefficient,
+                    params.world_extent,
+                );
                 tally.ext.network.merge(&census);
                 if second_half {
                     tally.ext.network_second_half.merge(&census);
@@ -1747,6 +1837,296 @@ fn rollout(
         }
     }
     tally
+}
+
+/// P (#742): [`RECIPIENTS`] buckets that hold producers by role, and the
+/// decomposers' bucket.
+const TRADE_PRODUCERS: [usize; 2] = [0, 1];
+const TRADE_DECOMPOSER: usize = 3;
+
+/// P (#742): one world's (one config's, over its seeds) producer–decomposer
+/// trade and pairing, over the settled half.
+#[derive(Clone, Debug)]
+struct TradeWorld {
+    source: ConfigSource,
+    config_index: usize,
+    seeds: usize,
+    /// Net nutrient from decomposers by role to producers by role along the
+    /// gradient flow, and as routed surplus.
+    gradient_net: f64,
+    routed_net: f64,
+    /// Producer–decomposer connections (by the sample's role), and every
+    /// classified connection (both endpoints alive), summed over sample ticks.
+    links: u64,
+    classified: u64,
+    /// Living agents by the sample's role ([`ROLES`]' slots) on those ticks.
+    heads: [u64; 4],
+    /// Producer-by-role samples with spare capacity, and those with a
+    /// decomposer by role in reach.
+    spare: u64,
+    in_reach: u64,
+}
+
+impl TradeWorld {
+    fn of(row: &Row) -> Self {
+        let r = &row.tally.ext.routes_second_half;
+        let net = |flow: &[f64]| -> f64 {
+            TRADE_PRODUCERS
+                .iter()
+                .map(|&p| {
+                    let at = |i: usize| flow.get(i).copied().unwrap_or(0.0);
+                    at(TRADE_DECOMPOSER * MEMO + p) - at(p * MEMO + TRADE_DECOMPOSER)
+                })
+                .sum()
+        };
+        let n = &row.tally.ext.network_second_half;
+        TradeWorld {
+            source: row.source,
+            config_index: row.config_index,
+            seeds: row.seed_kin_kills.len(),
+            gradient_net: net(&r.network_n_flow),
+            routed_net: net(&r.routed_n_flow),
+            links: n.pairs.get(pair(0, 2)).map_or(0, |p| p[0] + p[1]),
+            classified: n.pairs.iter().map(|p| p[0] + p[1]).sum(),
+            heads: n.heads,
+            spare: n.spare_producers,
+            in_reach: n.spare_producers_in_reach,
+        }
+    }
+
+    /// The world forms producer–decomposer links.
+    fn linked(&self) -> bool {
+        self.links > 0
+    }
+
+    /// #736's item 2: the trade runs, net decomposer → producer nutrient > 0.
+    fn trades(&self) -> bool {
+        self.net() > 0.0
+    }
+
+    /// The share of classified connections that join a producer to a
+    /// decomposer; `None` without connections.
+    fn observed_share(&self) -> Option<f64> {
+        (self.classified > 0).then(|| self.links as f64 / self.classified as f64)
+    }
+
+    /// The share pairing by headcount gives: 2 · p_P · p_D over the role
+    /// headcounts in the same samples; `None` without agents.
+    fn expected_share(&self) -> Option<f64> {
+        let all: u64 = self.heads.iter().sum();
+        (all > 0).then(|| {
+            let p = |slot: usize| self.heads[slot] as f64 / all as f64;
+            2.0 * p(0) * p(2)
+        })
+    }
+
+    /// Observed against expected, where both are read.
+    fn pairing(&self) -> Option<std::cmp::Ordering> {
+        Some(self.observed_share()?.total_cmp(&self.expected_share()?))
+    }
+
+    /// The trade's net: gradient flow plus routed surplus.
+    fn net(&self) -> f64 {
+        self.gradient_net + self.routed_net
+    }
+}
+
+/// P (#742), reported only: over the producers by role in `agents` (`(id,
+/// the sample's role, position)`) with spare connection capacity — fewer
+/// connections built than `cap` — how many there are, and how many have a
+/// decomposer by role within `reach` (formation's surface-contact radius,
+/// `contact_range_coefficient`, as `phase::form_connections` queries it:
+/// toroidal distance ≤ reach).
+fn decomposers_in_reach(
+    agents: &[(u64, Option<TrophicRole>, (f32, f32))],
+    connections: &[explorers_sim::Connection],
+    cap: u32,
+    reach: f32,
+    extent: f32,
+) -> [u64; 2] {
+    let mut built: HashMap<u64, u32> = HashMap::new();
+    for c in connections {
+        *built.entry(c.builder).or_default() += 1;
+    }
+    let decomposers: Vec<(f32, f32)> = agents
+        .iter()
+        .filter(|a| a.1 == Some(TrophicRole::Decomposer))
+        .map(|a| a.2)
+        .collect();
+    let mut out = [0; 2];
+    for &(id, role, at) in agents {
+        if role != Some(TrophicRole::Producer) || built.get(&id).copied().unwrap_or(0) >= cap {
+            continue;
+        }
+        out[0] += 1;
+        out[1] += u64::from(
+            decomposers
+                .iter()
+                .any(|&d| toroidal_distance(at, d, extent) <= reach),
+        );
+    }
+    out
+}
+
+/// P (#742): the rows' worlds, counted against #736's items 2 and 3.
+#[derive(Clone, Debug, Default)]
+struct TradeTally {
+    worlds: usize,
+    /// Worlds forming producer–decomposer links; of them, those trading,
+    /// and their pooled net nutrient (gradient flow, routed surplus).
+    linked: usize,
+    trading: usize,
+    gradient_net: f64,
+    routed_net: f64,
+    /// Producer-by-role samples with spare capacity, and with a decomposer
+    /// in reach, pooled over worlds.
+    spare: u64,
+    in_reach: u64,
+    /// Worlds with connections, read against headcount: observed above,
+    /// below, and equal to expected.
+    above: usize,
+    below: usize,
+    tied: usize,
+}
+
+impl TradeTally {
+    fn of(rows: &[Row]) -> Self {
+        let mut t = TradeTally::default();
+        for w in rows.iter().map(TradeWorld::of) {
+            t.worlds += 1;
+            t.spare += w.spare;
+            t.in_reach += w.in_reach;
+            if w.linked() {
+                t.linked += 1;
+                t.trading += usize::from(w.trades());
+                t.gradient_net += w.gradient_net;
+                t.routed_net += w.routed_net;
+            }
+            match w.pairing() {
+                Some(std::cmp::Ordering::Greater) => t.above += 1,
+                Some(std::cmp::Ordering::Less) => t.below += 1,
+                Some(std::cmp::Ordering::Equal) => t.tied += 1,
+                None => {}
+            }
+        }
+        t
+    }
+
+    /// More than half of the linked worlds trade (item 2).
+    fn majority(&self) -> bool {
+        2 * self.trading > self.linked
+    }
+
+    fn discordant(&self) -> usize {
+        self.above + self.below
+    }
+
+    /// `P(X ≥ k)`, `X ~ Bin(n, ½)`, k = worlds above, n = discordant.
+    fn one_sided_p(&self) -> f64 {
+        binomial_upper_tail_p(self.above, self.discordant())
+    }
+
+    /// `min(1, 2 P(X ≤ min(k, n − k)))` over the discordant.
+    fn two_sided_p(&self) -> f64 {
+        binomial_two_sided_p(self.above, self.discordant())
+    }
+}
+
+/// P (#742): the producer–decomposer trade and pairing readout as markdown —
+/// the worlds counted against #736's items 2 and 3, the decomposer-in-reach
+/// share, then per world.
+fn trade_report(rows: &[Row]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let o = &mut out;
+    let f4 = |v: Option<f64>| v.map_or("–".to_string(), |v| format!("{v:.4}"));
+    writeln!(o, "\n### P. Producer–decomposer trade and pairing (#742)\n").unwrap();
+    writeln!(o, "{}\n", network_label(rows)).unwrap();
+    writeln!(
+        o,
+        "Over the settled half (tick ≥ T/2 + 1). A **world** is one config, pooled over its seeds. **Net trade**: nutrient from decomposers by role to producers by role (C's buckets, the role at the start of the tick: both producer buckets against the decomposers') less the reverse, along the gradient flow (`Redistributed`, flow 5) and as routed surplus (`SurplusRouted`, #738: a connected drainer's excreted nutrient to its paying partners), reported apart and summed. A world **forms producer–decomposer links** when a live connection joins a producer by role to a decomposer by role on a settled-half sample tick (F's roles: the sample's recent-income role), and **the trade runs** (#736 item 2) when its net is positive. **Pairs against headcount** (item 3): the producer–decomposer share of a world's classified connections (both endpoints alive), summed over sample ticks, against 2 · p_P · p_D, the share pairing by headcount gives, over the role headcounts of the living agents on the same sample ticks; the sign test is exact, X ~ Bin(n, ½) over the discordant worlds (observed ≠ expected), one-sided P(X ≥ k) for k worlds above. **Decomposer in reach** (reported only): a producer by role with fewer built connections than the cap, on a settled-half sample tick, with a decomposer by role within formation's surface-contact radius (`contact_range_coefficient`).\n"
+    )
+    .unwrap();
+    let t = TradeTally::of(rows);
+    writeln!(
+        o,
+        "Worlds forming producer–decomposer links: **{}** of {}; of them, net decomposer → producer nutrient > 0: **{}** of {} ({} %), a majority: **{}**. Net over those worlds: gradient flow {:.4}, routed surplus {:.4}, sum {:.4}.\n",
+        t.linked,
+        t.worlds,
+        t.trading,
+        t.linked,
+        pct(t.trading as u64, t.linked as u64),
+        if t.majority() { "yes" } else { "no" },
+        t.gradient_net,
+        t.routed_net,
+        t.gradient_net + t.routed_net,
+    )
+    .unwrap();
+    writeln!(
+        o,
+        "Pairs against headcount: the producer–decomposer share of connections is above pairing by headcount in **{}** of {} worlds with connections, below in **{}**, equal in **{}**; sign test over the discordant worlds: n = {}, k = {}, one-sided p = {:.4}, two-sided p = {:.4}.\n",
+        t.above,
+        t.above + t.below + t.tied,
+        t.below,
+        t.tied,
+        t.discordant(),
+        t.above,
+        t.one_sided_p(),
+        t.two_sided_p(),
+    )
+    .unwrap();
+    writeln!(
+        o,
+        "Decomposer in reach (reported only): **{}** of {} settled-half samples of producers by role with spare connection capacity ({} %) have a decomposer by role within surface-contact reach.\n",
+        t.in_reach,
+        t.spare,
+        pct(t.in_reach, t.spare),
+    )
+    .unwrap();
+    writeln!(o, "Per world:\n").unwrap();
+    writeln!(
+        o,
+        "| config | seeds | P–D links / connections | observed share | headcount share | vs headcount | gradient net N | routed net N | net N | trade runs | spare producer samples | % decomposer in reach |"
+    )
+    .unwrap();
+    writeln!(
+        o,
+        "|---|---:|---:|---:|---:|---|---:|---:|---:|---|---:|---:|"
+    )
+    .unwrap();
+    for w in rows.iter().map(TradeWorld::of) {
+        writeln!(
+            o,
+            "| {}:{} | {} | {} / {} | {} | {} | {} | {:.4} | {:.4} | {:.4} | {} | {} | {} |",
+            w.source,
+            w.config_index,
+            w.seeds,
+            w.links,
+            w.classified,
+            f4(w.observed_share()),
+            f4(w.expected_share()),
+            match w.pairing() {
+                Some(std::cmp::Ordering::Greater) => "above",
+                Some(std::cmp::Ordering::Less) => "below",
+                Some(std::cmp::Ordering::Equal) => "equal",
+                None => "–",
+            },
+            w.gradient_net,
+            w.routed_net,
+            w.net(),
+            if !w.linked() {
+                "no links"
+            } else if w.trades() {
+                "yes"
+            } else {
+                "no"
+            },
+            w.spare,
+            pct(w.in_reach, w.spare),
+        )
+        .unwrap();
+    }
+    out
 }
 
 /// O (#740): the roles growth limitation is read for, by the sample's
@@ -3034,6 +3414,7 @@ fn summary(rows: &[Row], clusters: &Result<Vec<usize>, String>, baseline: Option
     leaching(rows);
     print!("{}", partner_report(rows, baseline));
     print!("{}", limitation_report(rows));
+    print!("{}", trade_report(rows));
 }
 
 /// The uptake scaling the rows ran at, each distinct value listed.
@@ -6206,5 +6587,240 @@ mod tests {
         );
         assert!(report.contains("| atlas:3 |"), "{report}");
         assert!(report.contains("not carrying both"), "{report}");
+    }
+
+    /// A network event of `kind` from `source` to `target` carrying nutrient
+    /// `n` (and energy `e`).
+    fn net_event(kind: EventKind, source: u64, target: u64, n: f32, e: f32) -> Event {
+        Event {
+            tick: 0,
+            seq: 0,
+            kind,
+            source,
+            target: Some(target),
+            energy_delta: e,
+            position: None,
+            target_was_carcass: false,
+            second_parent: None,
+            nutrient_delta: n,
+        }
+    }
+
+    /// #742, item 2: one producer–decomposer pair. The gradient flow sends
+    /// the decomposer 1.0 nutrient; it routes 3.0 back as surplus (two
+    /// partner shares) and the producer pays it energy. Routed nutrient is
+    /// attributed by the drainer's and partner's roles, kept apart from the
+    /// gradient flow, and the world's net decomposer → producer nutrient
+    /// counts both: −1 + 3 = +2.
+    #[test]
+    fn routed_surplus_is_attributed_by_role_and_counted_in_the_net_trade() {
+        // Agent 1 a plain producer (bucket 1), agent 2 a decomposer (bucket 3).
+        let bucket_of = |id: u64| match id {
+            1 => Some((1, false)),
+            2 => Some((3, false)),
+            _ => None,
+        };
+        let events = [
+            net_event(EventKind::Redistributed, 1, 2, 1.0, 0.0),
+            net_event(EventKind::Redistributed, 1, 2, 0.0, 4.0),
+            net_event(EventKind::SurplusRouted, 2, 1, 2.0, 0.0),
+            net_event(EventKind::SurplusRouted, 2, 1, 1.0, 0.0),
+            net_event(EventKind::SurplusRouted, 2, 9, 0.5, 0.0),
+        ];
+        let mut r = row(None, None);
+        record_network(&mut r.tally.ext.routes_second_half, &events, bucket_of);
+        let routes = &r.tally.ext.routes_second_half;
+        assert_eq!(routes.routed_n_flow[3 * MEMO + 1], 3.0);
+        assert_eq!(routes.routed_n_unattributed, 0.5);
+        // The gradient flow's readout is as before: routed nutrient is not
+        // a `Redistributed` event.
+        assert_eq!(routes.network_n_flow[MEMO + 3], 1.0);
+        assert_eq!(routes.network_n_in[3], 1.0);
+        assert_eq!(routes.network_e_flow[MEMO + 3], 4.0);
+        let w = TradeWorld::of(&r);
+        assert_eq!(w.gradient_net, -1.0);
+        assert_eq!(w.routed_net, 3.0);
+        assert_eq!(w.net(), 2.0);
+    }
+
+    /// A row for atlas config `idx` whose settled-half samples hold `pd`
+    /// producer–decomposer connections of `classified`, and role headcounts
+    /// `heads` (producer, consumer, decomposer, no income).
+    fn pairing_row(idx: usize, pd: u64, classified: u64, heads: [u64; 4]) -> Row {
+        let mut r = row(None, None);
+        r.config_index = idx;
+        let n = &mut r.tally.ext.network_second_half;
+        n.pairs = vec![[0; 2]; PAIRS.len()];
+        n.pairs[pair(0, 2)] = [pd, 0];
+        n.pairs[pair(0, 0)] = [classified - pd, 0];
+        n.connections = classified;
+        n.heads = heads;
+        r
+    }
+
+    /// #742, item 3: a world's observed producer–decomposer share of its
+    /// classified connections against the share pairing by headcount gives,
+    /// 2 · p_P · p_D; the sign test runs over the worlds where they differ.
+    #[test]
+    fn pairs_are_read_against_headcount_with_an_exact_sign_test_over_worlds() {
+        // 6 of 10 connections, against 2 · 0.5 · 0.3 = 0.3 (2 consumers).
+        let w = TradeWorld::of(&pairing_row(0, 6, 10, [5, 2, 3, 0]));
+        assert_eq!(w.links, 6);
+        assert_eq!(w.observed_share(), Some(0.6));
+        assert!(close(w.expected_share().unwrap(), 0.3));
+        let none = TradeWorld::of(&pairing_row(1, 0, 0, [5, 2, 3, 0]));
+        assert_eq!(none.observed_share(), None);
+        // Seven worlds above, one below, one tied (5 of 10 against
+        // 2 · 0.5 · 0.5), one without connections: n = 8, k = 7.
+        let mut rows: Vec<Row> = (0..7)
+            .map(|i| pairing_row(i, 6, 10, [5, 0, 5, 0]))
+            .collect();
+        rows.push(pairing_row(7, 1, 10, [5, 0, 5, 0]));
+        rows.push(pairing_row(8, 5, 10, [5, 0, 5, 0]));
+        rows.push(pairing_row(9, 0, 0, [5, 0, 5, 0]));
+        let t = TradeTally::of(&rows);
+        assert_eq!((t.above, t.below, t.tied), (7, 1, 1));
+        assert_eq!(t.discordant(), 8);
+        // P(X ≥ 7), X ~ Bin(8, ½) = (8 + 1) / 256; two-sided, twice that.
+        assert!(close(t.one_sided_p(), 9.0 / 256.0));
+        assert!(close(t.two_sided_p(), 18.0 / 256.0));
+    }
+
+    /// #742, reported only: of the producers by role with spare connection
+    /// capacity (fewer built connections than the cap), how many have a
+    /// decomposer by role within surface-contact reach (the formation
+    /// radius, `contact_range_coefficient`, on the torus).
+    #[test]
+    fn a_producer_with_spare_capacity_counts_a_decomposer_within_contact_reach() {
+        use explorers_sim::Connection;
+        let (p, c, d) = (
+            Some(TrophicRole::Producer),
+            Some(TrophicRole::Consumer),
+            Some(TrophicRole::Decomposer),
+        );
+        let agents = [
+            // 1: spare (none built), a decomposer 4 away.
+            (1, p, (0.0, 0.0)),
+            (11, d, (4.0, 0.0)),
+            // 2: at the cap (2 built), a decomposer in reach: not counted.
+            (2, p, (20.0, 0.0)),
+            (12, d, (21.0, 0.0)),
+            // 3: one built, partner in another, the nearest decomposer 6 away.
+            (3, p, (-20.0, 20.0)),
+            (13, d, (-20.0, 26.0)),
+            // 4: spare, only a consumer and a producer in reach.
+            (4, p, (20.0, -20.0)),
+            (14, c, (21.0, -20.0)),
+            (5, p, (19.0, -20.0)),
+            // 6: spare, a decomposer across the wrap (extent 100), 3 away.
+            (6, p, (49.0, -40.0)),
+            (16, d, (-48.0, -40.0)),
+            // 7: no role yet, beside a decomposer: not a producer by role.
+            (7, None, (-40.0, 0.0)),
+            (17, d, (-41.0, 0.0)),
+        ];
+        let link = |builder, partner| Connection { builder, partner };
+        // 3 is the partner of one link (not built by it) and builds one.
+        let connections = [link(2, 12), link(2, 14), link(3, 4), link(4, 3)];
+        let [spare, in_reach] = decomposers_in_reach(&agents, &connections, 2, 5.0, 100.0);
+        // Spare: 1, 3, 4, 5, 6 (2 is at the cap); in reach: 1 and 6.
+        assert_eq!((spare, in_reach), (5, 2));
+    }
+
+    /// #742: section P counts the worlds forming producer–decomposer links
+    /// and those among them whose net decomposer → producer nutrient is
+    /// positive (item 2), the sign test on pairing (item 3), and the
+    /// decomposer-in-reach share, pooled over worlds.
+    #[test]
+    fn the_trade_report_counts_trading_worlds_pairing_and_reach() {
+        let traded = |idx: usize, routed: f64, pd: u64, spare: [u64; 2]| {
+            let mut r = pairing_row(idx, pd, 10, [5, 0, 5, 0]);
+            r.tally.ext.routes_second_half.routed_n_flow[TRADE_DECOMPOSER * MEMO] = routed;
+            r.tally.ext.routes_second_half.network_n_flow[TRADE_DECOMPOSER] = 1.0;
+            let n = &mut r.tally.ext.network_second_half;
+            [n.spare_producers, n.spare_producers_in_reach] = spare;
+            r
+        };
+        let rows = vec![
+            // Linked, net −1 + 3 = +2 > 0, above headcount (0.6 > 0.5).
+            traded(0, 3.0, 6, [4, 1]),
+            // Linked, net −1 + 0.5 < 0, below (0.1 < 0.5).
+            traded(1, 0.5, 1, [6, 2]),
+            // Linked, net −1 + 2 > 0, above.
+            traded(2, 2.0, 7, [0, 0]),
+            // No links: not counted for item 2, below headcount.
+            traded(3, 0.0, 0, [2, 0]),
+        ];
+        let report = trade_report(&rows);
+        assert!(
+            report.contains("### P. Producer–decomposer trade and pairing (#742)"),
+            "{report}"
+        );
+        assert!(
+            report.contains(
+                "Worlds forming producer–decomposer links: **3** of 4; of them, net decomposer → producer nutrient > 0: **2** of 3 (66.7 %), a majority: **yes**. Net over those worlds: gradient flow -3.0000, routed surplus 5.5000, sum 2.5000."
+            ),
+            "{report}"
+        );
+        // n = 4, k = 2: P(X ≥ 2) = 11/16; two-sided 1.
+        assert!(
+            report.contains(
+                "Pairs against headcount: the producer–decomposer share of connections is above pairing by headcount in **2** of 4 worlds with connections, below in **2**, equal in **0**; sign test over the discordant worlds: n = 4, k = 2, one-sided p = 0.6875, two-sided p = 1.0000."
+            ),
+            "{report}"
+        );
+        assert!(
+            report.contains(
+                "Decomposer in reach (reported only): **3** of 12 settled-half samples of producers by role with spare connection capacity (25.0 %) have a decomposer by role within surface-contact reach."
+            ),
+            "{report}"
+        );
+        assert!(report.contains("| atlas:0 |"), "{report}");
+    }
+
+    /// #742 on one small run: with the network on, the settled half's
+    /// network samples carry the role headcounts (every living agent once
+    /// per sample tick) and the producers with spare capacity; with it off,
+    /// section P reports no links.
+    #[test]
+    fn each_run_books_headcounts_and_reach_and_reports_no_links_off() {
+        let decoded = resolve_config(
+            ConfigSource::SAMPLE,
+            14,
+            &Default::default(),
+            &sampled_units(),
+        );
+        let eval = EvalConfig::default();
+        let pins = NetworkPins {
+            connection_cap: Some(4),
+            creation_cost: Some(0.1),
+            maintenance_cost: Some(0.01),
+            redistribution_rate: Some(0.3),
+            transfer_efficiency: Some(0.9),
+        };
+        let (on, dist) = with_network(decoded.clone(), &pins);
+        let t = rollout(&on, &dist, 1000, 300, &eval, false);
+        let n = &t.ext.network_second_half;
+        assert!(n.sample_ticks > 0, "{n:?}");
+        assert_eq!(n.heads.iter().sum::<u64>(), n.agent_samples, "{n:?}");
+        assert!(n.heads[0] > 0, "{n:?}");
+        assert!(
+            n.spare_producers > 0 && n.spare_producers_in_reach <= n.spare_producers,
+            "{n:?}"
+        );
+        assert!(n.spare_producers <= n.heads[0], "{n:?}");
+
+        let mut off = row(None, None);
+        off.tally = rollout(&decoded.0, &decoded.1, 1000, 300, &eval, false);
+        off.seed_kin_kills = vec![off.tally.kin_kills];
+        let report = trade_report(&[off]);
+        assert!(
+            report.contains("Worlds forming producer–decomposer links: **0** of 1;"),
+            "{report}"
+        );
+        assert!(
+            report.contains("Decomposer in reach (reported only): **0** of 0"),
+            "{report}"
+        );
     }
 }
