@@ -418,8 +418,12 @@ pub fn maintain_connections(
 /// - **Unilateral, de-duplicated:** the builder owns the link; at most one link
 ///   exists between any pair (a builder skips a partner it is already linked to in
 ///   either direction).
-/// - **Deterministic:** agents are processed in slice order; when more eligible
-///   partners exist than free cap slots, the lowest partner ids are taken first.
+/// - **Farthest first:** when more eligible partners exist than free cap slots,
+///   candidates are taken farthest first in trait space (the raw Euclidean
+///   [`TraitVector::distance`] trophic efficiency and recognition use), ties broken
+///   by ascending partner id. A smooth preference for dissimilar partners — the
+///   plant–fungus link over kin — with no gate: it never forbids a link (#739).
+/// - **Deterministic:** agents are processed in slice order; no RNG.
 ///
 /// Returns the total creation cost dissipated to heat (energy conserved: the
 /// builder's reserve drop is matched by this dissipation).
@@ -447,8 +451,7 @@ pub fn form_connections(
             continue;
         }
 
-        // Eligible partners: contacted, not already linked (either direction),
-        // ordered by ascending id (the deterministic cap tie-break).
+        // Eligible partners: contacted, not already linked (either direction).
         let mut candidates: Vec<(u64, usize)> = grid
             .query_radius(agents[i].position, contact)
             .into_iter()
@@ -462,13 +465,19 @@ pub fn form_connections(
                 })
             })
             .collect();
-        // Order by ascending partner id (the deterministic cap tie-break) and
-        // dedupe: query_radius can return an id more than once under toroidal cell
+        // Dedupe: query_radius can return an id more than once under toroidal cell
         // wrapping, and a partner must be considered at most once per builder.
         candidates.sort_by_key(|&(pid, _)| pid);
         candidates.dedup_by_key(|&mut (pid, _)| pid);
+        // Farthest first in trait space, ties broken by ascending partner id.
+        let builder_traits = agents[i].traits;
+        let mut ranked: Vec<(f32, u64)> = candidates
+            .into_iter()
+            .map(|(pid, j)| (builder_traits.distance(&agents[j].traits), pid))
+            .collect();
+        ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
 
-        for (partner_id, _) in candidates {
+        for (_, partner_id) in ranked {
             if built >= cap {
                 break;
             }
@@ -2599,8 +2608,10 @@ mod tests {
 
     #[test]
     fn form_connections_caps_and_breaks_ties_by_partner_id() {
-        // Flow 5 (#412): when more eligible partners exist than free cap slots, the
-        // lowest partner ids are taken first — a deterministic tie-break.
+        // Flow 5 (#412, #739): when more eligible partners exist than free cap
+        // slots and they sit at equal trait distance from the builder (here all
+        // share the builder's traits), the lowest partner id is taken first — the
+        // deterministic tie-break under the farthest-first ranking.
         let mut params = test_params();
         params.network_connection_cap = 1;
         params.network_creation_cost = 1.0;
@@ -2620,6 +2631,78 @@ mod tests {
         let from5: Vec<_> = conns.iter().filter(|c| c.builder == 5).collect();
         assert_eq!(from5.len(), 1, "cap 1 respected");
         assert_eq!(from5[0].partner, 2, "lowest partner id chosen");
+    }
+
+    /// A cap-1 surplus builder (zero traits) with two contacted, non-surplus
+    /// candidates: `near_id` close in trait space, `far_id` distant.
+    fn cap_one_builder_choice(near_id: u64, far_id: u64) -> u64 {
+        let mut params = test_params();
+        params.network_connection_cap = 1;
+        params.network_creation_cost = 1.0;
+        params.contact_range_coefficient = 5.0;
+        let near = TraitVector {
+            heterotrophy: 0.1,
+            ..zero_traits()
+        };
+        let far = TraitVector {
+            heterotrophy: 0.9,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(5, (0.0, 0.0), 100.0, zero_traits()), // sole surplus builder
+            make_agent(near_id, (1.0, 0.0), 0.0, near),
+            make_agent(far_id, (1.0, 1.0), 0.0, far),
+        ];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        let mut conns = Vec::new();
+        form_connections(&mut agents, &mut conns, &grid, &params);
+        assert_eq!(conns.len(), 1, "cap 1 respected");
+        assert_eq!(conns[0].builder, 5);
+        conns[0].partner
+    }
+
+    #[test]
+    fn form_connections_takes_the_farthest_partner_in_trait_space_when_the_cap_binds() {
+        // Flow 5 (#739): when the cap binds, candidates are taken farthest first
+        // in trait space (the same Euclidean trait distance trophic efficiency and
+        // recognition use), whatever their ids — the plant–fungus link, not kin.
+        assert_eq!(cap_one_builder_choice(2, 3), 3, "far partner, higher id");
+        assert_eq!(cap_one_builder_choice(3, 2), 2, "far partner, lower id");
+    }
+
+    #[test]
+    fn form_connections_links_every_candidate_when_the_cap_does_not_bind() {
+        // Flow 5 (#739): the farthest-first ranking only orders how candidates
+        // fill a binding cap; with free slots for all, every contacted candidate
+        // is linked, exactly the set the id order formed.
+        let mut params = test_params();
+        params.network_connection_cap = 3;
+        params.network_creation_cost = 1.0;
+        params.contact_range_coefficient = 5.0;
+        let at = |h: f32| TraitVector {
+            heterotrophy: h,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(5, (0.0, 0.0), 100.0, zero_traits()), // sole surplus builder
+            make_agent(2, (1.0, 0.0), 0.0, at(0.1)),
+            make_agent(3, (1.0, 1.0), 0.0, at(0.9)),
+            make_agent(4, (0.0, 1.0), 0.0, at(0.5)),
+        ];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        let mut conns = Vec::new();
+        form_connections(&mut agents, &mut conns, &grid, &params);
+
+        let mut partners: Vec<u64> = conns.iter().map(|c| c.partner).collect();
+        partners.sort_unstable();
+        assert_eq!(partners, vec![2, 3, 4], "every candidate linked");
+        assert!(conns.iter().all(|c| c.builder == 5));
     }
 
     #[test]
