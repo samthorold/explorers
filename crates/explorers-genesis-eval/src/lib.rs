@@ -1221,6 +1221,8 @@ mod tests {
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
+            hyphal_uptake: false,
+            contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
         }
     }
 
@@ -2835,6 +2837,8 @@ mod tests {
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
+            hyphal_uptake: false,
+            contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {

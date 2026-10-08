@@ -132,10 +132,25 @@ fn the_committed_atlas_records_its_33_dimension_box_and_fixed_leaching_rate() {
 /// A stable FNV-1a digest of every decoded world of an atlas, read off the
 /// worlds' `Debug` form (which prints each `f32` round-trip exactly), so two
 /// decodes share it exactly when they name bit-identical worlds.
+///
+/// Fields added to `WorldParameters` after a digest was read are asserted at
+/// the latent default every atlas decodes them to and dropped from the
+/// `Debug` form, so the digests stay the ones read before them: hyphal
+/// uptake off at the default contact distance (#727).
 fn decoded_worlds_digest(read: &explorers_search::sweep::AtlasUnits) -> u64 {
+    const LATER_FIELDS: &str = ", hyphal_uptake: false, contact_distance: 0.1";
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for i in 0..read.len() {
-        for b in format!("{:?}", read.decode(i)).bytes() {
+        let world = read.decode(i);
+        assert!(!world.0.hyphal_uptake, "atlas:{i}");
+        assert_eq!(
+            world.0.contact_distance,
+            explorers_sim::DEFAULT_CONTACT_DISTANCE,
+            "atlas:{i}"
+        );
+        let debug = format!("{world:?}");
+        assert_eq!(debug.matches(LATER_FIELDS).count(), 1, "atlas:{i}");
+        for b in debug.replacen(LATER_FIELDS, "", 1).bytes() {
             h ^= u64::from(b);
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }

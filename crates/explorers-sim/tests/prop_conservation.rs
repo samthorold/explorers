@@ -6,7 +6,9 @@ mod support;
 
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use proptest::prelude::*;
-use support::{WorldCase, world_case, world_case_with_size_scaled_uptake};
+use support::{
+    WorldCase, world_case, world_case_with_hyphal_uptake, world_case_with_size_scaled_uptake,
+};
 
 /// Relative f32 tolerance for the energy identity: f32 carries ~7 significant
 /// digits and a ≤ 40-agent, ≤ 20-tick world performs a few thousand flows, so
@@ -82,6 +84,16 @@ proptest! {
     fn conservation_holds_with_size_scaled_uptake(
         case in world_case_with_size_scaled_uptake()
     ) {
+        check_energy_ledger_identity(&case)?;
+        check_nutrient_closure(&case)?;
+        check_stores_non_negative(&case)?;
+    }
+
+    /// The three conservation invariants with hyphal uptake on (#727):
+    /// heterotrophs drawing on the pool change who takes how much, never how
+    /// much exists.
+    #[test]
+    fn conservation_holds_with_hyphal_uptake(case in world_case_with_hyphal_uptake()) {
         check_energy_ledger_identity(&case)?;
         check_nutrient_closure(&case)?;
         check_stores_non_negative(&case)?;

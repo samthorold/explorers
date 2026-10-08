@@ -87,6 +87,8 @@ pub fn viable_baseline() -> WorldParameters {
         recognition_distance: 0.5,
         cross_trait_cost: 0.0,
         leaching_rate: 0.0,
+        hyphal_uptake: false,
+        contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
     }
 }
 
@@ -242,6 +244,17 @@ pub fn world_case_with_size_scaled_uptake() -> impl Strategy<Value = WorldCase> 
     (world_case(), 0.05f32..=1.0, 0.5f32..=200.0).prop_map(|(mut case, b, s_ref)| {
         case.params.uptake_structure_exponent = b;
         case.params.uptake_reference_structure = s_ref;
+        case
+    })
+}
+
+/// A stepper case with hyphal uptake switched on (#727): the C1 domain with
+/// the contact distance drawn from a tenth of the default to ten times it. A
+/// separate strategy, so `world_case()` draws exactly the inputs it always has.
+pub fn world_case_with_hyphal_uptake() -> impl Strategy<Value = WorldCase> {
+    (world_case(), 0.01f32..=1.0).prop_map(|(mut case, d_c)| {
+        case.params.hyphal_uptake = true;
+        case.params.contact_distance = d_c;
         case
     })
 }

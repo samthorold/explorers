@@ -701,6 +701,8 @@ fn viable_baseline() -> WorldParameters {
         recognition_distance: 0.5,
         cross_trait_cost: 0.0,
         leaching_rate: 0.0,
+        hyphal_uptake: false,
+        contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
     }
 }
 

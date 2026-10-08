@@ -647,6 +647,31 @@ pub struct WorldParameters {
     /// atlas are bit-unchanged.
     #[serde(default)]
     pub leaching_rate: f32,
+    /// Hyphal uptake switch (#654, #727; world-rules.md flow 2, *Hyphal
+    /// uptake*): when on, pool demand adds `contact × effective
+    /// heterotrophy × u_A` to the autotrophic demand, `contact` being
+    /// substrate contact `exp(−d / contact_distance)` on the distance `d` the
+    /// agent moved in the most recent move phase. Default `false` skips the
+    /// hyphal term, so demand is the autotrophic rule bit for bit and every
+    /// existing recipe, pin and the atlas are unchanged. Not in genesis's box.
+    #[serde(default)]
+    pub hyphal_uptake: bool,
+    /// Contact distance `d_c` (world-rules.md flow 2, *Substrate contact is
+    /// one predicate*; *Unit anchors*): the movement length over which
+    /// substrate contact falls by `1/e`. Units of length. Inert while
+    /// `hyphal_uptake` is off. Fixed, not searched; instruments may override
+    /// it. Default [`DEFAULT_CONTACT_DISTANCE`].
+    #[serde(default = "default_contact_distance")]
+    pub contact_distance: f32,
+}
+
+/// Design default contact distance `d_c = 0.1 u_M` (world-rules.md, *Unit
+/// anchors*): fixed in units of the mobility anchor, so it moves with `u_M`
+/// if that is ever rescaled.
+pub const DEFAULT_CONTACT_DISTANCE: f32 = 0.1 * units::MOBILITY_DISTANCE_PER_TICK;
+
+fn default_contact_distance() -> f32 {
+    DEFAULT_CONTACT_DISTANCE
 }
 
 /// Design default reference structure for size-scaled uptake (#644). Chosen
@@ -1061,6 +1086,11 @@ pub struct World {
     next_seq: u64,
     ledger: energy_ledger::EnergyLedger,
     nutrient_ledger: nutrient_ledger::NutrientLedger,
+    /// Distance each agent moved in the most recent move phase, by id (absent
+    /// = did not move). Movement runs after uptake within a tick, so this is
+    /// the movement hyphal uptake reads as substrate contact (world-rules.md
+    /// flow 2): the move that placed the agent where it now absorbs.
+    last_move_distance: std::collections::HashMap<u64, f32>,
 }
 
 impl World {
@@ -1182,6 +1212,7 @@ impl World {
             next_seq: 0,
             ledger: energy_ledger::EnergyLedger::new(),
             nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
+            last_move_distance: std::collections::HashMap::new(),
         }
     }
 
@@ -1275,6 +1306,7 @@ impl World {
                 next_seq: 0,
                 ledger: energy_ledger::EnergyLedger::new(),
                 nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
+                last_move_distance: std::collections::HashMap::new(),
             }
         } else if let Some(ref distribution) = recipe.initial_distribution {
             Self::new(recipe.parameters.clone(), distribution.clone(), seed)
@@ -1368,9 +1400,17 @@ impl World {
             phase::leach_carcasses(&mut self.carcasses, &mut self.nutrient_grid, &self.params);
         events.extend(leach_events);
 
-        // 2. Absorb nutrients
-        let nutrient_events =
-            phase::absorb_nutrients(&mut self.agents, &mut self.nutrient_grid, &self.params);
+        // 2. Absorb nutrients. Hyphal uptake (when on) reads substrate contact
+        // on the distance moved in the most recent move phase, which ran at
+        // the end of the previous tick: movement is the last repositioning
+        // phase, so that move is the one that placed each agent in the cell it
+        // absorbs from.
+        let nutrient_events = phase::absorb_nutrients_after_moves(
+            &mut self.agents,
+            &mut self.nutrient_grid,
+            &self.params,
+            &self.last_move_distance,
+        );
         events.extend(nutrient_events);
 
         // 3. Metabolise
@@ -1560,6 +1600,9 @@ impl World {
                 .or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
             entry[2] += dist;
         }
+        // Next tick's uptake reads this move phase's distances (hyphal
+        // contact, flow 2).
+        self.last_move_distance = move_distance_by_id;
         let wear_events = phase::apply_wear(&mut self.agents, &self.params, &usage_data);
         events.extend(wear_events);
 
@@ -2061,6 +2104,8 @@ mod tests {
             growth_retention_multiplier: 2.0,
             reserve_mobilisation_rate: 1.0,
             offspring_structure_fraction: 0.2,
+            hyphal_uptake: false,
+            contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
         }
     }
 
@@ -4306,6 +4351,8 @@ mod tests {
             growth_retention_multiplier: 2.0,
             reserve_mobilisation_rate: 1.0,
             offspring_structure_fraction: 0.2,
+            hyphal_uptake: false,
+            contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
         }
     }
 
