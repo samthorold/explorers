@@ -11,7 +11,9 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 
-use crate::config_source::{ConfigSource, with_hyphal_uptake};
+use crate::config_source::{
+    ConfigSource, NetworkPins, NetworkRecord, with_hyphal_uptake, with_network,
+};
 use crate::prefilter::prefilter_cliff;
 use crate::qd::QdConfig;
 use crate::role_diet::failure_label;
@@ -51,6 +53,11 @@ pub struct Rollouts {
     /// (every atlas world decodes with the switch off).
     pub hyphal_uptake: Option<bool>,
     pub contact_distance: Option<f32>,
+    /// Pins for the five **network** parameters (#741; world-rules.md
+    /// flow 5), applied with the hyphal pins (`config_source::with_network`);
+    /// unpinned keeps the decoded network (every atlas world decodes with it
+    /// off: connection cap 0).
+    pub network: NetworkPins,
 }
 
 impl Default for Rollouts {
@@ -65,6 +72,7 @@ impl Default for Rollouts {
             budget: search.rollout_budget,
             hyphal_uptake: None,
             contact_distance: None,
+            network: NetworkPins::default(),
         }
     }
 }
@@ -193,6 +201,12 @@ pub struct FragilityRow {
     pub hyphal_uptake: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_distance: Option<f32>,
+    /// The world's effective network parameters (#741), written when the
+    /// audit pinned any of them (`--network-*`). Absent on unpinned rows and
+    /// on older ones, which ran with the network off, so unpinned rows are
+    /// byte-identical to the pre-#741 audit's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkRecord>,
 }
 
 /// The finished seeds' verdicts, unfinished ones (either budget spent)
@@ -245,6 +259,7 @@ impl FragilityRow {
             seeds,
             hyphal_uptake: None,
             contact_distance: None,
+            network: None,
         }
     }
 
@@ -288,7 +303,7 @@ pub fn evaluate_row(
 }
 
 /// The world a (perturbed) unit vector names: decoded over the atlas's box,
-/// then the rollouts' hyphal-uptake pins applied.
+/// then the rollouts' hyphal-uptake and network pins applied.
 fn world(
     atlas: &AtlasUnits,
     moved: &[f64],
@@ -297,16 +312,19 @@ fn world(
     explorers_genesis::WorldParameters,
     explorers_genesis::InitialDistribution,
 ) {
-    with_hyphal_uptake(
-        decode(moved, atlas.search_box(), atlas.fixed()),
-        rollouts.hyphal_uptake,
-        rollouts.contact_distance,
+    with_network(
+        with_hyphal_uptake(
+            decode(moved, atlas.search_box(), atlas.fixed()),
+            rollouts.hyphal_uptake,
+            rollouts.contact_distance,
+        ),
+        &rollouts.network,
     )
 }
 
 /// A row with what its world and rollouts carry: the prefilter cliff, the
-/// bloom stop, and — when either was pinned — the effective hyphal-uptake
-/// switch and contact distance.
+/// bloom stop, when either was pinned the effective hyphal-uptake switch
+/// and contact distance, and when any was pinned the effective network.
 fn recorded(
     row: FragilityRow,
     params: &explorers_genesis::WorldParameters,
@@ -318,6 +336,7 @@ fn recorded(
         bloom_stop: rollouts.eval_config.bloom_stop,
         hyphal_uptake: pinned.then_some(params.hyphal_uptake),
         contact_distance: pinned.then_some(params.contact_distance),
+        network: (rollouts.network != NetworkPins::default()).then(|| NetworkRecord::of(params)),
         ..row
     }
 }
@@ -333,6 +352,31 @@ pub fn ran_at_hyphal_setting(row: &FragilityRow, rollouts: &Rollouts) -> bool {
             row.hyphal_uptake.is_some()
                 && (switch.is_none() || switch == row.hyphal_uptake)
                 && (d_c.is_none() || d_c == row.contact_distance)
+        }
+    }
+}
+
+/// Whether a row already written ran at `rollouts`' network setting (#741),
+/// as [`ran_at_hyphal_setting`] reads the hyphal one: with no network pin,
+/// a row that records no network; otherwise a row that records one, each
+/// pin equal to its recorded parameter.
+pub fn ran_at_network_setting(row: &FragilityRow, rollouts: &Rollouts) -> bool {
+    let pins = &rollouts.network;
+    match row.network {
+        None => *pins == NetworkPins::default(),
+        Some(_) if *pins == NetworkPins::default() => false,
+        Some(r) => {
+            pins.connection_cap.is_none_or(|v| v == r.connection_cap)
+                && pins.creation_cost.is_none_or(|v| v == r.creation_cost)
+                && pins
+                    .maintenance_cost
+                    .is_none_or(|v| v == r.maintenance_cost)
+                && pins
+                    .redistribution_rate
+                    .is_none_or(|v| v == r.redistribution_rate)
+                && pins
+                    .transfer_efficiency
+                    .is_none_or(|v| v == r.transfer_efficiency)
         }
     }
 }
@@ -1499,5 +1543,119 @@ mod tests {
         assert!(!ran_at_hyphal_setting(&off, &switch_on));
         assert!(ran_at_hyphal_setting(&on, &switch_on));
         assert!(!ran_at_hyphal_setting(&on, &wider));
+    }
+
+    /// A network setting with every parameter pinned: the fixture's arm
+    /// with the network on (#741).
+    fn network_on() -> NetworkPins {
+        NetworkPins {
+            connection_cap: Some(4),
+            creation_cost: Some(0.1),
+            maintenance_cost: Some(0.01),
+            redistribution_rate: Some(0.2),
+            transfer_efficiency: Some(0.8),
+        }
+    }
+
+    /// #741: the network pins reach every evaluated world, applied after
+    /// decoding (so the perturbation is untouched), and each row records
+    /// the effective network parameters it ran at. Unpinned, the row records
+    /// none: the network-off row the audit wrote before.
+    #[test]
+    fn the_network_pins_reach_the_worlds_and_are_recorded_in_each_row() {
+        let atlas = atlas();
+        let keys = [jittered_key(0, 0.0, 0), jittered_key(0, 0.1, 0)];
+        let off = evaluate_rows(&atlas, &keys, &[1000, 1001], &quick(320), 7);
+        let on_rollouts = Rollouts {
+            network: network_on(),
+            ..quick(320)
+        };
+        let on = evaluate_rows(&atlas, &keys, &[1000, 1001], &on_rollouts, 7);
+        for (off, on) in off.iter().zip(&on) {
+            assert_eq!(off.network, None);
+            assert_eq!(
+                on.network,
+                Some(NetworkRecord {
+                    connection_cap: 4,
+                    creation_cost: 0.1,
+                    maintenance_cost: 0.01,
+                    redistribution_rate: 0.2,
+                    transfer_efficiency: 0.8,
+                })
+            );
+            assert_eq!(on.jitter, off.jitter);
+            assert_ne!(on.seeds, off.seeds);
+        }
+    }
+
+    /// #741: a row written before (#729's hyphal-pinned arm, or the #719
+    /// row) reads as network off and re-serialises byte for byte; a
+    /// network-pinned row writes its setting as a `network` object last.
+    #[test]
+    fn an_older_row_reads_as_network_off_and_a_pinned_row_records_its_setting() {
+        let line = r#"{"source":"atlas","config_index":0,"atlas_fingerprint":9384858128293480890,"radius":0.0,"draw":0,"horizon":2000,"bloom_stop":{"tick":300,"factor":10.0},"jitter":[0.0,0.0],"prefilter_cliff":null,"seeds":[{"seed":1000,"verdict":"live","fitness":0.31576264}],"persisted_fraction":1.0,"modal_verdict":"live","hyphal_uptake":true,"contact_distance":0.1}"#;
+        let row: FragilityRow = serde_json::from_str(line).unwrap();
+        assert_eq!(row.network, None);
+        assert_eq!(serde_json::to_string(&row).unwrap(), line);
+        let pinned = FragilityRow {
+            network: Some(NetworkRecord {
+                connection_cap: 4,
+                creation_cost: 0.1,
+                maintenance_cost: 0.01,
+                redistribution_rate: 0.2,
+                transfer_efficiency: 0.8,
+            }),
+            ..row
+        };
+        let json = serde_json::to_string(&pinned).unwrap();
+        assert!(json.ends_with(
+            r#","network":{"connection_cap":4,"creation_cost":0.1,"maintenance_cost":0.01,"redistribution_rate":0.2,"transfer_efficiency":0.8}}"#
+        ));
+        assert_eq!(serde_json::from_str::<FragilityRow>(&json).unwrap(), pinned);
+    }
+
+    /// #741: a row written earlier ran at the rollouts' network setting
+    /// when nothing is pinned and it records no network, or when it records
+    /// one and every pin matches it; a network-off row never reads as a
+    /// network-on run's, so resuming into another arm's file is caught.
+    #[test]
+    fn a_row_ran_at_the_rollouts_network_setting_only_when_its_pins_match() {
+        let off = row(0, 0.0, 0, &[LIVE]);
+        let on = FragilityRow {
+            network: Some(NetworkRecord {
+                connection_cap: 4,
+                creation_cost: 0.1,
+                maintenance_cost: 0.01,
+                redistribution_rate: 0.2,
+                transfer_efficiency: 0.8,
+            }),
+            ..off.clone()
+        };
+        let unpinned = Rollouts::default();
+        let network_on = Rollouts {
+            network: network_on(),
+            ..Rollouts::default()
+        };
+        let cap_only = Rollouts {
+            network: NetworkPins {
+                connection_cap: Some(4),
+                ..NetworkPins::default()
+            },
+            ..Rollouts::default()
+        };
+        let costlier = Rollouts {
+            network: NetworkPins {
+                creation_cost: Some(0.2),
+                ..network_on.network
+            },
+            ..Rollouts::default()
+        };
+        assert!(ran_at_network_setting(&off, &unpinned));
+        assert!(!ran_at_network_setting(&on, &unpinned));
+        assert!(!ran_at_network_setting(&off, &network_on));
+        assert!(!ran_at_network_setting(&off, &cap_only));
+        assert!(ran_at_network_setting(&on, &network_on));
+        assert!(ran_at_network_setting(&on, &cap_only));
+        assert!(!ran_at_network_setting(&on, &costlier));
     }
 }

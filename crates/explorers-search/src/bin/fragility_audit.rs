@@ -33,6 +33,19 @@
 //! run refuses an `--out` holding rows at another setting: give each arm
 //! its own file. `--draws 0` audits the unperturbed cells alone.
 //!
+//! ## Network (#741)
+//!
+//! `--network-connection-cap <n>`, `--network-creation-cost <e>`,
+//! `--network-maintenance-cost <e>`, `--network-redistribution-rate <f>` and
+//! `--network-transfer-efficiency <f>` pin the network (world-rules.md
+//! flow 5) on every audited world, after decoding, jitter and the hyphal
+//! pins, named and parsed as the census's flags (#646). When any is pinned,
+//! every row carries the world's five effective network parameters as a
+//! `network` object; an unpinned run writes none, so its rows are the
+//! pre-#741 audit's byte for byte and older rows read as network off. As
+//! for the hyphal setting, a run refuses an `--out` holding rows at another
+//! network setting.
+//!
 //! The summary (printed after every run, or alone with `--summary`) reads
 //! per cell and radius the **flip rate** — the share of finished (draw,
 //! seed) evaluations whose verdict differs from the baseline's on the same
@@ -67,10 +80,10 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use explorers_search::config_source::{ConfigSource, parse_selector};
+use explorers_search::config_source::{ConfigSource, NETWORK_FLAGS, parse_selector};
 use explorers_search::fragility::{
     AXES, FragilityRow, Rollouts, Summary, evaluate_rows, plan_rows, ran_at_hyphal_setting,
-    read_cell_meta, summarise,
+    ran_at_network_setting, read_cell_meta, summarise,
 };
 use explorers_search::search::{BLOOM_STOP_FLAG, NO_BLOOM_STOP_FLAG, parse_bloom_stop};
 use explorers_search::sweep::{
@@ -209,6 +222,11 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
                         }),
                 )
             }
+            f if NETWORK_FLAGS.contains(&f) => args
+                .rollouts
+                .network
+                .set(f, &value(f))
+                .unwrap_or_else(|e| panic!("fragility_audit: {e}")),
             "--summary" => args.summary_only = true,
             other => panic!("fragility_audit: unknown argument {other:?}"),
         }
@@ -387,11 +405,24 @@ fn main() {
                 args.rollouts.contact_distance
             );
         }
+        if let Some(other) = done
+            .iter()
+            .find(|r| !ran_at_network_setting(r, &args.rollouts))
+        {
+            panic!(
+                "fragility_audit: {} holds rows at another network setting (atlas:{} ran at \
+                 network {:?}; this run pins {:?}): give each setting its own --out",
+                args.out.display(),
+                other.config_index,
+                other.network,
+                args.rollouts.network
+            );
+        }
         let mut plan = plan_rows(&cells, &args.radii, args.draws, &done);
         plan.truncate(args.limit.unwrap_or(usize::MAX));
         let seeds: Vec<u64> = (0..args.ensemble).map(|i| args.seed + i).collect();
         eprintln!(
-            "fragility_audit: {} cells selected, {} rows done in {}; {} seeds × (1 + {} radii × {} draws), horizon {}, bloom stop {:?}, budget {:?}, hyphal uptake {:?} d_c {:?}; running {} cells now",
+            "fragility_audit: {} cells selected, {} rows done in {}; {} seeds × (1 + {} radii × {} draws), horizon {}, bloom stop {:?}, budget {:?}, hyphal uptake {:?} d_c {:?}, network {:?}; running {} cells now",
             cells.len(),
             done.len(),
             args.out.display(),
@@ -403,6 +434,7 @@ fn main() {
             args.rollouts.budget,
             args.rollouts.hyphal_uptake,
             args.rollouts.contact_distance,
+            args.rollouts.network,
             plan.len()
         );
         let start = Instant::now();
@@ -448,6 +480,7 @@ fn main() {
 mod tests {
     use super::*;
     use explorers_genesis::BloomStop;
+    use explorers_search::config_source::NetworkPins;
     use explorers_search::qd::{DEFAULT_BLOOM_STOP, SEARCH_ROLLOUT_BUDGET};
     use explorers_search::search::SearchConfig;
 
@@ -538,5 +571,39 @@ mod tests {
     #[should_panic(expected = "--contact-distance \"0\" must be a positive number")]
     fn the_contact_distance_must_be_positive() {
         parse_args(["--contact-distance".to_string(), "0".to_string()]);
+    }
+
+    /// #741: the `--network-*` flags pin the network on every audited
+    /// world, named and parsed as the census's (#646); unset, the worlds keep
+    /// their decoded (off) network.
+    #[test]
+    fn the_network_flags_pin_the_rollouts() {
+        let a = parse_args(std::iter::empty());
+        assert_eq!(a.rollouts.network, NetworkPins::default());
+        let a = parse_args(
+            "--network-connection-cap 4 --network-creation-cost 0.1 --network-maintenance-cost 0.01 --network-redistribution-rate 0.2 --network-transfer-efficiency 0.8"
+                .split(' ')
+                .map(String::from),
+        );
+        assert_eq!(
+            a.rollouts.network,
+            NetworkPins {
+                connection_cap: Some(4),
+                creation_cost: Some(0.1),
+                maintenance_cost: Some(0.01),
+                redistribution_rate: Some(0.2),
+                transfer_efficiency: Some(0.8),
+            }
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "--network-transfer-efficiency \"1.5\" must be a number in [0, 1]")]
+    fn the_network_flags_reject_what_the_census_rejects() {
+        parse_args(
+            ["--network-transfer-efficiency", "1.5"]
+                .into_iter()
+                .map(String::from),
+        );
     }
 }
