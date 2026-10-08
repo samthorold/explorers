@@ -25,7 +25,7 @@ fa 0 = `founder_aggregation = 0`. Seed 42: 99 configs × 5 seeds. Seed 43: 96 ×
 | **#670 seed 43, decoded** | **−0.129 / −0.079 (62 of 96, 0.006)** | **62.0 %** | **89.8 %** | **14 (2.9 %)** | **non-empty, 41 of 276 cells (+0.035)** |
 | #656, fa 0 | −0.048 / +0.051 (33 of 79, 0.18) | 48.4 % | 91.9 % | 18 (4.6 %) | empty (−0.078) |
 | #668, fa 0 | −0.040 / +0.015 (36 of 79, 0.50) | 52.8 % | 93.2 % | 15 (3.8 %) | empty (−0.030) |
-| **#670 seed 42, fa 0** | **−0.165 / −0.026 (55 of 99, 0.32)** | **59.3 %** | **89.9 %** | **25 (5.1 %)** | **empty (−0.226)** |
+| **#670 seed 42, fa 0** | **−0.165 / −0.026 (55 of 99, 0.31)** | **59.3 %** | **89.9 %** | **25 (5.1 %)** | **empty (−0.226)** |
 | **#670 seed 43, fa 0** | **−0.089 / −0.036 (53 of 96, 0.36)** | **62.0 %** | **90.2 %** | **17 (3.5 %)** | **empty (−0.115)** |
 
 **Verdict for #662: on genesis's worlds, the deficit rule with `c_AH` searched does not deliver
@@ -33,7 +33,7 @@ flow 1's two tests.**
 
 1. **Conditionality passes by the rule in all four readings, but it is not a clear negative
    relation** (§3). At fa 0 it is the first pass since #655's `b = 1` perturbation. But in three of the four readings the
-   share of configs with ρ < 0 is a coin's (p = 0.32–0.69), as in #656 and #668. Only seed 43
+   share of configs with ρ < 0 is a coin's (p = 0.31–0.69), as in #656 and #668. Only seed 43
    decoded is told apart from a coin (62 of 96, p = 0.006, median −0.079), and its seed-43 fa 0
    twin is not (53 of 96). Within each atlas, a config's `c_AH` does not predict its ρ.
 2. **The minority share fails clearly, in all four readings** (§4). It is 59–62 % on the settled
@@ -153,7 +153,7 @@ Producer `h_eff` against pool N at the cell, second half:
 | seed 43, decoded | −0.129 | 553,159 | −0.079 | 62 of 96 | **0.006** |
 | #656, fa 0 | −0.048 | 703,608 | +0.051 | 33 of 79 | 0.18 |
 | #668, fa 0 | −0.040 | 656,200 | +0.015 | 36 of 79 | 0.50 |
-| seed 42, fa 0 | −0.165 | 636,320 | −0.026 | 55 of 99 | 0.32 |
+| seed 42, fa 0 | −0.165 | 636,320 | −0.026 | 55 of 99 | 0.31 |
 | seed 43, fa 0 | −0.089 | 729,581 | −0.036 | 53 of 96 | 0.36 |
 
 Mean pool N at the cell by `h_eff` bin:

@@ -153,7 +153,7 @@ structure.
 | | committed (#683) | #686 | #711 |
 |---|---|---|---|
 | (1) median per-config ρ | −0.021 / −0.026 | −0.104 / −0.085 | −0.158 / −0.071 |
-| (2) configs with ρ < 0, binomial p | 52 / 55 of 99, 0.69 / 0.32 | 54 / 51 of 83, 0.008 / 0.048 | 64 / 53 of 85, < 0.001 / 0.029 |
+| (2) configs with ρ < 0, binomial p | 52 / 55 of 99, 0.69 / 0.31 | 54 / 51 of 83, 0.008 / 0.048 | 64 / 53 of 85, < 0.001 / 0.029 |
 | (3) lineage clusters with median ρ < 0 | 5 / 5 of 8 | 7 / 5 of 8 | 7 / 5 of 8 |
 | **conditionality** | FAIL / FAIL | PASS / PASS | **PASS / PASS** |
 | **minority share**, second half | 61.6 / 59.3 % | 48.8 / 51.6 % | **44.7 / 52.8 %** |
