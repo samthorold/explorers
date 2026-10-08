@@ -168,7 +168,8 @@ also one of the lockup cells and the slowest audit cell (34 min).
   `λ = 0.0025`, so the emitters' geometry and the physics changed at once. The flip in flow 1,
   the lower agreement and the higher F could come from either, or from the different archive a
   33-dimensional search builds from the same seed. A second search seed would show how much is
-  the draw; a fixed-world comparison at `λ = 0` and `0.0025` would show how much is the rate.
+  the draw. The fixed-world comparison for flow 1 has since been run (§7): the rate is not what
+  reverses conditionality.
 - **That the recipe stays robust under play.** Robustness to perturbation mid-run is what the game
   turns on, and it is read on settled worlds, not here (genesis-search.md, *Genesis selects for
   worlds that are sensible across initial conditions*).
@@ -178,3 +179,27 @@ also one of the lockup cells and the slowest audit cell (34 min).
 - **Reproducibility.** The search was not rerun. Its 5 unfinished rollouts depend on wall clock,
   so a faster or slower machine could finish them and enter different cells. None of the atlas's
   cells rests on one.
+
+## 7. Addendum (#721, 2026-10-08): the same worlds at λ = 0
+
+The census was re-run on the same 78 worlds with the same binary, configs and seeds (1000–1004,
+ensemble 5, T = 2000), decoded and at fa 0, changing only the rate to `λ = 0` (`--leaching-rate
+0`). The rule fixed on #721 before the run read the pooled ρ: if it falls to ≤ 0 in both modes,
+the rate causes the reversal; if it stays > 0 in both, it does not.
+
+| | λ = 0.0025 (§5) | λ = 0 |
+|---|---|---|
+| pooled ρ, decoded / fa 0 | +0.087 / +0.021 | +0.078 / +0.077 |
+| median per-config ρ | −0.010 / +0.033 | −0.002 / +0.032 |
+| configs with ρ < 0 of 78, binomial p | 41 / 35, 0.73 / 0.43 | 40 / 30, 0.91 / 0.054 |
+| lineage clusters with median ρ < 0 | 3 / 3 of 8 | 4 / 1 of 8 |
+| the recipe's ρ (atlas:31) | +0.630 / +0.367 | +0.513 / +0.415 |
+| minority share, second half | 60.1 / 59.5 % | 68.5 / 65.5 % |
+| persisted seeds of 390 | 333 / 343 (85.4 / 87.9 %) | 310 / 315 (79.5 / 80.8 %) |
+| nutrient lockup seeds | 15 / 8 | 48 / 41 |
+
+**The rate does not cause the reversal.** The pooled ρ stays positive in both modes at `λ = 0`, so
+heterotrophy running backwards belongs to these worlds, to the box and seed 42's draw, not to
+leaching. **Leaching holds these worlds together.** Without it, lockup seeds rise from 15 to 48
+decoded and from 8 to 41 at fa 0, persistence falls by 6–7 points, and mixotrophs drain more of
+the pile. This is #700's lockup result again, read on worlds a fixed-λ search chose.
