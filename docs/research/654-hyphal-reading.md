@@ -5,6 +5,26 @@ committed atlas (#719's, 78 cells, recipe atlas:31) and read against the switch 
 posted on #654 before the run. Binaries pinned at main 0f097a3 under `target/654/bin`, driver
 `target/654/run.sh`.**
 
+> **Correction (2026-10-08, after review).** The first version of this note read the
+> switch-off gradient as evidence against the design's premise that no agent is poor in energy
+> and rich in nutrient. The ecology literature says otherwise.
+> - Consumers keep their body stoichiometry roughly constant and excrete the nutrient they cannot
+>   use (Sterner & Elser 2002; [nutrient cycling](../ecology/nutrient-cycling.md)), as flow 3
+>   does.
+> - Decomposers are limited by carbon, not mineral nutrient, where they coexist with producers
+>   (Daufresne & Loreau 2001; [stability and resilience](../ecology/stability-and-resilience.md)).
+>
+> A high free-nutrient-to-reserve ratio in heterotrophs is what energy limitation looks like, not
+> a surplus they can trade, so it is consistent with the design. The failure belongs instead to
+> the mechanism. Hyphal uptake rides on effective heterotrophy, with stillness standing in for the
+> absorptive habit, which gives every sessile mixotroph its own hyphae. In the literature a
+> plant's heterotrophy is carnivory, and a producer reaches hyphae only through a fungal partner:
+> it "does not become a decomposer" ([fungi](../ecology/fungi.md), *The producer's route to
+> organic nutrient*). That departure is why 98 % of the flow reaches producers. The ratio test
+> was also the wrong test of a partner. The literature's exchange runs on complementary
+> limitation (Kiers et al. 2011): producers limited by nutrient, the partner limited by carbon.
+> The measurements below stand. The sentences this correction supersedes are marked.
+
 ## TL;DR
 
 **The rule's partner test fails in both modes, so #654 is re-deferred.** With hyphal uptake on,
@@ -68,9 +88,11 @@ The failure does not depend on the contact distance. At every `d_c`, fewer world
 than move below it.
 
 **The baseline already shows the gradient.** With the switch off, 42 of the 75 (decoded) and
-42 of the 77 (fa 0) worlds carrying heterotrophs by role have gradient > 1. That reads against
+42 of the 77 (fa 0) worlds carrying heterotrophs by role have gradient > 1. ~~That reads against
 the design's premise that no agent is poor in energy and rich in nutrient (world-rules.md, *The
-partnership needs a partner*). Over qualifying runs, the switch-off quartiles are:
+partnership needs a partner*).~~ *(Superseded by the correction above: this is energy
+limitation, as the literature expects of heterotrophs, not a tradeable surplus.)* Over
+qualifying runs, the switch-off quartiles are:
 
 | | decoded, off | decoded, on | fa 0, off | fa 0, on |
 |---|---|---|---|---|
@@ -101,7 +123,9 @@ take nearly all the new flow. Heterotrophs by role do gain nutrient from it: a q
 of a consumer's pool uptake is hyphal, and 10–15 % of all their nutrient income. But producers'
 free nutrient per reserve rises faster than theirs (median 1.35 → 1.65 against 1.66 → 1.99,
 decoded), so the gradient the partnership needs narrows. On these worlds the flow serves
-mixotrophs, not a fungal partner.
+mixotrophs, not a fungal partner. That follows from the mechanism, which lets a sessile
+mixotroph's heterotrophy absorb from the pool. The literature gives that capability to
+absorptive heterotrophs (fungi and bacteria), not to plants (see the correction above).
 
 ## 3. Robustness
 
