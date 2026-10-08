@@ -33,8 +33,10 @@ pub const MOBILITY_DISTANCE_PER_TICK: f32 = 1.0;
 pub const DISPERSAL_KERNEL_SIGMA: f32 = 1.0;
 
 /// `u_A`: nutrient an agent demands from its cell per tick per unit of
-/// effective photosynthetic absorption. Units: `N/T` per trait unit. Read in
-/// `phase::absorb_nutrients`.
+/// effective photosynthetic absorption, and with hyphal uptake on (#727) per
+/// unit of contact × effective heterotrophy as well: one anchor for one
+/// absorptive surface. Units: `N/T` per trait unit. Read in
+/// `phase::nutrient_uptake_demand_after_move`.
 pub const AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK: f32 = 1.0;
 
 /// `u_H`: structure drained from each in-reach target per tick per unit of
