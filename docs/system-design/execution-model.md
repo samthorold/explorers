@@ -137,6 +137,8 @@ A carcass is a target while it holds *any* stock, energy or nutrient. The two ar
 
 Nutrient leaves a carcass in the proportion of its energy removed that tick, partitioned among the consumers by their drains — each share taken against the carcass's *tick-start* nutrient, like demand against tick-start structure, never against the stock as the previous consumer left it. Two equal bites therefore take equal shares, and a carcass whose demand exhausts it releases all of its nutrient in the same tick (any rounding remainder mineralises to the cell), so it leaves the world on the same tick in every run rather than lingering on a residue.
 
+What a consumer excretes from a bite is routed surplus when it has paying network partners (world-rules.md flow 5): it goes to their free stores, split by the energy each delivered in the most recent redistribution. Redistribution runs after this pass, so that is the previous tick's, kept on the world. A partner marked dead earlier in this pass already holds its carcass and is not paid; with no live paying partner the surplus goes to the cell.
+
 #### Pass 2 — Investments
 
 Resolve all interactions where the source invests its own resources:

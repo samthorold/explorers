@@ -1091,6 +1091,11 @@ pub struct World {
     /// the movement hyphal uptake reads as substrate contact (world-rules.md
     /// flow 2): the move that placed the agent where it now absorbs.
     last_move_distance: std::collections::HashMap<u64, f32>,
+    /// Energy each network partner delivered to each agent in the most recent
+    /// redistribution (flow 5). Drains run before redistribution within a
+    /// tick, so this is the payment the next tick's routed surplus is split
+    /// by. Empty while the network is off.
+    last_partner_payments: phase::PartnerPayments,
 }
 
 impl World {
@@ -1213,6 +1218,7 @@ impl World {
             ledger: energy_ledger::EnergyLedger::new(),
             nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
             last_move_distance: std::collections::HashMap::new(),
+            last_partner_payments: phase::PartnerPayments::default(),
         }
     }
 
@@ -1307,6 +1313,7 @@ impl World {
                 ledger: energy_ledger::EnergyLedger::new(),
                 nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
                 last_move_distance: std::collections::HashMap::new(),
+                last_partner_payments: phase::PartnerPayments::default(),
             }
         } else if let Some(ref distribution) = recipe.initial_distribution {
             Self::new(recipe.parameters.clone(), distribution.clone(), seed)
@@ -1431,13 +1438,17 @@ impl World {
         events.extend(grow_events);
 
         // 5. Resolve drains (coordinated pass 1)
-        let drain_result = phase::resolve_drains_with_deficits(
+        // A connected drainer's excreted surplus follows the energy its
+        // partners delivered in the previous tick's redistribution (routed
+        // surplus, flow 5); with nothing paid it goes to the cell.
+        let drain_result = phase::resolve_drains_routed(
             &mut self.agents,
             &mut self.carcasses,
             &grid,
             &self.params,
             &mut self.nutrient_grid,
             &consumer_deficit,
+            &self.last_partner_payments,
         );
         self.dissipated_energy += drain_result.dissipated;
         events.extend(drain_result.events);
@@ -1496,6 +1507,8 @@ impl World {
         let (redistribute_events, redistribute_dissipated) =
             phase::redistribute(&mut self.agents, &self.connections, &self.params);
         self.dissipated_energy += redistribute_dissipated;
+        // Next tick's routed surplus is split by this pass's energy legs.
+        self.last_partner_payments = phase::PartnerPayments::from_events(&redistribute_events);
         events.extend(redistribute_events);
 
         // 6. Resolve reproduction (coordinated pass 2)
@@ -1909,6 +1922,13 @@ impl World {
     /// contact. Read-only, for instruments that replay the tick.
     pub fn last_move_distance(&self) -> &std::collections::HashMap<u64, f32> {
         &self.last_move_distance
+    }
+
+    /// Energy each partner delivered to each agent in the most recent
+    /// redistribution: what the next tick's routed surplus is split by
+    /// (flow 5). Read-only, for instruments that read the trade.
+    pub fn last_partner_payments(&self) -> &phase::PartnerPayments {
+        &self.last_partner_payments
     }
 
     pub fn nutrient_grid_mut(&mut self) -> &mut spatial::NutrientGrid {
@@ -4007,6 +4027,115 @@ mod tests {
             "producer gains nutrient via the network: {} vs control {}",
             producer_nutrient(&net),
             producer_nutrient(&ctl)
+        );
+    }
+
+    /// A producer (id 0, energy-rich) connected to a decomposer (id 1) that sits
+    /// on a nutrient-rich carcass: the trade of flow 5 in its smallest form.
+    fn producer_decomposer_pair() -> World {
+        let mut params = test_params();
+        params.network_connection_cap = 4;
+        params.network_redistribution_rate = 0.5;
+        params.network_transfer_efficiency = 0.8;
+        // Both hold their reserve (no growth or reproduction) so the
+        // producer stays the energy donor.
+        params.growth_retention_multiplier = 1000.0;
+        let recipe = WorldRecipe {
+            parameters: params,
+            initial_distribution: None,
+            agents: Some(vec![
+                AgentSpec {
+                    position: (-30.0, -30.0),
+                    reserve: 500.0,
+                    traits: TraitVector {
+                        photosynthetic_absorption: 6.0,
+                        ..zero_traits()
+                    },
+                    nutrient: 0.0,
+                },
+                AgentSpec {
+                    position: (1.0, 0.0),
+                    reserve: 10.0,
+                    traits: TraitVector {
+                        heterotrophy: 2.0,
+                        ..zero_traits()
+                    },
+                    nutrient: 0.0,
+                },
+            ]),
+            carcasses: Some(vec![CarcassSpec {
+                position: (0.0, 0.0),
+                energy: 50.0,
+                traits: zero_traits(),
+                nutrient: 40.0,
+            }]),
+            max_ticks: 100,
+        };
+        let mut world = World::from_recipe(&recipe, 42);
+        world.seed_connection(0, 1);
+        world
+    }
+
+    #[test]
+    fn world_keeps_the_energy_each_partner_delivered_in_the_last_redistribution() {
+        let mut world = producer_decomposer_pair();
+        world.step();
+        let delivered: f32 = world
+            .event_log()
+            .by_kind(&event::EventKind::Redistributed)
+            .iter()
+            .filter(|e| e.energy_delta > 0.0)
+            .map(|e| e.energy_delta)
+            .sum();
+        assert!(delivered > 0.0);
+        let paid: Vec<(u64, f32)> = world.last_partner_payments().paid_to(1).collect();
+        assert_eq!(paid, vec![(0, delivered)]);
+    }
+
+    #[test]
+    fn a_paid_decomposer_routes_its_surplus_to_its_partner_on_the_next_tick() {
+        // Drains run before redistribution, so tick 1's surplus has no payment
+        // to follow and goes to the cell; tick 2's follows tick 1's energy leg
+        // to the producer. Nutrient is conserved throughout.
+        let mut world = producer_decomposer_pair();
+        let n_total = |w: &World| {
+            w.nutrient_pool()
+                + w.agents()
+                    .iter()
+                    .map(|a| a.nutrient_total(w.params()))
+                    .sum::<f32>()
+                + w.carcasses().iter().map(|c| c.nutrient).sum::<f32>()
+        };
+        let before = n_total(&world);
+        world.step();
+        assert!(
+            world
+                .event_log()
+                .by_kind(&event::EventKind::SurplusRouted)
+                .is_empty(),
+            "nothing paid yet on tick 1"
+        );
+        assert!(
+            world.nutrient_pool() > 0.0,
+            "tick 1's surplus reached the cell"
+        );
+        let pool_after_tick_1 = world.nutrient_pool();
+
+        world.step();
+        let routed = world.event_log().by_kind(&event::EventKind::SurplusRouted);
+        assert!(!routed.is_empty(), "tick 2's surplus is routed");
+        assert!(
+            routed
+                .iter()
+                .all(|e| e.source == 1 && e.target == Some(0) && e.nutrient_delta > 0.0)
+        );
+        assert!(
+            world.nutrient_pool() <= pool_after_tick_1,
+            "no new excretion to the cell"
+        );
+        assert!(
+            (n_total(&world) - before).abs() < 1e-3,
+            "nutrient conserved"
         );
     }
 

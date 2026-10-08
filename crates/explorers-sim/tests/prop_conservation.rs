@@ -7,7 +7,8 @@ mod support;
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use proptest::prelude::*;
 use support::{
-    WorldCase, world_case, world_case_with_hyphal_uptake, world_case_with_size_scaled_uptake,
+    WorldCase, world_case, world_case_with_hyphal_uptake, world_case_with_network,
+    world_case_with_size_scaled_uptake,
 };
 
 /// Relative f32 tolerance for the energy identity: f32 carries ~7 significant
@@ -94,6 +95,16 @@ proptest! {
     /// much exists.
     #[test]
     fn conservation_holds_with_hyphal_uptake(case in world_case_with_hyphal_uptake()) {
+        check_energy_ledger_identity(&case)?;
+        check_nutrient_closure(&case)?;
+        check_stores_non_negative(&case)?;
+    }
+
+    /// The three conservation invariants with the network on (#738):
+    /// redistribution and routed surplus move energy and nutrient between
+    /// partners, never create or destroy them.
+    #[test]
+    fn conservation_holds_with_the_network_on(case in world_case_with_network()) {
         check_energy_ledger_identity(&case)?;
         check_nutrient_closure(&case)?;
         check_stores_non_negative(&case)?;
