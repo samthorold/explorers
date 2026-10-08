@@ -152,6 +152,39 @@
 //! a.jsonl,b.jsonl,…` prints M4's line for each rows file as one table and
 //! exits. `PreStep` replays the tick's leaching, so C–J read the drain-time
 //! carcasses and pool at λ > 0. `scripts/700-leaching.sh` drives it.
+//!
+//! #728 reads hyphal uptake (#727; world-rules.md flow 2, *Hyphal uptake*)
+//! for the partner the symbiosis needs (#654's reading rule).
+//! `--hyphal-uptake on|off` and `--contact-distance <d_c>` pin the switch and
+//! `d_c` on every decoded config (unset, each keeps its decoded value: off,
+//! `DEFAULT_CONTACT_DISTANCE`); rows record the effective values (absent on
+//! older rows: off). `PreStep` replays uptake with the world's last move
+//! distances, so C–M read the stepper's uptake with the switch on. N.
+//! **Partner**, per run (`PartnerRun`): on every settled-half sample tick, by
+//! the sample's recent-income role, each agent's free nutrient ÷ reserve —
+//! free nutrient is its unbound nutrient (the unearmarked free store plus the
+//! reproductive earmark, not the nutrient bound in structure), reserve its
+//! whole reserve (unallocated plus the reproductive allocation); agents with
+//! no reserve are left out and counted. Over heterotrophs by role (consumer
+//! or decomposer) and producers by role, the median of each and the sample
+//! counts; on a persisted run with both, their ratio, the **gradient**. A
+//! world (a config over its seeds) has as its gradient the median over its
+//! qualifying runs, and carries heterotrophs by role when it has at least
+//! one; the rest are counted by why they are out. The **hyphal share**: the
+//! heterotrophs' (C's buckets) settled-half hyphal uptake over their pool
+//! uptake plus nutrient retained from consumption, per run, per world and
+//! pooled; 0 with the switch off. The section counts the worlds carrying
+//! heterotrophs by role and those with gradient > 1 (a majority or not),
+//! and with `--baseline <switch-off rows>` the paired sign test on each
+//! world's gradient > 1 indicator (a world not carrying reads 0; worlds pair
+//! by config), exact binomial over the discordant pairs, two-sided and
+//! one-sided (on > off). Section N is new and printed last, so an off run's
+//! other sections are unchanged.
+//!
+//!   cargo run --release -p explorers-search --example kin_killer_diet -- \
+//!       --atlas atlas.json --hyphal-uptake on --out target/728/on.jsonl
+//!   cargo run --release -p explorers-search --example kin_killer_diet -- \
+//!       --summary --out target/728/on.jsonl --baseline target/728/off.jsonl
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -164,11 +197,12 @@ use explorers_genesis_eval::{EvalConfig, RolloutObservations};
 use explorers_search::config_source::{
     ConfigSource, NetworkPins, parse_founder_aggregation, parse_non_negative, parse_positive,
     parse_selector, parse_unit_interval, resolve_config, sampled_units, with_cross_trait_cost,
-    with_founder_aggregation, with_leaching_rate, with_network, with_uptake_scaling,
+    with_founder_aggregation, with_hyphal_uptake, with_leaching_rate, with_network,
+    with_uptake_scaling,
 };
 use explorers_search::flow1_verdict::{
     COIN_ALPHA, Conditionality as Flow1Conditionality, DrainShift, Drains, LINEAGE_CLUSTERS,
-    MINORITY_BAR, minority, ward_clusters,
+    MINORITY_BAR, binomial_two_sided_p, binomial_upper_tail_p, minority, ward_clusters,
 };
 use explorers_search::fullness::{FullnessBank, FullnessTracker, k_grid, tau_grid, tick_intakes};
 use explorers_search::grazer_hunger::PreStep;
@@ -538,6 +572,10 @@ fn recipient(role: Option<TrophicRole>, eff: f32) -> usize {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct Routes {
     uptake: Vec<f64>,
+    /// The hyphal part of `uptake` (#728; `DrainStart::hyphal`). Zero with
+    /// hyphal uptake off, and on pre-#728 rows.
+    #[serde(default = "recipient_zeros")]
+    hyphal: Vec<f64>,
     living_energy: Vec<f64>,
     living_retained: Vec<f64>,
     carcass_bites: Vec<u64>,
@@ -583,6 +621,7 @@ impl Default for Routes {
         let z = vec![0.0; RECIPIENTS.len()];
         Self {
             uptake: z.clone(),
+            hyphal: z.clone(),
             living_energy: z.clone(),
             living_retained: z.clone(),
             carcass_bites: vec![0; RECIPIENTS.len()],
@@ -610,6 +649,7 @@ impl Routes {
             }
         };
         add(&mut self.uptake, &o.uptake);
+        add(&mut self.hyphal, &o.hyphal);
         add(&mut self.living_energy, &o.living_energy);
         add(&mut self.living_retained, &o.living_retained);
         for (x, y) in self.carcass_bites.iter_mut().zip(&o.carcass_bites) {
@@ -848,6 +888,10 @@ struct Tally {
     /// pre-#700 rows.
     #[serde(default)]
     leach_runs: Vec<LeachRun>,
+    /// N (#728): one partner readout per seed, in seed order. Empty on
+    /// pre-#728 rows.
+    #[serde(default)]
+    partner_runs: Vec<PartnerRun>,
     /// `--crosscheck` (#681): K's charges against the stepper's. Not on the
     /// rows.
     #[serde(skip)]
@@ -914,6 +958,7 @@ impl Tally {
         self.outcomes.merge(&o.outcomes);
         self.termination_ticks += o.termination_ticks;
         self.leach_runs.extend_from_slice(&o.leach_runs);
+        self.partner_runs.extend_from_slice(&o.partner_runs);
         self.charge_check.merge(&o.charge_check);
     }
 }
@@ -1024,6 +1069,8 @@ fn rollout(
     let mut drain_clock = DrainClock::default();
     let (mut leach_n, mut leach_n_second_half) =
         (CarcassNutrient::default(), CarcassNutrient::default());
+    // N (#728): free nutrient ÷ reserve by role group, settled sample ticks.
+    let mut partner = PartnerSamples::default();
     for _ in 0..max_ticks {
         let tick_before = world.tick();
         let second_half_tick = tick_before + 1 >= window_start;
@@ -1166,6 +1213,14 @@ fn rollout(
                         r.uptake[b] += f64::from(u);
                         if memo {
                             r.uptake[MEMO] += f64::from(u);
+                        }
+                    }
+                }
+                for (&id, &u) in &start.hyphal {
+                    if let Some((b, memo)) = bucket_of(id) {
+                        r.hyphal[b] += f64::from(u);
+                        if memo {
+                            r.hyphal[MEMO] += f64::from(u);
                         }
                     }
                 }
@@ -1533,6 +1588,11 @@ fn rollout(
                 mobile.sample(&producers);
                 moved.clear();
             }
+            if second_half {
+                for a in world.agents() {
+                    partner.sample(sample_roles.get(&a.id).copied(), a);
+                }
+            }
             for a in world.agents() {
                 let role = sample_roles.get(&a.id).copied();
                 let eff = a.effective_trait_with_steepness(1, steep);
@@ -1607,6 +1667,19 @@ fn rollout(
         &tally.ext.routes_second_half,
         drain_clock,
     ));
+    {
+        let r = &tally.ext.routes_second_half;
+        let het = |v: &[f64]| v[2] + v[3];
+        tally.partner_runs.push(partner.finish(
+            seed,
+            failure.as_ref().map_or("persisted", failure_label),
+            [
+                het(&r.hyphal),
+                het(&r.uptake),
+                het(&r.living_retained) + het(&r.carcass_retained),
+            ],
+        ));
+    }
     for (g, by_agent) in charge.into_iter().enumerate() {
         let mut by_agent: Vec<(u64, [f64; 4])> = by_agent.into_iter().collect();
         by_agent.sort_by_key(|(id, _)| *id);
@@ -1633,6 +1706,463 @@ fn rollout(
         }
     }
     tally
+}
+
+/// An agent's **free nutrient ÷ reserve** (#728): its unbound nutrient (the
+/// unearmarked free store plus the reproductive earmark; not the nutrient
+/// bound in structure) over its whole reserve (unallocated plus the
+/// reproductive allocation). `None` when it holds no reserve.
+fn free_nutrient_per_reserve(a: &explorers_sim::Agent) -> Option<f32> {
+    let reserve = a.reserve + a.repro_reserve;
+    (reserve > 0.0).then(|| (a.nutrient + a.repro_nutrient) / reserve)
+}
+
+/// N (#728): one run's free nutrient ÷ reserve samples, by role group, over
+/// the settled half's sample ticks (the sample's recent-income role).
+#[derive(Clone, Debug, Default)]
+struct PartnerSamples {
+    heterotroph: Vec<f64>,
+    producer: Vec<f64>,
+    zero_reserve: u64,
+}
+
+impl PartnerSamples {
+    /// One agent-sample: heterotroph by role (consumer or decomposer) or
+    /// producer by role; an agent with no role yet is in neither group.
+    fn sample(&mut self, role: Option<TrophicRole>, a: &explorers_sim::Agent) {
+        let group = match role {
+            Some(TrophicRole::Consumer | TrophicRole::Decomposer) => &mut self.heterotroph,
+            Some(TrophicRole::Producer) => &mut self.producer,
+            None => return,
+        };
+        match free_nutrient_per_reserve(a) {
+            Some(r) => group.push(f64::from(r)),
+            None => self.zero_reserve += 1,
+        }
+    }
+
+    /// The run's readout; `[hyphal, pool uptake, consumption]` is the
+    /// heterotrophs' settled-half nutrient income by route.
+    fn finish(self, seed: u64, outcome: &str, [hyphal, uptake, consumed]: [f64; 3]) -> PartnerRun {
+        PartnerRun {
+            seed,
+            outcome: outcome.to_string(),
+            heterotroph_samples: self.heterotroph.len() as u64,
+            producer_samples: self.producer.len() as u64,
+            zero_reserve: self.zero_reserve,
+            heterotroph: median(self.heterotroph),
+            producer: median(self.producer),
+            hyphal_n: hyphal,
+            uptake_n: uptake,
+            consumed_n: consumed,
+        }
+    }
+}
+
+/// N (#728): one seed's partner readout.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+struct PartnerRun {
+    seed: u64,
+    /// The census's verdict (`persisted` or a failure label).
+    outcome: String,
+    /// Settled-half agent-samples per group, those with reserve.
+    heterotroph_samples: u64,
+    producer_samples: u64,
+    /// Agent-samples in either group with no reserve, left out.
+    zero_reserve: u64,
+    /// Median free nutrient ÷ reserve per group (`None`: no samples).
+    heterotroph: Option<f64>,
+    producer: Option<f64>,
+    /// Heterotrophs by role (C's consumer and decomposer buckets, role at the
+    /// start of the tick), settled half: hyphal uptake, all pool uptake
+    /// (hyphal and root), and nutrient retained from consumption (living and
+    /// carcass drains).
+    hyphal_n: f64,
+    uptake_n: f64,
+    consumed_n: f64,
+}
+
+impl PartnerRun {
+    /// The **gradient**: heterotrophs' median over producers'. Only on a
+    /// persisted run with both groups sampled; `None` also when both medians
+    /// are 0 (an undefined ratio). A producer median of 0 under a positive
+    /// heterotroph median reads as +∞.
+    fn gradient(&self) -> Option<f64> {
+        if self.outcome != "persisted" {
+            return None;
+        }
+        let g = self.heterotroph? / self.producer?;
+        (!g.is_nan()).then_some(g)
+    }
+
+    /// The hyphal share of the heterotrophs' nutrient income: hyphal uptake
+    /// over all pool uptake plus consumption.
+    fn hyphal_share(&self) -> Option<f64> {
+        let income = self.uptake_n + self.consumed_n;
+        (income > 0.0).then(|| self.hyphal_n / income)
+    }
+}
+
+/// N (#728): one world's (one config's, over its seeds) partner readout.
+/// Its gradient is the median of the per-run gradients over its persisted
+/// runs carrying both roles; it **carries heterotrophs by role** when at
+/// least one such run exists.
+#[derive(Clone, Debug)]
+struct PartnerWorld {
+    source: ConfigSource,
+    config_index: usize,
+    runs: usize,
+    persisted: usize,
+    /// Persisted runs with no heterotroph-by-role / producer-by-role sample
+    /// (a run lacking both counts in both).
+    lacking_heterotroph: usize,
+    lacking_producer: usize,
+    /// Persisted runs with both groups at a median of 0 (0 / 0).
+    undefined: usize,
+    /// Per qualifying run, in seed order.
+    gradients: Vec<f64>,
+    gradient: Option<f64>,
+    /// Heterotrophs' settled-half `[hyphal, pool uptake, consumption]` N,
+    /// summed over every run.
+    income: [f64; 3],
+}
+
+impl PartnerWorld {
+    fn of(row: &Row) -> Self {
+        let runs = &row.tally.partner_runs;
+        let persisted: Vec<&PartnerRun> =
+            runs.iter().filter(|r| r.outcome == "persisted").collect();
+        let gradients: Vec<f64> = runs.iter().filter_map(PartnerRun::gradient).collect();
+        let lacking_heterotroph = persisted.iter().filter(|r| r.heterotroph.is_none()).count();
+        let lacking_producer = persisted.iter().filter(|r| r.producer.is_none()).count();
+        let both = persisted
+            .iter()
+            .filter(|r| r.heterotroph.is_some() && r.producer.is_some())
+            .count();
+        let mut income = [0.0; 3];
+        for r in runs {
+            income[0] += r.hyphal_n;
+            income[1] += r.uptake_n;
+            income[2] += r.consumed_n;
+        }
+        PartnerWorld {
+            source: row.source,
+            config_index: row.config_index,
+            runs: runs.len(),
+            persisted: persisted.len(),
+            lacking_heterotroph,
+            lacking_producer,
+            undefined: both - gradients.len(),
+            gradient: median(gradients.clone()),
+            gradients,
+            income,
+        }
+    }
+
+    fn carries(&self) -> bool {
+        self.gradient.is_some()
+    }
+
+    /// The indicator the sign test pairs on: carries heterotrophs by role
+    /// with a gradient above 1.
+    fn above_one(&self) -> bool {
+        self.gradient.is_some_and(|g| g > 1.0)
+    }
+
+    fn hyphal_share(&self) -> Option<f64> {
+        let total = self.income[1] + self.income[2];
+        (total > 0.0).then(|| self.income[0] / total)
+    }
+}
+
+/// N (#728): the rows' worlds, counted.
+#[derive(Clone, Debug)]
+struct PartnerTally {
+    worlds: usize,
+    carrying: usize,
+    above_one: usize,
+}
+
+impl PartnerTally {
+    fn of(rows: &[Row]) -> Self {
+        let worlds: Vec<PartnerWorld> = rows.iter().map(PartnerWorld::of).collect();
+        PartnerTally {
+            worlds: worlds.len(),
+            carrying: worlds.iter().filter(|w| w.carries()).count(),
+            above_one: worlds.iter().filter(|w| w.above_one()).count(),
+        }
+    }
+
+    /// More than half of the worlds carrying heterotrophs by role have a
+    /// gradient above 1.
+    fn majority(&self) -> bool {
+        2 * self.above_one > self.carrying
+    }
+}
+
+/// N (#728): the paired sign test of the switch-on rows against a baseline
+/// (switch-off) rows file, on each world's gradient > 1 indicator
+/// ([`PartnerWorld::above_one`]; a world not carrying heterotrophs by role
+/// reads 0). Worlds pair by config (source and index); a world in one file
+/// only is counted, not paired. The test is exact, over the discordant pairs.
+#[derive(Clone, Debug, Default)]
+struct SignTest {
+    pairs: usize,
+    unpaired_on: usize,
+    unpaired_off: usize,
+    /// Pairs above 1 with the switch on only (k), off only, in both, in neither.
+    on_only: usize,
+    off_only: usize,
+    both: usize,
+    neither: usize,
+}
+
+impl SignTest {
+    fn of(on: &[Row], off: &[Row]) -> Self {
+        let key = |r: &Row| (r.source, r.config_index);
+        let off_worlds: HashMap<(ConfigSource, usize), bool> = off
+            .iter()
+            .map(|r| (key(r), PartnerWorld::of(r).above_one()))
+            .collect();
+        let mut t = SignTest::default();
+        let mut paired: HashSet<(ConfigSource, usize)> = HashSet::new();
+        for r in on {
+            let Some(&b) = off_worlds.get(&key(r)) else {
+                t.unpaired_on += 1;
+                continue;
+            };
+            paired.insert(key(r));
+            t.pairs += 1;
+            match (PartnerWorld::of(r).above_one(), b) {
+                (true, false) => t.on_only += 1,
+                (false, true) => t.off_only += 1,
+                (true, true) => t.both += 1,
+                (false, false) => t.neither += 1,
+            }
+        }
+        t.unpaired_off = off_worlds.keys().filter(|k| !paired.contains(k)).count();
+        t
+    }
+
+    fn discordant(&self) -> usize {
+        self.on_only + self.off_only
+    }
+
+    /// `min(1, 2 P(X ≤ min(k, n − k)))`, `X ~ Bin(n, ½)` over the discordant.
+    fn two_sided_p(&self) -> f64 {
+        binomial_two_sided_p(self.on_only, self.discordant())
+    }
+
+    /// `P(X ≥ k)`: more worlds above 1 with the switch on than off.
+    fn one_sided_p(&self) -> f64 {
+        binomial_upper_tail_p(self.on_only, self.discordant())
+    }
+}
+
+/// N (#728): the partner readout as markdown — per world and per run, the
+/// worlds counted, the hyphal share, and, given a baseline (switch-off)
+/// rows file, the paired sign test.
+fn partner_report(rows: &[Row], baseline: Option<(&str, &[Row])>) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let o = &mut out;
+    let fmt = |v: Option<f64>| v.map_or("–".to_string(), |v| format!("{v:.4}"));
+    let share = |v: Option<f64>| v.map_or("–".to_string(), |v| format!("{:.2} %", 100.0 * v));
+    writeln!(
+        o,
+        "\n### N. Partner: free nutrient ÷ reserve by role (#728)\n"
+    )
+    .unwrap();
+    writeln!(o, "{}\n", hyphal_label(rows)).unwrap();
+    writeln!(
+        o,
+        "**Free nutrient** is an agent's unbound nutrient: the unearmarked free store plus the reproductive earmark (not the nutrient bound in its structure). **Reserve** is its whole reserve: unallocated plus the reproductive allocation. Read on every settled-half sample tick (tick ≥ T/2 + 1, the census's role samples), by the sample's recent-income role: **heterotrophs by role** (consumer or decomposer) and **producers by role**; an agent with no role yet is in neither. Agent-samples with no reserve are left out and counted. Per run, the **gradient** is the heterotrophs' median free nutrient ÷ reserve over the producers', on a persisted run with at least one sample of each (a producer median of 0 under a positive heterotroph median reads ∞; 0 / 0 is left out and counted). A **world** is one config over its seeds: its gradient is the median over its qualifying runs, and it **carries heterotrophs by role** when it has at least one. **Hyphal share**: the heterotrophs' (C's consumer and decomposer buckets, role at the start of the tick) settled-half hyphal uptake over their pool uptake (hyphal and root) plus nutrient retained from consumption (living and carcass drains); the network is not counted. 0 with the switch off.\n"
+    )
+    .unwrap();
+    let worlds: Vec<PartnerWorld> = rows.iter().map(PartnerWorld::of).collect();
+    let t = PartnerTally::of(rows);
+    let runs: Vec<&PartnerRun> = rows.iter().flat_map(|r| &r.tally.partner_runs).collect();
+    let sum = |f: &dyn Fn(&PartnerWorld) -> usize| -> usize { worlds.iter().map(f).sum() };
+    writeln!(
+        o,
+        "Worlds carrying heterotrophs by role: **{}** of {}; of them, gradient > 1: **{}** of {} ({} %), a majority: **{}**.\n",
+        t.carrying,
+        t.worlds,
+        t.above_one,
+        t.carrying,
+        pct(t.above_one as u64, t.carrying as u64),
+        if t.majority() { "yes" } else { "no" }
+    )
+    .unwrap();
+    let samples: u64 = runs
+        .iter()
+        .map(|r| r.heterotroph_samples + r.producer_samples)
+        .sum();
+    let zero: u64 = runs.iter().map(|r| r.zero_reserve).sum();
+    writeln!(
+        o,
+        "Runs: {} with a readout ({} rows' seeds predate #728), {} persisted, {} qualifying; persisted runs lacking heterotrophs by role {}, lacking producers by role {}, 0 / 0 {}. Agent-samples with no reserve, left out: {zero} (of {} sampled).\n",
+        runs.len(),
+        rows.iter()
+            .filter(|r| r.tally.partner_runs.is_empty())
+            .map(|r| r.seed_kin_kills.len())
+            .sum::<usize>(),
+        sum(&|w| w.persisted),
+        sum(&|w| w.gradients.len()),
+        sum(&|w| w.lacking_heterotroph),
+        sum(&|w| w.lacking_producer),
+        sum(&|w| w.undefined),
+        samples + zero
+    )
+    .unwrap();
+    let income = worlds.iter().fold([0.0; 3], |mut a, w| {
+        for (x, y) in a.iter_mut().zip(w.income) {
+            *x += y;
+        }
+        a
+    });
+    let total = income[1] + income[2];
+    writeln!(
+        o,
+        "Hyphal share, pooled: hyphal N {:.2} / (pool uptake N {:.2} + consumption N {:.2}) = **{}** (root uptake N {:.2}).\n",
+        income[0],
+        income[1],
+        income[2],
+        share((total > 0.0).then(|| income[0] / total)),
+        income[1] - income[0]
+    )
+    .unwrap();
+    writeln!(
+        o,
+        "| config | seeds | persisted | qualifying | lacking het / prod | run gradients | world gradient | > 1 | hyphal share |"
+    )
+    .unwrap();
+    writeln!(o, "|---|---:|---:|---:|---:|---|---:|---|---:|").unwrap();
+    for w in &worlds {
+        let g: Vec<String> = w.gradients.iter().map(|g| format!("{g:.3}")).collect();
+        writeln!(
+            o,
+            "| {}:{} | {} | {} | {} | {} / {} | {} | {} | {} | {} |",
+            w.source,
+            w.config_index,
+            w.runs,
+            w.persisted,
+            w.gradients.len(),
+            w.lacking_heterotroph,
+            w.lacking_producer,
+            if g.is_empty() {
+                "–".into()
+            } else {
+                g.join(", ")
+            },
+            fmt(w.gradient),
+            if !w.carries() {
+                "no heterotrophs"
+            } else if w.above_one() {
+                "yes"
+            } else {
+                "no"
+            },
+            share(w.hyphal_share()),
+        )
+        .unwrap();
+    }
+    writeln!(o, "\nPer run:\n").unwrap();
+    writeln!(
+        o,
+        "| config | seed | verdict | het samples | prod samples | no reserve | het median | prod median | gradient | hyphal share |"
+    )
+    .unwrap();
+    writeln!(o, "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|").unwrap();
+    for r in rows {
+        for p in &r.tally.partner_runs {
+            writeln!(
+                o,
+                "| {}:{} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                r.source,
+                r.config_index,
+                p.seed,
+                p.outcome,
+                p.heterotroph_samples,
+                p.producer_samples,
+                p.zero_reserve,
+                fmt(p.heterotroph),
+                fmt(p.producer),
+                fmt(p.gradient()),
+                share(p.hyphal_share()),
+            )
+            .unwrap();
+        }
+    }
+    let Some((name, base)) = baseline else {
+        writeln!(
+            o,
+            "\nNo baseline run given (`--baseline`): no paired sign test.\n"
+        )
+        .unwrap();
+        return out;
+    };
+    writeln!(o, "\n#### Paired sign test against `{name}`\n").unwrap();
+    let differs = baseline_differences(rows, base);
+    if !differs.is_empty() {
+        writeln!(
+            o,
+            "**Warning: the baseline differs in {}**; the test assumes the switch off, same atlas, seeds and mode.\n",
+            differs.join(", ")
+        )
+        .unwrap();
+    }
+    let s = SignTest::of(rows, base);
+    writeln!(
+        o,
+        "Indicator per world: gradient > 1 (a world not carrying heterotrophs by role reads 0). {} paired worlds ({} on this run only, {} in the baseline only): unpaired worlds are left out. Above 1 on this run only {}, in the baseline only {}, in both {}, in neither {}: discordant n = **{}**, k = **{}**. Exact binomial over the discordant pairs: two-sided p = **{:.4}**; one-sided p (on > off) = **{:.4}**. Baseline worlds above 1: {} of {} carrying.\n",
+        s.pairs,
+        s.unpaired_on,
+        s.unpaired_off,
+        s.on_only,
+        s.off_only,
+        s.both,
+        s.neither,
+        s.discordant(),
+        s.on_only,
+        s.two_sided_p(),
+        s.one_sided_p(),
+        PartnerTally::of(base).above_one,
+        PartnerTally::of(base).carrying,
+    )
+    .unwrap();
+    out
+}
+
+/// What a baseline (switch-off) rows file differs in from the rows, of what
+/// the paired test assumes they share: the switch off, the atlas, the seeds
+/// and the mode (horizon, founder aggregation).
+fn baseline_differences(rows: &[Row], base: &[Row]) -> Vec<String> {
+    let mut d = Vec::new();
+    if base.iter().any(|r| r.hyphal_uptake == Some(true)) {
+        d.push("the switch (some baseline rows ran with hyphal uptake on)".to_string());
+    }
+    let distinct = |rows: &[Row], f: &dyn Fn(&Row) -> String| -> Vec<String> {
+        let mut v: Vec<String> = rows.iter().map(f).collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let checks: [(&str, &dyn Fn(&Row) -> String); 5] = [
+        ("atlas", &|r| format!("{:?}", r.atlas)),
+        ("base seed", &|r| r.base_seed.to_string()),
+        ("seeds per config", &|r| r.seed_kin_kills.len().to_string()),
+        ("horizon", &|r| r.horizon.to_string()),
+        ("founder aggregation", &|r| {
+            format!("{:?}", r.founder_aggregation)
+        }),
+    ];
+    for (name, f) in checks {
+        if distinct(rows, f) != distinct(base, f) {
+            d.push(name.to_string());
+        }
+    }
+    d
 }
 
 /// M (#700): one seed's leaching readout. The carcass-locked fraction is
@@ -1710,6 +2240,13 @@ struct Row {
     /// `--leaching-rate`, else as decoded). Absent on older rows (λ = 0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     leaching_rate: Option<f32>,
+    /// The config's effective hyphal uptake switch and contact distance `d_c`
+    /// (#728: pinned by `--hyphal-uptake` and `--contact-distance`, else as
+    /// decoded). Absent on older rows, which ran with the switch off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hyphal_uptake: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contact_distance: Option<f32>,
     /// Kin kills per seed (for the cross-check).
     seed_kin_kills: Vec<u64>,
     /// Summed over the seeds.
@@ -1766,6 +2303,8 @@ struct Args {
     network: NetworkPins,
     cross_trait_cost: Option<f32>,
     leaching_rate: Option<f32>,
+    hyphal_uptake: Option<bool>,
+    contact_distance: Option<f32>,
     leaching_sweep: Option<Vec<PathBuf>>,
     crosscheck: bool,
     baseline: Option<PathBuf>,
@@ -1787,6 +2326,8 @@ fn parse_args() -> Result<Args, String> {
         network: NetworkPins::default(),
         cross_trait_cost: None,
         leaching_rate: None,
+        hyphal_uptake: None,
+        contact_distance: None,
         leaching_sweep: None,
         crosscheck: false,
         baseline: None,
@@ -1841,6 +2382,14 @@ fn parse_args() -> Result<Args, String> {
                 args.cross_trait_cost = Some(parse_non_negative(&flag, &value()?)?)
             }
             "--leaching-rate" => args.leaching_rate = Some(parse_unit_interval(&flag, &value()?)?),
+            "--hyphal-uptake" => {
+                args.hyphal_uptake = Some(match value()?.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    v => return Err(format!("{flag} takes on or off, not {v:?}")),
+                })
+            }
+            "--contact-distance" => args.contact_distance = Some(parse_positive(&flag, &value()?)?),
             "--leaching-sweep" => {
                 args.leaching_sweep = Some(value()?.split(',').map(PathBuf::from).collect())
             }
@@ -1899,6 +2448,7 @@ fn main() {
             let config = with_network(config, &args.network);
             let config = with_cross_trait_cost(config, args.cross_trait_cost);
             let config = with_leaching_rate(config, args.leaching_rate);
+            let config = with_hyphal_uptake(config, args.hyphal_uptake, args.contact_distance);
             let tallies: Vec<Tally> = (0..args.ensemble)
                 .into_par_iter()
                 .map(|i| {
@@ -1972,6 +2522,8 @@ fn main() {
                     cross_trait_cost: Some(config.0.cross_trait_cost),
                     maintenance_cost_exponent: Some(config.0.maintenance_cost_exponent),
                     leaching_rate: Some(config.0.leaching_rate),
+                    hyphal_uptake: Some(config.0.hyphal_uptake),
+                    contact_distance: Some(config.0.contact_distance),
                     seed_kin_kills,
                     tally,
                 },
@@ -2236,6 +2788,7 @@ fn summary(rows: &[Row], clusters: &Result<Vec<usize>, String>, baseline: Option
     charge_by_role(rows, &t.ext);
     mobile_autotrophy(rows, &t.ext);
     leaching(rows);
+    print!("{}", partner_report(rows, baseline));
 }
 
 /// The uptake scaling the rows ran at, each distinct value listed.
@@ -2274,6 +2827,32 @@ fn network_label(rows: &[Row]) -> String {
     }
     format!(
         "Network (flow 5, #646): **{}**",
+        if v.is_empty() {
+            "–".into()
+        } else {
+            v.join(" / ")
+        }
+    )
+}
+
+/// The hyphal uptake setting the rows ran at, each distinct one listed.
+fn hyphal_label(rows: &[Row]) -> String {
+    let mut v: Vec<String> = Vec::new();
+    for r in rows {
+        let s = match (r.hyphal_uptake, r.contact_distance) {
+            (None, _) => "off (unrecorded, pre-#728 row)".to_string(),
+            (Some(false), _) => "off".to_string(),
+            (Some(true), d) => format!(
+                "on, d_c = {}",
+                d.map_or("unrecorded".to_string(), |d| d.to_string())
+            ),
+        };
+        if !v.contains(&s) {
+            v.push(s);
+        }
+    }
+    format!(
+        "Hyphal uptake (#727): **{}**",
         if v.is_empty() {
             "–".into()
         } else {
@@ -4580,6 +5159,8 @@ mod tests {
             cross_trait_cost: None,
             maintenance_cost_exponent: None,
             leaching_rate: None,
+            hyphal_uptake: None,
+            contact_distance: None,
             seed_kin_kills: Vec::new(),
             tally: Tally::new(),
         }
@@ -4946,6 +5527,271 @@ mod tests {
         assert_eq!(back.tally.ext.second_half_agent_ticks, 0);
         let read = ChargeRead::of(&back.tally.ext.charge[0], 0);
         assert_eq!((read.agents, read.share), (0, None));
+    }
+
+    /// An agent holding `free` unearmarked nutrient and `earmark` reproductive
+    /// nutrient, on `reserve` unallocated and `allocation` reproductive reserve.
+    fn holding(
+        id: u64,
+        free: f32,
+        earmark: f32,
+        reserve: f32,
+        allocation: f32,
+    ) -> explorers_sim::Agent {
+        let traits = explorers_sim::TraitVector {
+            photosynthetic_absorption: 0.5,
+            heterotrophy: 0.5,
+            mobility: 0.0,
+            kappa: 0.5,
+            fecundity: 0.0,
+            asexual_propensity: 0.0,
+            dispersal: 0.0,
+        };
+        let mut a = explorers_sim::Agent::new(id, (0.0, 0.0), reserve, 1.0, free, traits);
+        a.repro_nutrient = earmark;
+        a.repro_reserve = allocation;
+        a
+    }
+
+    /// #728: free nutrient ÷ reserve is (free store + earmark) ÷ (reserve +
+    /// allocation), its median taken per role group; agents with no reserve
+    /// are counted, not sampled; agents with no role are in neither group.
+    #[test]
+    fn the_partner_readout_takes_each_role_groups_median_free_nutrient_per_reserve() {
+        let mut s = PartnerSamples::default();
+        let c = Some(TrophicRole::Consumer);
+        let d = Some(TrophicRole::Decomposer);
+        let p = Some(TrophicRole::Producer);
+        s.sample(c, &holding(1, 1.0, 1.0, 1.0, 1.0)); // 1
+        s.sample(d, &holding(2, 3.0, 1.0, 1.0, 1.0)); // 2
+        s.sample(c, &holding(3, 6.0, 0.0, 2.0, 0.0)); // 3
+        s.sample(d, &holding(4, 9.0, 0.0, 0.0, 0.0)); // no reserve
+        s.sample(p, &holding(5, 1.0, 0.0, 4.0, 0.0)); // 0.25
+        s.sample(p, &holding(6, 1.0, 1.0, 3.0, 1.0)); // 0.5
+        s.sample(None, &holding(7, 9.0, 9.0, 1.0, 0.0));
+        let run = s.finish(1000, "persisted", [0.0; 3]);
+        assert_eq!((run.heterotroph_samples, run.producer_samples), (3, 2));
+        assert_eq!(run.zero_reserve, 1);
+        assert_eq!(run.heterotroph, Some(2.0));
+        assert_eq!(run.producer, Some(0.375));
+        assert!(close(run.gradient().unwrap(), 2.0 / 0.375));
+    }
+
+    /// Runs that did not persist, or lack either role, carry no gradient.
+    #[test]
+    fn a_run_lacking_a_role_or_not_persisting_has_no_gradient() {
+        let mut s = PartnerSamples::default();
+        s.sample(Some(TrophicRole::Producer), &holding(1, 1.0, 0.0, 1.0, 0.0));
+        assert_eq!(s.clone().finish(1, "persisted", [0.0; 3]).gradient(), None);
+        s.sample(Some(TrophicRole::Consumer), &holding(2, 2.0, 0.0, 1.0, 0.0));
+        assert_eq!(
+            s.clone().finish(1, "persisted", [0.0; 3]).gradient(),
+            Some(2.0)
+        );
+        assert_eq!(s.finish(1, "nutrient_lockup", [0.0; 3]).gradient(), None);
+    }
+
+    /// #728 on one small run: each seed books one partner readout over the
+    /// settled half, both role groups sampled; with hyphal uptake on some of
+    /// the heterotrophs' pool uptake is hyphal, and with it off none is.
+    #[test]
+    fn each_run_books_its_partner_readout_and_the_hyphal_share_is_zero_off() {
+        let decoded = resolve_config(
+            ConfigSource::SAMPLE,
+            14,
+            &Default::default(),
+            &sampled_units(),
+        );
+        let eval = EvalConfig::default();
+        let (on, dist) = with_hyphal_uptake(decoded.clone(), Some(true), None);
+        let t = rollout(&on, &dist, 1000, 300, &eval, false);
+        let [run] = &t.partner_runs[..] else {
+            panic!("{:?}", t.partner_runs)
+        };
+        assert_eq!(run.seed, 1000);
+        assert!(
+            run.heterotroph_samples > 0 && run.producer_samples > 0,
+            "{run:?}"
+        );
+        assert!(
+            run.hyphal_n > 0.0 && run.hyphal_n <= run.uptake_n,
+            "{run:?}"
+        );
+        assert!(close(
+            run.hyphal_n,
+            t.ext.routes_second_half.hyphal[2] + t.ext.routes_second_half.hyphal[3]
+        ));
+        let t = rollout(&decoded.0, &decoded.1, 1000, 300, &eval, false);
+        assert_eq!(t.partner_runs[0].hyphal_n, 0.0);
+        assert_eq!(t.partner_runs[0].hyphal_share(), Some(0.0));
+    }
+
+    /// A persisted run with medians `h` / `p` (`None`: that group unsampled).
+    fn partner(outcome: &str, h: Option<f64>, p: Option<f64>) -> PartnerRun {
+        PartnerRun {
+            outcome: outcome.into(),
+            heterotroph_samples: u64::from(h.is_some()),
+            producer_samples: u64::from(p.is_some()),
+            heterotroph: h,
+            producer: p,
+            ..Default::default()
+        }
+    }
+
+    /// A row for atlas config `idx` carrying these partner runs.
+    fn partner_row(idx: usize, runs: Vec<PartnerRun>) -> Row {
+        let mut r = row(None, None);
+        r.config_index = idx;
+        r.tally.partner_runs = runs;
+        r
+    }
+
+    /// #728: a world's gradient is the median over its persisted runs that
+    /// carry both roles; the rest are counted by why they are out.
+    #[test]
+    fn a_worlds_gradient_is_the_median_over_its_qualifying_runs() {
+        let w = PartnerWorld::of(&partner_row(
+            3,
+            vec![
+                partner("persisted", Some(2.0), Some(1.0)),
+                partner("persisted", Some(0.5), Some(1.0)),
+                partner("persisted", Some(3.0), Some(1.0)),
+                partner("persisted", None, Some(1.0)),
+                partner("persisted", Some(1.0), None),
+                partner("nutrient_lockup", Some(9.0), Some(1.0)),
+            ],
+        ));
+        assert_eq!((w.runs, w.persisted), (6, 5));
+        assert_eq!((w.lacking_heterotroph, w.lacking_producer), (1, 1));
+        assert_eq!(w.gradients, vec![2.0, 0.5, 3.0]);
+        assert_eq!(w.gradient, Some(2.0));
+        assert!(w.carries() && w.above_one());
+
+        let none = PartnerWorld::of(&partner_row(4, vec![partner("persisted", None, Some(1.0))]));
+        assert!(!none.carries() && !none.above_one());
+        assert_eq!(none.gradient, None);
+    }
+
+    /// The summary counts the worlds carrying heterotrophs by role and those
+    /// above 1 among them, and whether they are a majority.
+    #[test]
+    fn the_partner_summary_counts_worlds_above_one_among_those_carrying() {
+        let rows = vec![
+            partner_row(0, vec![partner("persisted", Some(2.0), Some(1.0))]),
+            partner_row(1, vec![partner("persisted", Some(0.5), Some(1.0))]),
+            partner_row(2, vec![partner("persisted", Some(3.0), Some(1.0))]),
+            partner_row(3, vec![partner("persisted", None, Some(1.0))]),
+        ];
+        let s = PartnerTally::of(&rows);
+        assert_eq!((s.worlds, s.carrying, s.above_one), (4, 3, 2));
+        assert!(s.majority());
+        let s = PartnerTally::of(&rows[..2]);
+        assert_eq!((s.carrying, s.above_one), (2, 1));
+        assert!(!s.majority(), "half is not a majority");
+    }
+
+    /// #728: the paired sign test pairs worlds by config across the two
+    /// files on the gradient > 1 indicator. Fixture: 7 worlds above 1 only
+    /// with the switch on, 1 only off, 2 both, 2 neither (one of those
+    /// carrying no heterotrophs in either arm), and one world in each file
+    /// alone. Discordant n = 8, k = 7: two-sided p = 2 × 9 / 256, one-sided
+    /// (on > off) p = 9 / 256.
+    #[test]
+    fn the_paired_sign_test_counts_discordant_worlds_and_reads_exact_p() {
+        let above = || vec![partner("persisted", Some(2.0), Some(1.0))];
+        let below = || vec![partner("persisted", Some(0.5), Some(1.0))];
+        let absent = || vec![partner("persisted", None, Some(1.0))];
+        let (mut on, mut off) = (Vec::new(), Vec::new());
+        for i in 0..7 {
+            on.push(partner_row(i, above()));
+            off.push(partner_row(i, below()));
+        }
+        on.push(partner_row(7, below()));
+        off.push(partner_row(7, above()));
+        for i in 8..10 {
+            on.push(partner_row(i, above()));
+            off.push(partner_row(i, above()));
+        }
+        on.push(partner_row(10, below()));
+        off.push(partner_row(10, below()));
+        on.push(partner_row(11, absent()));
+        off.push(partner_row(11, absent()));
+        on.push(partner_row(12, above()));
+        off.push(partner_row(13, above()));
+        for r in &mut on {
+            r.hyphal_uptake = Some(true);
+        }
+        let t = SignTest::of(&on, &off);
+        assert_eq!(t.pairs, 12);
+        assert_eq!((t.unpaired_on, t.unpaired_off), (1, 1));
+        assert_eq!((t.on_only, t.off_only, t.both, t.neither), (7, 1, 2, 2));
+        assert_eq!(t.discordant(), 8);
+        assert!(close(t.two_sided_p(), 18.0 / 256.0));
+        assert!(close(t.one_sided_p(), 9.0 / 256.0));
+
+        // The report reads the same numbers.
+        let report = partner_report(&on, Some(("off.jsonl", &off)));
+        assert!(
+            report.contains("carrying heterotrophs by role: **12** of 13"),
+            "{report}"
+        );
+        assert!(
+            report.contains("gradient > 1: **10** of 12 (83.3 %), a majority: **yes**"),
+            "{report}"
+        );
+        assert!(
+            report.contains("12 paired worlds (1 on this run only, 1 in the baseline only)"),
+            "{report}"
+        );
+        assert!(
+            report.contains("discordant n = **8**, k = **7**"),
+            "{report}"
+        );
+        assert!(report.contains("two-sided p = **0.0703**"), "{report}");
+        assert!(
+            report.contains("one-sided p (on > off) = **0.0352**"),
+            "{report}"
+        );
+        assert!(!report.contains("baseline differs"), "{report}");
+        // A baseline that ran with the switch on is flagged.
+        let report = partner_report(&on, Some(("on.jsonl", &on)));
+        assert!(report.contains("baseline differs"), "{report}");
+        let report = partner_report(&on, None);
+        assert!(report.contains("No baseline"), "{report}");
+    }
+
+    /// Rows from before #728 read back with the switch off (no setting, no
+    /// partner runs, no hyphal route), and the label says so.
+    #[test]
+    fn rows_without_the_728_fields_read_back_as_switch_off() {
+        let mut r = row(None, None);
+        r.hyphal_uptake = Some(true);
+        r.contact_distance = Some(0.05);
+        r.tally
+            .partner_runs
+            .push(partner("persisted", Some(2.0), Some(1.0)));
+        assert!(hyphal_label(std::slice::from_ref(&r)).contains("on, d_c = 0.05"));
+        let mut json = serde_json::to_value(&r).unwrap();
+        let o = json.as_object_mut().unwrap();
+        for k in ["hyphal_uptake", "contact_distance"] {
+            assert!(o.remove(k).is_some(), "{k} is serialised");
+        }
+        assert!(
+            json["tally"]
+                .as_object_mut()
+                .unwrap()
+                .remove("partner_runs")
+                .is_some()
+        );
+        for routes in ["routes", "routes_second_half"] {
+            let r = json["tally"]["ext"][routes].as_object_mut().unwrap();
+            assert!(r.remove("hyphal").is_some());
+        }
+        let back: Row = serde_json::from_value(json).unwrap();
+        assert_eq!((back.hyphal_uptake, back.contact_distance), (None, None));
+        assert!(back.tally.partner_runs.is_empty());
+        assert_eq!(back.tally.ext.routes.hyphal, vec![0.0; RECIPIENTS.len()]);
+        assert!(hyphal_label(&[back]).contains("off (unrecorded, pre-#728 row)"));
     }
 
     /// Rows from before #668 (target/656) read back with I and J empty.

@@ -204,6 +204,24 @@ pub fn binomial_two_sided_p(k: usize, n: usize) -> f64 {
     p.min(1.0)
 }
 
+/// Exact one-sided binomial test of `k` successes in `n` trials against a
+/// fair coin, alternative "more successes": `P(X ≥ k)`, `X ~ Bin(n, ½)`
+/// (R's `binom.test(k, n, alternative = "greater")`). 1 when `k = 0`.
+pub fn binomial_upper_tail_p(k: usize, n: usize) -> f64 {
+    assert!(k <= n, "{k} successes in {n} trials");
+    let mut ln_c = 0.0;
+    let mut p = 0.0;
+    for i in 0..=n {
+        if i > 0 {
+            ln_c += ((n - i + 1) as f64).ln() - (i as f64).ln();
+        }
+        if i >= k {
+            p += (ln_c - n as f64 * std::f64::consts::LN_2).exp();
+        }
+    }
+    p.min(1.0)
+}
+
 /// Ward's agglomerative clustering of `points` (Euclidean), cut at `k`
 /// clusters: each step merges the pair whose union least increases the
 /// within-cluster sum of squares (Lance–Williams on squared distances, as
@@ -290,6 +308,17 @@ mod tests {
         // Every one of 10 one way: 2 / 2^10.
         assert!(close(binomial_two_sided_p(10, 10), 2.0 / 1024.0, 1e-12));
         assert!(close(binomial_two_sided_p(0, 0), 1.0, 1e-12));
+    }
+
+    #[test]
+    fn the_upper_tail_is_the_chance_of_at_least_k_heads() {
+        assert!(close(binomial_upper_tail_p(10, 10), 1.0 / 1024.0, 1e-12));
+        assert!(close(binomial_upper_tail_p(8, 10), 56.0 / 1024.0, 1e-12));
+        assert!(close(binomial_upper_tail_p(7, 8), 9.0 / 256.0, 1e-12));
+        assert!(close(binomial_upper_tail_p(0, 10), 1.0, 1e-12));
+        assert!(close(binomial_upper_tail_p(0, 0), 1.0, 1e-12));
+        // R: binom.test(62, 96, alternative = "greater").
+        assert!(close(binomial_upper_tail_p(62, 96), 0.0027865, 1e-6));
     }
 
     #[test]

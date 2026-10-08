@@ -1904,6 +1904,13 @@ impl World {
         &self.nutrient_grid
     }
 
+    /// Distance each agent moved in the most recent move phase, by id (absent
+    /// = did not move): what the next tick's hyphal uptake reads as substrate
+    /// contact. Read-only, for instruments that replay the tick.
+    pub fn last_move_distance(&self) -> &std::collections::HashMap<u64, f32> {
+        &self.last_move_distance
+    }
+
     pub fn nutrient_grid_mut(&mut self) -> &mut spatial::NutrientGrid {
         &mut self.nutrient_grid
     }

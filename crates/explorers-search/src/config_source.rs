@@ -214,6 +214,24 @@ pub fn with_leaching_rate(
     (params, dist)
 }
 
+/// Pin a resolved world's **hyphal uptake** switch and **contact distance**
+/// `d_c` (#727; world-rules.md flow 2, *Hyphal uptake*) when given, leaving
+/// everything else as decoded: #728's read of the switch on the atlas, whose
+/// worlds all decode with it off at the default `d_c`.
+pub fn with_hyphal_uptake(
+    (mut params, dist): (WorldParameters, InitialDistribution),
+    switch: Option<bool>,
+    contact_distance: Option<f32>,
+) -> (WorldParameters, InitialDistribution) {
+    if let Some(on) = switch {
+        params.hyphal_uptake = on;
+    }
+    if let Some(d) = contact_distance {
+        params.contact_distance = d;
+    }
+    (params, dist)
+}
+
 /// Pins for the five **network** parameters (flow 5); `None` keeps the
 /// decoded value (every decoded world has the network off: cap 0).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -390,6 +408,28 @@ mod tests {
         assert_eq!(dist, decoded.1);
         let mut want = decoded.0.clone();
         want.leaching_rate = 0.02;
+        assert_eq!(params, want);
+    }
+
+    /// #728 reads hyphal uptake (#727) on the atlas: a pinned switch or
+    /// contact distance overrides only its own parameter, and no pin leaves
+    /// the world as decoded (switch off, `d_c` at its default).
+    #[test]
+    fn pinned_hyphal_uptake_overrides_only_its_own_parameters() {
+        let sampled = sampled_units();
+        let decoded = resolve_config(ConfigSource::SAMPLE, 31, &Default::default(), &sampled);
+        assert!(!decoded.0.hyphal_uptake);
+        assert_eq!(with_hyphal_uptake(decoded.clone(), None, None), decoded);
+
+        let (params, dist) = with_hyphal_uptake(decoded.clone(), Some(true), None);
+        assert_eq!(dist, decoded.1);
+        let mut want = decoded.0.clone();
+        want.hyphal_uptake = true;
+        assert_eq!(params, want);
+
+        let (params, _) = with_hyphal_uptake(decoded.clone(), None, Some(0.05));
+        let mut want = decoded.0.clone();
+        want.contact_distance = 0.05;
         assert_eq!(params, want);
     }
 

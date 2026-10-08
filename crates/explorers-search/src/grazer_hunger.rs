@@ -49,6 +49,9 @@ pub struct PreStep {
     start_carcasses: Vec<Carcass>,
     /// The carcasses the drain pass reads: `start_carcasses` leached.
     carcasses: Vec<Carcass>,
+    /// The world's most recent move distances, by id: what this tick's
+    /// hyphal uptake reads as substrate contact (#727).
+    last_move_distance: HashMap<u64, f32>,
 }
 
 /// The state at the start of drain resolution (#629): the drain-time roster
@@ -60,6 +63,10 @@ pub struct DrainStart {
     pub agents: Vec<Agent>,
     pub light: HashMap<u64, f32>,
     pub uptake: HashMap<u64, f32>,
+    /// The hyphal part of each agent's `uptake` (#727): `uptake × c·H_eff /
+    /// (A_eff + c·H_eff)`, its hyphal demand's share of its own demand (the
+    /// size term is common to both). Empty with `hyphal_uptake` off.
+    pub hyphal: HashMap<u64, f32>,
     /// Each agent's nutrient deficit as the stepper reads it for retention
     /// (`phase::retention_deficit`, after metabolise and before grow), by id.
     pub deficit: HashMap<u64, f32>,
@@ -77,7 +84,44 @@ impl PreStep {
             nutrient_grid: world.nutrient_grid().clone(),
             start_carcasses,
             carcasses,
+            last_move_distance: world.last_move_distance().clone(),
         }
+    }
+
+    /// Uptake replayed as the stepper absorbs: substrate contact off the
+    /// world's most recent move distances.
+    fn absorb(
+        &self,
+        agents: &mut [Agent],
+        grid: &mut NutrientGrid,
+        params: &WorldParameters,
+    ) -> Vec<explorers_sim::event::Event> {
+        phase::absorb_nutrients_after_moves(agents, grid, params, &self.last_move_distance)
+    }
+
+    /// The hyphal part of each agent's replayed `uptake` (empty with the
+    /// switch off), read on the agents as uptake found them.
+    fn hyphal_parts(
+        &self,
+        agents: &[Agent],
+        uptake: &HashMap<u64, f32>,
+        params: &WorldParameters,
+    ) -> HashMap<u64, f32> {
+        if !params.hyphal_uptake {
+            return HashMap::new();
+        }
+        let k = params.wear_degradation_steepness;
+        agents
+            .iter()
+            .filter_map(|a| {
+                let u = *uptake.get(&a.id)?;
+                let moved = self.last_move_distance.get(&a.id).copied().unwrap_or(0.0);
+                let h = phase::substrate_contact(moved, params)
+                    * a.effective_trait_with_steepness(1, k);
+                let rate = a.effective_trait_with_steepness(0, k) + h;
+                (rate > 0.0).then(|| (a.id, u * h / rate))
+            })
+            .collect()
     }
 
     /// The nutrient grid as uptake reads it: the pre-step grid with this
@@ -123,10 +167,12 @@ impl PreStep {
             phase::photosynthesise(&mut agents, &grid, params),
             EventKind::Photosynthesized,
         );
+        let absorbing = agents.clone();
         let uptake = by_source(
-            phase::absorb_nutrients(&mut agents, &mut nutrient_grid, params),
+            self.absorb(&mut agents, &mut nutrient_grid, params),
             EventKind::NutrientAbsorbed,
         );
+        let hyphal = self.hyphal_parts(&absorbing, &uptake, params);
         phase::metabolise(&mut agents, params);
         let deficit = agents
             .iter()
@@ -137,6 +183,7 @@ impl PreStep {
             agents,
             light,
             uptake,
+            hyphal,
             deficit,
         }
     }
@@ -154,7 +201,7 @@ impl PreStep {
             grid.insert(i as u64, a.position);
         }
         phase::photosynthesise(&mut agents, &grid, params);
-        phase::absorb_nutrients(&mut agents, &mut nutrient_grid, params);
+        self.absorb(&mut agents, &mut nutrient_grid, params);
         phase::metabolise(&mut agents, params);
         agents
     }
@@ -737,6 +784,67 @@ mod tests {
         }
         assert!(leached > 10, "only {leached} leaching events");
         assert!(absorbed > 10, "only {absorbed} uptakes");
+    }
+
+    /// With hyphal uptake on (#727), the replay reads substrate contact off
+    /// the world's most recent move distances as the stepper does: each
+    /// agent's replayed uptake is the stepper's `NutrientAbsorbed`, bit for
+    /// bit, and its hyphal part is `uptake × c·H_eff / (A_eff + c·H_eff)`.
+    #[test]
+    fn replay_reads_substrate_contact_as_the_stepper_does_with_hyphal_uptake_on() {
+        let mut world = sample_31_world(1000);
+        world.params_mut().hyphal_uptake = true;
+        world.retain_event_kinds(&[EventKind::NutrientAbsorbed]);
+        let params = world.params().clone();
+        let k = params.wear_degradation_steepness;
+        let (mut absorbed, mut hyphal, mut partial) = (0, 0.0_f64, 0);
+        for _ in 0..150 {
+            let pre = PreStep::capture(&world);
+            let moved = world.last_move_distance().clone();
+            let cursor = world.event_log().len();
+            world.step();
+            let events = world.event_log().since(cursor).to_vec();
+            let start = pre.drain_start(&params);
+            for e in &events {
+                assert_eq!(
+                    start.uptake.get(&e.source).map(|u| u.to_bits()),
+                    Some(e.energy_delta.to_bits()),
+                    "{e:?}"
+                );
+                absorbed += 1;
+                let a = pre.agents().iter().find(|a| a.id == e.source).unwrap();
+                let c = phase::substrate_contact(moved.get(&a.id).copied().unwrap_or(0.0), &params);
+                let (aa, h) = (
+                    a.effective_trait_with_steepness(0, k),
+                    c * a.effective_trait_with_steepness(1, k),
+                );
+                let want = e.energy_delta * h / (aa + h);
+                let got = start.hyphal.get(&e.source).copied().unwrap_or(0.0);
+                assert!(
+                    (got - want).abs() <= 1e-6 * e.energy_delta.max(1.0),
+                    "{e:?}"
+                );
+                hyphal += f64::from(got);
+                partial += usize::from(c < 1.0 && h > 0.0);
+            }
+            world.compact_event_log_before(world.event_log().len());
+        }
+        assert!(absorbed > 10, "only {absorbed} uptakes");
+        assert!(hyphal > 0.0, "no hyphal uptake on sample:31");
+        assert!(partial > 0, "no moving heterotroph absorbed");
+    }
+
+    /// With hyphal uptake off, nothing is booked as hyphal.
+    #[test]
+    fn nothing_is_hyphal_with_the_switch_off() {
+        let mut world = sample_31_world(1000);
+        let params = world.params().clone();
+        assert!(!params.hyphal_uptake);
+        for _ in 0..60 {
+            let start = PreStep::capture(&world).drain_start(&params);
+            assert!(start.hyphal.values().all(|&h| h == 0.0));
+            world.step();
+        }
     }
 
     /// Satiation reads both currencies in ticks of maintenance, the reading
