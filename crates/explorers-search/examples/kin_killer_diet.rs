@@ -185,6 +185,23 @@
 //!       --atlas atlas.json --hyphal-uptake on --out target/728/on.jsonl
 //!   cargo run --release -p explorers-search --example kin_killer_diet -- \
 //!       --summary --out target/728/on.jsonl --baseline target/728/off.jsonl
+//!
+//! #740 reads which currency limits growth, by role (#736's reading rule,
+//! item 1, complementary limitation; Daufresne & Loreau 2001, Sterner &
+//! Elser 2002, Kiers et al. 2011). O. **Growth limitation**, per run
+//! (`LimitationRun`): on every settled-half sample tick, each agent's growth
+//! event (`grazer_hunger::GrowthLimit`: the grow phase had surplus to
+//! mobilise) off the metabolised roster, by the sample's recent-income role
+//! (producers, consumers, decomposers): energy- or nutrient-limited by
+//! Liebig's law, a tie reading nutrient-limited (the stepper's tie rule),
+//! and the free nutrient left unbound on energy-limited events. A world (a
+//! config, its events pooled over its seeds) passes item 1 when producers'
+//! nutrient-limited share exceeds decomposers' and decomposers'
+//! energy-limited share exceeds producers'; the section counts the worlds
+//! carrying both roles, those passing, and whether that is a majority. No
+//! flag: it reads every run, network on or off (off, it is the rule's
+//! baseline). Section O is new and printed last; rows from before #740 read
+//! back with no limitation runs.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
@@ -205,7 +222,7 @@ use explorers_search::flow1_verdict::{
     MINORITY_BAR, binomial_two_sided_p, binomial_upper_tail_p, minority, ward_clusters,
 };
 use explorers_search::fullness::{FullnessBank, FullnessTracker, k_grid, tau_grid, tick_intakes};
-use explorers_search::grazer_hunger::PreStep;
+use explorers_search::grazer_hunger::{GrowthLimit, PreStep};
 use explorers_search::intake_ceiling::realised_bites;
 use explorers_search::leaching::{
     CarcassNutrient, DrainClock, FirstDrain, LeachRun, SweepReading, lambda_max,
@@ -892,6 +909,10 @@ struct Tally {
     /// pre-#728 rows.
     #[serde(default)]
     partner_runs: Vec<PartnerRun>,
+    /// O (#740): one growth-limitation readout per seed, in seed order.
+    /// Empty on pre-#740 rows.
+    #[serde(default)]
+    limitation_runs: Vec<LimitationRun>,
     /// `--crosscheck` (#681): K's charges against the stepper's. Not on the
     /// rows.
     #[serde(skip)]
@@ -959,6 +980,7 @@ impl Tally {
         self.termination_ticks += o.termination_ticks;
         self.leach_runs.extend_from_slice(&o.leach_runs);
         self.partner_runs.extend_from_slice(&o.partner_runs);
+        self.limitation_runs.extend_from_slice(&o.limitation_runs);
         self.charge_check.merge(&o.charge_check);
     }
 }
@@ -1071,6 +1093,9 @@ fn rollout(
         (CarcassNutrient::default(), CarcassNutrient::default());
     // N (#728): free nutrient ÷ reserve by role group, settled sample ticks.
     let mut partner = PartnerSamples::default();
+    // O (#740): growth events by role and limiting currency, settled sample
+    // ticks.
+    let mut limitation = LimitationRun::default();
     for _ in 0..max_ticks {
         let tick_before = world.tick();
         let second_half_tick = tick_before + 1 >= window_start;
@@ -1557,9 +1582,19 @@ fn rollout(
                 }
             }
             let quarter = (((tick.max(1) - 1) * 4) / max_ticks.max(1)).min(3) as usize;
+            let earmark_fills = if second_half {
+                pre.earmark_fills(params)
+            } else {
+                Vec::new()
+            };
+            for (a, _) in &earmark_fills {
+                if let Some(limit) = GrowthLimit::of(a, params) {
+                    limitation.record(sample_roles.get(&a.id).copied(), limit);
+                }
+            }
             let fills: HashMap<u64, (f32, explorers_search::grazer_hunger::Surplus)> =
                 if second_half {
-                    pre.earmark_fills(params)
+                    earmark_fills
                         .into_iter()
                         .map(|(a, fill)| {
                             let s = explorers_search::grazer_hunger::Surplus::of(&a, params);
@@ -1680,6 +1715,12 @@ fn rollout(
             ],
         ));
     }
+    limitation.seed = seed;
+    limitation.outcome = failure
+        .as_ref()
+        .map_or("persisted", failure_label)
+        .to_string();
+    tally.limitation_runs.push(limitation);
     for (g, by_agent) in charge.into_iter().enumerate() {
         let mut by_agent: Vec<(u64, [f64; 4])> = by_agent.into_iter().collect();
         by_agent.sort_by_key(|(id, _)| *id);
@@ -1706,6 +1747,262 @@ fn rollout(
         }
     }
     tally
+}
+
+/// O (#740): the roles growth limitation is read for, by the sample's
+/// recent-income role; agents with no role yet are left out.
+const LIMIT_ROLES: [&str; 3] = ["producers", "consumers", "decomposers"];
+const LIMIT_PRODUCER: usize = 0;
+const LIMIT_CONSUMER: usize = 1;
+const LIMIT_DECOMPOSER: usize = 2;
+
+/// O (#740): one seed's growth events (`GrowthLimit`) on the settled half's
+/// sample ticks, per role ([`LIMIT_ROLES`]): how many, how many nutrient-
+/// limited (the rest are energy-limited), and Σ the free nutrient left
+/// unbound on the energy-limited ones.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+struct LimitationRun {
+    seed: u64,
+    /// The census's verdict (`persisted` or a failure label).
+    outcome: String,
+    events: [u64; 3],
+    nutrient_limited: [u64; 3],
+    free_nutrient_left: [f64; 3],
+}
+
+impl LimitationRun {
+    fn record(&mut self, role: Option<TrophicRole>, limit: GrowthLimit) {
+        let r = match role {
+            Some(TrophicRole::Producer) => LIMIT_PRODUCER,
+            Some(TrophicRole::Consumer) => LIMIT_CONSUMER,
+            Some(TrophicRole::Decomposer) => LIMIT_DECOMPOSER,
+            None => return,
+        };
+        self.events[r] += 1;
+        match limit {
+            GrowthLimit::Nutrient => self.nutrient_limited[r] += 1,
+            GrowthLimit::Energy { free_nutrient } => {
+                self.free_nutrient_left[r] += f64::from(free_nutrient)
+            }
+        }
+    }
+}
+
+/// O (#740): one world's (one config's, over every one of its seeds)
+/// growth events, pooled per role.
+#[derive(Clone, Debug)]
+struct LimitationWorld {
+    source: ConfigSource,
+    config_index: usize,
+    runs: usize,
+    events: [u64; 3],
+    nutrient_limited: [u64; 3],
+    free_nutrient_left: [f64; 3],
+}
+
+impl LimitationWorld {
+    fn of(row: &Row) -> Self {
+        let mut w = LimitationWorld {
+            source: row.source,
+            config_index: row.config_index,
+            runs: row.tally.limitation_runs.len(),
+            events: [0; 3],
+            nutrient_limited: [0; 3],
+            free_nutrient_left: [0.0; 3],
+        };
+        for r in &row.tally.limitation_runs {
+            for i in 0..LIMIT_ROLES.len() {
+                w.events[i] += r.events[i];
+                w.nutrient_limited[i] += r.nutrient_limited[i];
+                w.free_nutrient_left[i] += r.free_nutrient_left[i];
+            }
+        }
+        w
+    }
+
+    fn energy_limited(&self, role: usize) -> u64 {
+        self.events[role] - self.nutrient_limited[role]
+    }
+
+    /// The role's share of growth events that are nutrient-limited; `None`
+    /// without any.
+    fn nutrient_share(&self, role: usize) -> Option<f64> {
+        let n = self.events[role];
+        (n > 0).then(|| self.nutrient_limited[role] as f64 / n as f64)
+    }
+
+    fn energy_share(&self, role: usize) -> Option<f64> {
+        let n = self.events[role];
+        (n > 0).then(|| self.energy_limited(role) as f64 / n as f64)
+    }
+
+    /// Mean free nutrient left unbound per energy-limited growth event.
+    fn mean_free_nutrient_left(&self, role: usize) -> Option<f64> {
+        let n = self.energy_limited(role);
+        (n > 0).then(|| self.free_nutrient_left[role] / n as f64)
+    }
+
+    /// Both roles the rule compares grew: producers and decomposers by role
+    /// each have at least one growth event.
+    fn carries_both(&self) -> bool {
+        self.events[LIMIT_PRODUCER] > 0 && self.events[LIMIT_DECOMPOSER] > 0
+    }
+
+    /// #736's item 1, complementary limitation: producers nutrient-limited in
+    /// a larger share than decomposers, and decomposers energy-limited in a
+    /// larger share than producers.
+    fn passes(&self) -> bool {
+        let (p, d) = (LIMIT_PRODUCER, LIMIT_DECOMPOSER);
+        match (
+            self.nutrient_share(p),
+            self.nutrient_share(d),
+            self.energy_share(p),
+            self.energy_share(d),
+        ) {
+            (Some(pn), Some(dn), Some(pe), Some(de)) => pn > dn && de > pe,
+            _ => false,
+        }
+    }
+}
+
+/// O (#740): the rows' worlds, counted against item 1.
+#[derive(Clone, Debug)]
+struct LimitationTally {
+    worlds: usize,
+    carrying: usize,
+    passing: usize,
+}
+
+impl LimitationTally {
+    fn of(rows: &[Row]) -> Self {
+        let worlds: Vec<LimitationWorld> = rows.iter().map(LimitationWorld::of).collect();
+        LimitationTally {
+            worlds: worlds.len(),
+            carrying: worlds.iter().filter(|w| w.carries_both()).count(),
+            passing: worlds.iter().filter(|w| w.passes()).count(),
+        }
+    }
+
+    /// More than half of the worlds carrying both roles pass item 1.
+    fn majority(&self) -> bool {
+        2 * self.passing > self.carrying
+    }
+}
+
+/// O (#740): the growth-limitation readout as markdown — the worlds counted
+/// against #736's item 1, then per world and per run.
+fn limitation_report(rows: &[Row]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let o = &mut out;
+    let fmt = |v: Option<f64>| v.map_or("–".to_string(), |v| format!("{v:.4}"));
+    writeln!(
+        o,
+        "\n### O. Growth limitation: which currency limits growth, by role (#740)\n"
+    )
+    .unwrap();
+    writeln!(o, "{}\n", network_label(rows)).unwrap();
+    writeln!(
+        o,
+        "A **growth event** is an agent-tick on which the grow phase had surplus to mobilise (reserve above the retention buffer), read on every settled-half sample tick (tick ≥ T/2 + 1) off the metabolised roster, by the sample's recent-income role (agents with no role yet are left out). By Liebig's law the structure built is the smaller of what the soma energy affords and what the free (unearmarked) nutrient store supports: the event is **nutrient-limited** when the free store capped it (growth bound all of it; a tie between the caps reads nutrient-limited, the stepper's own tie rule) and **energy-limited** otherwise. **Free N left**: the mean free nutrient the grow phase left unbound per energy-limited event. A **world** is one config, its growth events pooled over all its seeds. It **carries both roles** when producers and decomposers by role each have a growth event, and **passes item 1** (#736, complementary limitation; Daufresne & Loreau 2001, Kiers et al. 2011) when producers' nutrient-limited share exceeds decomposers' and decomposers' energy-limited share exceeds producers'.\n"
+    )
+    .unwrap();
+    let t = LimitationTally::of(rows);
+    writeln!(
+        o,
+        "Worlds carrying both producers and decomposers by role: **{}** of {}; of them, passing item 1: **{}** of {} ({} %), a majority: **{}**.\n",
+        t.carrying,
+        t.worlds,
+        t.passing,
+        t.carrying,
+        pct(t.passing as u64, t.carrying as u64),
+        if t.majority() { "yes" } else { "no" }
+    )
+    .unwrap();
+    let worlds: Vec<LimitationWorld> = rows.iter().map(LimitationWorld::of).collect();
+    let runs: Vec<&LimitationRun> = rows.iter().flat_map(|r| &r.tally.limitation_runs).collect();
+    writeln!(
+        o,
+        "Runs with a readout: {} ({} rows' seeds predate #740).\n",
+        runs.len(),
+        rows.iter()
+            .filter(|r| r.tally.limitation_runs.is_empty())
+            .map(|r| r.seed_kin_kills.len())
+            .sum::<usize>(),
+    )
+    .unwrap();
+    writeln!(
+        o,
+        "Per world, each role as growth events / % nutrient-limited / % energy-limited:\n"
+    )
+    .unwrap();
+    writeln!(
+        o,
+        "| config | seeds | producers | consumers | decomposers | free N left (P / C / D) | item 1 |"
+    )
+    .unwrap();
+    writeln!(o, "|---|---:|---:|---:|---:|---:|---|").unwrap();
+    for w in &worlds {
+        let role = |r: usize| {
+            format!(
+                "{} / {} / {}",
+                w.events[r],
+                pct(w.nutrient_limited[r], w.events[r]),
+                pct(w.energy_limited(r), w.events[r])
+            )
+        };
+        let left: Vec<String> = (0..LIMIT_ROLES.len())
+            .map(|r| fmt(w.mean_free_nutrient_left(r)))
+            .collect();
+        writeln!(
+            o,
+            "| {}:{} | {} | {} | {} | {} | {} | {} |",
+            w.source,
+            w.config_index,
+            w.runs,
+            role(LIMIT_PRODUCER),
+            role(LIMIT_CONSUMER),
+            role(LIMIT_DECOMPOSER),
+            left.join(" / "),
+            if !w.carries_both() {
+                "not carrying both"
+            } else if w.passes() {
+                "yes"
+            } else {
+                "no"
+            },
+        )
+        .unwrap();
+    }
+    writeln!(
+        o,
+        "\nPer run, each role as growth events / nutrient-limited:\n"
+    )
+    .unwrap();
+    writeln!(
+        o,
+        "| config | seed | verdict | producers | consumers | decomposers |"
+    )
+    .unwrap();
+    writeln!(o, "|---|---:|---|---:|---:|---:|").unwrap();
+    for r in rows {
+        for l in &r.tally.limitation_runs {
+            let role = |i: usize| format!("{} / {}", l.events[i], l.nutrient_limited[i]);
+            writeln!(
+                o,
+                "| {}:{} | {} | {} | {} | {} | {} |",
+                r.source,
+                r.config_index,
+                l.seed,
+                l.outcome,
+                role(LIMIT_PRODUCER),
+                role(LIMIT_CONSUMER),
+                role(LIMIT_DECOMPOSER),
+            )
+            .unwrap();
+        }
+    }
+    out
 }
 
 /// An agent's **free nutrient ÷ reserve** (#728): its unbound nutrient (the
@@ -2789,6 +3086,7 @@ fn summary(rows: &[Row], clusters: &Result<Vec<usize>, String>, baseline: Option
     mobile_autotrophy(rows, &t.ext);
     leaching(rows);
     print!("{}", partner_report(rows, baseline));
+    print!("{}", limitation_report(rows));
 }
 
 /// The uptake scaling the rows ran at, each distinct value listed.
@@ -5825,5 +6123,141 @@ mod tests {
         assert!(back.tally.ext.lfm_carcass_bites.is_empty());
         assert_eq!(back.tally.ext.second_half_ticks, 0);
         assert!(cross_trait_label(&[back]).contains("pre-#668"));
+    }
+
+    /// #740 on one small run: each seed books one growth-limitation readout
+    /// over the settled half's sample ticks, by the sample's role; every
+    /// growth event is nutrient- or energy-limited, and the free nutrient left
+    /// is booked on energy-limited events only.
+    #[test]
+    fn each_run_books_its_growth_events_by_role() {
+        let decoded = resolve_config(
+            ConfigSource::SAMPLE,
+            14,
+            &Default::default(),
+            &sampled_units(),
+        );
+        let eval = EvalConfig::default();
+        let t = rollout(&decoded.0, &decoded.1, 1000, 300, &eval, false);
+        let [run] = &t.limitation_runs[..] else {
+            panic!("{:?}", t.limitation_runs)
+        };
+        assert_eq!(run.seed, 1000);
+        assert_eq!(run.outcome, t.partner_runs[0].outcome);
+        assert!(run.events[LIMIT_PRODUCER] > 0, "{run:?}");
+        for r in 0..LIMIT_ROLES.len() {
+            assert!(run.nutrient_limited[r] <= run.events[r], "{run:?}");
+            assert!(run.free_nutrient_left[r] >= 0.0, "{run:?}");
+            if run.nutrient_limited[r] == run.events[r] {
+                assert_eq!(run.free_nutrient_left[r], 0.0, "{run:?}");
+            }
+        }
+    }
+
+    /// A run with `[events, nutrient-limited]` per role (producers,
+    /// consumers, decomposers) and `left` free nutrient per energy-limited
+    /// event.
+    fn limited(outcome: &str, counts: [[u64; 2]; 3], left: f64) -> LimitationRun {
+        let mut r = LimitationRun {
+            outcome: outcome.into(),
+            ..Default::default()
+        };
+        for (i, [n, nl]) in counts.into_iter().enumerate() {
+            r.events[i] = n;
+            r.nutrient_limited[i] = nl;
+            r.free_nutrient_left[i] = left * (n - nl) as f64;
+        }
+        r
+    }
+
+    /// A row for atlas config `idx` carrying these limitation runs.
+    fn limitation_row(idx: usize, runs: Vec<LimitationRun>) -> Row {
+        let mut r = row(None, None);
+        r.config_index = idx;
+        r.tally.limitation_runs = runs;
+        r
+    }
+
+    /// #740: a world pools its runs' growth events per role; it passes
+    /// item 1 when producers are nutrient-limited in a larger share than
+    /// decomposers and decomposers energy-limited in a larger share than
+    /// producers.
+    #[test]
+    fn a_world_pools_its_growth_events_and_reads_complementary_limitation() {
+        let w = LimitationWorld::of(&limitation_row(
+            2,
+            vec![
+                limited("persisted", [[4, 3], [2, 1], [4, 1]], 0.5),
+                limited("nutrient_lockup", [[4, 3], [0, 0], [0, 0]], 0.5),
+            ],
+        ));
+        assert_eq!(w.runs, 2);
+        assert_eq!(w.nutrient_share(LIMIT_PRODUCER), Some(0.75));
+        assert_eq!(w.energy_share(LIMIT_DECOMPOSER), Some(0.75));
+        assert_eq!(w.nutrient_share(LIMIT_CONSUMER), Some(0.5));
+        assert_eq!(w.mean_free_nutrient_left(LIMIT_DECOMPOSER), Some(0.5));
+        assert!(w.carries_both() && w.passes());
+        // Producers no more nutrient-limited than decomposers: fails.
+        let w = LimitationWorld::of(&limitation_row(
+            3,
+            vec![limited("persisted", [[4, 1], [0, 0], [4, 1]], 0.0)],
+        ));
+        assert!(w.carries_both() && !w.passes());
+        assert_eq!(w.nutrient_share(LIMIT_CONSUMER), None);
+        // No decomposer growth events: not carrying both roles.
+        let w = LimitationWorld::of(&limitation_row(
+            4,
+            vec![limited("persisted", [[4, 4], [2, 0], [0, 0]], 0.0)],
+        ));
+        assert!(!w.carries_both() && !w.passes());
+        assert_eq!(w.mean_free_nutrient_left(LIMIT_PRODUCER), None);
+    }
+
+    /// #740: the section counts the worlds carrying both roles, those passing
+    /// item 1 and whether that is a majority, lists each world's shares and
+    /// leftover free nutrient, and counts rows from before #740 (which read
+    /// back with no limitation runs).
+    #[test]
+    fn the_limitation_report_counts_worlds_passing_item_1_and_reads_old_rows_empty() {
+        let mut json = serde_json::to_value(Tally::new()).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .remove("limitation_runs")
+            .unwrap();
+        let back: Tally = serde_json::from_value(json).unwrap();
+        assert!(back.limitation_runs.is_empty());
+        let mut old = row(None, None);
+        old.tally = back;
+        old.config_index = 9;
+        old.seed_kin_kills = vec![0, 0];
+        let rows = vec![
+            limitation_row(
+                1,
+                vec![limited("persisted", [[4, 3], [0, 0], [4, 1]], 0.25)],
+            ),
+            limitation_row(2, vec![limited("persisted", [[4, 1], [0, 0], [4, 1]], 0.0)]),
+            limitation_row(3, vec![limited("persisted", [[4, 4], [2, 0], [0, 0]], 0.0)]),
+            old,
+        ];
+        let t = LimitationTally::of(&rows);
+        assert_eq!((t.worlds, t.carrying, t.passing), (4, 2, 1));
+        assert!(!t.majority());
+        let report = limitation_report(&rows);
+        assert!(report.contains("### O. Growth limitation"), "{report}");
+        assert!(
+            report.contains(
+                "Worlds carrying both producers and decomposers by role: **2** of 4; of them, passing item 1: **1** of 2 (50.0 %), a majority: **no**."
+            ),
+            "{report}"
+        );
+        assert!(report.contains("2 rows' seeds predate #740"), "{report}");
+        // Config 1: producers 75 % nutrient-limited, decomposers 75 %
+        // energy-limited, 0.25 left per energy-limited event.
+        assert!(
+            report.contains("| atlas:1 | 1 | 4 / 75.0 / 25.0 | 0 / – / – | 4 / 25.0 / 75.0 | 0.2500 / – / 0.2500 | yes |"),
+            "{report}"
+        );
+        assert!(report.contains("| atlas:3 |"), "{report}");
+        assert!(report.contains("not carrying both"), "{report}");
     }
 }
