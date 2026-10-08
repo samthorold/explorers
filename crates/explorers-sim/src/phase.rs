@@ -872,6 +872,130 @@ pub fn bite_retention(released: f32, energy_match: f32, deficit_left: &mut f32) 
     retained
 }
 
+/// The energy each network partner delivered to each agent in the most recent
+/// redistribution (flow 5): the payment that routed surplus is split by. Keyed
+/// by recipient, then partner, so every split runs in stable id order.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PartnerPayments {
+    by_recipient: std::collections::BTreeMap<u64, std::collections::BTreeMap<u64, f32>>,
+}
+
+impl PartnerPayments {
+    /// The payments read off a redistribution pass's events: each
+    /// `Redistributed` energy leg is `energy_delta` paid by `source` to `target`.
+    pub fn from_events(events: &[Event]) -> Self {
+        let mut payments = Self::default();
+        for e in events {
+            if e.kind == EventKind::Redistributed && e.energy_delta > 0.0 {
+                if let Some(recipient) = e.target {
+                    payments.record(e.source, recipient, e.energy_delta);
+                }
+            }
+        }
+        payments
+    }
+
+    /// Record `energy` delivered by `partner` to `recipient`.
+    pub fn record(&mut self, partner: u64, recipient: u64, energy: f32) {
+        *self
+            .by_recipient
+            .entry(recipient)
+            .or_default()
+            .entry(partner)
+            .or_insert(0.0) += energy;
+    }
+
+    /// No agent was paid: routing is a no-op.
+    pub fn is_empty(&self) -> bool {
+        self.by_recipient.is_empty()
+    }
+
+    /// Energy delivered to `recipient`, by partner id, in id order.
+    pub fn paid_to(&self, recipient: u64) -> impl Iterator<Item = (u64, f32)> + '_ {
+        self.by_recipient
+            .get(&recipient)
+            .into_iter()
+            .flat_map(|m| m.iter().map(|(&p, &e)| (p, e)))
+    }
+
+    /// Split `amount` of `recipient`'s surplus among its paying partners that
+    /// `is_live` accepts, in proportion to the energy each delivered. Empty when
+    /// no live partner paid. The last share takes the remainder, so the shares
+    /// sum to `amount` exactly: routing conserves nutrient.
+    pub fn split(
+        &self,
+        recipient: u64,
+        amount: f32,
+        is_live: impl Fn(u64) -> bool,
+    ) -> Vec<(u64, f32)> {
+        let paying: Vec<(u64, f32)> = self
+            .paid_to(recipient)
+            .filter(|&(p, e)| e > 0.0 && is_live(p))
+            .collect();
+        let total: f32 = paying.iter().map(|&(_, e)| e).sum();
+        if paying.is_empty() || total <= 0.0 {
+            return Vec::new();
+        }
+        let mut shares = Vec::with_capacity(paying.len());
+        let mut given = 0.0_f32;
+        for (i, &(p, e)) in paying.iter().enumerate() {
+            let share = if i + 1 == paying.len() {
+                (amount - given).max(0.0)
+            } else {
+                amount * (e / total)
+            };
+            given += share;
+            shares.push((p, share));
+        }
+        shares
+    }
+}
+
+/// Send a drainer's excreted surplus where flow 5 says it goes: to its live
+/// paying partners' free stores (each routing a `SurplusRouted` event), or,
+/// with no live paying partner, mineralised to the cell at `cell_pos`.
+#[allow(clippy::too_many_arguments)]
+fn route_or_excrete(
+    agents: &mut [Agent],
+    drainer_idx: usize,
+    excreted: f32,
+    cell_pos: (f32, f32),
+    nutrient_grid: &mut crate::spatial::NutrientGrid,
+    payments: &PartnerPayments,
+    index_of: &std::collections::HashMap<u64, usize>,
+    dead_agents: &[u64],
+    events: &mut Vec<Event>,
+) {
+    let drainer = agents[drainer_idx].id;
+    let shares = if payments.is_empty() || excreted <= 0.0 {
+        Vec::new()
+    } else {
+        payments.split(drainer, excreted, |p| {
+            index_of.contains_key(&p) && !dead_agents.contains(&p)
+        })
+    };
+    if shares.is_empty() {
+        *nutrient_grid.at_position(cell_pos) += excreted;
+        return;
+    }
+    let position = agents[drainer_idx].position;
+    for (partner, share) in shares {
+        agents[index_of[&partner]].nutrient += share;
+        events.push(Event {
+            tick: 0,
+            seq: 0,
+            kind: EventKind::SurplusRouted,
+            source: drainer,
+            target: Some(partner),
+            energy_delta: 0.0,
+            position: Some(position),
+            target_was_carcass: false,
+            second_parent: None,
+            nutrient_delta: share,
+        });
+    }
+}
+
 /// [`resolve_drains`] with each consumer's tick-start [`retention_deficit`]
 /// supplied, by slice index — the snapshot [`retention_deficits`] took before
 /// growth, so what a consumer keeps from a bite cannot depend on slice order
@@ -884,7 +1008,40 @@ pub fn resolve_drains_with_deficits(
     nutrient_grid: &mut crate::spatial::NutrientGrid,
     consumer_deficit: &[f32],
 ) -> DrainResult {
+    resolve_drains_routed(
+        agents,
+        carcasses,
+        grid,
+        params,
+        nutrient_grid,
+        consumer_deficit,
+        &PartnerPayments::default(),
+    )
+}
+
+/// [`resolve_drains_with_deficits`] with routed surplus (flow 5): what a
+/// connected drainer excretes from a living-target or carcass drain goes to
+/// the partners that paid it energy in `payments` (the most recent
+/// redistribution), split by payment, instead of to the cell. With no live
+/// paying partner, or empty `payments` (the network off), it is mineralised to
+/// the cell exactly as before.
+pub fn resolve_drains_routed(
+    agents: &mut [Agent],
+    carcasses: &mut [Carcass],
+    grid: &SpatialGrid,
+    params: &WorldParameters,
+    nutrient_grid: &mut crate::spatial::NutrientGrid,
+    consumer_deficit: &[f32],
+    payments: &PartnerPayments,
+) -> DrainResult {
     debug_assert_eq!(consumer_deficit.len(), agents.len());
+    // Slice index by agent id, for crediting routed surplus. Unused (and not
+    // built) while nothing was paid.
+    let index_of: std::collections::HashMap<u64, usize> = if payments.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        agents.iter().enumerate().map(|(i, a)| (a.id, i)).collect()
+    };
     let mut events = Vec::new();
     let mut dissipated = 0.0_f32;
     let mut dead_agents: Vec<u64> = Vec::new();
@@ -1063,8 +1220,21 @@ pub fn resolve_drains_with_deficits(
                 // heterotroph funds reproduction from ingested nutrient, exactly as
                 // a producer does from autotrophic pool uptake (flow 2).
                 agents[consumer_idx].credit_nutrient(retained);
-                // Excrete excess nutrient to the local cell at the target's position
-                *nutrient_grid.at_position(agents[drain.target_idx].position) += excreted;
+                // Excrete excess nutrient: to the consumer's paying partners
+                // (routed surplus, flow 5), else to the local cell at the
+                // target's position.
+                let cell_pos = agents[drain.target_idx].position;
+                route_or_excrete(
+                    agents,
+                    consumer_idx,
+                    excreted,
+                    cell_pos,
+                    nutrient_grid,
+                    payments,
+                    &index_of,
+                    &dead_agents,
+                    &mut events,
+                );
             }
 
             events.push(Event {
@@ -1229,8 +1399,21 @@ pub fn resolve_drains_with_deficits(
                 // detrital chain funds decomposer reproduction from carcass
                 // nutrient, the same route-agnostic split as living prey and uptake.
                 agents[consumer_idx].credit_nutrient(retained);
-                // Excrete excess nutrient to the local cell at the carcass's position
-                *nutrient_grid.at_position(carcass_pos) += excreted;
+                // Excrete excess nutrient: to the decomposer's paying partners
+                // (routed surplus, flow 5), else to the local cell at the
+                // carcass's position. A partner killed by this tick's living
+                // drains already holds its carcass, so it is not live.
+                route_or_excrete(
+                    agents,
+                    consumer_idx,
+                    excreted,
+                    carcass_pos,
+                    nutrient_grid,
+                    payments,
+                    &index_of,
+                    &dead_agents,
+                    &mut events,
+                );
             }
 
             events.push(Event {
@@ -9833,6 +10016,293 @@ mod tests {
             carcasses[1].energy < 20.0,
             "large-bodied heterotroph must reach its carcass at distance 8 by body extent (energy {})",
             carcasses[1].energy
+        );
+    }
+
+    // --- Routed surplus (flow 5, #738) ---
+
+    /// A grazer (id 1) biting a nutrient-rich producer (id 2), excreting 1.3
+    /// beyond its need (see `drain_excretes_bound_nutrient_excess_to_available_pool`),
+    /// with two distant, non-feeding partners (ids 3 and 4).
+    fn grazer_with_partners() -> (Vec<Agent>, SpatialGrid) {
+        let consumer_traits = TraitVector {
+            heterotrophy: 2.0,
+            ..zero_traits()
+        };
+        let target_traits = TraitVector {
+            photosynthetic_absorption: 4.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (0.0, 0.0), 10.0, consumer_traits),
+            make_agent(2, (1.0, 0.0), 10.0, target_traits),
+            make_agent(3, (40.0, 40.0), 10.0, zero_traits()),
+            make_agent(4, (-40.0, 40.0), 10.0, zero_traits()),
+        ];
+        agents[0].structure = 0.1;
+        agents[1].structure = 10.0;
+        agents[1].nutrient = 20.0;
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        (agents, grid)
+    }
+
+    fn drain_routed(
+        agents: &mut [Agent],
+        carcasses: &mut [Carcass],
+        grid: &SpatialGrid,
+        params: &WorldParameters,
+        nutrient_grid: &mut crate::spatial::NutrientGrid,
+        payments: &PartnerPayments,
+    ) -> DrainResult {
+        let deficits = retention_deficits(agents, params);
+        resolve_drains_routed(
+            agents,
+            carcasses,
+            grid,
+            params,
+            nutrient_grid,
+            &deficits,
+            payments,
+        )
+    }
+
+    #[test]
+    fn living_drain_surplus_is_routed_to_paying_partners_by_energy_delivered() {
+        // Partners 3 and 4 delivered energy 3 and 1 to the grazer last tick:
+        // its excreted 1.3 goes ¾ / ¼ to their free stores, none to the cell.
+        let params = test_params();
+        let (mut agents, grid) = grazer_with_partners();
+        let mut payments = PartnerPayments::default();
+        payments.record(3, 1, 3.0);
+        payments.record(4, 1, 1.0);
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+
+        drain_routed(
+            &mut agents,
+            &mut [],
+            &grid,
+            &params,
+            &mut nutrient_grid,
+            &payments,
+        );
+
+        assert!(
+            nutrient_grid.total().abs() < 1e-6,
+            "nothing reaches the cell, got {}",
+            nutrient_grid.total()
+        );
+        assert!(
+            (agents[2].nutrient - 1.3 * 0.75).abs() < 1e-4,
+            "partner 3 gets ¾, got {}",
+            agents[2].nutrient
+        );
+        assert!(
+            (agents[3].nutrient - 1.3 * 0.25).abs() < 1e-4,
+            "partner 4 gets ¼, got {}",
+            agents[3].nutrient
+        );
+        assert_eq!(agents[2].repro_nutrient, 0.0, "credited to the free store");
+    }
+
+    #[test]
+    fn a_partner_that_delivered_no_energy_gets_no_routed_surplus() {
+        let params = test_params();
+        let (mut agents, grid) = grazer_with_partners();
+        let mut payments = PartnerPayments::default();
+        payments.record(3, 1, 2.0);
+        payments.record(4, 1, 0.0);
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+
+        drain_routed(
+            &mut agents,
+            &mut [],
+            &grid,
+            &params,
+            &mut nutrient_grid,
+            &payments,
+        );
+
+        assert!(
+            (agents[2].nutrient - 1.3).abs() < 1e-4,
+            "the payer gets it all"
+        );
+        assert_eq!(agents[3].nutrient, 0.0, "the non-payer gets none");
+        assert!(nutrient_grid.total().abs() < 1e-6);
+    }
+
+    #[test]
+    fn with_no_paying_partner_the_surplus_is_mineralised_to_the_cell() {
+        // The partners paid some other agent, not the grazer: its surplus goes
+        // to the cell exactly as with no payments at all.
+        let params = test_params();
+        let (mut agents, grid) = grazer_with_partners();
+        let mut payments = PartnerPayments::default();
+        payments.record(3, 2, 5.0);
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let (mut unrouted, _) = grazer_with_partners();
+        let mut unrouted_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+
+        let routed = drain_routed(
+            &mut agents,
+            &mut [],
+            &grid,
+            &params,
+            &mut nutrient_grid,
+            &payments,
+        );
+        resolve_drains(&mut unrouted, &mut [], &grid, &params, &mut unrouted_grid);
+
+        assert!((nutrient_grid.total() - 1.3).abs() < 1e-4);
+        assert_eq!(nutrient_grid.cells(), unrouted_grid.cells());
+        assert_eq!(agents[2].nutrient, 0.0);
+        assert!(
+            routed
+                .events
+                .iter()
+                .all(|e| e.kind != EventKind::SurplusRouted),
+            "nothing routed, nothing reported"
+        );
+    }
+
+    #[test]
+    fn carcass_drain_surplus_is_routed_to_paying_partners() {
+        // A decomposer (id 1) excreting from a nutrient-rich carcass, paid
+        // by partners 3 and 4: every unit it does not keep reaches them ¾ / ¼,
+        // reported as `SurplusRouted` events from it to each.
+        let params = test_params();
+        let decomposer = TraitVector {
+            heterotrophy: 2.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (41.0, 0.0), 10.0, decomposer),
+            make_agent(3, (-40.0, 40.0), 10.0, zero_traits()),
+            make_agent(4, (-40.0, -40.0), 10.0, zero_traits()),
+        ];
+        agents[0].structure = 5.0;
+        let mut carcasses = vec![Carcass {
+            id: 99,
+            position: (40.0, 0.0),
+            energy: 10.0,
+            nutrient: 20.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                ..zero_traits()
+            },
+        }];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        let mut payments = PartnerPayments::default();
+        payments.record(3, 1, 3.0);
+        payments.record(4, 1, 1.0);
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+
+        let result = drain_routed(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+            &payments,
+        );
+
+        let kept = agents[0].nutrient + agents[0].repro_nutrient;
+        let excreted = 20.0 - carcasses[0].nutrient - kept;
+        assert!(excreted > 0.1, "the decomposer has a surplus: {excreted}");
+        assert!(nutrient_grid.total().abs() < 1e-6, "none to the cell");
+        assert!((agents[1].nutrient - 0.75 * excreted).abs() < 1e-4);
+        assert!((agents[2].nutrient - 0.25 * excreted).abs() < 1e-4);
+        let routed: Vec<_> = result
+            .events
+            .iter()
+            .filter(|e| e.kind == EventKind::SurplusRouted)
+            .map(|e| (e.source, e.target, e.nutrient_delta))
+            .collect();
+        assert_eq!(
+            routed,
+            vec![
+                (1, Some(3), agents[1].nutrient),
+                (1, Some(4), agents[2].nutrient)
+            ]
+        );
+    }
+
+    #[test]
+    fn surplus_is_not_routed_to_a_partner_killed_this_tick() {
+        // The decomposer (id 1) eats its partner 3 to death in the living pass,
+        // then excretes from a carcass. Partner 3 already holds its carcass, so
+        // the surplus goes to partner 4 alone and nutrient is conserved.
+        let params = test_params();
+        let decomposer = TraitVector {
+            heterotrophy: 2.0,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(1, (41.0, 0.0), 10.0, decomposer),
+            make_agent(3, (42.0, 0.0), 10.0, zero_traits()),
+            make_agent(4, (-40.0, -40.0), 10.0, zero_traits()),
+        ];
+        agents[0].structure = 5.0;
+        agents[1].structure = 0.5;
+        let mut carcasses = vec![Carcass {
+            id: 99,
+            position: (40.0, 0.0),
+            energy: 10.0,
+            nutrient: 20.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                ..zero_traits()
+            },
+        }];
+        let mut grid = SpatialGrid::new(100.0, 10.0);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        let mut payments = PartnerPayments::default();
+        payments.record(3, 1, 3.0);
+        payments.record(4, 1, 1.0);
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
+        let total =
+            |agents: &[Agent], carcasses: &[Carcass], grid: &crate::spatial::NutrientGrid| {
+                agents
+                    .iter()
+                    .map(|a| a.nutrient_total(&params))
+                    .sum::<f32>()
+                    + carcasses.iter().map(|c| c.nutrient).sum::<f32>()
+                    + grid.total()
+            };
+        let before = total(&agents, &carcasses, &nutrient_grid);
+
+        let result = drain_routed(
+            &mut agents,
+            &mut carcasses,
+            &grid,
+            &params,
+            &mut nutrient_grid,
+            &payments,
+        );
+
+        assert_eq!(result.dead_agents, vec![3], "partner 3 was eaten");
+        let living: Vec<Agent> = agents.iter().filter(|a| a.id != 3).cloned().collect();
+        let mut all_carcasses = carcasses.clone();
+        all_carcasses.extend(result.new_carcasses.iter().cloned());
+        let after = total(&living, &all_carcasses, &nutrient_grid);
+        assert!(
+            (after - before).abs() < 1e-4,
+            "nutrient conserved: {before} -> {after}"
+        );
+        assert!(agents[2].nutrient > 0.1, "partner 4 takes the surplus");
+        assert!(
+            result
+                .events
+                .iter()
+                .filter(|e| e.kind == EventKind::SurplusRouted)
+                .all(|e| e.target == Some(4)),
         );
     }
 }

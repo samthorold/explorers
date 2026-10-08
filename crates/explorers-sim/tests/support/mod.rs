@@ -258,3 +258,27 @@ pub fn world_case_with_hyphal_uptake() -> impl Strategy<Value = WorldCase> {
         case
     })
 }
+
+/// A stepper case with the network on (flow 5, #738): the C1 domain with a
+/// connection cap of 1 to 4 and the network's costs, rate and efficiency
+/// drawn across their ranges, so connections form, redistribute and route
+/// surplus. A separate strategy, so `world_case()` draws exactly the inputs it
+/// always has.
+pub fn world_case_with_network() -> impl Strategy<Value = WorldCase> {
+    (
+        world_case(),
+        1u32..=4,
+        0.0f32..=2.0,
+        0.0f32..=0.5,
+        0.01f32..=1.0,
+        0.05f32..=1.0,
+    )
+        .prop_map(|(mut case, cap, create, maintain, rate, efficiency)| {
+            case.params.network_connection_cap = cap;
+            case.params.network_creation_cost = create;
+            case.params.network_maintenance_cost = maintain;
+            case.params.network_redistribution_rate = rate;
+            case.params.network_transfer_efficiency = efficiency;
+            case
+        })
+}

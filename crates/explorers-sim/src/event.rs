@@ -31,6 +31,15 @@ pub enum EventKind {
     /// amount; `energy_delta` is always 0, as leaching moves nutrient only.
     /// A readout; emitted only when the leaching rate is above 0.
     Leached,
+    /// Routed surplus (flow 5, #738): nutrient a connected drainer excreted
+    /// beyond its stoichiometric need from a living-target or carcass drain,
+    /// sent to a paying partner's free store instead of the cell. `source` is
+    /// the drainer, `target` the partner, `nutrient_delta` the amount
+    /// (conserved), `energy_delta` 0, `position` the drainer's. One event per
+    /// partner share. The nutrient leg of the producer–decomposer trade, kept
+    /// apart from `Redistributed` (the gradient flow of stores). Emitted only
+    /// when the network is enabled; inert by default.
+    SurplusRouted,
 }
 
 #[derive(Clone, Debug, PartialEq)]
