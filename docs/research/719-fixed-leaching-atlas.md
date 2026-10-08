@@ -125,7 +125,7 @@ cells' 0.61. The run does not say what locks them.
 | | committed (#683) | #711 | **#719** |
 |---|---|---|---|
 | (1) median per-config ρ | −0.021 / −0.026 | −0.158 / −0.071 | **−0.010 / +0.033** |
-| (2) configs with ρ < 0, binomial p | 52 / 55 of 99, 0.69 / 0.32 | 64 / 53 of 85, < 0.001 / 0.029 | **41 / 35 of 78, 0.73 / 0.43** |
+| (2) configs with ρ < 0, binomial p | 52 / 55 of 99, 0.69 / 0.31 | 64 / 53 of 85, < 0.001 / 0.029 | **41 / 35 of 78, 0.73 / 0.43** |
 | (3) lineage clusters with median ρ < 0 | 5 / 5 of 8 | 7 / 5 of 8 | **3 / 3 of 8** |
 | **conditionality** | FAIL / FAIL | PASS / PASS | **FAIL / FAIL** |
 | pooled ρ (does not run backwards if ≤ 0) | −0.179 / −0.165 | −0.143 / −0.125 | **+0.087 / +0.021** |

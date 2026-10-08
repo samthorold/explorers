@@ -62,7 +62,7 @@ A global synthesis of about 2800 observations makes the threshold explicit ([Man
 
 So a decomposer that processes dead matter can still starve the mineral pool if it retains most of what it takes. Whether decomposition feeds the pool or the decomposer turns on that ratio. The consumer-side version of the same mismatch is in [Nutrient Cycling](nutrient-cycling.md), *Stoichiometry and nutrient recycling*.
 
-A further result concerns decomposers that can use both organic and mineral sources of the same element. Stoichiometric constraints create trade-offs between such decomposers and draw them toward co-limitation over evolutionary time ([Cherif & Loreau 2007, *Am. Nat.*](https://doi.org/10.1086/516844)). In Daufresne and Loreau's terms, an organism that both takes up mineral nutrient and processes detritus sits on the competitive pathway; a decomposer that takes no mineral nutrient sits on the facilitative one.
+A further result concerns decomposers that can use both organic and mineral sources of the same element. Stoichiometric constraints create trade-offs between such decomposers and draw them toward co-limitation over evolutionary time ([Cherif & Loreau 2007, *Am. Nat.*](https://doi.org/10.1086/516844)). In Daufresne and Loreau's terms, an organism that both takes up mineral nutrient and processes detritus sits on the competitive pathway; a decomposer that takes no mineral nutrient sits on the facilitative one. This is an inference: Daufresne and Loreau define the two pathways by whether decomposers compete with producers for mineral nutrient, and neither source places an organism that does both on either one.
 
 ### Two recycling channels buffer better than one
 
