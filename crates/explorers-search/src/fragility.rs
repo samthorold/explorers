@@ -11,7 +11,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rayon::prelude::*;
 
-use crate::config_source::ConfigSource;
+use crate::config_source::{ConfigSource, with_hyphal_uptake};
 use crate::prefilter::prefilter_cliff;
 use crate::qd::QdConfig;
 use crate::role_diet::failure_label;
@@ -37,12 +37,20 @@ pub struct SeedVerdict {
 /// per-rollout wall-clock budget. The default is the search's own (#693):
 /// `QdConfig::default().eval_config()` (the evaluator with the predictive
 /// bloom stop at `DEFAULT_BLOOM_STOP`), `SearchConfig::default().max_ticks`
-/// and `SEARCH_ROLLOUT_BUDGET`, so the verdicts are the ones genesis scores.
+/// and `SEARCH_ROLLOUT_BUDGET`, so the verdicts are the ones genesis scores,
+/// on the worlds as decoded.
 #[derive(Clone, Debug)]
 pub struct Rollouts {
     pub horizon: u64,
     pub eval_config: EvalConfig,
     pub budget: RolloutBudget,
+    /// Pins for the **hyphal uptake** switch and the **contact distance**
+    /// `d_c` (#729; world-rules.md flow 2, *Hyphal uptake*), applied to every
+    /// evaluated world after decoding and jitter
+    /// (`config_source::with_hyphal_uptake`); `None` keeps the decoded value
+    /// (every atlas world decodes with the switch off).
+    pub hyphal_uptake: Option<bool>,
+    pub contact_distance: Option<f32>,
 }
 
 impl Default for Rollouts {
@@ -55,6 +63,8 @@ impl Default for Rollouts {
                 ..QdConfig::default().eval_config()
             },
             budget: search.rollout_budget,
+            hyphal_uptake: None,
+            contact_distance: None,
         }
     }
 }
@@ -174,6 +184,15 @@ pub struct FragilityRow {
     /// lexicographically first); `None` when none finished.
     #[serde(default)]
     pub modal_verdict: Option<String>,
+    /// The world's effective hyphal uptake switch and contact distance `d_c`
+    /// (#729), written when the audit pinned either
+    /// (`--hyphal-uptake`, `--contact-distance`). Absent on unpinned rows and
+    /// on older ones, which ran with the switch off at the decoded `d_c`, so
+    /// unpinned rows are byte-identical to the pre-#729 audit's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyphal_uptake: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_distance: Option<f32>,
 }
 
 /// The finished seeds' verdicts, unfinished ones (either budget spent)
@@ -224,6 +243,8 @@ impl FragilityRow {
             persisted_fraction: persisted_fraction(&seeds),
             modal_verdict: modal_verdict(&seeds),
             seeds,
+            hyphal_uptake: None,
+            contact_distance: None,
         }
     }
 
@@ -254,15 +275,65 @@ pub fn evaluate_row(
     jitter_seed: u64,
 ) -> FragilityRow {
     let (moved, delta) = perturbed(atlas, key, jitter_seed);
-    let (params, dist) = decode(&moved, atlas.search_box(), atlas.fixed());
+    let (params, dist) = world(atlas, &moved, rollouts);
     let seeds = seeds
         .iter()
         .map(|&s| evaluate_seed(&params, &dist, s, rollouts))
         .collect();
+    recorded(
+        FragilityRow::new(key, rollouts.horizon, delta, seeds, atlas.fingerprint()),
+        &params,
+        rollouts,
+    )
+}
+
+/// The world a (perturbed) unit vector names: decoded over the atlas's box,
+/// then the rollouts' hyphal-uptake pins applied.
+fn world(
+    atlas: &AtlasUnits,
+    moved: &[f64],
+    rollouts: &Rollouts,
+) -> (
+    explorers_genesis::WorldParameters,
+    explorers_genesis::InitialDistribution,
+) {
+    with_hyphal_uptake(
+        decode(moved, atlas.search_box(), atlas.fixed()),
+        rollouts.hyphal_uptake,
+        rollouts.contact_distance,
+    )
+}
+
+/// A row with what its world and rollouts carry: the prefilter cliff, the
+/// bloom stop, and — when either was pinned — the effective hyphal-uptake
+/// switch and contact distance.
+fn recorded(
+    row: FragilityRow,
+    params: &explorers_genesis::WorldParameters,
+    rollouts: &Rollouts,
+) -> FragilityRow {
+    let pinned = rollouts.hyphal_uptake.is_some() || rollouts.contact_distance.is_some();
     FragilityRow {
-        prefilter_cliff: prefilter_label(&params),
+        prefilter_cliff: prefilter_label(params),
         bloom_stop: rollouts.eval_config.bloom_stop,
-        ..FragilityRow::new(key, rollouts.horizon, delta, seeds, atlas.fingerprint())
+        hyphal_uptake: pinned.then_some(params.hyphal_uptake),
+        contact_distance: pinned.then_some(params.contact_distance),
+        ..row
+    }
+}
+
+/// Whether a row already written ran at `rollouts`' hyphal setting (#729):
+/// with nothing pinned, a row that records no setting; otherwise a row that
+/// records one, each pin equal to what it recorded. A run resuming into
+/// rows of another setting would skip their keys and mix two arms.
+pub fn ran_at_hyphal_setting(row: &FragilityRow, rollouts: &Rollouts) -> bool {
+    match (rollouts.hyphal_uptake, rollouts.contact_distance) {
+        (None, None) => row.hyphal_uptake.is_none() && row.contact_distance.is_none(),
+        (switch, d_c) => {
+            row.hyphal_uptake.is_some()
+                && (switch.is_none() || switch == row.hyphal_uptake)
+                && (d_c.is_none() || d_c == row.contact_distance)
+        }
     }
 }
 
@@ -285,11 +356,7 @@ pub fn evaluate_rows(
         .iter()
         .map(|&key| {
             let (moved, delta) = perturbed(atlas, key, jitter_seed);
-            (
-                key,
-                delta,
-                decode(&moved, atlas.search_box(), atlas.fixed()),
-            )
+            (key, delta, world(atlas, &moved, rollouts))
         })
         .collect();
     let verdicts: Vec<SeedVerdict> = (0..worlds.len() * seeds.len())
@@ -303,10 +370,12 @@ pub fn evaluate_rows(
     worlds
         .into_iter()
         .zip(verdicts.chunks(seeds.len().max(1)))
-        .map(|((key, delta, (params, _)), v)| FragilityRow {
-            prefilter_cliff: prefilter_label(&params),
-            bloom_stop: rollouts.eval_config.bloom_stop,
-            ..FragilityRow::new(key, rollouts.horizon, delta, v.to_vec(), fingerprint)
+        .map(|((key, delta, (params, _)), v)| {
+            recorded(
+                FragilityRow::new(key, rollouts.horizon, delta, v.to_vec(), fingerprint),
+                &params,
+                rollouts,
+            )
         })
         .collect()
 }
@@ -1022,6 +1091,25 @@ mod tests {
         assert_eq!(back, row);
     }
 
+    /// #729: a #719 row (the first of `target/719/fragility/rows.jsonl`,
+    /// copied inline) reads as the switch-off arm, and an unpinned row
+    /// re-serialises byte for byte: switch-off rows are unchanged.
+    #[test]
+    fn a_719_row_reads_as_switch_off_and_round_trips_byte_for_byte() {
+        let line = r#"{"source":"atlas","config_index":0,"atlas_fingerprint":9384858128293480890,"radius":0.0,"draw":0,"horizon":2000,"bloom_stop":{"tick":300,"factor":10.0},"jitter":[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],"prefilter_cliff":null,"seeds":[{"seed":1000,"verdict":"live","fitness":0.31576264},{"seed":1001,"verdict":"live","fitness":0.40418226},{"seed":1002,"verdict":"live","fitness":0.4730626},{"seed":1003,"verdict":"extinction","fitness":0.0},{"seed":1004,"verdict":"live","fitness":0.5669043},{"seed":1005,"verdict":"live","fitness":0.56711864},{"seed":1006,"verdict":"live","fitness":0.6871617},{"seed":1007,"verdict":"live","fitness":0.5589049},{"seed":1008,"verdict":"generalist_dominance","fitness":0.0},{"seed":1009,"verdict":"extinction","fitness":0.0}],"persisted_fraction":0.7,"modal_verdict":"live"}"#;
+        let row: FragilityRow = serde_json::from_str(line).unwrap();
+        assert_eq!((row.hyphal_uptake, row.contact_distance), (None, None));
+        assert_eq!(serde_json::to_string(&row).unwrap(), line);
+        let pinned = FragilityRow {
+            hyphal_uptake: Some(true),
+            contact_distance: Some(0.1),
+            ..row
+        };
+        let json = serde_json::to_string(&pinned).unwrap();
+        assert!(json.ends_with(r#","hyphal_uptake":true,"contact_distance":0.1}"#));
+        assert_eq!(serde_json::from_str::<FragilityRow>(&json).unwrap(), pinned);
+    }
+
     /// A cell's rows evaluated together (in parallel) are each the row
     /// evaluated alone, in key order.
     #[test]
@@ -1357,5 +1445,59 @@ mod tests {
             Some(direct.fitness.to_bits())
         );
         assert!(row.jitter.iter().all(|&d| d == 0.0));
+    }
+
+    /// #729: the hyphal-uptake pins reach every evaluated world, applied
+    /// after decoding (so the perturbation is untouched), and each row
+    /// records the setting it ran at. Off and unpinned, the row is the one
+    /// the audit wrote before.
+    #[test]
+    fn the_hyphal_uptake_pins_reach_the_worlds_and_are_recorded_in_each_row() {
+        let atlas = atlas();
+        let keys = [jittered_key(0, 0.0, 0), jittered_key(0, 0.1, 0)];
+        let off = evaluate_rows(&atlas, &keys, &[1000, 1001], &quick(320), 7);
+        let on_rollouts = Rollouts {
+            hyphal_uptake: Some(true),
+            contact_distance: Some(0.2),
+            ..quick(320)
+        };
+        let on = evaluate_rows(&atlas, &keys, &[1000, 1001], &on_rollouts, 7);
+        for (off, on) in off.iter().zip(&on) {
+            assert_eq!((off.hyphal_uptake, off.contact_distance), (None, None));
+            assert_eq!(
+                (on.hyphal_uptake, on.contact_distance),
+                (Some(true), Some(0.2))
+            );
+            assert_eq!(on.jitter, off.jitter);
+            assert_ne!(on.seeds, off.seeds);
+        }
+    }
+
+    /// #729: a row written earlier ran at the rollouts' hyphal setting when
+    /// both are unpinned, or when each pin matches what the row recorded;
+    /// a switch-off row never reads as a switch-on run's, so a run resumed
+    /// into another arm's file is caught rather than silently skipped.
+    #[test]
+    fn a_row_ran_at_the_rollouts_hyphal_setting_only_when_its_pins_match() {
+        let off = row(0, 0.0, 0, &[LIVE]);
+        let on = FragilityRow {
+            hyphal_uptake: Some(true),
+            contact_distance: Some(0.1),
+            ..off.clone()
+        };
+        let unpinned = Rollouts::default();
+        let switch_on = Rollouts {
+            hyphal_uptake: Some(true),
+            ..Rollouts::default()
+        };
+        let wider = Rollouts {
+            contact_distance: Some(0.2),
+            ..switch_on.clone()
+        };
+        assert!(ran_at_hyphal_setting(&off, &unpinned));
+        assert!(!ran_at_hyphal_setting(&on, &unpinned));
+        assert!(!ran_at_hyphal_setting(&off, &switch_on));
+        assert!(ran_at_hyphal_setting(&on, &switch_on));
+        assert!(!ran_at_hyphal_setting(&on, &wider));
     }
 }

@@ -21,6 +21,18 @@
 //! gated world dead on that cliff without a rollout; the audit rolls it out
 //! anyway and the summary tallies the gated rows apart.
 //!
+//! ## Hyphal uptake (#729)
+//!
+//! `--hyphal-uptake on|off` and `--contact-distance <d_c>` (positive) pin
+//! the hyphal uptake switch and contact distance (world-rules.md flow 2,
+//! *Hyphal uptake*) on every audited world, after decoding and jitter, as
+//! the census's flags of the same names do (#728). A pinned run writes the
+//! world's effective switch and `d_c` into every row (`hyphal_uptake`,
+//! `contact_distance`); an unpinned run writes neither, so its rows are
+//! the pre-#729 audit's byte for byte and older rows read as switch off. A
+//! run refuses an `--out` holding rows at another setting: give each arm
+//! its own file. `--draws 0` audits the unperturbed cells alone.
+//!
 //! The summary (printed after every run, or alone with `--summary`) reads
 //! per cell and radius the **flip rate** — the share of finished (draw,
 //! seed) evaluations whose verdict differs from the baseline's on the same
@@ -57,7 +69,8 @@ use std::time::{Duration, Instant};
 
 use explorers_search::config_source::{ConfigSource, parse_selector};
 use explorers_search::fragility::{
-    AXES, FragilityRow, Rollouts, Summary, evaluate_rows, plan_rows, read_cell_meta, summarise,
+    AXES, FragilityRow, Rollouts, Summary, evaluate_rows, plan_rows, ran_at_hyphal_setting,
+    read_cell_meta, summarise,
 };
 use explorers_search::search::{BLOOM_STOP_FLAG, NO_BLOOM_STOP_FLAG, parse_bloom_stop};
 use explorers_search::sweep::{
@@ -176,6 +189,26 @@ fn parse_args<I: IntoIterator<Item = String>>(argv: I) -> Args {
                 )
             }
             NO_BLOOM_STOP_FLAG => args.rollouts.eval_config.bloom_stop = None,
+            "--hyphal-uptake" => {
+                args.rollouts.hyphal_uptake = Some(match value("--hyphal-uptake").as_str() {
+                    "on" => true,
+                    "off" => false,
+                    v => panic!("fragility_audit: --hyphal-uptake takes on or off, not {v:?}"),
+                })
+            }
+            "--contact-distance" => {
+                let raw = value("--contact-distance");
+                args.rollouts.contact_distance = Some(
+                    raw.parse::<f32>()
+                        .ok()
+                        .filter(|d| d.is_finite() && *d > 0.0)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "fragility_audit: --contact-distance {raw:?} must be a positive number"
+                            )
+                        }),
+                )
+            }
             "--summary" => args.summary_only = true,
             other => panic!("fragility_audit: unknown argument {other:?}"),
         }
@@ -338,11 +371,27 @@ fn main() {
                 .map(|(_, i)| i)
                 .collect();
         let done: Vec<FragilityRow> = read_rows(&args.out);
+        if let Some(other) = done
+            .iter()
+            .find(|r| !ran_at_hyphal_setting(r, &args.rollouts))
+        {
+            panic!(
+                "fragility_audit: {} holds rows at another hyphal setting (atlas:{} ran at \
+                 hyphal_uptake {:?}, contact_distance {:?}; this run pins {:?}, {:?}): \
+                 give each setting its own --out",
+                args.out.display(),
+                other.config_index,
+                other.hyphal_uptake,
+                other.contact_distance,
+                args.rollouts.hyphal_uptake,
+                args.rollouts.contact_distance
+            );
+        }
         let mut plan = plan_rows(&cells, &args.radii, args.draws, &done);
         plan.truncate(args.limit.unwrap_or(usize::MAX));
         let seeds: Vec<u64> = (0..args.ensemble).map(|i| args.seed + i).collect();
         eprintln!(
-            "fragility_audit: {} cells selected, {} rows done in {}; {} seeds × (1 + {} radii × {} draws), horizon {}, bloom stop {:?}, budget {:?}; running {} cells now",
+            "fragility_audit: {} cells selected, {} rows done in {}; {} seeds × (1 + {} radii × {} draws), horizon {}, bloom stop {:?}, budget {:?}, hyphal uptake {:?} d_c {:?}; running {} cells now",
             cells.len(),
             done.len(),
             args.out.display(),
@@ -352,6 +401,8 @@ fn main() {
             args.rollouts.horizon,
             args.rollouts.eval_config.bloom_stop,
             args.rollouts.budget,
+            args.rollouts.hyphal_uptake,
+            args.rollouts.contact_distance,
             plan.len()
         );
         let start = Instant::now();
@@ -452,5 +503,40 @@ mod tests {
         assert_eq!(a.rollouts.budget.simulation, Duration::from_secs(7));
         assert_eq!(a.rollouts.budget.evaluation, Duration::from_secs(11));
         assert!(a.summary_only);
+    }
+
+    /// #729: `--hyphal-uptake on|off` and `--contact-distance <d_c>` pin
+    /// the switch and `d_c` on every audited world, as the census's flags
+    /// do (#728); unset, the worlds keep their decoded values.
+    #[test]
+    fn the_hyphal_uptake_flags_pin_the_rollouts() {
+        let a = parse_args(std::iter::empty());
+        assert_eq!(
+            (a.rollouts.hyphal_uptake, a.rollouts.contact_distance),
+            (None, None)
+        );
+        let a = parse_args(
+            "--hyphal-uptake on --contact-distance 0.05"
+                .split(' ')
+                .map(String::from),
+        );
+        assert_eq!(
+            (a.rollouts.hyphal_uptake, a.rollouts.contact_distance),
+            (Some(true), Some(0.05))
+        );
+        let a = parse_args(["--hyphal-uptake".to_string(), "off".to_string()]);
+        assert_eq!(a.rollouts.hyphal_uptake, Some(false));
+    }
+
+    #[test]
+    #[should_panic(expected = "--hyphal-uptake takes on or off")]
+    fn the_hyphal_uptake_flag_takes_on_or_off() {
+        parse_args(["--hyphal-uptake".to_string(), "yes".to_string()]);
+    }
+
+    #[test]
+    #[should_panic(expected = "--contact-distance \"0\" must be a positive number")]
+    fn the_contact_distance_must_be_positive() {
+        parse_args(["--contact-distance".to_string(), "0".to_string()]);
     }
 }
