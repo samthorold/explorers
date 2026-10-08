@@ -323,6 +323,50 @@ impl Surplus {
         self.energy.min(self.nutrient).max(0.0)
     }
 }
+/// Which currency capped a **growth event** (#740): an agent-tick on which
+/// the grow phase had surplus to mobilise (reserve above the retention
+/// buffer). Growth is co-limited by Liebig's law of the minimum: the
+/// structure built is the smaller of what the soma energy affords and what
+/// the free (unearmarked) nutrient store supports (`phase::grow`). Read
+/// against the complementary limitation of a partnership (Daufresne &
+/// Loreau 2001; Kiers et al. 2011; #736's reading rule, item 1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GrowthLimit {
+    /// The free nutrient store capped the structure built, and growth bound
+    /// all of it. A tie between the caps reads here: the stepper's own tie
+    /// rule (`nutrient_limited <= energy_limited`) binds the whole store.
+    /// So does an event whose caps are both zero (soma energy spent on
+    /// repair, no free nutrient).
+    Nutrient,
+    /// The soma energy (after wear repair) capped it; `free_nutrient` is the
+    /// free store the grow phase left unbound. Growth that binds no nutrient
+    /// (zero stoichiometric demand) is always energy-limited.
+    Energy { free_nutrient: f32 },
+}
+
+impl GrowthLimit {
+    /// The growth event of a metabolised (pre-growth) agent, read by replaying
+    /// the grow phase on a copy of it (`PreStep::metabolised_agents`'s
+    /// roster); `None` when it has nothing to mobilise. The stepper is not
+    /// touched.
+    pub fn of(pre: &Agent, params: &WorldParameters) -> Option<Self> {
+        let buffer = params.growth_retention_multiplier * phase::metabolic_cost(pre, params);
+        let surplus = (pre.reserve - buffer).max(0.0) * params.reserve_mobilisation_rate;
+        if pre.reserve <= 0.0 || surplus <= 0.0 {
+            return None;
+        }
+        let mut grown = [pre.clone()];
+        phase::grow(&mut grown, params);
+        let free_nutrient = grown[0].nutrient;
+        let binds = explorers_sim::stoichiometric_demand(&pre.traits, 1.0, params) > 0.0;
+        Some(if binds && free_nutrient <= 0.0 {
+            GrowthLimit::Nutrient
+        } else {
+            GrowthLimit::Energy { free_nutrient }
+        })
+    }
+}
+
 /// Lower edge of the [`SurplusDistribution`]'s log bins, in ticks of
 /// maintenance; positive surplus below it is binned together.
 pub const SURPLUS_LOW: f64 = 1e-3;
@@ -1228,5 +1272,104 @@ mod tests {
         assert!((t.mean().unwrap() - 0.325).abs() < 1e-6);
         assert!((t.rms().unwrap() - ((0.0025 + 0.36) / 2.0f64).sqrt()).abs() < 1e-6);
         assert_eq!(TraitDistances::default().mean(), None);
+    }
+
+    /// A growing agent holding `reserve` and `nutrient` free (unearmarked)
+    /// nutrient, unworn, on sample 31's parameters.
+    fn grower(reserve: f32, nutrient: f32) -> (Agent, WorldParameters) {
+        let (params, _) = resolve_config(
+            ConfigSource::SAMPLE,
+            31,
+            &Default::default(),
+            &sampled_units(),
+        );
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            heterotrophy: 0.2,
+            mobility: 0.0,
+            kappa: 0.6,
+            fecundity: 0.0,
+            asexual_propensity: 0.0,
+            dispersal: 0.0,
+        };
+        (
+            Agent::new(1, (0.0, 0.0), reserve, 1.0, nutrient, traits),
+            params,
+        )
+    }
+
+    /// #740: growth capped by the free nutrient store reads nutrient-limited.
+    #[test]
+    fn growth_capped_by_free_nutrient_is_nutrient_limited() {
+        let (a, params) = grower(100.0, 1e-3);
+        assert_eq!(GrowthLimit::of(&a, &params), Some(GrowthLimit::Nutrient));
+    }
+
+    /// #740: growth capped by the soma energy reads energy-limited, with the
+    /// free nutrient the grow phase left unbound.
+    #[test]
+    fn growth_capped_by_soma_energy_is_energy_limited_with_its_leftover_nutrient() {
+        let (a, params) = grower(100.0, 1e3);
+        let mut grown = [a.clone()];
+        phase::grow(&mut grown, &params);
+        assert!(grown[0].structure > a.structure);
+        assert!(grown[0].nutrient > 0.0 && grown[0].nutrient < a.nutrient);
+        assert_eq!(
+            GrowthLimit::of(&a, &params),
+            Some(GrowthLimit::Energy {
+                free_nutrient: grown[0].nutrient
+            })
+        );
+    }
+
+    /// #740: an agent with no surplus above its retention buffer to mobilise
+    /// has no growth event, whatever its stores.
+    #[test]
+    fn an_agent_with_nothing_to_mobilise_has_no_growth_event() {
+        let (mut a, params) = grower(0.0, 1e3);
+        a.reserve = params.growth_retention_multiplier * phase::metabolic_cost(&a, &params);
+        assert_eq!(GrowthLimit::of(&a, &params), None);
+        a.nutrient = 0.0;
+        assert_eq!(GrowthLimit::of(&a, &params), None);
+        a.reserve = 0.0;
+        assert_eq!(GrowthLimit::of(&a, &params), None);
+    }
+
+    /// #740, the equality edge case: when the free store supports exactly the
+    /// structure the soma energy affords, the event reads nutrient-limited —
+    /// the stepper's own tie rule (`nutrient_limited <= energy_limited`), which
+    /// binds the whole store. One ulp more nutrient and energy caps it.
+    #[test]
+    fn a_tie_between_the_two_caps_reads_nutrient_limited() {
+        let (mut a, mut params) = grower(100.0, 0.0);
+        // A power-of-two demand ratio makes the tie exact in f32.
+        params.base_nutrient_ratio = 0.5;
+        params.specification_nutrient_coefficient = 0.0;
+        let buffer = params.growth_retention_multiplier * phase::metabolic_cost(&a, &params);
+        let surplus = (a.reserve - buffer).max(0.0) * params.reserve_mobilisation_rate;
+        let energy_cap = surplus * a.traits.kappa * params.growth_efficiency;
+        let ratio = explorers_sim::stoichiometric_demand(&a.traits, 1.0, &params);
+        let n = energy_cap * ratio;
+        assert_eq!(n / ratio, energy_cap, "a tie exists");
+        a.nutrient = n;
+        assert_eq!(GrowthLimit::of(&a, &params), Some(GrowthLimit::Nutrient));
+        a.nutrient = f32::from_bits(n.to_bits() + 1);
+        assert!(matches!(
+            GrowthLimit::of(&a, &params),
+            Some(GrowthLimit::Energy { .. })
+        ));
+    }
+
+    /// #740: growth that binds no nutrient (zero stoichiometric demand) is
+    /// never nutrient-limited, even on an empty free store.
+    #[test]
+    fn growth_binding_no_nutrient_is_energy_limited_on_an_empty_store() {
+        let (a, mut params) = grower(100.0, 0.0);
+        params.base_nutrient_ratio = 0.0;
+        params.specification_nutrient_coefficient = 0.0;
+        assert_eq!(
+            GrowthLimit::of(&a, &params),
+            Some(GrowthLimit::Energy { free_nutrient: 0.0 })
+        );
     }
 }
