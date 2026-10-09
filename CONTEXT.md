@@ -152,8 +152,12 @@ The cumulative degradation of an agent's functional traits over its lifetime. Ea
 _Avoid_: aging (too vague — wear is per-trait, not a single scalar), damage (implies a discrete event, not continuous accumulation)
 
 **Somatic maintenance**:
-The energy an agent invests in repairing accumulated **wear**. Governed by **kappa** — the fraction of mobilised energy routed to soma determines how much energy is available for maintenance and growth. Higher kappa means more energy for somatic maintenance, slowing degradation across all specification traits — somatic maintenance is a whole-organism investment, not selective repair. The energy routed to soma competes directly with reproduction — this is the core survive-vs-reproduce trade-off. High kappa produces long-lived agents that reproduce infrequently. Low kappa produces short-lived agents that reproduce early and often. The balance between wear accumulation and repair determines an agent's lifespan — this balance must permit a stable equilibrium where agents are degraded but functional, not a guaranteed death spiral or effective immortality.
+The energy an agent invests in repairing accumulated **wear**. Governed by **kappa** — the fraction of mobilised energy routed to soma determines how much energy is available for maintenance and growth. Higher kappa means more energy for somatic maintenance, slowing degradation across all specification traits — somatic maintenance is a whole-organism investment, not selective repair. The energy routed to soma competes directly with reproduction — this is the core survive-vs-reproduce trade-off. High kappa produces long-lived agents that reproduce infrequently. Low kappa produces short-lived agents that reproduce early and often. The balance between wear accumulation and repair determines an agent's lifespan — this balance must permit a stable equilibrium where agents are degraded but functional, not a guaranteed death spiral or effective immortality. Repair is proportional to the wear it repairs, at a rate set by the **repair rate** and kappa.
 _Avoid_: healing, regeneration (these imply discrete repair events, not continuous investment)
+
+**Senescent death**:
+Death by age: each tick a living agent dies with a probability proportional to its total **wear**, scaled by the **senescence hazard**. It runs beside death by loss of function, where worn traits no longer cover an agent's costs. Because wear levels off at its equilibrium, the hazard rises with age and then plateaus.
+_Avoid_: old age (suggests a fixed lifespan), natural death (every death in the world is natural)
 
 ### Movement and sensing
 

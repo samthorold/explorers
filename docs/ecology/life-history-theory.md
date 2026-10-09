@@ -103,6 +103,22 @@ Why do organisms age and die? In a system with no intrinsic constraint on lifesp
 
 These survivorship types are not fixed categories but endpoints on a continuum, and they connect directly to parental investment: Type I curves emerge from high investment, Type III from low investment.
 
+### The form of senescence: damage, repair and the mortality trajectory
+
+The theories above say why organisms senesce. A separate body of work describes the form senescence takes: how damage builds up, how repair counters it, and how the risk of death changes with age.
+
+**Senescence is a ratio of damage to repair, and it is continuous.** In disposable-soma theory, lifespan is not a fixed limit. It moves with the ratio between the rate at which damage arises and the rate at which the soma is maintained. Investing too little in repair kills before reproduction, and investing too much starves reproduction, so the optimum lies between (Kirkwood 1977; Kirkwood & Holliday 1979).
+
+**Limited repair makes the risk of death rise roughly exponentially with age.** In damage–repair models, damage arrives at some rate and is repaired at a limited rate, so it can accumulate, and the risk of dying is a function of the accumulated damage. Such models produce a risk of death that rises exponentially with age, and that dependence holds however the accumulation process is modelled. This is the Gompertz law: a hazard rising exponentially with age, to which an age-independent term adds the Gompertz–Makeham form. DEB-based ageing models arrive at the same place: when the age-independent component is negligible, mortality follows Gompertz.
+
+**Damage need not drive mortality up without limit.** Damage accumulation does not by itself imply an ever-rising mortality rate (Finkelstein). Many populations show mortality decelerating, or reaching a plateau, at very old ages.
+
+**Mortality trajectories are diverse across life.** Across 46 species (mammals, other vertebrates, invertebrates, vascular plants and a green alga), mortality after maturity rises in some species, and is constant, falls, is humped or is bowed in others. This holds for long- and short-lived species alike (Jones et al. 2014). Rising mortality with age is common, but it is not universal, and plants include many of the exceptions.
+
+**In trees, the largest individuals die more often, and the cause is mixed.** Survival falls in the largest size classes, and in old-growth forests the share of dead trunks rises among the largest trees. Senescence is commonly cited as a main cause, but how age and size each contribute is unresolved. Larger crowns are also more exposed to wind and snow. Most background mortality in one long-term study was stress from climate and competition, with carbon starvation under drought as a documented route. Mass growth rate keeps increasing with tree size in most species, so large trees are not simply senescent stores.
+
+*Evidence quality.* Kirkwood's damage-to-repair ratio, and the exponential result from damage–repair models, come from secondary summaries and one modelling abstract. Kirkwood's own equations were not read. The DEB ageing models (van Leeuwen et al. 2010) are known through a review, not read. Jones et al. 2014 is known through its abstract. Which plant taxa show which trajectory was not checked. The tree-mortality findings come from a Norway spruce study and a drought study (Colorado), both through summaries.
+
 ## Feedback loops
 
 Life history strategies do not just respond to environmental conditions — they create population-level dynamics that feed back to reshape selection pressures. These feedbacks are the mechanism by which individual-level allocation decisions produce community-level structure.
@@ -184,7 +200,11 @@ Grime, J.P. (1977). Evidence for the existence of three primary strategies in pl
 
 Hamilton, W.D. & May, R.M. (1977). Dispersal in stable habitats. *Nature*, 269(5629), 578-581.
 
+Jones, O.R., Scheuerlein, A., Salguero-Gómez, R. et al. (2014). Diversity of ageing across the tree of life. *Nature*, 505, 169-173.
+
 Kirkwood, T.B.L. (1977). Evolution of ageing. *Nature*, 270(5635), 301-304.
+
+Kirkwood, T.B.L. & Holliday, R. (1979). The evolution of ageing and longevity. *Proceedings of the Royal Society B*, 205(1161), 531-546.
 
 Kooijman, S.A.L.M. (2010). *Dynamic Energy Budget Theory for Metabolic Organisation*. 3rd ed. Cambridge University Press.
 

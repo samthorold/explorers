@@ -102,7 +102,55 @@ The balance between wear accumulation and repair must produce three properties:
 - **Activity-dependent equilibrium.** Higher throughput (more photosynthesis, more consumption, more movement) increases the equilibrium wear level. Busier agents age faster, but stabilise at a lower level of function rather than spiralling to death.
 - **Trait-space-derived lifespan.** An agent's position on the survive-vs-reproduce axis determines its lifespan. High kappa produces long-lived agents with low equilibrium wear. Low kappa produces short-lived agents with high equilibrium wear. The lifespan gradient is continuous, not binary.
 
-**Use-dependent wear is one coefficient over three couplings.** The committed rule accrues per-tick use-dependent wear on each functional trait as `use_wear_rate × usage`, where usage is *energy captured* for autotrophy, *energy drained* for heterotrophy, and *distance moved* for mobility. Wear is an energy (repair is 1:1 with energy, flow 9), so the first two couplings are dimensionless (`E/E`) while the third is `E/L` — one coefficient cannot carry both. The rule therefore carries three implied unit constants, one per coupling, each `1.0` in today's units: `u_WA` (per energy captured), `u_WH` (per energy drained), `u_WM` (per distance moved) — named in code as `units::USE_WEAR_PER_ENERGY_CAPTURED`, `units::USE_WEAR_PER_ENERGY_DRAINED`, `units::USE_WEAR_PER_DISTANCE_MOVED` (see *Unit anchors* below). The inhomogeneity is latent in practice: `use_wear_rate` is `0` on the search baseline and on the recipes that exercise the current verdicts (example4, 9–13); the older recipes example1–3, 5, 7 and 8 set it to `0.01`. Whether to resolve it — by splitting the coefficient into a per-energy and a per-distance rate, or by converting distance moved to the energy it already costs (`distance × movement_cost_coefficient × structure`) before it enters wear — is a design decision to be taken with the designer, not one the committed rules make ([`440-dimensionless-groups.md`](../research/440-dimensionless-groups.md), smell S2).
+**Repair is first order in damage.** Each tick, wear on each functional trait changes by
+
+> Δw = a − ρ · κ · w
+
+where `a` is that tick's accumulation (baseline plus use-dependent, below), `κ` is the agent's kappa, and `ρ` is the **repair rate**, a world parameter. Repair, `ρ · κ · w`, costs soma energy 1:1 and is paid first from the kappa share of the mobilised surplus (flow 9). An agent that cannot fund it repairs only what its soma budget covers.
+
+This law delivers the three properties above directly:
+- Wear relaxes to the **stable equilibrium** `w* = a / (ρ · κ)`, with time constant `1 / (ρ · κ)`.
+- The equilibrium **rises with activity**, through `a`.
+- It **falls with kappa**, so lifespan is a **continuous gradient** in the allocation trait.
+
+The domain's account of senescence has the same shape: lifespan moves with the ratio of damage to repair investment, with no fixed limit ([life history theory](../ecology/life-history-theory.md), *The form of senescence*).
+
+Two tempting forms fail:
+- **A fixed repair capacity**, one that clears all wear up to some rate per tick, has a threshold. Below the capacity, nothing ever ages. Above it, nothing holds wear back. A trait-space position just under the capacity is immortal, and one just over it is not, which is a cliff in kappa and in activity that the smooth-landscape constraint forbids.
+- **Repair that weakens as damage grows** makes the loop amplifying: more wear means less repair, which means more wear. Wear then runs away, and every agent of a phenotype dies at the same fixed age. A first-order law is damping everywhere.
+
+The energy coupling keeps a real decline spiral, but only under stress. A worn agent captures less, its surplus falls, and it can fund less repair. That is the route by which stressed organisms in the domain die, the competition and starvation that dominate background mortality in trees.
+
+**Senescent death is a hazard linear in wear.** Each tick, a living agent dies with probability
+
+> h = η · w
+
+where `w` is its total wear over its functional traits and `η` is the **senescence hazard**, a world parameter. The draw uses the keyed random stream, so a run stays deterministic per seed. A senescent death makes a carcass like any other death (flow 6). This route runs beside the loss of function above. A worn agent can still starve first.
+
+Loss of function alone cannot be the whole account:
+- Under first-order repair, wear levels off at `w*`. Where function at `w*` still covers maintenance, an agent in a benign place would never die of age. That would contradict demographic turnover ([expected properties](expected-properties.md)), in which wear makes death eventually certain.
+- Where function at `w*` does not cover maintenance, every agent of a phenotype in the same conditions dies at the same age.
+
+The hazard gives what the domain shows:
+- **A rise, then a plateau.** The risk of death rises as wear approaches `w*`, which is senescence. It then levels off at `η · w*`, matching the deceleration of mortality at old ages.
+- **Lifespans as a distribution.** A cohort's deaths are bunched but spread out, not simultaneous. This is the cohort synchrony that colonisation overshoot depends on ([reference modes](reference-modes.md)).
+- **Certain eventual death.** Every agent with `a > 0` carries a hazard above zero at equilibrium.
+- **A continuous survivorship gradient.** Kappa sets both `w*` and how fast wear approaches it, so survivorship runs continuously from the late, low-rising hazard of high kappa to the steeper one of low kappa.
+
+The hazard is linear rather than exponential in wear (a Gompertz form in damage). The domain fixes that the hazard rises, not its curve: trajectories vary widely across life ([life history theory](../ecology/life-history-theory.md), *The form of senescence*). The linear form needs one parameter, not two.
+
+**Use-dependent wear follows the energy put through each machine.** The accumulation on each functional trait is
+
+> a = wear_rate × nominal trait + use_wear_rate × energy throughput
+
+Throughput is measured as energy for every trait:
+- **Autotrophy:** the energy captured.
+- **Heterotrophy:** the energy drained.
+- **Mobility:** the energy spent moving, `distance × movement_cost_coefficient × structure` (flow 8), not the distance itself.
+
+So every term is energy put through a piece of machinery, and one coefficient over all three is dimensionally homogeneous (`E/E`), with no hidden unit constant. Use-dependent wear is on: `use_wear_rate` is above zero in every world. It is what makes the equilibrium wear rise with activity, the second property above. Without it, a busy agent and an idle one with the same traits age alike.
+
+Measuring by energy is the domain's throughput reading, in which wear follows metabolic work. It is the "rate of living" coupling that DEB ageing models use ([life history theory](../ecology/life-history-theory.md), *The form of senescence*). The alternative is to split the coefficient into a per-energy rate and a per-distance rate. That would add a parameter whose only job is to repair the units, and it would keep distance and energy as separate axes with no measured ratio between them.
 
 **Wear is always on.** Every world runs with a nonzero wear rate. Wear is part of the physics, not a world switch. Without it nothing senesces: producers die only of starvation, structural loss or consumption, lifespan no longer follows from kappa, and the survivorship continuum and demographic turnover in the absence of predation ([expected properties](expected-properties.md)) have no mechanism. Reference modes depend on it too. A colonising cohort overshoots because it ages and dies together ([reference modes](reference-modes.md), *Colonisation overshoot*). Without senescence, an even-aged cohort only self-thins: crowded individuals starve, survivors grow, and biomass keeps rising. An instrument whose readings are valid only without wear has a limit on that instrument. It is not a reason to remove wear from the worlds it reads. How large the wear rate is, and whether genesis searches it or fixes it, is a calibration question. Whether wear acts at all is not.
 
@@ -274,7 +322,7 @@ Solar ──photosynthesis──▶ Reserve ──growth──▶ Structure ─�
 
 ### Unit anchors (trait-to-flow conversions)
 
-Traits are dimensionless ([trait-space](trait-space.md)), but five committed forms read a trait *as* a flow or a length. Each conversion carries a **unit anchor** — a constant that turns one trait unit into so much of a base unit per tick — which the rules previously left implicit. They are now named, with the tick's status as a committed unit choice, and each is `1.0` in today's units:
+Traits are dimensionless ([trait-space](trait-space.md)), but four committed forms read a trait *as* a flow or a length. Each conversion carries a **unit anchor** — a constant that turns one trait unit into so much of a base unit per tick — which the rules previously left implicit. They are now named, with the tick's status as a committed unit choice, and each is `1.0` in today's units:
 
 | conversion | rule | anchor | units | code constant |
 |---|---|---|---|---|
@@ -282,19 +330,10 @@ Traits are dimensionless ([trait-space](trait-space.md)), but five committed for
 | offspring placement kernel `Normal(0, σ)`, `σ = u_D · dispersal` of the seed parent | flow 4, both modes | `u_D = 1` | `L` per trait unit | `units::DISPERSAL_KERNEL_SIGMA` |
 | nutrient uptake demand per tick `= u_A · effective autotrophy` (`× (structure / s_ref)^b` when size-scaled uptake is on) | flow 2 | `u_A = 1` | `N/T` per trait unit | `units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK` |
 | structure drained per in-reach target per tick `= u_H · effective heterotrophy` | flow 3 | `u_H = 1` | `E/T` per trait unit | `units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK` |
-| base repair per functional trait per tick `= u_R · kappa`, attenuated by `exp(−repair_decay · wear)` | somatic wear, flow 9 | `u_R = 1` | `E/T` per unit kappa | `units::KAPPA_REPAIR_PER_TICK` |
 
 One length anchor reads movement rather than a trait. The **contact distance** `d_c = 0.1 u_M` (`L`) scales substrate contact, `exp(−d / d_c)` for distance `d` moved this tick (flow 2). It is fixed in units of the mobility anchor, so it moves with `u_M` if that is ever rescaled. In code it is the world parameter `contact_distance`, defaulting to `DEFAULT_CONTACT_DISTANCE`; genesis does not search it.
 
-A second family of anchors sits inside use-dependent wear (*Somatic wear*, above). `use_wear_rate` is one coefficient applied to three usages of different dimension; the constant that makes each product homogeneous is likewise `1.0` today:
-
-| coupling | rule | anchor | units | code constant |
-|---|---|---|---|---|
-| autotrophy wear per tick `= use_wear_rate · u_WA · energy captured` | somatic wear | `u_WA = 1` | `E/E` (dimensionless) | `units::USE_WEAR_PER_ENERGY_CAPTURED` |
-| heterotrophy wear per tick `= use_wear_rate · u_WH · energy drained` | somatic wear | `u_WH = 1` | `E/E` (dimensionless) | `units::USE_WEAR_PER_ENERGY_DRAINED` |
-| mobility wear per tick `= use_wear_rate · u_WM · distance moved` | somatic wear | `u_WM = 1` | `E/L` | `units::USE_WEAR_PER_DISTANCE_MOVED` |
-
-With `u_WA` and `u_WH` dimensionless, `use_wear_rate` is itself a pure number for the two energy couplings, and `u_WM` alone carries the `E/L` that the mobility coupling needs. The use-wear branch is guarded bit-exactly on a configuration where all three couplings are live at once (`tests/trait_unit_anchors.rs`).
+Use-dependent wear needs no anchor. Each of its three couplings measures energy put through a machine (*Somatic wear*, above), so `use_wear_rate` is a pure number for all three. Repair needs none either: `ρ · κ · w` is a per-tick rate on wear, so `ρ` carries the `1/T`.
 
 Naming them changes no number and no trajectory (`crates/explorers-sim/src/units.rs`; guarded bit-exactly by `tests/trait_unit_anchors.rs`). What it changes is what the design claims: the trait unit is pinned simultaneously to `L/T`, `L`, `N/T` and `E/T`, so no rescaling of energy, length or nutrient is a symmetry of the map even when every explicit parameter scales along — three of the search box's 32 axes are physical only through these anchors (see [viability](viability.md), *Dimensionless groups*, and [`440-dimensionless-groups.md`](../research/440-dimensionless-groups.md), smell S1).
 
