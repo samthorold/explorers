@@ -4,10 +4,25 @@ Design documentation for the simulation — our opinion about what stocks, flows
 
 The ecology docs describe observable Earth. This layer describes what we want our world to look like — which ecological principles we carry forward, which we simplify, which feedback mechanisms we consider load-bearing, and what dynamic properties the simulation must exhibit. It is opinionated and detailed, and it is **self-justifying**: each mechanism is described together with the reason it has that shape, including why tempting alternatives fail. A reader should understand why the design looks the way it does today from these documents alone — no separate record of past decisions is needed.
 
+## Purpose before structure
+
+The design is ordered the way system dynamics orders a model: purpose first, structure last.
+
+1. **Reference modes.** The purpose of the world is stated as *reference modes*: the characteristic behaviours over time of real ecosystems, drawn from the [ecology layer](../ecology/), each with a time horizon. The world must be able to produce them from its own rules.
+   - **Reference modes live at the patch scale.** A patch is one to three nutrient cells, about the reach of the local interactions: light competition, nutrient sharing and feeding. The domain's own dynamics (gap dynamics, patch dynamics, local consumer–resource cycles) are defined at this scale. Transients count: a local bloom-and-collapse is a behaviour over time like any other.
+   - **The world scale is the stage condition.** The world persists and stays sensible across seeds. That is what the [expected properties](expected-properties.md) and [genesis search](genesis-search.md) judge.
+   - **Horizons are stated in the world's own time constants**, such as producer generations, consumer lifespans or the leaching half-life, not in ticks. A horizon stated this way keeps its meaning when parameters move.
+2. **Boundary.** What the world generates from inside itself, and what comes in from outside. The solar flux is constant, so every temporal variation is endogenous. There is no player inside the boundary. The ecology is encoded first, and a player is introduced afterwards, onto a world that already produces its reference modes.
+3. **Dynamic hypothesis.** The feedback loops that should produce each reference mode: which stocks they run through, whether they amplify or damp, their delays, and which loop dominates when. This is an agent-based world, so loops are not authored. They emerge from per-agent rules, and the loop inventory is a hypothesis about what those rules produce, to be tested against the reference modes.
+4. **Stocks, flows and rates.** The physics in [world rules](world-rules.md). Each rate an agent controls is a decision rule: a goal, the condition the agent observes, the discrepancy between them, and the action taken on it.
+
+Why this order: in a feedback system, purpose is the least visible part and usually the most decisive (Meadows 2008). Structure written without a stated purpose can only be judged mechanism by mechanism, as fidelity to the domain. That says whether each piece is faithful, but not whether the whole is a working ecosystem, or when the encoding is good enough. Reference modes give the whole encoding something to be judged against: the ecology is encoded well when the world reproduces the ecology's characteristic dynamics. The ecology layer then plays two parts. It supplies the reference modes, and it constrains *how* they may arise. The [expected properties](expected-properties.md) are health checks over a seed ensemble. They gate whether a world is sensible at all. They are not reference modes, because none of them is a behaviour over time at the patch scale.
+
 The implementation (the code) encodes this design. It is close to the codebase — specific to data structures, algorithms, and parameter values — and traces its motivation back to a system design property described here without restating it.
 
 ## Documents
 
+- [Reference Modes](reference-modes.md) — the purpose of the world: the ecology's characteristic behaviours over time, at the patch scale, that the world must be able to produce
 - [World Rules](world-rules.md) — the immutable physics of the simulation: stocks (energy and nutrients), flows, topologies, channels, conservation laws, and the cost structure that creates trade-offs
 - [Trait Space](trait-space.md) — the seven heritable dimensions that define an agent: allocation (kappa), specification (autotrophy, heterotrophy, mobility), and reproduction (fecundity, asexual propensity, dispersal)
 - [Execution Model](execution-model.md) — how the world rules are realised through time: monolithic tick loop, phase ordering, interaction coordination, event recording

@@ -83,6 +83,20 @@ Connell & Slatyer (1977) proposed three mechanistic models:
 
 In practice, all three mechanisms operate simultaneously in most systems, and their relative importance varies with the resource in question, the spatial scale, and the organisms involved.
 
+### Biomass after colonisation: smooth accumulation or peak and decline
+
+Odum's (1969) model has biomass accumulating smoothly after disturbance and levelling off as production comes to balance respiration ([Energy Flow](energy-flow.md), *The P/R trajectory*). At the scale of a single stand, the record is more often a peak followed by a decline. Bormann and Likens (1979), working at Hubbard Brook, describe forest development in four phases: reorganisation, aggradation, transition and steady state. Biomass climbs through aggradation, falls through the transition, and then fluctuates about a mean in a **shifting-mosaic steady state**, with patches at different stages of their own cycles.
+
+Three mechanisms can put a peak and decline into the biomass curve after colonisation. Which one dominates depends on the system.
+
+**Cohort synchrony.** Colonists that establish together after a disturbance form an even-aged stand. They grow, close the canopy, and age together, so their mortality is bunched rather than spread out. The stand's biomass peaks around full canopy and declines as the dominant cohort breaks up into gaps. In a *Quercus*-dominated forest in the north-eastern United States, the decline in stand biomass accumulation was driven mainly by the death of large, dominant trees, not by physiological limits on individual trees (as reported in the stand-structure work following Binkley et al.). The breakup is where gap dynamics begin (*Gap dynamics*, below). Once the stand is a mosaic of patches at different ages, the landscape holds a roughly constant share in each state while every patch changes (Chambers et al. 2013, in Amazonian forest).
+
+**Internal nutrient storage.** Organisms that store nutrient beyond their immediate needs keep growing after the external supply runs out. Phytoplankton are the classic case. Under Droop's cell-quota model, growth depends on the internal store (the quota), not on the external concentration. A population can therefore keep dividing after the external nutrient is exhausted, until quotas fall to their minimum. Biomass peaks after the external pool is empty. Losses (grazing, sinking, lysis) then drive the decline.
+
+**Nutrient held in slow organic pools.** While biomass aggrades, plants take up the limiting nutrient fast and the ecosystem retains it. Outputs fall below inputs, and the living stock acts as a sink (Vitousek & Reiners 1975). As stands age, nutrient builds up in organic matter that turns over slowly (dead wood, litter, soil organic matter) and is unavailable while it sits there. This is one of four standing hypotheses for age-related productivity decline. The others are respiration rising relative to photosynthesis, allocation shifting away from biomass, and hydraulic limits on photosynthesis. In field tests nutrient availability modulates the decline rather than causing it outright: stands given more nutrient declined more slowly. The lag of decomposition behind production is the loop delay in nutrient cycling ([Nutrient Cycling](nutrient-cycling.md)).
+
+*Evidence quality.* The four-phase sequence and the early net-loss phase come from a review of Bormann and Likens (1979) in *Nature*. The book itself was not read, so its own account of the mechanisms behind the transition phase is not verified here. The cohort-breakup mechanism rests on the oak-forest study's finding and on the general stand-structure hypothesis, both through secondary summaries. The Droop model's luxury uptake is well established. That biomass peaks after external depletion is a standard reading of the model, not a finding verified in a bloom study. The Vitousek–Reiners retention hypothesis is foundational but contested: stream nitrate has fallen in ageing New England forests, which the hypothesis does not predict (Lajtha 2019).
+
 ### Clements vs Gleason
 
 The debate between Clements (1916) and Gleason (1926) frames a fundamental question: is succession deterministic or stochastic?
@@ -260,17 +274,20 @@ In models where agents can modify their environment, disturbance can be an agent
 ## References
 
 - Bond, W.J. & Midgley, J.J. (1995) Kill thy neighbour: an individualistic argument for the evolution of flammability. *Oikos*, 73, 79-85.
+- Bormann, F.H. & Likens, G.E. (1979) *Pattern and Process in a Forested Ecosystem*. Springer, New York.
 - Botkin, D.B., Janak, J.F. & Wallis, J.R. (1972) Some ecological consequences of a computer model of forest growth. *Journal of Ecology*, 60, 849-872.
+- Chambers, J.Q., Negron-Juarez, R.I., Marra, D.M. et al. (2013) The steady-state mosaic of disturbance and succession across an old-growth Central Amazon forest landscape. *PNAS*, 110, 3949-3954.
 - Chase, J.M. (2003) Community assembly: when should history matter? *Oecologia*, 136, 489-498.
 - Clements, F.E. (1916) *Plant Succession: An Analysis of the Development of Vegetation*. Carnegie Institution of Washington.
 - Collins, S.L., Knapp, A.K., Briggs, J.M., Blair, J.M. & Steinauer, E.M. (1998) Modulation of diversity by grazing and mowing in native tallgrass prairie. *Science*, 280, 745-747.
+- Connell, J.H. & Slatyer, R.O. (1977) Mechanisms of succession in natural communities and their role in community stability and organization. *American Naturalist*, 111, 1119-1144.
 - Connell, J.H. (1971) On the role of natural enemies in preventing competitive exclusion in some marine animals and in rain forest trees. *Dynamics of Populations* (eds P.J. den Boer & G.R. Gradwell), pp. 298-312. PUDOC, Wageningen.
 - Connell, J.H. (1978) Diversity in tropical rain forests and coral reefs. *Science*, 199, 1302-1310.
-- Connell, J.H. & Slatyer, R.O. (1977) Mechanisms of succession in natural communities and their role in community stability and organization. *American Naturalist*, 111, 1119-1144.
 - D'Antonio, C.M. & Vitousek, P.M. (1992) Biological invasions by exotic grasses, the grass/fire cycle, and global change. *Annual Review of Ecology and Systematics*, 23, 63-87.
 - DeAngelis, D.L. & Mooij, W.M. (2005) Individual-based modeling of ecological and evolutionary processes. *Annual Review of Ecology, Evolution, and Systematics*, 36, 147-168.
 - Denslow, J.S. (1987) Tropical rainforest gaps and tree species diversity. *Annual Review of Ecology and Systematics*, 18, 431-451.
 - Diamond, J.M. (1975) Assembly of species communities. *Ecology and Evolution of Communities* (eds M.L. Cody & J.M. Diamond), pp. 342-444. Harvard University Press.
+- Droop, M.R. (1968) Vitamin B12 and marine ecology. IV. The kinetics of uptake, growth and inhibition in *Monochrysis lutheri*. *Journal of the Marine Biological Association of the UK*, 48, 689-733.
 - Drossel, B. & Schwabl, F. (1992) Self-organized critical forest-fire model. *Physical Review Letters*, 69, 1629-1632.
 - Fischer, R., Bohn, F., Dantas de Paula, M. et al. (2016) Lessons learned from applying a forest gap model to understand ecosystem and carbon dynamics of complex tropical forests. *Ecological Modelling*, 326, 124-133.
 - Fox, J.W. (2013) The intermediate disturbance hypothesis should be abandoned. *Trends in Ecology & Evolution*, 28, 86-92.
@@ -285,10 +302,12 @@ In models where agents can modify their environment, disturbance can be an agent
 - Keddy, P.A. (1992) Assembly and response rules: two goals for predictive community ecology. *Journal of Vegetation Science*, 3, 157-164.
 - Knapp, A.K., Blair, J.M., Briggs, J.M. et al. (1999) The keystone role of bison in North American tallgrass prairie. *BioScience*, 49, 39-50.
 - Kohler, P. & Huth, A. (1998) The effects of tree species grouping in tropical rainforest modelling. *Ecological Modelling*, 109, 301-321.
+- Lajtha, K. (2019) Nutrient retention and loss during ecosystem succession: revisiting a classic model. *Ecology*, 101, e02896.
 - Ludwig, D., Jones, D.D. & Holling, C.S. (1978) Qualitative analysis of insect outbreak systems: the spruce budworm and forest. *Journal of Animal Ecology*, 47, 315-332.
 - Malamud, B.D., Morein, G. & Turcotte, D.L. (1998) Forest fires: an example of self-organized critical behavior. *Science*, 281, 1840-1842.
 - Mladenoff, D.J. (2004) LANDIS and forest landscape models. *Ecological Modelling*, 180, 7-19.
 - Mutch, R.W. (1970) Wildland fires and ecosystems — a hypothesis. *Ecology*, 51, 1046-1051.
+- Odum, E.P. (1969) The strategy of ecosystem development. *Science*, 164, 262-270.
 - Pacala, S.W., Canham, C.D., Saponara, J., Silander, J.A., Kobe, R.K. & Ribbens, E. (1996) Forest models defined by field measurements: estimation, error analysis and dynamics. *Ecological Monographs*, 66, 1-43.
 - Pausas, J.G. & Keeley, J.E. (2009) A burning story: the role of fire in the history of life. *BioScience*, 59, 593-601.
 - Pickett, S.T.A. & White, P.S. (eds) (1985) *The Ecology of Natural Disturbance and Patch Dynamics*. Academic Press.
@@ -297,11 +316,12 @@ In models where agents can modify their environment, disturbance can be an agent
 - Scheffer, M., Carpenter, S., Foley, J.A., Folke, C. & Walker, B. (2001) Catastrophic shifts in ecosystems. *Nature*, 413, 591-596.
 - Seidl, R., Rammer, W., Scheller, R.M. & Spies, T.A. (2012) An individual-based process model to simulate landscape-scale forest ecosystem dynamics. *Ecological Modelling*, 231, 87-100.
 - Sheil, D. & Burslem, D.F.R.P. (2013) Defining and defending Connell's intermediate disturbance hypothesis: a response to Fox. *Trends in Ecology & Evolution*, 28, 571-572.
-- Shugart, H.H. (1984) *A Theory of Forest Dynamics*. Springer.
 - Shugart, H.H. & West, D.C. (1977) Development of an Appalachian deciduous forest succession model and its application to assessment of the impact of the chestnut blight. *Journal of Environmental Management*, 5, 161-179.
+- Shugart, H.H. (1984) *A Theory of Forest Dynamics*. Springer.
 - Staver, A.C., Archibald, S. & Levin, S.A. (2011) The global extent and determinants of savanna and forest as alternative biome states. *Science*, 334, 230-232.
 - Tilman, D. (1988) *Plant Strategies and the Dynamics and Structure of Plant Communities*. Princeton University Press.
 - Tockner, K. & Stanford, J.A. (2002) Riverine flood plains: present state and future trends. *Environmental Conservation*, 29, 308-330.
+- Vitousek, P.M. & Reiners, W.A. (1975) Ecosystem succession and nutrient retention: a hypothesis. *BioScience*, 25, 376-381.
 - Walker, B., Holling, C.S., Carpenter, S.R. & Kinzig, A.P. (2004) Resilience, adaptability and transformability in social-ecological systems. *Ecology and Society*, 9, 5.
 - Walker, L.R. & del Moral, R. (2003) *Primary Succession and Ecosystem Rehabilitation*. Cambridge University Press.
 - Watt, A.S. (1947) Pattern and process in the plant community. *Journal of Ecology*, 35, 1-22.

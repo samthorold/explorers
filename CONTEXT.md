@@ -331,6 +331,24 @@ _Avoid_: cluster count (the question during genesis is whether clustering exists
 **Cluster labelling**:
 Assigning each agent to a density-based trait-space cluster, or to none, via DBSCAN (no preset cluster count; Ester et al. 1996). Where the dip test asks only *whether* clustering exists, labelling identifies *which* agents form *which* cluster in a given population. Variance-ratio / gap statistic (scalar measure of clustering strength vs. uniform expectation) is an alternative approach.
 
+**Reference mode**:
+A characteristic behaviour over time of real ecosystems, with a time horizon, that the world must be able to produce from its own rules: colonisation overshoot, gap dynamics, a shifting patch mosaic, divergent recovery. Observed at the patch scale, and read by a perturbation experiment on a known state. Reference modes are the world's purpose. The ecology is encoded well when the world reproduces them.
+_Avoid_: expected property (a health check over a seed ensemble, not a behaviour over time), signature (a readout of fidelity, not a purpose)
+
+**Patch**:
+A region of one to three nutrient cells: the reach of the local interactions (light competition, nutrient sharing, feeding), and the scale at which reference modes are observed.
+_Avoid_: founding patch (the seeding footprint of a founder cluster; see **founder aggregation**)
+
+**Known state**:
+A parameter set and initial distribution, run under the rules until it settles, then snapshotted as the starting point of a perturbation experiment. It is either designed (a **mesocosm**) or found (a settled genesis world). It qualifies only if its unperturbed control persists at the patch scale over the reference mode's horizon.
+
+**Mesocosm**:
+A designed known state: a small world of a few patches, set up to hold the case a reference mode needs, such as a closed canopy with resident decomposers. The state is authored. The response to the perturbation is not.
+_Avoid_: scenario (suggests an outcome arranged by construction)
+
+**Dynamic hypothesis**:
+The feedback loops claimed to produce a reference mode: the stocks they run through, whether they amplify or damp, their delays, and which loop dominates when. In an agent-based world loops are not authored but emerge from per-agent rules, so the inventory is a hypothesis, tested against the reference modes.
+
 ### Simulation
 
 **World genesis**:
