@@ -14,6 +14,7 @@ pub mod intake_ceiling;
 pub mod invasion;
 pub mod leaching;
 pub mod lhs;
+pub mod mesocosm;
 pub mod prefilter;
 pub mod qd;
 pub mod recipe_export;
