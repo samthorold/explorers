@@ -18,9 +18,10 @@ pub const PRODUCERS_PER_CELL: usize = 2;
 /// Decomposer founders per nutrient cell.
 pub const DECOMPOSERS_PER_CELL: usize = 1;
 
-/// Provisional somatic wear rate for the mesocosm, until the calibration
-/// issue (#753) sets it against the design's target of producer lifespans of
-/// a few hundred ticks. Under the committed repair law (flow 9) wear is
+/// Provisional somatic wear rate for the mesocosm. The calibration sweep
+/// (#753, `docs/research/753-mode1-wear-calibration.md`) found no rate that
+/// gives producer lifespans of a few hundred ticks and a persisting control,
+/// so it stays provisional until the open questions on #751 are settled. Under the committed repair law (flow 9) wear is
 /// repaired in full while `wear_rate × autotrophy < kappa`, and runs away to
 /// one fixed age at death above it; for the founder producers (kappa ≈ 0.32,
 /// autotrophy ≈ 1.07) the edge is ≈ 0.30, where every founder dies before it
