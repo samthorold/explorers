@@ -1547,6 +1547,29 @@ mod tests {
         }
     }
 
+    /// #765: a recipe that omits a world parameter gets the search baseline's
+    /// physics. Each field is dropped from the baseline in turn; every field
+    /// that then still deserialises (it has a serde default) must come back at
+    /// the baseline's value. Fields added later are covered without a change.
+    #[test]
+    fn every_serde_default_equals_the_search_baseline() {
+        let baseline = serde_json::to_value(viable_baseline()).unwrap();
+        let fields = baseline.as_object().unwrap();
+        let mismatches: Vec<String> = fields
+            .keys()
+            .filter_map(|name| {
+                let mut omitted = fields.clone();
+                omitted.remove(name);
+                let parsed: WorldParameters =
+                    serde_json::from_value(serde_json::Value::Object(omitted)).ok()?;
+                let default = serde_json::to_value(parsed).unwrap()[name].clone();
+                (default != fields[name])
+                    .then(|| format!("{name}: serde {default} vs baseline {}", fields[name]))
+            })
+            .collect();
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
+    }
+
     #[test]
     fn stoichiometric_parameters_in_search_ranges() {
         let ranges = default_ranges();
