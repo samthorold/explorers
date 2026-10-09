@@ -62,7 +62,8 @@ pub fn viable_baseline() -> WorldParameters {
         somatic_maintenance_cost_coefficient: 0.1,
         use_wear_rate: 0.0,
         structure_maintenance_coefficient: 0.01,
-        repair_decay: 1.0,
+        repair_rate: explorers_sim::DEFAULT_REPAIR_RATE,
+        senescence_hazard: explorers_sim::DEFAULT_SENESCENCE_HAZARD,
         base_nutrient_ratio: 0.1,
         specification_nutrient_coefficient: 0.2,
         reproductive_compatibility_distance: 2.0,
@@ -257,6 +258,27 @@ pub fn world_case_with_hyphal_uptake() -> impl Strategy<Value = WorldCase> {
         case.params.contact_distance = d_c;
         case
     })
+}
+
+/// A stepper case with somatic wear on (#763): baseline and use-dependent
+/// accumulation, first-order repair and a senescence hazard high enough that
+/// worn agents die of age within the run. A separate strategy, so
+/// `world_case()` draws exactly the inputs it always has.
+pub fn world_case_with_wear() -> impl Strategy<Value = WorldCase> {
+    (
+        world_case(),
+        0.01f32..=0.5,
+        0.0f32..=0.1,
+        0.0f32..=2.0,
+        0.0f32..=1.0,
+    )
+        .prop_map(|(mut case, wear, use_wear, repair, hazard)| {
+            case.params.wear_rate = wear;
+            case.params.use_wear_rate = use_wear;
+            case.params.repair_rate = repair;
+            case.params.senescence_hazard = hazard;
+            case
+        })
 }
 
 /// A stepper case with the network on (flow 5, #738): the C1 domain with a

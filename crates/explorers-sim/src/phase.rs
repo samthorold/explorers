@@ -632,29 +632,7 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
         agent.reserve -= surplus;
 
         // Repair gets priority from soma budget: counteract accumulated wear
-        let decay = params.repair_decay;
-        let mut repair_energy_spent = 0.0_f32;
-        if soma_fraction > 0.0 && decay > 0.0 {
-            // Repair in energy per tick: the kappa anchor u_R (#459).
-            let base_repair = kappa * crate::units::KAPPA_REPAIR_PER_TICK;
-            for ft in 0..crate::FUNCTIONAL_TRAIT_COUNT {
-                if agent.wear[ft] <= 0.0 {
-                    continue;
-                }
-                let effective_repair = base_repair * (-decay * agent.wear[ft]).exp();
-                let repair = effective_repair.min(agent.wear[ft]);
-                let cost = repair; // 1:1 energy-to-repair
-                if repair_energy_spent + cost > soma_fraction {
-                    let remaining = soma_fraction - repair_energy_spent;
-                    let capped_repair = remaining.min(agent.wear[ft]);
-                    agent.wear[ft] -= capped_repair;
-                    repair_energy_spent = soma_fraction;
-                    break;
-                }
-                agent.wear[ft] -= repair;
-                repair_energy_spent += cost;
-            }
-        }
+        let repair_energy_spent = repair_wear(&mut agent.wear, kappa, soma_fraction, params);
         total_dissipated += repair_energy_spent;
 
         // Remainder of soma fraction → growth
@@ -727,12 +705,43 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
     (events, total_dissipated)
 }
 
+/// First-order wear repair (world rules, *Somatic wear*): wear on every
+/// functional trait falls by `ρ · κ · w`, at 1:1 energy, funded from
+/// `soma_budget` (the kappa share of the mobilised surplus). Repair is a
+/// whole-organism investment, so an agent whose budget cannot fund it repairs
+/// the same fraction of every trait's wear, as far as the budget goes. The
+/// per-tick fraction is capped at 1: repair clears at most all of the wear.
+/// Returns the energy spent, which dissipates.
+pub fn repair_wear(
+    wear: &mut [f32; crate::FUNCTIONAL_TRAIT_COUNT],
+    kappa: f32,
+    soma_budget: f32,
+    params: &WorldParameters,
+) -> f32 {
+    let rate = (params.repair_rate * kappa).min(1.0);
+    let demand: f32 = wear.iter().map(|w| rate * w).sum();
+    if demand <= 0.0 || soma_budget <= 0.0 {
+        return 0.0;
+    }
+    // When the budget binds, all of it is spent: returning it exactly keeps
+    // the energy books closed to the bit.
+    let (fraction, spent) = if demand <= soma_budget {
+        (rate, demand)
+    } else {
+        (rate * (soma_budget / demand), soma_budget)
+    };
+    for w in wear.iter_mut() {
+        *w -= fraction * *w;
+    }
+    spent
+}
+
 /// Apply wear: baseline + use-dependent accumulation per functional trait.
 /// Accumulation only — repair is funded from soma energy in `grow()`.
 ///
 /// `usage` maps agent id → per-functional-trait usage amounts:
 ///   [0] = energy captured (autotrophy), [1] = energy drained (heterotrophy),
-///   [2] = distance moved (mobility).
+///   [2] = energy spent moving (mobility).
 pub fn apply_wear(
     agents: &mut [Agent],
     params: &WorldParameters,
@@ -753,11 +762,9 @@ pub fn apply_wear(
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
             let nominal = agent.traits.get(FUNCTIONAL_TRAIT_INDICES[ft]);
             let baseline = baseline_rate * nominal.max(0.0);
-            // `use_wear_rate` is one coefficient over three usages of different
-            // dimension; the per-usage anchor (each 1.0) makes the product
-            // homogeneous (#460, `units.rs`).
-            let use_dependent =
-                use_rate * crate::units::USE_WEAR_ANCHORS[ft] * agent_usage[ft].max(0.0);
+            // Every usage is energy put through the machine, so one
+            // coefficient over all three is homogeneous (`E/E`).
+            let use_dependent = use_rate * agent_usage[ft].max(0.0);
             let accumulation = baseline + use_dependent;
             agent.wear[ft] += accumulation;
             total_wear_delta += accumulation;
@@ -1498,15 +1505,35 @@ pub fn leach_carcasses(
     events
 }
 
+/// Senescent death (world rules, *Somatic wear*): a living agent dies this
+/// tick with probability `h = η · w`, `w` its total wear over the functional
+/// traits, drawn from its own keyed stream. At `h = 0` there is no draw.
+fn senesces(agent: &Agent, params: &WorldParameters, run_seed: u64, tick: u64) -> bool {
+    let hazard = params.senescence_hazard * agent.wear.iter().sum::<f32>();
+    if hazard <= 0.0 {
+        return false;
+    }
+    let mut rng = crate::keyed_rng::agent_rng(
+        run_seed,
+        agent.id,
+        tick,
+        crate::keyed_rng::PhaseTag::Senescence,
+    );
+    rng.random::<f32>() < hazard
+}
+
 /// Check death thresholds: reserve depletion, starvation this tick (`starved`,
 /// from `starved_ids`) or structure below complexity-dependent threshold
-/// produces carcass.
+/// produces carcass, as does a senescent death (a `Senesced` event marks its
+/// cause), drawn for agents no threshold kills.
 /// Returns (events, carcasses, dissipated) — dissipated includes reserve and
 /// repro_reserve energy that doesn't transfer to the carcass.
 pub fn check_death_thresholds(
     agents: &mut [Agent],
     params: &WorldParameters,
     starved: &HashSet<u64>,
+    run_seed: u64,
+    tick: u64,
 ) -> (Vec<Event>, Vec<Carcass>, f32) {
     let mut events = Vec::new();
     let mut carcasses = Vec::new();
@@ -1517,8 +1544,23 @@ pub fn check_death_thresholds(
         let dies = agent.reserve <= 0.0
             || starved.contains(&agent.id)
             || (agent.structure > 0.0 && agent.structure < threshold);
+        let senesces = !dies && senesces(agent, params, run_seed, tick);
 
-        if dies {
+        if senesces {
+            events.push(Event {
+                tick: 0,
+                seq: 0,
+                kind: EventKind::Senesced,
+                source: agent.id,
+                target: None,
+                energy_delta: 0.0,
+                position: Some(agent.position),
+                target_was_carcass: false,
+                second_parent: None,
+                nutrient_delta: 0.0,
+            });
+        }
+        if dies || senesces {
             let carcass_energy = agent.structure.max(0.0);
             // Energy in reserve and repro_reserve is dissipated at death
             let lost = agent.reserve.max(0.0) + agent.repro_reserve.max(0.0);
@@ -1561,9 +1603,9 @@ pub struct MoveResult {
     /// Per-agent sensing throughput: number of agents + carcasses detected.
     /// Indexed by position in the agents slice.
     pub sensing_throughput: Vec<f32>,
-    /// Per-agent distance actually moved this tick (mobility use). Indexed by
-    /// position in the agents slice. Movement runs before wear, so this is
-    /// folded into the same tick's mobility use-wear.
+    /// Per-agent distance actually moved this tick. Indexed by position in
+    /// the agents slice. Next tick's hyphal contact reads it; mobility
+    /// use-wear reads the movement energy on the `Moved` events instead.
     pub move_distance: Vec<f32>,
 }
 
@@ -2439,7 +2481,8 @@ mod tests {
             somatic_maintenance_cost_coefficient: 0.0,
             use_wear_rate: 0.0,
             structure_maintenance_coefficient: 0.0,
-            repair_decay: 0.0,
+            repair_rate: 0.0,
+            senescence_hazard: 0.0,
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
             reproductive_compatibility_distance: 2.0,
@@ -4404,7 +4447,7 @@ mod tests {
             let mut offspring = result.offspring;
             let structures: Vec<f32> = offspring.iter().map(|o| o.structure).collect();
             let (_events, carcasses, _diss) =
-                check_death_thresholds(&mut offspring, &params, &HashSet::new());
+                check_death_thresholds(&mut offspring, &params, &HashSet::new(), 0, 0);
             assert!(
                 carcasses.is_empty(),
                 "decomposer offspring must survive its birth tick (seed {seed}): \
@@ -4562,7 +4605,7 @@ mod tests {
     fn apply_wear_accumulates_without_repair() {
         let params = WorldParameters {
             wear_rate: 0.1,
-            repair_decay: 1.0,
+            repair_rate: 1.0,
             ..test_params()
         };
         let traits = TraitVector {
@@ -4584,30 +4627,127 @@ mod tests {
         );
     }
 
-    #[test]
-    fn grow_repairs_wear_from_soma_budget() {
-        let params = WorldParameters {
+    /// Steps one well-funded agent through `grow` (repair) then `apply_wear`
+    /// (accumulation) for `ticks` ticks, topping its reserve back up each tick
+    /// so the soma budget never binds. Returns its wear after the last tick.
+    fn wear_after(
+        params: &WorldParameters,
+        traits: TraitVector,
+        usage: [f32; FUNCTIONAL_TRAIT_COUNT],
+        ticks: usize,
+    ) -> [f32; FUNCTIONAL_TRAIT_COUNT] {
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 1000.0, traits)];
+        let usage = std::collections::HashMap::from([(1_u64, usage)]);
+        for _ in 0..ticks {
+            agents[0].reserve = 1000.0;
+            grow(&mut agents, params);
+            apply_wear(&mut agents, params, &usage);
+        }
+        agents[0].wear
+    }
+
+    fn first_order_params() -> WorldParameters {
+        WorldParameters {
             base_metabolic_rate: 0.0,
-            growth_efficiency: 1.0,
-            repair_decay: 1.0,
+            wear_rate: 0.1,
+            repair_rate: 0.5,
             ..test_params()
-        };
+        }
+    }
+
+    #[test]
+    fn wear_relaxes_to_accumulation_over_repair_rate_times_kappa() {
+        // World rules, *Somatic wear*: Δw = a − ρ·κ·w, so wear settles at
+        // w* = a / (ρ·κ). Here a = 0.1 × 0.5, ρ = 0.5, κ = 0.4: w* = 0.25.
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
-            kappa: 0.7,
+            kappa: 0.4,
             ..zero_traits()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, traits)];
-        agents[0].wear[0] = 1.0;
-
-        let (_events, _dissipated) = grow(&mut agents, &params);
-
+        let wear = wear_after(&first_order_params(), traits, [0.0; 3], 300);
         assert!(
-            agents[0].wear[0] < 1.0,
-            "grow should repair wear from soma budget, got {}",
-            agents[0].wear[0]
+            (wear[0] - 0.25).abs() < 1e-4,
+            "wear should settle at a/(ρκ) = 0.25, got {}",
+            wear[0]
         );
-        assert!(agents[0].wear[0] > 0.0, "wear should still be positive");
+    }
+
+    #[test]
+    fn equilibrium_wear_rises_with_throughput_and_falls_with_kappa() {
+        let params = WorldParameters {
+            use_wear_rate: 0.02,
+            ..first_order_params()
+        };
+        let producer = |kappa| TraitVector {
+            photosynthetic_absorption: 0.5,
+            kappa,
+            ..zero_traits()
+        };
+        let idle = wear_after(&params, producer(0.4), [0.0; 3], 300)[0];
+        let busy = wear_after(&params, producer(0.4), [5.0, 0.0, 0.0], 300)[0];
+        let thrifty = wear_after(&params, producer(0.8), [5.0, 0.0, 0.0], 300)[0];
+        // a = 0.1 × 0.5 + 0.02 × 5 = 0.15; w* = a / (ρκ).
+        assert!(
+            (busy - 0.15 / 0.2).abs() < 1e-4,
+            "busy w* = 0.75, got {busy}"
+        );
+        assert!(busy > idle, "throughput raises w*: {busy} vs {idle}");
+        assert!(
+            (thrifty - 0.15 / 0.4).abs() < 1e-4,
+            "doubling κ halves w*, got {thrifty}"
+        );
+    }
+
+    #[test]
+    fn repair_has_no_threshold_below_which_wear_is_cleared() {
+        // A fixed repair capacity would clear small wear outright. First-order
+        // repair removes the fraction ρκ of it, however small it is.
+        let params = first_order_params();
+        let traits = TraitVector {
+            kappa: 0.4,
+            ..zero_traits()
+        };
+        for w in [1e-4_f32, 1e-2, 1.0] {
+            let mut agents = vec![make_agent(1, (0.0, 0.0), 1000.0, traits)];
+            agents[0].wear = [w; FUNCTIONAL_TRAIT_COUNT];
+            grow(&mut agents, &params);
+            let expected = w * (1.0 - 0.5 * 0.4);
+            assert!(
+                (agents[0].wear[0] - expected).abs() <= 1e-6 * w,
+                "wear {w} should fall to {expected}, got {}",
+                agents[0].wear[0]
+            );
+        }
+    }
+
+    #[test]
+    fn an_unfunded_agent_repairs_only_what_its_soma_budget_covers() {
+        // No maintenance cost, so no retention: the whole reserve is surplus.
+        let params = WorldParameters {
+            repair_rate: 1.0,
+            ..first_order_params()
+        };
+        let traits = TraitVector {
+            kappa: 0.5,
+            ..zero_traits()
+        };
+        // Reserve 1.0 → soma budget 0.5. Demand ρκ × Σw = 0.5 × 4 = 2.0.
+        let mut agents = vec![make_agent(1, (0.0, 0.0), 1.0, traits)];
+        agents[0].wear = [2.0, 1.0, 1.0];
+        let (_events, dissipated) = grow(&mut agents, &params);
+        assert!(
+            (dissipated - 0.5).abs() < 1e-6,
+            "repair spends the whole soma budget, got {dissipated}"
+        );
+        // A quarter of the demand is funded: every trait loses ρκ/4 of its wear.
+        let kept = 1.0 - 0.5 / 4.0;
+        for (got, w) in agents[0].wear.iter().zip([2.0_f32, 1.0, 1.0]) {
+            assert!(
+                (got - w * kept).abs() < 1e-6,
+                "whole-organism repair: {w} → {}, got {got}",
+                w * kept
+            );
+        }
     }
 
     #[test]
@@ -4699,9 +4839,9 @@ mod tests {
     }
 
     #[test]
-    fn use_wear_mobility_increases_with_distance_moved() {
+    fn use_wear_mobility_increases_with_energy_spent_moving() {
         // An agent that moves should accumulate extra mobility wear
-        // proportional to distance traveled.
+        // proportional to the energy it spent moving.
         let params = WorldParameters {
             wear_rate: 0.1,
             use_wear_rate: 0.05,
@@ -4714,7 +4854,7 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
 
         let mut usage = std::collections::HashMap::new();
-        usage.insert(1_u64, [0.0_f32, 0.0, 2.0]); // 2.0 distance moved
+        usage.insert(1_u64, [0.0_f32, 0.0, 2.0]); // 2.0 energy spent moving
         let _events = apply_wear(&mut agents, &params, &usage);
 
         // Baseline: 0.1 * 0.6 = 0.06
@@ -4753,6 +4893,44 @@ mod tests {
         assert!((agents[0].wear[2] - 0.04).abs() < 1e-6); // 0.1 * 0.4
     }
 
+    // --- Senescent death ---
+
+    /// A cohort of `n` well-fed agents, each carrying `wear`.
+    fn worn_cohort(n: u64, wear: [f32; FUNCTIONAL_TRAIT_COUNT]) -> Vec<Agent> {
+        (0..n)
+            .map(|id| {
+                let mut a = Agent::new(id, (0.0, 0.0), 10.0, 5.0, 1.0, zero_traits());
+                a.wear = wear;
+                a
+            })
+            .collect()
+    }
+
+    #[test]
+    fn senescent_deaths_happen_at_rate_eta_times_total_wear() {
+        // World rules, *Somatic wear*: h = η · w, w the total wear over the
+        // functional traits. Here w = 0.3 and η = 0.5, so h = 0.15.
+        let params = WorldParameters {
+            senescence_hazard: 0.5,
+            ..test_params()
+        };
+        let n = 20_000;
+        let mut agents = worn_cohort(n, [0.2, 0.1, 0.0]);
+        let (events, carcasses, _) =
+            check_death_thresholds(&mut agents, &params, &HashSet::new(), 7, 3);
+        let rate = carcasses.len() as f32 / n as f32;
+        // Binomial sd √(h(1−h)/n) ≈ 0.0025: four sd either side.
+        assert!(
+            (rate - 0.15).abs() < 0.01,
+            "death rate {rate}, expected 0.15"
+        );
+        let senesced = events
+            .iter()
+            .filter(|e| e.kind == EventKind::Senesced)
+            .count();
+        assert_eq!(senesced, carcasses.len(), "every death here is senescent");
+    }
+
     // --- Check death thresholds ---
 
     #[test]
@@ -4761,7 +4939,7 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 0.0, zero_traits())];
 
         let (events, carcasses, _dissipated) =
-            check_death_thresholds(&mut agents, &params, &HashSet::new());
+            check_death_thresholds(&mut agents, &params, &HashSet::new(), 0, 0);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::Died);
@@ -4786,7 +4964,7 @@ mod tests {
         agents[0].reserve += 1.6e-10;
 
         let (events, carcasses, dissipated) =
-            check_death_thresholds(&mut agents, &params, &starved);
+            check_death_thresholds(&mut agents, &params, &starved, 0, 0);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::Died);
@@ -4821,7 +4999,7 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), -5.0, zero_traits())];
 
         let (events, carcasses, _dissipated) =
-            check_death_thresholds(&mut agents, &params, &HashSet::new());
+            check_death_thresholds(&mut agents, &params, &HashSet::new(), 0, 0);
 
         assert_eq!(events.len(), 1);
         assert_eq!(carcasses.len(), 1);
@@ -4851,7 +5029,7 @@ mod tests {
         agents[0].structure = threshold * 0.5; // below threshold
 
         let (events, carcasses, _dissipated) =
-            check_death_thresholds(&mut agents, &params, &HashSet::new());
+            check_death_thresholds(&mut agents, &params, &HashSet::new(), 0, 0);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::Died);
@@ -4865,7 +5043,7 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, zero_traits())];
 
         let (events, carcasses, _dissipated) =
-            check_death_thresholds(&mut agents, &params, &HashSet::new());
+            check_death_thresholds(&mut agents, &params, &HashSet::new(), 0, 0);
 
         assert!(events.is_empty());
         assert!(carcasses.is_empty());
@@ -4883,7 +5061,7 @@ mod tests {
         agents[0].repro_nutrient = 2.0; // earmark
         agents[0].structure = 10.0; // bound = 10.0 * 0.1 = 1.0 (zero traits)
 
-        let (_, carcasses, _) = check_death_thresholds(&mut agents, &params, &HashSet::new());
+        let (_, carcasses, _) = check_death_thresholds(&mut agents, &params, &HashSet::new(), 0, 0);
 
         assert_eq!(carcasses.len(), 1);
         // free(5.0) + earmark(2.0) + bound(1.0) = 8.0
@@ -4909,8 +5087,10 @@ mod tests {
         let mut small = vec![make(2.0)];
         let mut large = vec![make(20.0)];
 
-        let (_, small_carcasses, _) = check_death_thresholds(&mut small, &params, &HashSet::new());
-        let (_, large_carcasses, _) = check_death_thresholds(&mut large, &params, &HashSet::new());
+        let (_, small_carcasses, _) =
+            check_death_thresholds(&mut small, &params, &HashSet::new(), 0, 0);
+        let (_, large_carcasses, _) =
+            check_death_thresholds(&mut large, &params, &HashSet::new(), 0, 0);
 
         assert!(
             large_carcasses[0].nutrient > small_carcasses[0].nutrient,

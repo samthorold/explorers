@@ -136,9 +136,14 @@ fn the_committed_atlas_records_its_33_dimension_box_and_fixed_leaching_rate() {
 /// Fields added to `WorldParameters` after a digest was read are asserted at
 /// the latent default every atlas decodes them to and dropped from the
 /// `Debug` form, so the digests stay the ones read before them: hyphal
-/// uptake off at the default contact distance (#727).
+/// uptake off at the default contact distance (#727). The wear law (#763)
+/// replaced `repair_decay`, which every atlas decoded to 1.0, with the repair
+/// rate and senescence hazard at their placeholder defaults; the digest reads
+/// the old field back in their place.
 fn decoded_worlds_digest(read: &explorers_search::sweep::AtlasUnits) -> u64 {
     const LATER_FIELDS: &str = ", hyphal_uptake: false, contact_distance: 0.1";
+    const WEAR_LAW_FIELDS: &str = ", repair_rate: 1.0, senescence_hazard: 0.01";
+    const REPAIR_DECAY_FIELD: &str = ", repair_decay: 1.0";
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for i in 0..read.len() {
         let world = read.decode(i);
@@ -148,9 +153,16 @@ fn decoded_worlds_digest(read: &explorers_search::sweep::AtlasUnits) -> u64 {
             explorers_sim::DEFAULT_CONTACT_DISTANCE,
             "atlas:{i}"
         );
+        assert_eq!(world.0.repair_rate, 1.0, "atlas:{i}");
+        assert_eq!(world.0.senescence_hazard, 0.01, "atlas:{i}");
         let debug = format!("{world:?}");
         assert_eq!(debug.matches(LATER_FIELDS).count(), 1, "atlas:{i}");
-        for b in debug.replacen(LATER_FIELDS, "", 1).bytes() {
+        assert_eq!(debug.matches(WEAR_LAW_FIELDS).count(), 1, "atlas:{i}");
+        let debug =
+            debug
+                .replacen(LATER_FIELDS, "", 1)
+                .replacen(WEAR_LAW_FIELDS, REPAIR_DECAY_FIELD, 1);
+        for b in debug.bytes() {
             h ^= u64::from(b);
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }

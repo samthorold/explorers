@@ -503,7 +503,8 @@ fn default_recipe() -> WorldRecipe {
             somatic_maintenance_cost_coefficient: 0.1,
             use_wear_rate: 0.01,
             structure_maintenance_coefficient: 0.01,
-            repair_decay: 1.0,
+            repair_rate: explorers_sim::DEFAULT_REPAIR_RATE,
+            senescence_hazard: explorers_sim::DEFAULT_SENESCENCE_HAZARD,
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
             reproductive_compatibility_distance: 2.0,
@@ -1309,7 +1310,11 @@ impl ExplorersApp {
                 ui.add(
                     egui::Slider::new(&mut params.use_wear_rate, 0.0..=0.5).text("Use wear rate"),
                 );
-                ui.add(egui::Slider::new(&mut params.repair_decay, 0.0..=5.0).text("Repair decay"));
+                ui.add(egui::Slider::new(&mut params.repair_rate, 0.0..=2.0).text("Repair rate"));
+                ui.add(
+                    egui::Slider::new(&mut params.senescence_hazard, 0.0..=0.1)
+                        .text("Senescence hazard"),
+                );
                 ui.add(
                     egui::Slider::new(&mut params.base_trophic_efficiency, 0.0..=1.0)
                         .text("Base trophic efficiency"),

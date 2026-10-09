@@ -251,28 +251,11 @@ pub fn grow_soa(s: &mut AgentSoA, params: &WorldParameters) -> (Vec<Event>, f32)
         s.reserve[i] -= surplus;
 
         // Repair gets priority from soma budget.
-        let decay = params.repair_decay;
-        let mut repair_energy_spent = 0.0_f32;
-        if soma_fraction > 0.0 && decay > 0.0 {
-            // Repair in energy per tick: the kappa anchor u_R (#459).
-            let base_repair = kappa * crate::units::KAPPA_REPAIR_PER_TICK;
-            for ft in 0..FUNCTIONAL_TRAIT_COUNT {
-                if s.wear[ft][i] <= 0.0 {
-                    continue;
-                }
-                let effective_repair = base_repair * (-decay * s.wear[ft][i]).exp();
-                let repair = effective_repair.min(s.wear[ft][i]);
-                let cost = repair; // 1:1 energy-to-repair
-                if repair_energy_spent + cost > soma_fraction {
-                    let remaining = soma_fraction - repair_energy_spent;
-                    let capped_repair = remaining.min(s.wear[ft][i]);
-                    s.wear[ft][i] -= capped_repair;
-                    repair_energy_spent = soma_fraction;
-                    break;
-                }
-                s.wear[ft][i] -= repair;
-                repair_energy_spent += cost;
-            }
+        let mut wear = [s.wear[0][i], s.wear[1][i], s.wear[2][i]];
+        let repair_energy_spent =
+            crate::phase::repair_wear(&mut wear, kappa, soma_fraction, params);
+        for (ft, w) in wear.into_iter().enumerate() {
+            s.wear[ft][i] = w;
         }
         total_dissipated += repair_energy_spent;
 
@@ -351,11 +334,9 @@ pub fn apply_wear_soa(
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
             let nominal = s.nominal_functional(ft, i);
             let baseline = baseline_rate * nominal.max(0.0);
-            // `use_wear_rate` is one coefficient over three usages of different
-            // dimension; the per-usage anchor (each 1.0) makes the product
-            // homogeneous (#460, `units.rs`).
-            let use_dependent =
-                use_rate * crate::units::USE_WEAR_ANCHORS[ft] * agent_usage[ft].max(0.0);
+            // Every usage is energy put through the machine, so one
+            // coefficient over all three is homogeneous (`E/E`).
+            let use_dependent = use_rate * agent_usage[ft].max(0.0);
             let accumulation = baseline + use_dependent;
             s.wear[ft][i] += accumulation;
             total_wear_delta += accumulation;
