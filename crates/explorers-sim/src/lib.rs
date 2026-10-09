@@ -116,17 +116,11 @@ impl TraitVector {
 fn default_kappa() -> f32 {
     0.5
 }
-fn default_wear_rate() -> f32 {
-    0.1
-}
 fn default_wear_degradation_steepness() -> f32 {
     1.0
 }
 fn default_somatic_maintenance_cost_coefficient() -> f32 {
     0.1
-}
-fn default_use_wear_rate() -> f32 {
-    0.01
 }
 fn default_structure_maintenance_coefficient() -> f32 {
     0.01
@@ -196,6 +190,9 @@ fn default_offspring_structure_fraction() -> f32 {
 }
 fn default_asexual_propensity_maintenance_cost() -> f32 {
     0.01
+}
+fn default_dispersal_reach_coefficient() -> f32 {
+    10.0
 }
 fn default_dispersal_propagule_cost_exponent() -> f32 {
     2.0
@@ -461,7 +458,9 @@ pub struct WorldParameters {
     /// Required (no serde default) so an under-specified recipe fails loudly.
     /// (issue #327)
     pub growth_efficiency: f32,
-    #[serde(default = "default_wear_rate")]
+    /// Senescent wear rate. Its serde default is the search baseline's (0,
+    /// #765); the value belongs to #756, which changes the two together.
+    #[serde(default)]
     pub wear_rate: f32,
     #[serde(default = "default_wear_degradation_steepness")]
     pub wear_degradation_steepness: f32,
@@ -469,7 +468,9 @@ pub struct WorldParameters {
     /// Somatic maintenance is now derived from kappa allocation.
     #[serde(default = "default_somatic_maintenance_cost_coefficient")]
     pub somatic_maintenance_cost_coefficient: f32,
-    #[serde(default = "default_use_wear_rate")]
+    /// Use-wear rate. Its serde default is the search baseline's (0, #765);
+    /// the value belongs to #756, which changes the two together.
+    #[serde(default)]
     pub use_wear_rate: f32,
     #[serde(default = "default_structure_maintenance_coefficient")]
     pub structure_maintenance_coefficient: f32,
@@ -572,9 +573,8 @@ pub struct WorldParameters {
     /// offspring. Reach gates eligibility only — it does not move offspring (that
     /// remains governed by the dispersal trait at the placement step). Unlike the
     /// mobility term, dispersal does not wear, so this contribution is age-stable.
-    /// Default 0.0 disables it (backward-compatible: existing recipes keep the
-    /// pure-mobility reach).
-    #[serde(default)]
+    /// Its serde default is the search baseline's 10 (#765); 0 disables it.
+    #[serde(default = "default_dispersal_reach_coefficient")]
     pub dispersal_reach_coefficient: f32,
     /// Coefficient on the **structure** contribution to consumption (feeding)
     /// reach. Consumption reach = `eff_heterotrophy * (contact_range_coefficient
@@ -2535,9 +2535,8 @@ mod tests {
 
     #[test]
     fn dispersal_reach_coefficient_has_serde_default() {
-        // The dispersal contribution to mate-finding reach is a new world
-        // parameter with a serde default of 0.0, so existing recipes/scenarios
-        // that omit it deserialise unchanged and keep the pure-mobility reach.
+        // A recipe omitting the dispersal contribution to mate-finding reach
+        // gets the search baseline's 10 (#765).
         let params: WorldParameters = serde_json::from_str(
             r#"{
                 "solar_flux_magnitude": 10.0,
@@ -2559,7 +2558,7 @@ mod tests {
             }"#,
         )
         .expect("params omitting dispersal_reach_coefficient should deserialise");
-        assert_eq!(params.dispersal_reach_coefficient, 0.0);
+        assert_eq!(params.dispersal_reach_coefficient, 10.0);
     }
 
     #[test]
