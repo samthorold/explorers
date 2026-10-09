@@ -131,8 +131,20 @@ fn default_use_wear_rate() -> f32 {
 fn default_structure_maintenance_coefficient() -> f32 {
     0.01
 }
-fn default_repair_decay() -> f32 {
-    1.0
+/// Placeholder repair rate `ρ` (world rules, *Somatic wear*): wear relaxes
+/// at `ρ · κ` per tick. Its value is calibrated in the mesocosm issue, and
+/// genesis's value belongs to #756.
+pub const DEFAULT_REPAIR_RATE: f32 = 1.0;
+/// Placeholder senescence hazard `η` (world rules, *Somatic wear*): a living
+/// agent dies each tick with probability `η · w`. Calibrated as
+/// [`DEFAULT_REPAIR_RATE`] is.
+pub const DEFAULT_SENESCENCE_HAZARD: f32 = 0.01;
+
+fn default_repair_rate() -> f32 {
+    DEFAULT_REPAIR_RATE
+}
+fn default_senescence_hazard() -> f32 {
+    DEFAULT_SENESCENCE_HAZARD
 }
 fn default_trophic_distance_decay() -> f32 {
     1.0
@@ -461,8 +473,17 @@ pub struct WorldParameters {
     pub use_wear_rate: f32,
     #[serde(default = "default_structure_maintenance_coefficient")]
     pub structure_maintenance_coefficient: f32,
-    #[serde(default = "default_repair_decay")]
-    pub repair_decay: f32,
+    /// Repair rate `ρ` (world rules, *Somatic wear*): each tick, wear on each
+    /// functional trait falls by `ρ · κ · w`, paid 1:1 from the soma share of
+    /// the mobilised surplus. Recipes from before #763 carry `repair_decay`
+    /// instead, the old law's parameter; it has no counterpart here and is
+    /// ignored on load.
+    #[serde(default = "default_repair_rate")]
+    pub repair_rate: f32,
+    /// Senescence hazard `η` (world rules, *Somatic wear*): each tick a living
+    /// agent dies with probability `η · w`, `w` its total wear.
+    #[serde(default = "default_senescence_hazard")]
+    pub senescence_hazard: f32,
     /// Base nutrient-to-energy ratio per unit structure.
     #[serde(default = "default_base_nutrient_ratio")]
     pub base_nutrient_ratio: f32,
@@ -1616,12 +1637,14 @@ impl World {
                 .or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
             entry[1] += ev.energy_delta;
         }
-        // Mobility usage: distance moved during this tick's movement phase.
-        for (&id, &dist) in &move_distance_by_id {
+        // Mobility usage: energy spent moving in this tick's movement phase
+        // (distance × movement cost coefficient × structure, as paid), so all
+        // three throughputs are energy (world rules, *Somatic wear*).
+        for ev in events.iter().filter(|e| e.kind == event::EventKind::Moved) {
             let entry = usage_data
-                .entry(id)
+                .entry(ev.source)
                 .or_insert([0.0; FUNCTIONAL_TRAIT_COUNT]);
-            entry[2] += dist;
+            entry[2] += ev.energy_delta;
         }
         // Next tick's uptake reads this move phase's distances (hyphal
         // contact, flow 2).
@@ -1630,8 +1653,13 @@ impl World {
         events.extend(wear_events);
 
         // 9. Check death thresholds
-        let (death_events, threshold_carcasses, death_dissipated) =
-            phase::check_death_thresholds(&mut self.agents, &self.params, &starved_ids);
+        let (death_events, threshold_carcasses, death_dissipated) = phase::check_death_thresholds(
+            &mut self.agents,
+            &self.params,
+            &starved_ids,
+            self.seed,
+            self.tick,
+        );
         let threshold_deaths = threshold_carcasses.len();
         self.dissipated_energy += death_dissipated;
         events.extend(death_events);
@@ -2131,7 +2159,8 @@ mod tests {
             somatic_maintenance_cost_coefficient: 0.0,
             use_wear_rate: 0.0,
             structure_maintenance_coefficient: 0.0,
-            repair_decay: 0.0,
+            repair_rate: 0.0,
+            senescence_hazard: 0.0,
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
             reproductive_compatibility_distance: 2.0,
@@ -3142,7 +3171,7 @@ mod tests {
             growth_efficiency: 0.5,
             wear_rate: 0.01,
             wear_degradation_steepness: 1.0,
-            repair_decay: 1.0,
+            repair_rate: 1.0,
             initial_population_size: 0,
             // Producers need environmental nutrient to bootstrap structure: growth
             // is nutrient-co-limited, and photosynthesis needs structure > 0.
@@ -3216,7 +3245,7 @@ mod tests {
             wear_rate: 0.01,
             use_wear_rate: 0.02,
             wear_degradation_steepness: 1.0,
-            repair_decay: 0.0, // no repair, so wear only accumulates
+            repair_rate: 0.0, // no repair, so wear only accumulates
             initial_population_size: 0,
             ..test_params()
         };
@@ -3281,7 +3310,7 @@ mod tests {
             wear_rate: 0.01,
             use_wear_rate: 0.02,
             wear_degradation_steepness: 1.0,
-            repair_decay: 0.0, // no repair
+            repair_rate: 0.0, // no repair
             contact_range_coefficient: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -3345,73 +3374,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn use_dependent_wear_mobility_through_world_step() {
-        // A mobile agent that moves should accumulate extra mobility wear beyond
-        // baseline. Movement runs before wear within each tick, so the distance
-        // moved on a given tick is folded into THAT tick's mobility usage.
-        let params = WorldParameters {
-            solar_flux_magnitude: 0.0, // no photosynthesis
-            base_metabolic_rate: 0.5,  // small drain so reserve is retained, not dumped to repro
-            growth_efficiency: 0.0,
-            wear_rate: 0.01,
-            use_wear_rate: 0.02,
-            wear_degradation_steepness: 1.0,
-            repair_decay: 0.0,              // no repair
-            movement_cost_coefficient: 0.0, // free movement so the agent survives
-            initial_population_size: 0,
-            ..test_params()
-        };
-        let dist = InitialDistribution {
-            mean_traits: zero_traits(),
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 50.0,
-            founder_aggregation: 0.0,
-        };
-        let mut world = World::new(params, dist, 42);
-        // A mobile agent: nonzero mobility drives a random-walk move each tick.
-        world.add_agent(Agent {
-            id: 0,
-            position: (0.0, 0.0),
-            reserve: 50.0,
-            structure: 5.0,
-            peak_structure: 5.0,
-            nutrient: 0.0,
-            traits: TraitVector {
-                mobility: 0.5,
-                ..zero_traits()
-            },
-            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-            repro_reserve: 0.0,
-            repro_nutrient: 0.0,
-        });
-
-        // Two ticks: each tick's move is charged as mobility use-wear that same
-        // tick (move runs before wear), so wear[2] exceeds two ticks of baseline.
-        world.step();
-        world.step();
-
-        let agent = world
-            .agents()
-            .iter()
-            .find(|a| a.id == 0)
-            .expect("mobile agent should survive two ticks");
-        // Two ticks of baseline-only wear: 2 * wear_rate * mobility = 2 * 0.01 * 0.5
-        let baseline_only = 2.0 * 0.01 * 0.5;
-        assert!(
-            agent.wear[2] > baseline_only,
-            "mobility wear ({}) should exceed two ticks of baseline ({baseline_only}) due to movement use-wear",
-            agent.wear[2]
-        );
-    }
-
-    #[test]
-    fn movement_wear_charged_in_same_tick() {
-        // With the tick loop ordered move -> wear -> check death thresholds, an
-        // agent's movement on a given tick is folded into THAT tick's mobility
-        // use-wear (no one-tick lag). After a single step in which a mobile agent
-        // moves a nonzero distance, wear[2] exceeds one tick of baseline-only wear.
+    /// Mobility use-wear one step charges a lone mobile agent (mobility 0.5,
+    /// so it moves 0.5 this tick), net of its baseline wear.
+    fn mobility_use_wear(movement_cost_coefficient: f32, structure: f32) -> f32 {
         let params = WorldParameters {
             solar_flux_magnitude: 0.0, // no photosynthesis
             base_metabolic_rate: 0.5,
@@ -3419,51 +3384,51 @@ mod tests {
             wear_rate: 0.01,
             use_wear_rate: 0.02,
             wear_degradation_steepness: 1.0,
-            repair_decay: 0.0,              // no repair
-            movement_cost_coefficient: 0.0, // free movement so the agent survives
+            repair_rate: 0.0, // no repair
+            movement_cost_coefficient,
             initial_population_size: 0,
             ..test_params()
         };
-        let dist = InitialDistribution {
-            mean_traits: zero_traits(),
-            trait_covariance: 0.0,
-            initial_cluster_count: 1,
-            initial_energy_per_agent: 50.0,
-            founder_aggregation: 0.0,
+        let mut world = World::new(params, test_distribution(), 42);
+        let traits = TraitVector {
+            mobility: 0.5,
+            ..zero_traits()
         };
-        let mut world = World::new(params, dist, 42);
-        world.add_agent(Agent {
-            id: 0,
-            position: (0.0, 0.0),
-            reserve: 50.0,
-            structure: 5.0,
-            peak_structure: 5.0,
-            nutrient: 0.0,
-            traits: TraitVector {
-                mobility: 0.5,
-                ..zero_traits()
-            },
-            wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
-            repro_reserve: 0.0,
-            repro_nutrient: 0.0,
-        });
-
-        // A single tick: the agent moves and the move-wear is charged this tick.
+        world.add_agent(Agent::new(0, (0.0, 0.0), 50.0, structure, 0.0, traits));
         world.step();
-
         let agent = world
             .agents()
             .iter()
             .find(|a| a.id == 0)
             .expect("mobile agent should survive one tick");
-        // One tick of baseline-only wear: wear_rate * mobility = 0.01 * 0.5.
-        // Under the old one-tick lag this is exactly what wear[2] would be after
-        // the first step; charging the move this tick pushes it strictly higher.
-        let baseline_only = 0.01 * 0.5;
+        agent.wear[2] - 0.01 * 0.5
+    }
+
+    #[test]
+    fn mobility_use_wear_reads_this_ticks_movement_energy() {
+        // World rules, *Somatic wear*: mobility throughput is the energy spent
+        // moving, distance × movement_cost_coefficient × structure, charged
+        // the tick the agent moves: 0.02 × 0.5 × 0.1 × 5.
+        let use_wear = mobility_use_wear(0.1, 5.0);
         assert!(
-            agent.wear[2] > baseline_only,
-            "mobility wear ({}) should exceed one tick of baseline ({baseline_only}) because this tick's move is charged this tick",
-            agent.wear[2]
+            (use_wear - 0.02 * 0.5 * 0.1 * 5.0).abs() < 1e-6,
+            "mobility use-wear {use_wear}"
+        );
+    }
+
+    #[test]
+    fn mobility_use_wear_is_homogeneous_in_cost_and_structure() {
+        // One coefficient over energy throughput: use-wear scales with the
+        // movement cost coefficient and with structure, as the energy does.
+        let base = mobility_use_wear(0.1, 5.0);
+        let dearer = mobility_use_wear(0.2, 5.0);
+        let bigger = mobility_use_wear(0.1, 10.0);
+        assert!((dearer - 2.0 * base).abs() < 1e-6, "{dearer} vs 2 × {base}");
+        assert!((bigger - 2.0 * base).abs() < 1e-6, "{bigger} vs 2 × {base}");
+        assert_eq!(
+            mobility_use_wear(0.0, 5.0),
+            0.0,
+            "free movement wears nothing"
         );
     }
 
@@ -4499,7 +4464,8 @@ mod tests {
             growth_efficiency: 0.5,
             wear_rate: 0.01,
             wear_degradation_steepness: 1.0,
-            repair_decay: 1.0,
+            repair_rate: 1.0,
+            senescence_hazard: 0.0,
             somatic_maintenance_cost_coefficient: 0.05,
             structure_maintenance_coefficient: 0.01,
             movement_cost_coefficient: 0.1,
@@ -5408,6 +5374,87 @@ mod tests {
     }
 
     #[test]
+    fn a_recipe_from_before_the_wear_law_loads_with_its_repair_decay_ignored() {
+        // Pre-#763 recipes carry `repair_decay` and no `repair_rate` or
+        // `senescence_hazard`. The old field has no counterpart and is
+        // ignored; the new ones take their placeholder defaults.
+        let mut json = serde_json::to_value(test_params()).unwrap();
+        let fields = json.as_object_mut().unwrap();
+        fields.remove("repair_rate");
+        fields.remove("senescence_hazard");
+        fields.insert("repair_decay".into(), serde_json::json!(1.0));
+        let params: WorldParameters = serde_json::from_value(json).unwrap();
+        assert_eq!(params.repair_rate, DEFAULT_REPAIR_RATE);
+        assert_eq!(params.senescence_hazard, DEFAULT_SENESCENCE_HAZARD);
+    }
+
+    #[test]
+    fn a_senescent_death_leaves_a_carcass_and_conserves_energy_and_nutrient() {
+        // Hazard η · w = 10 × 1 ≥ 1: the worn agent dies of age this tick.
+        let params = WorldParameters {
+            solar_flux_magnitude: 0.0,
+            base_metabolic_rate: 0.0,
+            movement_cost_coefficient: 0.0,
+            senescence_hazard: 10.0,
+            // Mobilise nothing, so the reserve stays and no other death fires.
+            reserve_mobilisation_rate: 0.0,
+            initial_population_size: 0,
+            ..test_params()
+        };
+        let mut world = World::new(params, test_distribution(), 42);
+        let traits = TraitVector {
+            photosynthetic_absorption: 0.5,
+            ..zero_traits()
+        };
+        let mut agent = Agent::new(0, (0.0, 0.0), 3.0, 4.0, 0.5, traits);
+        agent.wear = [1.0, 0.0, 0.0];
+        world.add_agent(agent);
+        let nutrient_before = world.agents()[0].nutrient_total(world.params());
+
+        world.step();
+
+        assert!(world.agents().is_empty(), "the worn agent died of age");
+        let log = world.event_log();
+        assert_eq!(log.by_kind(&event::EventKind::Senesced).len(), 1);
+        assert_eq!(log.by_kind(&event::EventKind::Died).len(), 1);
+        let carcass = &world.carcasses()[0];
+        assert_eq!(carcass.energy, 4.0, "the body becomes the carcass");
+        assert_eq!(carcass.nutrient, nutrient_before, "its nutrient with it");
+        assert_eq!(
+            world.dissipated_energy() + carcass.energy,
+            7.0,
+            "reserve dissipates, structure stays: energy is conserved"
+        );
+    }
+
+    #[test]
+    fn senescence_never_kills_an_unworn_agent() {
+        // h = η · 0 = 0: no draw, no death, and the trajectory is the one a
+        // world with no hazard runs.
+        let run = |eta| {
+            let params = WorldParameters {
+                senescence_hazard: eta,
+                ..test_params()
+            };
+            let mut world = World::new(params, test_distribution(), 9);
+            for _ in 0..20 {
+                world.step();
+            }
+            world
+        };
+        let (with, without) = (run(10.0), run(0.0));
+        assert!(
+            with.event_log()
+                .by_kind(&event::EventKind::Senesced)
+                .is_empty()
+        );
+        assert_eq!(
+            format!("{:?}", with.agents()),
+            format!("{:?}", without.agents())
+        );
+    }
+
+    #[test]
     fn dying_agent_takes_final_step_before_death_check() {
         // With the tick loop ordered move -> wear -> check death thresholds, a
         // mobile agent destined to die from wear this tick takes one final step
@@ -5420,7 +5467,7 @@ mod tests {
             wear_rate: 10.0, // very high baseline wear
             use_wear_rate: 0.0,
             wear_degradation_steepness: 1.0,
-            repair_decay: 0.0, // no repair
+            repair_rate: 0.0, // no repair
             contact_range_coefficient: 5.0,
             movement_cost_coefficient: 0.0,
             initial_population_size: 0,

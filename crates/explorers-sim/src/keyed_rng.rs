@@ -73,6 +73,9 @@ pub enum PhaseTag {
     /// Founder placement at world creation (#601): the founding patch centres.
     /// World-level, keyed on the run seed alone (tick 0, no agent identity).
     FounderPlacement = 4,
+    /// Senescent death (#763): the per-tick draw against the hazard `η · w`.
+    /// Single-agent. Skipped, not drawn, where the hazard is zero.
+    Senescence = 5,
 }
 
 /// Sentinel occupying the high id slot for single-agent (non-pair) sites, so a

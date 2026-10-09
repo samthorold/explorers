@@ -285,26 +285,7 @@ fn replay_grow(m: &MemberState, photo: f32, metab: f32, p: &WorldParameters) -> 
     let kappa = m.traits.kappa.clamp(0.0, 1.0);
     let soma = surplus * kappa;
     out.earmark_fill = surplus - soma;
-    let decay = p.repair_decay;
-    if soma > 0.0 && decay > 0.0 {
-        let base_repair = kappa * explorers_sim::units::KAPPA_REPAIR_PER_TICK;
-        let mut spent = 0.0_f32;
-        for ft in 0..FUNCTIONAL_TRAIT_COUNT {
-            if out.wear[ft] <= 0.0 {
-                continue;
-            }
-            let repair = (base_repair * (-decay * out.wear[ft]).exp()).min(out.wear[ft]);
-            if spent + repair > soma {
-                let capped = (soma - spent).min(out.wear[ft]);
-                out.wear[ft] -= capped;
-                spent = soma;
-                break;
-            }
-            out.wear[ft] -= repair;
-            spent += repair;
-        }
-        out.repair = spent;
-    }
+    out.repair = explorers_sim::phase::repair_wear(&mut out.wear, kappa, soma, p);
     out
 }
 

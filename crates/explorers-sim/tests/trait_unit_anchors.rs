@@ -1,13 +1,14 @@
-//! Unit anchors: trait-to-flow conversions (#459) and use-wear couplings (#460).
+//! Unit anchors: trait-to-flow conversions (#459).
 //!
-//! Five committed forms read a dimensionless trait *as* a dimensional flow
+//! Four committed forms read a dimensionless trait *as* a dimensional flow
 //! (see `docs/research/440-dimensionless-groups.md`, smell S1). The design's
 //! AFK posture is to name those anchors as explicit constants — each `1.0` in
 //! today's units — without changing any trajectory. This suite is the
 //! byte-identity guard: a golden hash of fixed-seed runs pinned *before* the
 //! constants were introduced, which must survive their introduction unchanged.
-//! The same guard covers the three use-wear anchors (smell S2), pinned on a
-//! configuration where `use_wear_rate > 0` and all three couplings are live.
+//! The use-wear anchors and the repair anchor this suite also guarded are gone
+//! (#763): under the wear law every use-wear coupling is energy, and repair
+//! is first order, so neither needs a unit constant.
 
 use explorers_sim::{World, WorldRecipe};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -80,9 +81,13 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// example4 and example10 re-pinned for #684: expression is ungated and
 /// recognition restraint is 1, so a consumer drains at full capability less
 /// the resemblance of a living target.
+/// example8 re-pinned for #763: it runs with wear on (`wear_rate` 0.1,
+/// `use_wear_rate` 0.01), so the wear law (first-order repair, the
+/// senescence hazard, mobility use-wear by energy) moves it. example4 and
+/// example10 run wear-free and are unchanged.
 const GOLDEN: [(&str, u64, u64, u64); 3] = [
     ("example4.json", 7, 300, 0x1dc20e4bb35be8eb),
-    ("example8.json", 11, 300, 0x366aea7e88b3c291),
+    ("example8.json", 11, 300, 0x458996bf2981df18),
     (
         "example10_predator_prey_hopf.json",
         3,
@@ -100,37 +105,6 @@ fn naming_the_unit_anchors_leaves_every_trajectory_byte_identical() {
             "{name} seed={seed} ticks={ticks}: trajectory digest {got:#018x} != golden {expected:#018x}"
         );
     }
-}
-
-/// Use-dependent wear anchors (#460). `use_wear_rate` multiplies three
-/// dimensionally distinct usages — energy captured, energy drained, distance
-/// moved — with one coefficient. Naming the three implied unit constants must
-/// not change the `use_wear_rate > 0` branch bit-for-bit, so pin it on a
-/// config where all three couplings are live at once: example10's sessile
-/// producers capture energy while its lightly mobile consumers both drain
-/// structure and move. Digest pinned on `main` at 5a7bede, before the anchors
-/// were named; re-pinned for #600 (need-gated consumption), #604
-/// (recognition), #623 (surplus satiation read before growth) and #652
-/// (retention capped at the consumer's ratio × energy gained) and #684
-/// (ungated expression, recognition restraint 1).
-const USE_WEAR_GOLDEN: (&str, f32, u64, u64, u64) = (
-    "example10_predator_prey_hopf.json",
-    0.02,
-    3,
-    300,
-    0xba6a410f14b8c0be,
-);
-
-#[test]
-fn naming_the_use_wear_anchors_leaves_the_use_wear_branch_byte_identical() {
-    let (name, use_wear_rate, seed, ticks, expected) = USE_WEAR_GOLDEN;
-    let mut recipe = load_recipe(name);
-    recipe.parameters.use_wear_rate = use_wear_rate;
-    let got = recipe_trajectory_hash(name, &recipe, seed, ticks);
-    assert_eq!(
-        got, expected,
-        "{name} use_wear_rate={use_wear_rate} seed={seed} ticks={ticks}: trajectory digest {got:#018x} != golden {expected:#018x}"
-    );
 }
 
 /// Carcass leaching (#698) is skipped, not evaluated, at `λ = 0`: every
@@ -169,28 +143,5 @@ fn every_trait_to_flow_anchor_is_one_in_todays_units() {
     assert_eq!(
         HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK, 1.0,
         "u_H: energy per tick per trait unit"
-    );
-    assert_eq!(
-        KAPPA_REPAIR_PER_TICK, 1.0,
-        "u_R: energy per tick per unit kappa"
-    );
-}
-
-#[test]
-fn every_use_wear_anchor_is_one_in_todays_units() {
-    use explorers_sim::units::*;
-    // The AFK posture for #460: `use_wear_rate` stays one coefficient; the
-    // three unit constants it silently carries are named, not parameterised.
-    assert_eq!(
-        USE_WEAR_PER_ENERGY_CAPTURED, 1.0,
-        "u_WA: wear (energy) per energy captured — dimensionless"
-    );
-    assert_eq!(
-        USE_WEAR_PER_ENERGY_DRAINED, 1.0,
-        "u_WH: wear (energy) per energy drained — dimensionless"
-    );
-    assert_eq!(
-        USE_WEAR_PER_DISTANCE_MOVED, 1.0,
-        "u_WM: wear (energy) per unit distance moved"
     );
 }

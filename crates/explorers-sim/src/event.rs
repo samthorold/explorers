@@ -40,6 +40,12 @@ pub enum EventKind {
     /// apart from `Redistributed` (the gradient flow of stores). Emitted only
     /// when the network is enabled; inert by default.
     SurplusRouted,
+    /// Senescent death (#763): `source` died this tick of the wear hazard
+    /// `η · w` (world rules, *Somatic wear*), not of starvation or structural
+    /// loss. Emitted immediately before that agent's `Died` event, which
+    /// every death carries, so a death count reads `Died` alone and the cause
+    /// reads this. `energy_delta` is 0.
+    Senesced,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -20,13 +20,11 @@ pub const DECOMPOSERS_PER_CELL: usize = 1;
 
 /// Provisional somatic wear rate for the mesocosm. The calibration sweep
 /// (#753, `docs/research/753-mode1-wear-calibration.md`) found no rate that
-/// gives producer lifespans of a few hundred ticks and a persisting control,
-/// so it stays provisional until the open questions on #751 are settled. Under the committed repair law (flow 9) wear is
-/// repaired in full while `wear_rate × autotrophy < kappa`, and runs away to
-/// one fixed age at death above it; for the founder producers (kappa ≈ 0.32,
-/// autotrophy ≈ 1.07) the edge is ≈ 0.30, where every founder dies before it
-/// reproduces (#751). `0.2` sits below it: the founders reproduce, and
-/// repair costs them `0.2 × autotrophy` of energy a tick.
+/// gives producer lifespans of a few hundred ticks and a persisting control
+/// under the old repair law, which #763 replaced with first-order repair and
+/// a senescence hazard (world rules, *Somatic wear*). The value, like the
+/// recipe's placeholder repair rate and senescence hazard, stays provisional
+/// until the mesocosm calibration settles them.
 pub const PROVISIONAL_WEAR_RATE: f32 = 0.2;
 
 /// Which founders the mesocosm is seeded with. Without decomposers the
@@ -300,9 +298,18 @@ pub struct PairedReport {
 /// births and deaths are those since the settle's last sample.
 pub fn run_paired(mut world: World, settle: u64, ticks: u64, sample_every: u64) -> PairedReport {
     let mut observer = Observer::new(&mut world);
+    let start = world.tick();
     for _ in 0..settle {
         world.step();
         observer.observe(&mut world);
+        let elapsed = world.tick() - start;
+        if elapsed < settle && elapsed % sample_every == 0 {
+            // The settle's samples before the fork are not reported, but
+            // taking them resets the birth and death counts, so the fork's
+            // sample counts only those since the settle's last sample, as a
+            // run sampled straight through does.
+            observer.sample_centre(&world);
+        }
     }
     observer.lifespans.clear();
     let fork_tick = world.tick();
