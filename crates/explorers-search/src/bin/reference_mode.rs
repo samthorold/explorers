@@ -2,16 +2,17 @@
 //!
 //! Mode 1, colonisation overshoot: builds the designed mesocosm
 //! ([`explorers_search::mesocosm::mode1_mesocosm`]) from the committed recipe
-//! with somatic wear on, runs it, and reports the centre cell, the patch the
-//! perturbation will clear, per sampled tick, plus the distribution of
-//! producer lifespans over the run, against which the wear rate is
-//! calibrated.
+//! with somatic wear on and standing carcasses at founding (#764), runs it,
+//! and reports the centre patch, the 3 × 3 block of cells the perturbation
+//! clears, per sampled tick beside the world's decomposers, plus the
+//! distribution of producer lifespans over the run, against which the wear
+//! rate is calibrated.
 //!
 //! With `--clear-at T` (#752) it reads the perturbation against its paired
 //! control: it settles the mesocosm to tick `T`, clones it, clears every agent
-//! and carcass from one copy's centre cell (an outflow, booked in each arm's
+//! and carcass from one copy's centre patch (an outflow, booked in each arm's
 //! energy and nutrient ledger), and runs both copies `--ticks` further,
-//! reporting their centre-cell series side by side. `--no-decomposers` builds
+//! reporting their centre-patch series side by side. `--no-decomposers` builds
 //! the mesocosm from producer founders alone.
 //!
 //! ```text
