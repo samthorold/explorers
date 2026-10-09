@@ -29,10 +29,20 @@ pub const DECOMPOSERS_PER_CELL: usize = 1;
 /// repair costs them `0.2 × autotrophy` of energy a tick.
 pub const PROVISIONAL_WEAR_RATE: f32 = 0.2;
 
+/// Which founders the mesocosm is seeded with. Without decomposers the
+/// settled-level prediction is read as a second paired comparison
+/// (reference-modes.md, *Colonisation overshoot*, *Mesocosm*, *Community*).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub enum Community {
+    ProducersAndDecomposers,
+    ProducersOnly,
+}
+
 /// Build the mode-1 mesocosm (reference-modes.md, *Colonisation overshoot*,
 /// *Mesocosm*): the recipe's world parameters on a [`SIDE_CELLS`]² torus of
 /// nutrient cells, with somatic wear at `wear_rate`, seeded with producer and
-/// decomposer founders and no consumers. The recipe's nutrient is kept at its
+/// decomposer founders (producers alone with [`Community::ProducersOnly`])
+/// and no consumers. The recipe's nutrient is kept at its
 /// density per area, so each cell holds what a cell of the recipe's world does.
 ///
 /// Founders take the two trophic vertices the recipe's initial distribution
@@ -40,7 +50,12 @@ pub const PROVISIONAL_WEAR_RATE: f32 = 0.2;
 /// in autotrophy (a producer) or in heterotrophy (a decomposer), its other
 /// traits at their means. They are placed uniformly over the torus from
 /// `seed`, so the state is deterministic per seed.
-pub fn mode1_mesocosm(recipe: &WorldRecipe, wear_rate: f32, seed: u64) -> World {
+pub fn mode1_mesocosm(
+    recipe: &WorldRecipe,
+    wear_rate: f32,
+    seed: u64,
+    community: Community,
+) -> World {
     let distribution = recipe
         .initial_distribution
         .as_ref()
@@ -64,9 +79,12 @@ pub fn mode1_mesocosm(recipe: &WorldRecipe, wear_rate: f32, seed: u64) -> World 
         ..mean
     };
     let cells = SIDE_CELLS * SIDE_CELLS;
-    let roster = std::iter::repeat_n(producer, PRODUCERS_PER_CELL * cells).chain(
-        std::iter::repeat_n(decomposer, DECOMPOSERS_PER_CELL * cells),
-    );
+    let decomposers = match community {
+        Community::ProducersAndDecomposers => DECOMPOSERS_PER_CELL * cells,
+        Community::ProducersOnly => 0,
+    };
+    let roster = std::iter::repeat_n(producer, PRODUCERS_PER_CELL * cells)
+        .chain(std::iter::repeat_n(decomposer, decomposers));
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let half = extent / 2.0;
     let agents: Vec<AgentSpec> = roster
@@ -161,6 +179,77 @@ pub struct Mode1Report {
     pub producer_lifespans: Vec<u64>,
     /// The whole world's living roster at the end, by income role.
     pub final_roles: RoleTally,
+    /// The world's energy and nutrient budget over the run.
+    pub ledger: Ledger,
+}
+
+/// The whole world's energy and nutrient budget over a run, with what a
+/// clearance took out as an explicit outflow. The sim's own ledgers close
+/// each tick's flows; a clearance happens between ticks, so it is booked
+/// here. Energy is open (solar in, dissipation out); nutrient is closed but
+/// for the clearance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Ledger {
+    /// Energy held by agents and carcasses at the start, before any clearance.
+    pub energy_start: f32,
+    /// Solar energy fixed over the run.
+    pub solar_input: f32,
+    /// Energy dissipated over the run.
+    pub dissipated: f32,
+    /// Energy the clearance removed.
+    pub cleared_energy: f32,
+    /// Energy held by agents and carcasses at the end.
+    pub energy_end: f32,
+    /// Nutrient across pool, agents and carcasses at the start, before any
+    /// clearance.
+    pub nutrient_start: f32,
+    /// Nutrient the clearance removed.
+    pub cleared_nutrient: f32,
+    /// Nutrient across pool, agents and carcasses at the end.
+    pub nutrient_end: f32,
+}
+
+impl Ledger {
+    /// Energy in less energy out and held: zero when the budget closes.
+    pub fn energy_residual(&self) -> f32 {
+        self.energy_start + self.solar_input
+            - self.dissipated
+            - self.cleared_energy
+            - self.energy_end
+    }
+
+    /// Nutrient at the start less nutrient cleared and held: zero when the
+    /// budget closes.
+    pub fn nutrient_residual(&self) -> f32 {
+        self.nutrient_start - self.cleared_nutrient - self.nutrient_end
+    }
+}
+
+/// The world's stocks and cumulative energy counters at one moment.
+#[derive(Clone, Copy)]
+struct Stock {
+    energy: f32,
+    nutrient: f32,
+    solar_input: f32,
+    dissipated: f32,
+}
+
+impl Stock {
+    fn of(world: &World) -> Self {
+        let params = world.params();
+        Self {
+            energy: world.free_energy() + world.carcasses().iter().map(|c| c.energy).sum::<f32>(),
+            nutrient: world.nutrient_pool()
+                + world
+                    .agents()
+                    .iter()
+                    .map(|a| a.nutrient_total(params))
+                    .sum::<f32>()
+                + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>(),
+            solar_input: world.total_solar_input(),
+            dissipated: world.dissipated_energy(),
+        }
+    }
 }
 
 /// Living agents by trophic role (the income read); `no_role` have no income
@@ -176,8 +265,86 @@ pub struct RoleTally {
 /// Step `world` for `ticks` ticks, sampling the centre cell at the start and
 /// every `sample_every` ticks.
 pub fn run_mode1(world: &mut World, ticks: u64, sample_every: u64) -> Mode1Report {
-    let start = world.tick();
     let mut observer = Observer::new(world);
+    let start = Stock::of(world);
+    run_arm(
+        world,
+        &mut observer,
+        start,
+        Clearance::default(),
+        ticks,
+        sample_every,
+    )
+}
+
+/// The mode-1 perturbation read against its paired control (reference-modes.md,
+/// *How a reference mode is read*).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct PairedReport {
+    /// The tick at which the settled state was cloned into the two arms.
+    pub fork_tick: u64,
+    /// What the perturbed arm's clearance took out of the world.
+    pub clearance: Clearance,
+    /// The arm whose centre cell was cleared at the fork.
+    pub perturbed: Mode1Report,
+    /// The arm left alone.
+    pub control: Mode1Report,
+}
+
+/// Settle `world` for `settle` ticks, clone it into two arms, clear the
+/// perturbed arm's centre cell, and run both arms `ticks` further, sampling
+/// the centre at the fork and every `sample_every` ticks. Both arms continue
+/// from the same cloned state, RNG included, and each arm's observer carries
+/// the settle's history, so roles and ages read the same in both. An arm's
+/// lifespans are the producer deaths after the fork; its first sample's
+/// births and deaths are those since the settle's last sample.
+pub fn run_paired(mut world: World, settle: u64, ticks: u64, sample_every: u64) -> PairedReport {
+    let mut observer = Observer::new(&mut world);
+    for _ in 0..settle {
+        world.step();
+        observer.observe(&mut world);
+    }
+    observer.lifespans.clear();
+    let fork_tick = world.tick();
+
+    let start = Stock::of(&world);
+    let mut control = world.clone();
+    let mut control_observer = observer.clone();
+    let clearance = clear_centre(&mut world);
+    PairedReport {
+        fork_tick,
+        clearance,
+        perturbed: run_arm(
+            &mut world,
+            &mut observer,
+            start,
+            clearance,
+            ticks,
+            sample_every,
+        ),
+        control: run_arm(
+            &mut control,
+            &mut control_observer,
+            start,
+            Clearance::default(),
+            ticks,
+            sample_every,
+        ),
+    }
+}
+
+/// Step `world` for `ticks` ticks under `observer`, sampling the centre cell
+/// at the start and every `sample_every` ticks. `stock` is the world before
+/// `cleared` was taken out of it.
+fn run_arm(
+    world: &mut World,
+    observer: &mut Observer,
+    stock: Stock,
+    cleared: Clearance,
+    ticks: u64,
+    sample_every: u64,
+) -> Mode1Report {
+    let start = world.tick();
     let mut samples = vec![observer.sample_centre(world)];
     for _ in 0..ticks {
         world.step();
@@ -197,8 +364,58 @@ pub fn run_mode1(world: &mut World, ticks: u64, sample_every: u64) -> Mode1Repor
     }
     Mode1Report {
         samples,
-        producer_lifespans: observer.lifespans,
+        producer_lifespans: std::mem::take(&mut observer.lifespans),
         final_roles,
+        ledger: {
+            let end = Stock::of(world);
+            Ledger {
+                energy_start: stock.energy,
+                solar_input: end.solar_input - stock.solar_input,
+                dissipated: end.dissipated - stock.dissipated,
+                cleared_energy: cleared.energy,
+                energy_end: end.energy,
+                nutrient_start: stock.nutrient,
+                cleared_nutrient: cleared.nutrient,
+                nutrient_end: end.nutrient,
+            }
+        },
+    }
+}
+
+/// What a centre-cell clearance took out of the world: the matter that
+/// leaves as an outflow (reference-modes.md, *Colonisation overshoot*,
+/// *Perturbation*).
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Clearance {
+    pub agents: usize,
+    pub carcasses: usize,
+    /// Energy the removed bodies held: living reserve, structure and
+    /// reproductive reserve, and carcass energy.
+    pub energy: f32,
+    /// Nutrient they held: each agent's free, earmarked and bound nutrient,
+    /// and carcass nutrient.
+    pub nutrient: f32,
+}
+
+/// Clear every agent and carcass standing in the centre cell out of the
+/// world. The cell's available pool keeps its nutrient; the removed matter
+/// is returned as the clearance's outflow.
+pub fn clear_centre(world: &mut World) -> Clearance {
+    let grid = world.nutrient_grid().clone();
+    let centre = grid.cells().len() / 2;
+    let params = world.params().clone();
+    let agents = world.retain_agents(|a| grid.cell_index_for(a.position) != centre);
+    let carcasses = world.retain_carcasses(|c| grid.cell_index_for(c.position) != centre);
+    Clearance {
+        agents: agents.len(),
+        carcasses: carcasses.len(),
+        energy: agents.iter().map(|a| a.energy()).sum::<f32>()
+            + carcasses.iter().map(|c| c.energy).sum::<f32>(),
+        nutrient: agents
+            .iter()
+            .map(|a| a.nutrient_total(&params))
+            .sum::<f32>()
+            + carcasses.iter().map(|c| c.nutrient).sum::<f32>(),
     }
 }
 
@@ -214,6 +431,7 @@ const OBSERVED_KINDS: [EventKind; 4] = [
 /// Observer-side state walked along the run's event log. It keeps no history
 /// in the world: the log is cut back to what it reads and compacted after
 /// every step.
+#[derive(Clone)]
 struct Observer {
     income: IncomeLedger,
     centre: usize,
@@ -370,6 +588,80 @@ pub fn mode1_summary(header: &str, report: &Mode1Report) -> String {
     out
 }
 
+/// The human-readable summary of a paired run: the clearance, each arm's
+/// budget residuals, lifespans and end roster, and the two arms' centre-cell
+/// series side by side as `perturbed / control`.
+pub fn paired_summary(header: &str, report: &PairedReport) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# Reference mode 1 mesocosm: centre clearance against its control\n\n{header}\n"
+    );
+    let c = report.clearance;
+    let _ = writeln!(
+        out,
+        "cleared at tick {}: {} agents, {} carcasses, energy {:.1}, nutrient {:.2} (an outflow)\n",
+        report.fork_tick, c.agents, c.carcasses, c.energy, c.nutrient
+    );
+    let _ = writeln!(
+        out,
+        "| arm | energy residual | nutrient residual | producer deaths | median lifespan | roster P / D / C / none |\n\
+         |---|---:|---:|---:|---:|---|"
+    );
+    for (name, arm) in [
+        ("perturbed", &report.perturbed),
+        ("control", &report.control),
+    ] {
+        let d = LifespanDistribution::of(&arm.producer_lifespans);
+        let r = arm.final_roles;
+        let _ = writeln!(
+            out,
+            "| {name} | {:.3} | {:.4} | {} | {} | {} / {} / {} / {} |",
+            arm.ledger.energy_residual() + 0.0,
+            arm.ledger.nutrient_residual() + 0.0,
+            d.count,
+            d.median,
+            r.producers,
+            r.decomposers,
+            r.consumers,
+            r.no_role
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\n## Centre cell, perturbed / control\n\n\
+         | tick | producers | structure | pool N | carcass N | births | deaths | mean age |\n\
+         |---:|---:|---:|---:|---:|---:|---:|---:|"
+    );
+    let age = |s: &CentreSample| {
+        s.mean_producer_age
+            .map_or_else(|| "-".to_string(), |a| format!("{a:.0}"))
+    };
+    for (p, k) in report.perturbed.samples.iter().zip(&report.control.samples) {
+        let _ = writeln!(
+            out,
+            "| {} | {} / {} | {:.1} / {:.1} | {:.2} / {:.2} | {:.2} / {:.2} | {} / {} | {} / {} | {} / {} |",
+            p.tick,
+            p.producers,
+            k.producers,
+            p.producer_structure + 0.0,
+            k.producer_structure + 0.0,
+            p.available_nutrient + 0.0,
+            k.available_nutrient + 0.0,
+            p.carcass_nutrient + 0.0,
+            k.carcass_nutrient + 0.0,
+            p.producer_births,
+            k.producer_births,
+            p.producer_deaths,
+            k.producer_deaths,
+            age(p),
+            age(k)
+        );
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,7 +674,7 @@ mod tests {
     fn mode1_mesocosm_is_a_five_by_five_cell_torus_of_producer_and_decomposer_founders_with_wear_on()
      {
         let recipe = committed_recipe();
-        let world = mode1_mesocosm(&recipe, 0.01, 7);
+        let world = mode1_mesocosm(&recipe, 0.01, 7, Community::ProducersAndDecomposers);
         let p = world.params();
 
         assert_eq!(
@@ -407,7 +699,12 @@ mod tests {
 
     #[test]
     fn a_run_samples_the_centre_cell_every_interval_and_reads_its_pool_and_carcasses() {
-        let mut world = mode1_mesocosm(&committed_recipe(), 0.01, 3);
+        let mut world = mode1_mesocosm(
+            &committed_recipe(),
+            0.01,
+            3,
+            Community::ProducersAndDecomposers,
+        );
         let report = run_mode1(&mut world, 30, 10);
 
         let ticks: Vec<u64> = report.samples.iter().map(|s| s.tick).collect();
@@ -431,7 +728,12 @@ mod tests {
     /// the income read calls every one a producer, and nothing else is.
     #[test]
     fn centre_producers_are_read_from_income() {
-        let mut world = mode1_mesocosm(&committed_recipe(), 0.01, 5);
+        let mut world = mode1_mesocosm(
+            &committed_recipe(),
+            0.01,
+            5,
+            Community::ProducersAndDecomposers,
+        );
         let report = run_mode1(&mut world, 20, 20);
 
         let centre = world.nutrient_grid().cells().len() / 2;
@@ -453,7 +755,12 @@ mod tests {
     #[test]
     fn producer_deaths_record_their_age_at_death() {
         let ticks = 150;
-        let mut world = mode1_mesocosm(&committed_recipe(), 0.2, 11);
+        let mut world = mode1_mesocosm(
+            &committed_recipe(),
+            0.2,
+            11,
+            Community::ProducersAndDecomposers,
+        );
         let report = run_mode1(&mut world, ticks, 10);
 
         assert!(!report.producer_lifespans.is_empty());
@@ -473,7 +780,7 @@ mod tests {
     fn mean_producer_age_counts_from_the_start_for_founders() {
         let mut recipe = committed_recipe();
         recipe.parameters.reproduction_energy_threshold = f32::MAX;
-        let mut world = mode1_mesocosm(&recipe, 0.01, 5);
+        let mut world = mode1_mesocosm(&recipe, 0.01, 5, Community::ProducersAndDecomposers);
         let report = run_mode1(&mut world, 30, 10);
 
         assert_eq!(report.samples[0].mean_producer_age, None);
@@ -486,9 +793,203 @@ mod tests {
     #[test]
     fn the_same_seed_gives_the_same_report() {
         let recipe = committed_recipe();
-        let run = |seed| run_mode1(&mut mode1_mesocosm(&recipe, 0.05, seed), 60, 10);
+        let run = |seed| {
+            run_mode1(
+                &mut mode1_mesocosm(&recipe, 0.05, seed, Community::ProducersAndDecomposers),
+                60,
+                10,
+            )
+        };
         assert_eq!(run(9), run(9));
         assert_ne!(run(9), run(10));
+    }
+
+    /// Clearing the centre takes every agent and carcass standing in it out of
+    /// the world, leaves its pool and every other cell alone, and records the
+    /// removed energy and nutrient.
+    #[test]
+    fn clearing_the_centre_removes_its_agents_and_carcasses_and_records_them() {
+        let mut world = mode1_mesocosm(
+            &committed_recipe(),
+            0.2,
+            2,
+            Community::ProducersAndDecomposers,
+        );
+        run_mode1(&mut world, 120, 120);
+        let grid = world.nutrient_grid().clone();
+        let centre = grid.cells().len() / 2;
+        let in_centre = |p: (f32, f32)| grid.cell_index_for(p) == centre;
+        let params = world.params().clone();
+        let agents_before = world.agents().to_vec();
+        let carcasses_before = world.carcasses().to_vec();
+        let centre_agents: Vec<_> = agents_before
+            .iter()
+            .filter(|a| in_centre(a.position))
+            .collect();
+        let centre_carcasses: Vec<_> = carcasses_before
+            .iter()
+            .filter(|c| in_centre(c.position))
+            .collect();
+        assert!(!centre_agents.is_empty() && !centre_carcasses.is_empty());
+
+        let cleared = clear_centre(&mut world);
+
+        assert!(world.agents().iter().all(|a| !in_centre(a.position)));
+        assert!(world.carcasses().iter().all(|c| !in_centre(c.position)));
+        assert_eq!(
+            world.agents().len(),
+            agents_before.len() - centre_agents.len()
+        );
+        assert_eq!(
+            world.carcasses().len(),
+            carcasses_before.len() - centre_carcasses.len()
+        );
+        assert_eq!(world.nutrient_grid().cells(), grid.cells());
+        assert_eq!(cleared.agents, centre_agents.len());
+        assert_eq!(cleared.carcasses, centre_carcasses.len());
+        let energy: f32 = centre_agents.iter().map(|a| a.energy()).sum::<f32>()
+            + centre_carcasses.iter().map(|c| c.energy).sum::<f32>();
+        let nutrient: f32 = centre_agents
+            .iter()
+            .map(|a| a.nutrient_total(&params))
+            .sum::<f32>()
+            + centre_carcasses.iter().map(|c| c.nutrient).sum::<f32>();
+        assert!((cleared.energy - energy).abs() <= 1e-3 * energy);
+        assert!((cleared.nutrient - nutrient).abs() <= 1e-3 * nutrient);
+    }
+
+    /// The control arm is the unperturbed mesocosm: its series is the tail of
+    /// one uninterrupted run over the settle and the arm's span.
+    #[test]
+    fn the_control_arm_is_the_unperturbed_run_over_the_same_span() {
+        let recipe = committed_recipe();
+        let (settle, ticks, every) = (60, 60, 10);
+        let paired = run_paired(
+            mode1_mesocosm(&recipe, 0.2, 6, Community::ProducersAndDecomposers),
+            settle,
+            ticks,
+            every,
+        );
+        let mut whole = mode1_mesocosm(&recipe, 0.2, 6, Community::ProducersAndDecomposers);
+        let uninterrupted = run_mode1(&mut whole, settle + ticks, every);
+
+        assert_eq!(paired.fork_tick, settle);
+        let tail = &uninterrupted.samples[(settle / every) as usize..];
+        assert_eq!(paired.control.samples, tail);
+        assert_eq!(paired.control.final_roles, uninterrupted.final_roles);
+        assert!(
+            uninterrupted
+                .producer_lifespans
+                .ends_with(&paired.control.producer_lifespans)
+        );
+        assert_ne!(paired.perturbed.samples, paired.control.samples);
+    }
+
+    /// Each arm's budget closes from the fork, with the clearance as an
+    /// outflow: energy at the fork plus solar input is what remains plus what
+    /// dissipated plus what was cleared, and nutrient at the fork is what
+    /// remains plus what was cleared.
+    #[test]
+    fn both_arms_conserve_energy_and_nutrient_with_the_clearance_as_an_outflow() {
+        let paired = run_paired(
+            mode1_mesocosm(
+                &committed_recipe(),
+                0.2,
+                8,
+                Community::ProducersAndDecomposers,
+            ),
+            80,
+            80,
+            20,
+        );
+        assert!(paired.clearance.energy > 0.0 && paired.clearance.nutrient > 0.0);
+        assert_eq!(
+            paired.perturbed.ledger.cleared_energy,
+            paired.clearance.energy
+        );
+        assert_eq!(
+            paired.perturbed.ledger.cleared_nutrient,
+            paired.clearance.nutrient
+        );
+        assert_eq!(paired.control.ledger.cleared_energy, 0.0);
+        assert_eq!(paired.control.ledger.cleared_nutrient, 0.0);
+        for ledger in [&paired.perturbed.ledger, &paired.control.ledger] {
+            let energy_budget = ledger.energy_start + ledger.solar_input;
+            assert!(
+                ledger.energy_residual().abs() <= 1e-4 * energy_budget,
+                "{ledger:?}"
+            );
+            assert!(
+                ledger.nutrient_residual().abs() <= 1e-4 * ledger.nutrient_start,
+                "{ledger:?}"
+            );
+        }
+    }
+
+    /// The producers-only mesocosm is the full one without its decomposer
+    /// founders: the same producers in the same places.
+    #[test]
+    fn the_producers_only_mesocosm_has_no_decomposer_founders() {
+        let recipe = committed_recipe();
+        let full = mode1_mesocosm(&recipe, 0.2, 4, Community::ProducersAndDecomposers);
+        let bare = mode1_mesocosm(&recipe, 0.2, 4, Community::ProducersOnly);
+
+        let producers = |w: &World| -> Vec<((f32, f32), TraitVector)> {
+            w.agents()
+                .iter()
+                .filter(|a| a.traits.heterotrophy == 0.0)
+                .map(|a| (a.position, a.traits))
+                .collect()
+        };
+        assert!(bare.agents().iter().all(|a| a.traits.heterotrophy == 0.0));
+        assert_eq!(producers(&bare), producers(&full));
+        assert!(full.agents().len() > bare.agents().len());
+    }
+
+    #[test]
+    fn the_same_seed_gives_the_same_paired_report() {
+        let recipe = committed_recipe();
+        let run = |seed| {
+            let world = mode1_mesocosm(&recipe, 0.2, seed, Community::ProducersOnly);
+            run_paired(world, 40, 40, 10)
+        };
+        assert_eq!(run(3), run(3));
+        assert_ne!(run(3), run(4));
+    }
+
+    /// The paired summary sets the arms side by side, one row per sampled
+    /// tick, with the clearance and each arm's budget residuals.
+    #[test]
+    fn the_paired_summary_sets_the_arms_side_by_side() {
+        let world = mode1_mesocosm(
+            &committed_recipe(),
+            0.2,
+            3,
+            Community::ProducersAndDecomposers,
+        );
+        let paired = run_paired(world, 40, 40, 10);
+        let summary = paired_summary("header line", &paired);
+
+        assert!(summary.contains("header line"));
+        assert!(summary.contains(&format!(
+            "cleared at tick 40: {} agents, {} carcasses",
+            paired.clearance.agents, paired.clearance.carcasses
+        )));
+        assert!(summary.contains("energy residual"));
+        let fork = &paired.perturbed.samples[0];
+        let control = &paired.control.samples[0];
+        assert!(summary.contains(&format!(
+            "| 40 | {} / {} |",
+            fork.producers, control.producers
+        )));
+        let rows = summary
+            .lines()
+            .filter(|l| {
+                l.strip_prefix("| ")
+                    .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()))
+            })
+            .count();
+        assert_eq!(rows, paired.control.samples.len());
     }
 
     #[test]
@@ -505,7 +1006,12 @@ mod tests {
     /// reader sees whether the heterotroph founders' line stayed decomposers.
     #[test]
     fn the_world_roster_at_the_end_is_tallied_by_role() {
-        let mut world = mode1_mesocosm(&committed_recipe(), 0.01, 4);
+        let mut world = mode1_mesocosm(
+            &committed_recipe(),
+            0.01,
+            4,
+            Community::ProducersAndDecomposers,
+        );
         let report = run_mode1(&mut world, 40, 10);
 
         let r = report.final_roles;

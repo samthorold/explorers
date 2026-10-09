@@ -7,22 +7,34 @@
 //! producer lifespans over the run, against which the wear rate is
 //! calibrated.
 //!
+//! With `--clear-at T` (#752) it reads the perturbation against its paired
+//! control: it settles the mesocosm to tick `T`, clones it, clears every agent
+//! and carcass from one copy's centre cell (an outflow, booked in each arm's
+//! energy and nutrient ledger), and runs both copies `--ticks` further,
+//! reporting their centre-cell series side by side. `--no-decomposers` builds
+//! the mesocosm from producer founders alone.
+//!
 //! ```text
 //! reference_mode [--recipe PATH] [--ticks N] [--seed S] [--wear-rate W]
-//!                [--sample-every K] [--out PATH]
+//!                [--sample-every K] [--clear-at T] [--no-decomposers]
+//!                [--out PATH]
 //! ```
 //!
 //! Defaults: `recipe.json`, 3000 ticks, seed 1, wear rate
-//! [`PROVISIONAL_WEAR_RATE`], a sample every 25 ticks, artifact
-//! `target/reference-mode/mode1.json` with the human-readable summary beside
-//! it as `.md` (also printed). Deterministic per seed and arguments.
+//! [`PROVISIONAL_WEAR_RATE`], a sample every 25 ticks, no clearance, with
+//! decomposers, artifact `target/reference-mode/mode1.json` (or
+//! `mode1-paired.json` with `--clear-at`) with the human-readable summary
+//! beside it as `.md` (also printed). Deterministic per seed and arguments.
 
 use std::path::PathBuf;
 
-use explorers_search::mesocosm::{PROVISIONAL_WEAR_RATE, mode1_mesocosm, mode1_summary, run_mode1};
+use explorers_search::mesocosm::{
+    Community, PROVISIONAL_WEAR_RATE, mode1_mesocosm, mode1_summary, paired_summary, run_mode1,
+    run_paired,
+};
 use explorers_sim::WorldRecipe;
 
-const USAGE: &str = "usage: reference_mode [--recipe PATH] [--ticks N] [--seed S] [--wear-rate W] [--sample-every K] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--recipe PATH] [--ticks N] [--seed S] [--wear-rate W] [--sample-every K] [--clear-at T] [--no-decomposers] [--out PATH]";
 
 struct Cli {
     recipe: PathBuf,
@@ -30,7 +42,9 @@ struct Cli {
     seed: u64,
     wear_rate: f32,
     sample_every: u64,
-    out: PathBuf,
+    clear_at: Option<u64>,
+    community: Community,
+    out: Option<PathBuf>,
 }
 
 impl Cli {
@@ -41,9 +55,15 @@ impl Cli {
             seed: 1,
             wear_rate: PROVISIONAL_WEAR_RATE,
             sample_every: 25,
-            out: PathBuf::from("target/reference-mode/mode1.json"),
+            clear_at: None,
+            community: Community::ProducersAndDecomposers,
+            out: None,
         };
         while let Some(flag) = args.next() {
+            if flag == "--no-decomposers" {
+                cli.community = Community::ProducersOnly;
+                continue;
+            }
             let value = args.next().ok_or(format!("{flag} needs a value"))?;
             let bad = |e: &dyn std::fmt::Display| format!("{flag}: cannot parse {value:?}: {e}");
             match flag.as_str() {
@@ -52,7 +72,8 @@ impl Cli {
                 "--seed" => cli.seed = value.parse().map_err(|e| bad(&e))?,
                 "--wear-rate" => cli.wear_rate = value.parse().map_err(|e| bad(&e))?,
                 "--sample-every" => cli.sample_every = value.parse().map_err(|e| bad(&e))?,
-                "--out" => cli.out = PathBuf::from(&value),
+                "--clear-at" => cli.clear_at = Some(value.parse().map_err(|e| bad(&e))?),
+                "--out" => cli.out = Some(PathBuf::from(&value)),
                 _ => return Err(format!("unknown flag {flag}")),
             }
         }
@@ -73,21 +94,38 @@ fn main() {
     let recipe: WorldRecipe = serde_json::from_str(&contents)
         .unwrap_or_else(|e| panic!("parse {}: {e}", cli.recipe.display()));
 
-    let mut world = mode1_mesocosm(&recipe, cli.wear_rate, cli.seed);
-    let report = run_mode1(&mut world, cli.ticks, cli.sample_every);
-
+    let mut world = mode1_mesocosm(&recipe, cli.wear_rate, cli.seed, cli.community);
+    let community = match cli.community {
+        Community::ProducersAndDecomposers => "producers and decomposers",
+        Community::ProducersOnly => "producers only",
+    };
     let header = format!(
-        "recipe {}, seed {}, {} ticks, wear rate {}, sample every {}",
+        "recipe {}, seed {}, {} ticks, wear rate {}, sample every {}, {community}",
         cli.recipe.display(),
         cli.seed,
         cli.ticks,
         cli.wear_rate,
         cli.sample_every
     );
-    let summary = mode1_summary(&header, &report);
+    let (summary, report, default_out) = match cli.clear_at {
+        None => {
+            let report = run_mode1(&mut world, cli.ticks, cli.sample_every);
+            let summary = mode1_summary(&header, &report);
+            (summary, serde_json::to_value(report), "mode1.json")
+        }
+        Some(settle) => {
+            let report = run_paired(world, settle, cli.ticks, cli.sample_every);
+            let header = format!("{header}, settled to tick {settle} then cleared");
+            let summary = paired_summary(&header, &report);
+            (summary, serde_json::to_value(report), "mode1-paired.json")
+        }
+    };
     print!("{summary}");
 
-    if let Some(dir) = cli.out.parent() {
+    let out = cli
+        .out
+        .unwrap_or_else(|| PathBuf::from("target/reference-mode").join(default_out));
+    if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).expect("create the artifact directory");
     }
     let artifact = serde_json::json!({
@@ -96,10 +134,11 @@ fn main() {
         "ticks": cli.ticks,
         "wear_rate": cli.wear_rate,
         "sample_every": cli.sample_every,
-        "report": report,
+        "clear_at": cli.clear_at,
+        "community": cli.community,
+        "report": report.expect("the report serialises"),
     });
-    std::fs::write(&cli.out, serde_json::to_string(&artifact).unwrap())
-        .expect("write the artifact");
-    std::fs::write(cli.out.with_extension("md"), &summary).expect("write the summary");
-    eprintln!("wrote {} and its .md summary", cli.out.display());
+    std::fs::write(&out, serde_json::to_string(&artifact).unwrap()).expect("write the artifact");
+    std::fs::write(out.with_extension("md"), &summary).expect("write the summary");
+    eprintln!("wrote {} and its .md summary", out.display());
 }

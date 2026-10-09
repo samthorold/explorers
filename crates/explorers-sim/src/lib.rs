@@ -1352,6 +1352,16 @@ impl World {
         self.carcasses.push(carcass);
     }
 
+    /// Remove every carcass the predicate rejects and hand them back, the
+    /// carcass counterpart of [`World::retain_agents`] (#752: clearing a
+    /// patch). The removed carcasses' energy and nutrient leave the world with
+    /// them; the caller accounts for them as an outflow.
+    pub fn retain_carcasses<F: FnMut(&Carcass) -> bool>(&mut self, mut keep: F) -> Vec<Carcass> {
+        let (kept, removed) = self.carcasses.drain(..).partition(|c| keep(c));
+        self.carcasses = kept;
+        removed
+    }
+
     pub fn step(&mut self) {
         use energy_ledger::EnergyEndpoint;
 
@@ -4343,6 +4353,37 @@ mod tests {
         let removed_max = removed.iter().map(|a| a.id).max().unwrap();
         world.add_agent(removed[0].clone());
         assert!(world.agents().last().unwrap().id > max_id.max(removed_max));
+    }
+
+    /// `retain_carcasses` removes the carcasses the predicate rejects and
+    /// hands them back, leaving the rest in place.
+    #[test]
+    fn retain_carcasses_removes_the_rejected_and_returns_them() {
+        let recipe: WorldRecipe = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../scenarios/example10_predator_prey_hopf.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut world = World::from_recipe(&recipe, 3);
+        assert!(world.carcasses().is_empty());
+        let traits = world.agents()[0].traits;
+        for (id, x) in [(1, -5.0), (2, 5.0), (3, 6.0)] {
+            world.add_carcass(Carcass {
+                id,
+                position: (x, 0.0),
+                energy: 10.0,
+                nutrient: 2.0,
+                traits,
+            });
+        }
+        let removed = world.retain_carcasses(|c| c.position.0 < 0.0);
+        let removed_ids: Vec<u64> = removed.iter().map(|c| c.id).collect();
+        assert_eq!(removed_ids, vec![2, 3]);
+        let kept: Vec<u64> = world.carcasses().iter().map(|c| c.id).collect();
+        assert_eq!(kept, vec![1]);
     }
 
     #[test]
