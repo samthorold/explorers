@@ -95,18 +95,20 @@ fn sample_keys_stay_draws_over_the_sample_box() {
 const COMMITTED_ATLAS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../atlas.json");
 
 /// The committed atlas (#687, #719's seed-42 search) was searched under
-/// genesis's box since #716 and records it: the 33-coordinate untaxed box,
-/// with no scales recorded, and the leaching rate held outside it at
-/// `λ = 0.0025`, which it records as `fixed`. Every `atlas:i` decodes over
-/// that box at that rate, with `c_AH = 0`.
+/// genesis's box from #716 until #773 and records it: the 33-coordinate
+/// untaxed box, with no scales recorded, and the leaching rate held outside
+/// it at `λ = 0.0025`, which it records as `fixed`. Every `atlas:i` decodes
+/// over that recorded box at that rate, with `c_AH = 0`. It predates the
+/// bounded box genesis searches since #773, so a reader under that box is
+/// refused.
 #[test]
 fn the_committed_atlas_records_its_33_dimension_box_and_fixed_leaching_rate() {
     let text = std::fs::read_to_string(COMMITTED_ATLAS).unwrap();
     let read = read_atlas_units(std::path::Path::new(COMMITTED_ATLAS));
-    assert_eq!(read.search_box(), default_ranges().as_slice());
     assert_eq!(read.search_box(), untaxed_ranges().as_slice());
     assert_eq!(read.fixed(), &FixedParameters::genesis());
-    assert!(read.check_search_box(&default_ranges()).is_ok());
+    assert!(read.check_search_box(&untaxed_ranges()).is_ok());
+    assert!(read.check_search_box(&default_ranges()).is_err());
     assert!(read.check_search_box(&leached_ranges()).is_err());
     assert!(read.check_search_box(&taxed_ranges()).is_err());
     // #719's atlas, the seed-42 one read in `719-fixed-leaching-atlas.md`;
@@ -121,7 +123,7 @@ fn the_committed_atlas_records_its_33_dimension_box_and_fixed_leaching_rate() {
         let world = read.decode(i);
         assert_eq!(
             world,
-            decode(&unit, &default_ranges(), &FixedParameters::genesis()),
+            decode(&unit, &untaxed_ranges(), &FixedParameters::genesis()),
             "atlas:{i}"
         );
         assert_eq!(world.0.cross_trait_cost, 0.0, "atlas:{i}");

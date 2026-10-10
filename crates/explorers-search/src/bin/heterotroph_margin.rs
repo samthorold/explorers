@@ -527,7 +527,7 @@ mod tests {
         );
         assert_eq!(s.margins[0][4], row.line.best.margin);
         assert_eq!(s.x_values[4], 0.9);
-        assert_eq!(s.y_values[0], 0.1);
+        assert_eq!(s.y_values[0], 0.36);
     }
 
     /// Fractions are over finished seeds (a timed-out seed is dropped), as

@@ -94,7 +94,10 @@ pub fn viable_baseline() -> WorldParameters {
 }
 
 /// Strategy over the searched `WorldParameters` dimensions (ranges copied from
-/// `explorers-search::default_ranges()`, indices 0..=16, 24..=25 and 28..=32),
+/// `explorers-search::untaxed_ranges()`, indices 0..=16, 24..=25 and 28..=32;
+/// the two trophic-efficiency dims keep its ranges, wider than the bound
+/// `default_ranges()` searches since #773, so the stepper is checked beyond
+/// where genesis looks),
 /// plus the cross-trait cost over the range it is searched on if it comes out
 /// of reserve (`taxed_ranges()`, index 33), the recognition distance, spanning
 /// the kin-blind limit to a wide one, and the leaching rate (#698), from off
