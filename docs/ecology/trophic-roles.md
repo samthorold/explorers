@@ -62,6 +62,31 @@ Most dead organic matter is polymer: cellulose, lignin, protein, chitin. These m
 
 Hyphae that grow into the substrate, high surface area and enzymes matched to particular substrates all reduce these costs. These are the growth forms of fungi and bacteria described above.
 
+### How efficiently decomposers use dead tissue
+
+A decomposer turns tens of percent of the dead plant tissue it takes up into its own biomass, not a few percent.
+- **Microbes.** Microbial carbon-use efficiency (CUE) is the fraction of absorbed carbon that becomes biomass rather than being respired.
+  - Thermodynamics caps it at about 0.6.
+  - Communities limited by several resources at once are expected to approach about 0.3.
+  - Measured means run from about 0.26 to 0.55, depending largely on how CUE is estimated (Sinsabaugh et al. 2013).
+  - A later global soil synthesis reports means of 0.34–0.59, again split by method (Hu et al.).
+- **Animal detritivores.** Detritivores such as isopods and millipedes assimilate a smaller share of the litter they eat, about 15–30 %. That share is the herbivore range for woody material (see [energy flow](energy-flow.md)). The rest leaves as faeces, which microbes then decompose.
+
+**Litter quality mainly sets the rate.**
+- Recalcitrant litter, with high lignin:N, decomposes *slowly* (see [fungi](fungi.md)), but it does not drive the decomposer's efficiency toward zero.
+- What the litter's nutrient poverty changes is how much carbon the decomposer respires. Decomposers adjust their CUE to the litter's C:N. They respire more carbon on poor litter so that they release nutrient earlier (see [stability and resilience](stability-and-resilience.md), on Manzoni et al. 2008). Inferred CUE also rises over the decomposition of an N-poor litter cohort as the decomposer's N limitation eases (Manzoni 2017).
+- Standard decomposition data cannot tell apart the ways microbes cope with poor litter: flexible CUE, targeted enzymes, changed cell composition and nutrient retention (Manzoni et al. 2021).
+
+**Why the specialist escapes the dissimilarity penalty.**
+- For a gut digester, efficiency falls as the food grows chemically unlike the consumer. Carnivores assimilate about 80 % of what they eat, herbivores 20–50 %.
+- A decomposer digests outside its body with enzymes matched to its substrate. That is what frees it from this penalty.
+- It pays instead in the costs listed above: enzymes it must build, products that diffuse away, and neighbours that absorb what it released. These are an overhead and a limit on rate, not a near-total loss.
+
+*Evidence quality.*
+- **The microbial CUE range is well supported.** It rests on several syntheses, and the method dependence is itself a finding of those syntheses. The figures here come from abstracts and secondary summaries; the papers' own tables were not read.
+- **The detritivore figure is moderate.** It rests on a few species, an isopod value of about 30 % and the herbivore woody-tissue range. A 456-measurement meta-analysis of isopod and millipede feeding was found, but its pooled assimilation value was not read.
+- **The domain does not say whether a decomposer's efficiency is *independent* of how dissimilar its substrate is.** It says only that the efficiency is far higher than a gut digester's on the same food.
+
 **Producers do not mineralise detritus themselves.** Plants take up nutrient mainly in mineral form: ammonium, nitrate and phosphate (Chapin, Matson & Vitousek 2011). Some plants also take up small organic molecules such as amino acids directly (Näsholm et al. 1998). But depolymerising dead matter into those small molecules is microbial work (Schimel & Bennett 2004). Herbivores take only 5–15 % of terrestrial net primary production (Cyr & Pace 1993). Most of the rest enters the detrital pathway, which runs through microbes and detritivores. Where a plant draws on organic nutrient at scale, it does so through a fungal partner (see [fungi](fungi.md), *Mycorrhizal strategy*), not by digesting dead matter itself.
 
 The distinction is not binary. Many organisms span both categories. Vultures are consumers that specialize on dead animals. Parasites consume living tissue from within. Detritivorous invertebrates (earthworms, millipedes, isopods) fragment dead matter, increasing the surface area available to microbial decomposers — a processing role rather than a purely metabolic one. The boundary between "consumer" and "decomposer" is better understood as a continuum of target states than as a categorical divide. The same machinery also does not stop at the species boundary. The nearest living target is often a conspecific, and often a relative. How common that is, and how organisms avoid eating their own kin, is covered in [cannibalism and kin](cannibalism-and-kin.md).
@@ -129,6 +154,9 @@ The roles are emergent properties of the flow network, not innate properties of 
 - Givnish, T.J., Burkhardt, E.L., Happel, R.E. & Weintraub, J.D. (1984). Carnivory in the bromeliad *Brocchinia reducta*, with a cost/benefit model for the general restriction of carnivorous plants to sunny, moist, nutrient-poor habitats. *American Naturalist* 124(4): 479–497.
 - Gorham, E. (1991). Northern peatlands: role in the carbon cycle and probable responses to climatic warming. *Ecological Applications* 1(2): 182–195.
 - Hobbie, S.E. (1992). Effects of plant species on nutrient cycling. *Trends in Ecology and Evolution* 7(10): 336–339.
+- Hu, J. et al. Microbial carbon use efficiency and growth rates in soil: global patterns and drivers (VU Amsterdam research record; journal, year and pages not verified).
+- Manzoni, S. (2017). Flexible carbon-use efficiency across litter types and during decomposition partly compensates nutrient imbalances — results from analytical stoichiometric models. *Frontiers in Microbiology* 8: 661.
+- Manzoni, S., Chakrawal, A., Spohn, M. & Lindahl, B.D. (2021). Modeling microbial adaptations to nutrient limitation during litter decomposition. *Frontiers in Forests and Global Change* 4: 686945.
 - Näsholm, T., Ekblad, A., Nordin, A., Giesler, R., Högberg, M. & Högberg, P. (1998). Boreal forest plants take up organic nitrogen. *Nature* 392: 914–916.
 - Nygaard, K. & Tobiesen, A. (1993). Bacterivory in algae: a survival strategy during nutrient limitation. *Limnology and Oceanography* 38(2): 273–279.
 - Paine, R.T. (1966). Food web complexity and species diversity. *American Naturalist* 100(910): 65–75.
@@ -136,6 +164,7 @@ The roles are emergent properties of the flow network, not innate properties of 
 - Schimel, J.P. & Weintraub, M.N. (2003). The implications of exoenzyme activity on microbial carbon and nitrogen limitation in soil: a theoretical model. *Soil Biology and Biochemistry* 35(4): 549–563.
 - Schmitz, O.J., Krivan, V. & Ovadia, O. (2004). Trophic cascades: the primacy of trait-mediated indirect effects. *Ecology Letters* 7(2): 153–163.
 - Schmitz, O.J. et al. (2010). Predator control of ecosystem nutrient dynamics. *Ecology Letters* 13(10): 1199–1209.
+- Sinsabaugh, R.L., Manzoni, S., Moorhead, D.L. & Richter, A. (2013). Carbon use efficiency of microbial communities: stoichiometry, methodology and modelling. *Ecology Letters* 16(7): 930–939.
 - Smith, S.E. & Read, D.J. (2008). *Mycorrhizal Symbiosis*. 3rd ed. Academic Press.
 - Sterner, R.W. & Elser, J.J. (2002). *Ecological Stoichiometry: The Biology of Elements from Molecules to the Biosphere*. Princeton University Press.
 - Stoecker, D.K. (1998). Conceptual models of mixotrophy. *Journal of Eukaryotic Microbiology* 45(3): 255–261.
