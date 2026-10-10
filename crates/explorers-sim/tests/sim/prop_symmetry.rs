@@ -14,11 +14,12 @@ use support::{WorldCase, world_case, world_case_with_size_scaled_uptake};
 
 /// Relative tolerance for *summed* world totals under a permutation. The
 /// execution model commits every RNG-derived quantity and every agent's
-/// identity as exactly order-invariant, but explicitly allows the coordinated
-/// non-RNG phases (light competition, nutrient uptake) to accumulate their
-/// per-neighbour sums in slice order — so totals built from them may differ
-/// by rounding (execution-model.md, "Re-seeding is a one-time event"). The
-/// drain pass is id-ordered (#452), since its rounding feeds a discontinuity.
+/// identity as exactly order-invariant, but allows coordinated non-RNG sums
+/// that run in slice order to differ by rounding (execution-model.md,
+/// "Re-seeding is a one-time event"). The drain pass (#452), light
+/// competition, nutrient uptake and carcass leaching (#780) are id-ordered,
+/// since movement reads the stores they feed and its positions feed every
+/// discontinuity; the stores are still compared to a tolerance here.
 /// 1e-5 is ~100 ulps: ample for ≤ 20 ticks of a ≤ 40-agent world, and far
 /// below any real order leak (see #451, which showed up as a position
 /// difference of ~1e-2 after one tick).
