@@ -3,7 +3,23 @@
 **Status: measurement (2026-10-10). The mode-1 mesocosm (`explorers_search::mesocosm`) now runs
 trophic transfer inside flow 7's domain bound: the recipe's `base_trophic_efficiency` (0.78) and
 `trophic_distance_decay` 0.60 (`MESOCOSM_TROPHIC_DISTANCE_DECAY`), against the recipe's 2.38.
-#764's pre-registered reading (#771) was run on it. Verdict: row 2 of the table.**
+#764's pre-registered reading (#771) was run on it. Verdict: ambiguous between rows 2 and 3 of the
+table (see the dated reading below, which supersedes the row-2 verdict in the TL;DR).**
+
+> **Orchestrator's reading (2026-10-10): ambiguous between row 2 and row 3.** The operationalisation
+> below counted persistence by income role over all agents, and under it the result is row 2. But
+> the table's rows are about *decomposers founded at the pure vertex*, and that line died out within
+> 50 ticks in all 5 seeds, which is row 3's description ("they still die out in at least 3 of 5
+> seeds"). The decomposers that persist are a different population: producer-line mixotrophs that
+> took up the litter from about tick 100. Row 2's reading, *the residual inversion matters*, is the
+> case flow 7 names for bringing out the trait-dependent kernel: mixotrophs taking the decomposer
+> income *from specialists at the vertex*. That did not happen here. The specialists were gone
+> before the mixotrophs had drained more than a few percent of the litter, so there was no
+> competition for the inversion to decide. The operationalisation therefore does not fit the table
+> cleanly. Under #772's hard stop, the result is recorded as **ambiguous**, and the #764 work stops
+> here. No threshold, decay, founder phenotype or other parameter was changed. Which row the owner
+> reads this as, and what follows, is the owner's call.
+
 
 ## TL;DR
 
