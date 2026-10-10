@@ -436,6 +436,26 @@ mod tests {
         assert_eq!(refused.len(), 1, "{refused:?}");
     }
 
+    /// #773: a checkpoint from a search under the untaxed box, genesis's box
+    /// before its trophic-efficiency coordinates were bounded, is refused by
+    /// a search under the bounded box: the boxes have the same coordinates in
+    /// the same order, and the stamp tells them apart by those two ranges.
+    #[test]
+    fn a_checkpoint_from_the_box_before_the_trophic_bound_is_refused() {
+        let untaxed = QdConfig {
+            ranges: crate::search::untaxed_ranges(),
+            ..tiny()
+        };
+        let refused = Stamp::of(&untaxed, 42).mismatches(&Stamp::of(&tiny(), 42));
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(refused[0].starts_with("ranges"), "{refused:?}");
+        assert!(
+            refused[0].contains("base_trophic_efficiency"),
+            "{refused:?}"
+        );
+        assert!(refused[0].contains("trophic_distance_decay"), "{refused:?}");
+    }
+
     /// #716: a checkpoint from a search with `λ` in its box (#686's, #711's)
     /// is refused by a search under genesis's box, which holds `λ` fixed
     /// outside it; so is one written before #716 under the untaxed box, whose

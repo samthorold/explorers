@@ -187,15 +187,43 @@ impl FixedParameters {
     }
 }
 
-/// The full box (#716): the 33-coordinate untaxed box ([`untaxed_ranges`]).
-/// Neither the cross-trait cost `c_AH` (trade-off #5) nor the leaching rate
-/// `λ` is in it: genesis selects on neither, and a dimension the search does
-/// not select on only adds noise. `c_AH` keeps its default 0; `λ` is held at
-/// [`GENESIS_LEACHING_RATE`] outside the box, which the search records as one
-/// of its [`FixedParameters`] (world-rules.md, *Carcass energy decays only
-/// through agents; carcass nutrient leaches*, *The rate*).
+/// The full box (#716, #773): the 33-coordinate bounded box
+/// ([`bounded_ranges`]). Neither the cross-trait cost `c_AH` (trade-off #5)
+/// nor the leaching rate `λ` is in it: genesis selects on neither, and a
+/// dimension the search does not select on only adds noise. `c_AH` keeps its
+/// default 0; `λ` is held at [`GENESIS_LEACHING_RATE`] outside the box, which
+/// the search records as one of its [`FixedParameters`] (world-rules.md,
+/// *Carcass energy decays only through agents; carcass nutrient leaches*,
+/// *The rate*).
 pub fn default_ranges() -> Vec<ParameterRange> {
+    bounded_ranges()
+}
+
+/// The box genesis searches since #773: the untaxed box ([`untaxed_ranges`])
+/// with its two trophic-efficiency coordinates cut to flow 7's domain bounds,
+/// both linear: `base_trophic_efficiency` over `[0.6, 0.9]` and
+/// `trophic_distance_decay` over `[0.36, 0.98]` (world-rules.md flow 7, *What
+/// the two parameters stand for, and their domain bounds*). A wider decay
+/// would let the search find worlds where a specialist decomposer cannot live
+/// on plant litter. The untaxed box keeps its wider ranges: it is the box the
+/// committed atlas (#687) was searched under and records.
+pub fn bounded_ranges() -> Vec<ParameterRange> {
     untaxed_ranges()
+        .into_iter()
+        .map(|r| match r.name.as_str() {
+            "base_trophic_efficiency" => ParameterRange {
+                min: 0.6,
+                max: 0.9,
+                ..r
+            },
+            "trophic_distance_decay" => ParameterRange {
+                min: 0.36,
+                max: 0.98,
+                ..r
+            },
+            _ => r,
+        })
+        .collect()
 }
 
 /// The box #686's and #711's atlases were searched under (#701): the untaxed
@@ -239,9 +267,11 @@ pub fn taxed_ranges() -> Vec<ParameterRange> {
 }
 
 /// The full box as it stood before the cross-trait cost joined it (#669),
-/// and again since #716: 33 coordinates, with mixotrophy untaxed
-/// (`c_AH = 0`). Its leaching rate is the one held fixed outside it:
-/// [`GENESIS_LEACHING_RATE`] for a search since #716, and the stepper's
+/// and again from #716 until #773 bounded its trophic-efficiency coordinates
+/// ([`bounded_ranges`]): 33 coordinates, with mixotrophy untaxed
+/// (`c_AH = 0`). The committed atlas (#687) was searched under it and
+/// records it. Its leaching rate is the one held fixed outside it:
+/// [`GENESIS_LEACHING_RATE`] for a search from #716 to #773, and the stepper's
 /// `λ = 0` for #663's atlas (committed until #677), which was searched under
 /// this box and records no fixed rate.
 pub fn untaxed_ranges() -> Vec<ParameterRange> {
@@ -499,7 +529,9 @@ pub const NARROWED_BAND_FRACTION: f64 = 0.25;
 /// [`FULL_WIDTH_DIMS`] shrunk to a band of [`NARROWED_BAND_FRACTION`] of its
 /// full span around its [`band_centre`]. A band that would cross a full-range
 /// bound is slid back inside it, so every band keeps its full width, lies
-/// within the full range, and contains its centre.
+/// within the full range, and contains its centre, or meets it at the nearest
+/// bound when the centre lies outside the full range
+/// (`trophic_distance_decay`'s, since #773).
 ///
 /// The raw `decode` coordinates are kept (the held-out check rejects a
 /// reduced decode); only the box they span changes. A unit vector therefore
@@ -530,7 +562,7 @@ pub fn narrowed_ranges() -> Vec<ParameterRange> {
 /// | dim | centre |
 /// |---|---|
 /// | `base_trophic_efficiency` | 0.8 |
-/// | `trophic_distance_decay` | 1.0 |
+/// | `trophic_distance_decay` | 1.0 (a legacy centre above the full range's top since #773 bounded it at 0.98, so the band is its top quarter, `[0.825, 0.98]`; kept because it is the baseline's value, which the stepper's serde default agrees with (#768), and moving it would change what that default names) |
 /// | `reproduction_efficiency` | 0.7 |
 /// | `base_metabolic_rate` | 0.3 |
 /// | `movement_cost_coefficient` | 0.05 |
@@ -951,7 +983,10 @@ mod tests {
     }
 
     /// #559: every other dim is a band of `NARROWED_BAND_FRACTION` of its
-    /// full span, inside its full bounds, containing its centre.
+    /// full span, inside its full bounds, containing its centre. A centre
+    /// outside the full range (`trophic_distance_decay`'s legacy 1.0 since
+    /// #773 bounded it at 0.98) is met at the nearest bound: the band is the
+    /// range's top or bottom quarter.
     #[test]
     fn every_other_dim_is_a_band_around_its_centre() {
         let full = default_ranges();
@@ -964,7 +999,7 @@ mod tests {
         // 22 dims at #559, plus the uptake structure exponent (#653).
         assert_eq!(shrunk.len(), 23);
         for (n, f) in shrunk {
-            let centre = band_centre(f);
+            let centre = band_centre(f).clamp(f.min, f.max);
             assert!(f.min <= n.min && n.max <= f.max, "{} outside", f.name);
             assert!(
                 n.min <= centre && centre <= n.max,
@@ -1167,15 +1202,42 @@ mod tests {
         }
     }
 
-    /// #716: the default box is the 33-coordinate untaxed box again: neither
-    /// the cross-trait cost nor the leaching rate is a coordinate of it.
+    /// #716, #773: the default box is the 33-coordinate untaxed box with its
+    /// trophic-efficiency coordinates bounded: neither the cross-trait cost
+    /// nor the leaching rate is a coordinate of it, and every other range is
+    /// the untaxed box's.
     #[test]
-    fn the_default_box_is_the_untaxed_box_without_a_leaching_rate() {
+    fn the_default_box_is_the_bounded_untaxed_box_without_a_leaching_rate() {
         let ranges = default_ranges();
-        assert_eq!(ranges, untaxed_ranges());
+        assert_eq!(ranges, bounded_ranges());
         assert_eq!(ranges.len(), 33);
+        let trophic = ["base_trophic_efficiency", "trophic_distance_decay"];
+        for (r, u) in ranges.iter().zip(untaxed_ranges()) {
+            assert_eq!(r.name, u.name);
+            if trophic.contains(&r.name.as_str()) {
+                assert_ne!((r.min, r.max), (u.min, u.max), "{}", r.name);
+            } else {
+                assert_eq!(*r, u);
+            }
+        }
         assert!(!ranges.iter().any(|r| r.name == "leaching_rate"));
         assert!(!ranges.iter().any(|r| r.name == "cross_trait_cost"));
+    }
+
+    /// #773: the full box ranges the two trophic-efficiency coordinates over
+    /// flow 7's domain bounds, linearly (world-rules.md flow 7, *What the two
+    /// parameters stand for, and their domain bounds*).
+    #[test]
+    fn the_full_box_ranges_the_trophic_coordinates_over_the_domain_bounds() {
+        let ranges = default_ranges();
+        let range = |name: &str| ranges.iter().find(|r| r.name == name).unwrap().clone();
+        let base = range("base_trophic_efficiency");
+        assert_eq!((base.min, base.max, base.scale), (0.6, 0.9, Scale::Linear));
+        let decay = range("trophic_distance_decay");
+        assert_eq!(
+            (decay.min, decay.max, decay.scale),
+            (0.36, 0.98, Scale::Linear)
+        );
     }
 
     /// #716: every world genesis decodes from the default box runs at the
