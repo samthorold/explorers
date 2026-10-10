@@ -65,6 +65,16 @@ Key system-level distinctions among saprotrophs:
 - **Brown-rot fungi** decompose cellulose but leave lignin largely intact, producing a brown, crumbly residue that contributes to stable soil organic matter (humus). They create a flow from labile carbon to the atmosphere while routing recalcitrant carbon into long-term soil stocks.
 - **Soft-rot fungi** decompose cellulose in high-moisture, low-oxygen environments where white and brown-rot fungi are less competitive — a niche-specific decomposition pathway.
 
+**How a saprotroph reaches its litter: by growth, not travel.** A saprotrophic fungus does not move to its food. It grows into the litter and through the substrate between pieces of it.
+- **Resource-unit restricted or not.** Some saprotrophs stay inside the piece of litter they colonised and spread between pieces only by spores. Cord-forming basidiomycetes are *non-resource-unit restricted*: they grow out of one resource in search of others, and their cord systems join many pieces of litter into one long-lived network at the soil–litter interface. These systems span several square metres up to hectares and persist for years (Boddy 1999).
+- **Sit-and-wait and seek-and-find.** A cord system can lie as a standing network on which new litter lands ("sit and wait"), or grow out to find it ("seek and find"). Most do both at once (Boddy 1999).
+- **Extent grows with biomass, sublinearly.** A two-dimensional mycelium's biomass scales with its radius as `M ∝ R^D`, where `D` is the mass fractal dimension (Bolton & Boddy 1993). Slow, diffuse search fronts that fill space have `D` close to 2. Open systems of fast-extending cords have lower `D`. *Phanerochaete velutina* systems measure about 1.7 (Bretherton et al. 2006). So reach grows as `M^(1/D)`, between `M^0.5` for a filled disc and about `M^0.6` for a cord system. A larger mycelium touches more ground, but less than in proportion to its biomass.
+- **Extent follows the food.** Radial extension and biomass production respond to the size and quality of the resources a system meets (Donnelly & Boddy 1997). Mycelium on ground with no new resource regresses, and its biomass is redeployed (see *How decomposers find food* in [spatial ecology](spatial-ecology.md)).
+
+- **Reach does not decide diet; defence does.** The largest known mycelium, an *Armillaria ostoyae* clone in Oregon's Blue Mountains, covers about 965 ha. Its rhizomorphs carry food across poor ground between stumps, and where one meets a susceptible conifer it enters under the bark, kills the cambium and feeds on the wood. So it is a pathogen as well as a saprotroph. Most large cord-forming saprotrophs, such as *Phanerochaete* and *Hypholoma*, live on dead wood and litter, though their networks span metres. What keeps a saprotroph off living plants is the plant's defence against colonisation of living tissue, which a necrotroph overcomes. The size of the network does not decide it.
+
+*Evidence quality.* The cord-system picture rests on one research group's microcosm and field work, read here from abstracts, reviews and reference lists, not from the papers' full texts. The fractal measurements come from two-dimensional microcosms. The domain gives the **form** of the scaling: sublinear, with an exponent between 0.5 and 0.6. It gives the **magnitude** only as an order: a non-unit-restricted saprotroph's network spans many pieces of litter, and a unit-restricted one spans one. It gives no figure for reach per unit of biomass that would carry over to another world's units. The *Armillaria* figures come from encyclopedic and popular summaries, whose mass estimates conflict. That defence, not reach, separates a saprotroph from a pathogen is standard plant pathology, recalled rather than read from a source here.
+
 ### Mycorrhizal strategy
 
 **Flow position:** Producer carbon stock --> fungal biomass; soil nutrient stock --> producer nutrient uptake (mediated by fungi).
@@ -148,9 +158,13 @@ The overall pattern: removing fungi doesn't eliminate energy from the system —
 
 - Bagchi, R. et al. (2014). Pathogens and insect herbivores drive rainforest plant diversity and composition. *Nature*, 506, 85-88.
 - Bebber, D.P. et al. (2007). Biological solutions to transport network design. *Proceedings of the Royal Society B*, 274, 2307-2315.
+- Boddy, L. (1999). Saprotrophic cord-forming fungi: meeting the challenge of heterogeneous environments. *Mycologia*, 91, 13-32.
+- Bolton, R.G. & Boddy, L. (1993). Characterisation of the spatial aspects of foraging mycelial cord systems using fractal geometry. *Mycological Research*, 97, 762-768.
 - Boswell, G.P. et al. (2007). Functional consequences of nutrient translocation in mycelial fungi. *Journal of Theoretical Biology*, 245, 28-41.
 - Brabcova, V. et al. (2024). Variation of carbon, nitrogen and phosphorus content in fungi reflects their ecology and phylogeny. *bioRxiv* / in press.
+- Bretherton, S., Tordoff, G.M., Jones, T.H. & Boddy, L. (2006). Compensatory growth of *Phanerochaete velutina* mycelial systems grazed by *Folsomia candida* (Collembola). *FEMS Microbiology Ecology*, 58, 33-40.
 - Burdon, J.J. & Laine, A.-L. (2019). *Evolutionary Dynamics of Plant-Pathogen Interactions*. Cambridge University Press.
+- Donnelly, D.P. & Boddy, L. (1997). Resource acquisition by the mycelial-cord-former *Stropharia caerulea*: effect of resource quantity and quality. (Journal, volume and pages not verified.)
 - Falconer, R.E. et al. (2005). Biomass recycling and the origin of phenotype in fungal mycelia. *Proceedings of the Royal Society B*, 272, 1727-1734.
 - Fellbaum, C.R. et al. (2014). Fungal nutrient allocation in common mycorrhizal networks is regulated by the carbon source strength of individual host plants. *New Phytologist*, 203, 646-656.
 - Floudas, D. et al. (2012). The Paleozoic origin of enzymatic lignin decomposition reconstructed from 31 fungal genomes. *Science*, 336, 1715-1719.
