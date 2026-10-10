@@ -1622,6 +1622,36 @@ pub fn move_agents(
     run_seed: u64,
     tick: u64,
 ) -> MoveResult {
+    move_agents_with(
+        agents,
+        carcasses,
+        grid,
+        params,
+        run_seed,
+        tick,
+        CarcassScan::Grid,
+    )
+}
+
+/// How `move_agents` finds the carcasses within an agent's sensing range.
+/// Only the grid exists outside tests; the brute-force scan it replaced (#785)
+/// is kept as the test-only reference the grid must match bit for bit.
+#[derive(Clone, Copy)]
+enum CarcassScan {
+    Grid,
+    #[cfg(test)]
+    BruteForce,
+}
+
+fn move_agents_with(
+    agents: &mut [Agent],
+    carcasses: &[Carcass],
+    grid: &SpatialGrid,
+    params: &WorldParameters,
+    run_seed: u64,
+    tick: u64,
+    scan: CarcassScan,
+) -> MoveResult {
     let mut events = Vec::new();
     let mut total_dissipated = 0.0_f32;
     let mut sensing_throughput = vec![0.0_f32; agents.len()];
@@ -1638,6 +1668,24 @@ pub fn move_agents(
     // so their attraction terms sum in a canonical order too.
     let mut carcasses_by_id: Vec<&Carcass> = carcasses.iter().collect();
     carcasses_by_id.sort_unstable_by_key(|c| c.id);
+    // Carcasses within sensing range come from a spatial grid rather than a
+    // scan of the whole pile, which grows to thousands (#785). Each carcass is
+    // keyed by its index in `carcasses_by_id`, so sorting a query's hits
+    // ascending visits them in id order, exactly as the scan did; and
+    // `query_radius` keeps a candidate on `toroidal_distance(center, pos) <=
+    // radius`, the scan's own predicate with the same arguments.
+    //
+    // Cell size: the grid is fast when a cell is about one sensing range, so
+    // it is the mean sensing range of this tick's mobile agents (~2 for a
+    // mesocosm founder, against the ~8.5 of the living-agent grid, which is
+    // sized by the light radius). It is floored at 1/64 of the extent to bound
+    // the cell count, and only changes speed: the hits and their order do not
+    // depend on it.
+    let carcass_grid = match scan {
+        CarcassScan::Grid => Some(carcass_grid(agents, &carcasses_by_id, params)),
+        #[cfg(test)]
+        CarcassScan::BruteForce => None,
+    };
 
     for i in 0..agents.len() {
         let eff_mobility = agents[i].effective_trait_with_steepness(2, k);
@@ -1687,12 +1735,30 @@ pub fn move_agents(
                 detected_count += 1.0;
             }
 
-            // Detect nearby carcasses
-            for carcass in &carcasses_by_id {
-                let dist = crate::toroidal_distance(agents[i].position, carcass.position, extent);
-                if dist > eff_sensing {
-                    continue;
+            // Detect nearby carcasses, in ascending id order.
+            let in_range: Vec<usize> = match &carcass_grid {
+                Some(carcass_grid) => {
+                    let mut hits: Vec<usize> = carcass_grid
+                        .query_radius(agents[i].position, eff_sensing)
+                        .into_iter()
+                        .map(|k| k as usize)
+                        .collect();
+                    hits.sort_unstable();
+                    hits
                 }
+                None => (0..carcasses_by_id.len())
+                    .filter(|&k| {
+                        crate::toroidal_distance(
+                            agents[i].position,
+                            carcasses_by_id[k].position,
+                            extent,
+                        ) <= eff_sensing
+                    })
+                    .collect(),
+            };
+            for k in in_range {
+                let carcass = carcasses_by_id[k];
+                let dist = crate::toroidal_distance(agents[i].position, carcass.position, extent);
                 detected_count += 1.0;
                 if dist < 1e-6 {
                     continue;
@@ -1775,6 +1841,32 @@ pub fn move_agents(
         sensing_throughput,
         move_distance,
     }
+}
+
+/// The spatial grid over the carcasses `move_agents` senses, each keyed by its
+/// index in `carcasses_by_id`; its cell size is explained at the call site.
+fn carcass_grid(
+    agents: &[Agent],
+    carcasses_by_id: &[&Carcass],
+    params: &WorldParameters,
+) -> SpatialGrid {
+    let extent = params.world_extent;
+    let k = params.wear_degradation_steepness;
+    let (sum, count) = agents
+        .iter()
+        .map(|a| a.effective_trait_with_steepness(2, k) * params.sensing_range_coefficient)
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .fold((0.0_f32, 0_u32), |(sum, n), s| (sum + s, n + 1));
+    let mean_sensing = if count > 0 { sum / count as f32 } else { 0.0 };
+    let mut cell_size = mean_sensing.max(extent / 64.0);
+    if !(cell_size.is_finite() && cell_size > 0.0) {
+        cell_size = 1.0;
+    }
+    let mut grid = SpatialGrid::new(extent, cell_size);
+    for (k, carcass) in carcasses_by_id.iter().enumerate() {
+        grid.insert(k as u64, carcass.position);
+    }
+    grid
 }
 
 /// An offspring awaiting its canonical id: its world-state sort key, the
@@ -5872,6 +5964,126 @@ mod tests {
             "sensing throughput should be 3.0, got {}",
             result.sensing_throughput[0]
         );
+    }
+
+    /// #785: finding carcasses through a spatial grid is a pure refactor of the
+    /// brute-force scan. Over many ticks, with carcasses spread over the torus,
+    /// some exactly at an agent's sensing range (directly and across the wrap),
+    /// one just beyond it and one under the agent, both paths give bit-identical
+    /// positions, reserves, sensing throughput and movement events.
+    #[test]
+    fn carcass_grid_scan_moves_agents_bit_identically_to_brute_force_scan() {
+        use rand::SeedableRng;
+        use rand::distr::Uniform;
+        use rand_chacha::ChaCha8Rng;
+
+        let mut params = test_params();
+        params.movement_cost_coefficient = 0.01;
+        let extent = params.world_extent;
+        let half = extent / 2.0;
+        let mut rng = ChaCha8Rng::seed_from_u64(785);
+        let pos = Uniform::new(-half, half).unwrap();
+        let unit = Uniform::new(0.0_f32, 1.0).unwrap();
+
+        // Agents 0 and 1 sense exactly 2.5 (mobility 0.25 x coefficient 10).
+        let probe = TraitVector {
+            mobility: 0.25,
+            heterotrophy: 0.5,
+            ..zero_traits()
+        };
+        let mut agents = vec![
+            make_agent(0, (0.0, 0.0), 100.0, probe),
+            make_agent(1, (49.0, 0.0), 100.0, probe),
+        ];
+        for id in 2..60u64 {
+            let traits = TraitVector {
+                mobility: 0.05 + 0.5 * rng.sample(unit),
+                heterotrophy: rng.sample(unit),
+                ..zero_traits()
+            };
+            agents.push(make_agent(
+                id,
+                (rng.sample(pos), rng.sample(pos)),
+                100.0,
+                traits,
+            ));
+        }
+        // A sessile agent: it never scans.
+        agents.push(make_agent(60, (1.0, 1.0), 100.0, zero_traits()));
+
+        let carcass = |id: u64, position: (f32, f32)| Carcass {
+            id,
+            position,
+            energy: 5.0,
+            nutrient: 0.0,
+            traits: zero_traits(),
+        };
+        let sensing = 2.5_f32;
+        let mut carcasses = vec![
+            carcass(9_001, (sensing, 0.0)),                 // exactly at range
+            carcass(9_002, (0.0, -sensing)),                // exactly at range
+            carcass(9_003, (sensing + 1e-6, 0.0)),          // just beyond
+            carcass(9_004, (0.0, 0.0)),                     // under agent 0
+            carcass(9_005, (49.0 + sensing - extent, 0.0)), // at range across the wrap
+            carcass(9_006, (49.0, half - 0.5)),             // near the wrap in y
+        ];
+        // The boundary fixtures really sit on the predicate's edge.
+        assert_eq!(
+            crate::toroidal_distance((0.0, 0.0), carcasses[0].position, extent),
+            sensing
+        );
+        assert_eq!(
+            crate::toroidal_distance((49.0, 0.0), carcasses[4].position, extent),
+            sensing
+        );
+        // Ids deliberately out of slice order, so the canonical id order matters.
+        for _ in 0..400 {
+            let id = (rng.sample(unit) * 1.0e6) as u64 * 1000 + carcasses.len() as u64;
+            carcasses.push(carcass(id, (rng.sample(pos), rng.sample(pos))));
+        }
+
+        let run = |scan: CarcassScan| {
+            let mut agents = agents.clone();
+            let mut trace = Vec::new();
+            for tick in 0..40 {
+                let mut grid = crate::spatial::SpatialGrid::new(extent, 10.0);
+                for (i, a) in agents.iter().enumerate() {
+                    grid.insert(i as u64, a.position);
+                }
+                let result =
+                    move_agents_with(&mut agents, &carcasses, &grid, &params, 7, tick, scan);
+                trace.push((
+                    agents
+                        .iter()
+                        .map(|a| (a.position.0.to_bits(), a.position.1.to_bits()))
+                        .collect::<Vec<_>>(),
+                    agents
+                        .iter()
+                        .map(|a| a.reserve.to_bits())
+                        .collect::<Vec<_>>(),
+                    result
+                        .sensing_throughput
+                        .iter()
+                        .map(|t| t.to_bits())
+                        .collect::<Vec<_>>(),
+                    result
+                        .events
+                        .iter()
+                        .map(|e| (e.source, e.energy_delta.to_bits()))
+                        .collect::<Vec<_>>(),
+                    result.dissipated.to_bits(),
+                ));
+            }
+            trace
+        };
+
+        let brute = run(CarcassScan::BruteForce);
+        let gridded = run(CarcassScan::Grid);
+        // Agent 0 sees the two carcasses at range and the one under it, but not
+        // the one just beyond; agent 1 sees the one across the wrap.
+        assert!(f32::from_bits(brute[0].2[0]) >= 3.0);
+        assert!(f32::from_bits(brute[0].2[1]) >= 1.0);
+        assert_eq!(brute, gridded);
     }
 
     #[test]
