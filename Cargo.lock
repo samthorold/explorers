@@ -639,20 +639,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "explorers-search"
-version = "0.1.0"
-dependencies = [
- "explorers-genesis",
- "explorers-genesis-eval",
- "explorers-sim",
- "rand",
- "rand_chacha",
- "rayon",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "explorers-sim"
 version = "0.1.0"
 dependencies = [
@@ -1803,7 +1789,6 @@ checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
  "rand_core",
- "serde",
 ]
 
 [[package]]

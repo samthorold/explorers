@@ -5,7 +5,7 @@ edition = "2024"
 
 # Reads reference modes by perturbation experiments on known states
 # (docs/system-design/reference-modes.md). Depends on the sim and the evaluator
-# only, never on explorers-search or explorers-genesis.
+# only, never on explorers-genesis (or the archived explorers-search).
 [dependencies]
 explorers-sim = { path = "../explorers-sim" }
 explorers-genesis-eval = { path = "../explorers-genesis-eval" }

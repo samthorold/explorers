@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/explorers-sim", "crates/explorers-app", "crates/explorers-genesis-eval", "crates/explorers-genesis", "crates/explorers-search", "crates/explorers-reference-modes"]
+members = ["crates/explorers-sim", "crates/explorers-app", "crates/explorers-genesis-eval", "crates/explorers-genesis", "crates/explorers-reference-modes"]
 resolver = "3"
 
 # Dependencies are always optimised — they rarely change and compile once.
