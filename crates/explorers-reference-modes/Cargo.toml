@@ -1,0 +1,21 @@
+[package]
+name = "explorers-reference-modes"
+version = "0.1.0"
+edition = "2024"
+
+# Reads reference modes by perturbation experiments on known states
+# (docs/system-design/reference-modes.md). Depends on the sim and the evaluator
+# only, never on explorers-search or explorers-genesis.
+[dependencies]
+explorers-sim = { path = "../explorers-sim" }
+explorers-genesis-eval = { path = "../explorers-genesis-eval" }
+rand = "0.9"
+rand_chacha = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+# The bin carries no unit tests; don't build it twice.
+[[bin]]
+name = "reference_mode"
+path = "src/bin/reference_mode.rs"
+test = false

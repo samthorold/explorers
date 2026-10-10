@@ -1,8 +1,8 @@
 //! Reference-mode instrument (#751; `docs/system-design/reference-modes.md`).
 //!
 //! Mode 1, colonisation overshoot: builds the designed mesocosm
-//! ([`explorers_search::mesocosm::mode1_mesocosm`]) from the committed recipe
-//! with somatic wear on and standing carcasses at founding (#764), runs it,
+//! ([`explorers_reference_modes::mesocosm::mode1_mesocosm`]) from its
+//! committed spec (`mode1.json`, #782) with somatic wear on and standing carcasses at founding (#764), runs it,
 //! and reports the centre patch, the 3 × 3 block of cells the perturbation
 //! clears, per sampled tick beside the world's decomposers, plus the
 //! distribution of producer lifespans over the run, read also over producers
@@ -20,32 +20,34 @@
 //! the mesocosm from producer founders alone.
 //!
 //! ```text
-//! reference_mode [--recipe PATH] [--ticks N] [--seed S] [--wear-rate W]
+//! reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W]
 //!                [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H]
 //!                [--sample-every K] [--clear-at T] [--no-decomposers]
 //!                [--out PATH]
 //! ```
 //!
-//! Defaults: `recipe.json`, 3000 ticks, seed 1, the mesocosm's wear
-//! ([`Wear::MESOCOSM`]; the four wear flags override its parameters), a sample every 25 ticks, no clearance, with
+//! Defaults: the committed `crates/explorers-reference-modes/mode1.json`
+//! (found from any working directory), 3000 ticks, seed 1, the spec's wear
+//! (the four wear flags override its parameters), a sample every 25 ticks, no clearance, with
 //! decomposers, artifact `target/reference-mode/mode1.json` (or
 //! `mode1-paired.json` with `--clear-at`) with the human-readable summary
 //! beside it as `.md` (also printed). Deterministic per seed and arguments.
 
 use std::path::PathBuf;
 
-use explorers_search::mesocosm::{
-    Community, Wear, mode1_mesocosm, mode1_summary, paired_summary, run_mode1, run_paired,
+use explorers_reference_modes::mesocosm::{
+    Community, Mode1Spec, mode1_mesocosm, mode1_summary, paired_summary, run_mode1, run_paired,
 };
-use explorers_sim::WorldRecipe;
 
-const USAGE: &str = "usage: reference_mode [--recipe PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--out PATH]";
 
 struct Cli {
-    recipe: PathBuf,
+    spec: PathBuf,
     ticks: u64,
     seed: u64,
-    wear: Wear,
+    /// Overrides of the spec's wear_rate, use_wear_rate, repair_rate and
+    /// senescence_hazard, in that order.
+    wear: [Option<f32>; 4],
     sample_every: u64,
     clear_at: Option<u64>,
     community: Community,
@@ -55,10 +57,10 @@ struct Cli {
 impl Cli {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut cli = Cli {
-            recipe: PathBuf::from("recipe.json"),
+            spec: PathBuf::from(Mode1Spec::COMMITTED_PATH),
             ticks: 3000,
             seed: 1,
-            wear: Wear::MESOCOSM,
+            wear: [None; 4],
             sample_every: 25,
             clear_at: None,
             community: Community::ProducersAndDecomposers,
@@ -72,15 +74,13 @@ impl Cli {
             let value = args.next().ok_or(format!("{flag} needs a value"))?;
             let bad = |e: &dyn std::fmt::Display| format!("{flag}: cannot parse {value:?}: {e}");
             match flag.as_str() {
-                "--recipe" => cli.recipe = PathBuf::from(&value),
+                "--spec" => cli.spec = PathBuf::from(&value),
                 "--ticks" => cli.ticks = value.parse().map_err(|e| bad(&e))?,
                 "--seed" => cli.seed = value.parse().map_err(|e| bad(&e))?,
-                "--wear-rate" => cli.wear.wear_rate = value.parse().map_err(|e| bad(&e))?,
-                "--use-wear-rate" => cli.wear.use_wear_rate = value.parse().map_err(|e| bad(&e))?,
-                "--repair-rate" => cli.wear.repair_rate = value.parse().map_err(|e| bad(&e))?,
-                "--senescence-hazard" => {
-                    cli.wear.senescence_hazard = value.parse().map_err(|e| bad(&e))?
-                }
+                "--wear-rate" => cli.wear[0] = Some(value.parse().map_err(|e| bad(&e))?),
+                "--use-wear-rate" => cli.wear[1] = Some(value.parse().map_err(|e| bad(&e))?),
+                "--repair-rate" => cli.wear[2] = Some(value.parse().map_err(|e| bad(&e))?),
+                "--senescence-hazard" => cli.wear[3] = Some(value.parse().map_err(|e| bad(&e))?),
                 "--sample-every" => cli.sample_every = value.parse().map_err(|e| bad(&e))?,
                 "--clear-at" => cli.clear_at = Some(value.parse().map_err(|e| bad(&e))?),
                 "--out" => cli.out = Some(PathBuf::from(&value)),
@@ -99,25 +99,39 @@ fn main() {
         eprintln!("reference_mode: {e}\n{USAGE}");
         std::process::exit(2);
     });
-    let contents = std::fs::read_to_string(&cli.recipe)
-        .unwrap_or_else(|e| panic!("read {}: {e}", cli.recipe.display()));
-    let recipe: WorldRecipe = serde_json::from_str(&contents)
-        .unwrap_or_else(|e| panic!("parse {}: {e}", cli.recipe.display()));
+    let contents = std::fs::read_to_string(&cli.spec)
+        .unwrap_or_else(|e| panic!("read {}: {e}", cli.spec.display()));
+    let spec: Mode1Spec = serde_json::from_str(&contents)
+        .unwrap_or_else(|e| panic!("parse {}: {e}", cli.spec.display()));
+    let mut wear = spec.wear();
+    for (field, value) in [
+        &mut wear.wear_rate,
+        &mut wear.use_wear_rate,
+        &mut wear.repair_rate,
+        &mut wear.senescence_hazard,
+    ]
+    .into_iter()
+    .zip(cli.wear)
+    {
+        if let Some(value) = value {
+            *field = value;
+        }
+    }
 
-    let mut world = mode1_mesocosm(&recipe, cli.wear, cli.seed, cli.community);
+    let mut world = mode1_mesocosm(&spec, wear, cli.seed, cli.community);
     let community = match cli.community {
         Community::ProducersAndDecomposers => "producers and decomposers",
         Community::ProducersOnly => "producers only",
     };
     let header = format!(
-        "recipe {}, seed {}, {} ticks, wear rate {}, use-wear rate {}, repair rate {}, senescence hazard {}, sample every {}, {community}",
-        cli.recipe.display(),
+        "spec {}, seed {}, {} ticks, wear rate {}, use-wear rate {}, repair rate {}, senescence hazard {}, sample every {}, {community}",
+        cli.spec.display(),
         cli.seed,
         cli.ticks,
-        cli.wear.wear_rate,
-        cli.wear.use_wear_rate,
-        cli.wear.repair_rate,
-        cli.wear.senescence_hazard,
+        wear.wear_rate,
+        wear.use_wear_rate,
+        wear.repair_rate,
+        wear.senescence_hazard,
         cli.sample_every
     );
     let (summary, report, default_out) = match cli.clear_at {
@@ -142,10 +156,10 @@ fn main() {
         std::fs::create_dir_all(dir).expect("create the artifact directory");
     }
     let artifact = serde_json::json!({
-        "recipe": cli.recipe,
+        "spec": cli.spec,
         "seed": cli.seed,
         "ticks": cli.ticks,
-        "wear": cli.wear,
+        "wear": wear,
         "sample_every": cli.sample_every,
         "clear_at": cli.clear_at,
         "community": cli.community,

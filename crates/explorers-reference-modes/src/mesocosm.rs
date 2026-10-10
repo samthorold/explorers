@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use explorers_genesis_eval::income::IncomeLedger;
 use explorers_sim::event::EventKind;
 use explorers_sim::topology::TrophicRole;
-use explorers_sim::{AgentSpec, CarcassSpec, TraitVector, World, WorldRecipe};
+use explorers_sim::{AgentSpec, CarcassSpec, TraitVector, World, WorldParameters, WorldRecipe};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
@@ -36,18 +36,6 @@ pub const CARCASS_ENERGY_PER_CELL: f32 = 54.0;
 /// pool; see [`CARCASSES_PER_CELL`].
 pub const CARCASS_NUTRIENT_PER_CELL: f32 = 58.0;
 
-/// The mesocosm's trophic distance decay (#772). The recipe's 2.38 lies
-/// outside flow 7's domain bound (world rules, flow 7, *What the two
-/// parameters stand for, and their domain bounds*: decay in about
-/// [0.36, 0.98]), so the mesocosm overrides it and keeps the recipe's
-/// `base_trophic_efficiency` (0.78, in bound). At 0.60 the kernel's factor at
-/// the reference distance `√2` is about 0.43, near the bound's midpoint, and a
-/// decomposer founder at the recipe's heterotroph vertex assimilates
-/// `0.78 · exp(−0.60 · 1.52) ≈ 0.31` of the producer litter it drains,
-/// against 0.021 at the recipe's decay (reference-modes.md, mode 1,
-/// *Parameters*).
-pub const MESOCOSM_TROPHIC_DISTANCE_DECAY: f32 = 0.60;
-
 /// The mesocosm's somatic wear: the four parameters of the wear law (world
 /// rules, *Somatic wear*), which together set producer lifespans.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
@@ -62,23 +50,71 @@ pub struct Wear {
     pub senescence_hazard: f32,
 }
 
-impl Wear {
-    /// The mesocosm's calibrated wear (#766,
-    /// `docs/research/766-mode1-wear-recalibration.md`), which supersedes the
-    /// old repair law's calibration (#753). Wear comes from use alone: a
-    /// producer wears with the energy it captures, relaxes towards
-    /// `w* = a / (ρ · κ)` over about 95 ticks, and dies senescent at `η · w`.
-    /// Established producers (past [`ESTABLISHMENT_AGE`]) live a median of
-    /// about 230 ticks, under the leaching half-life of 277, and the
-    /// unperturbed centre patch held producers through every second-half
-    /// sample in 10 seeds of 10. Calibrated with the decomposer founders dying
-    /// out early (#764), so it may need revisiting once they persist.
-    pub const MESOCOSM: Wear = Wear {
-        wear_rate: 0.0,
-        use_wear_rate: 0.0007,
-        repair_rate: 0.03,
-        senescence_hazard: 0.022,
-    };
+/// The mode-1 mesocosm's own parameters, stated in full in the committed
+/// `mode1.json` (#782): nothing is derived from another world at run time.
+/// The spec is their only home. It was generated once from the committed
+/// recipe with the adjustments the mesocosm then made at run time:
+///
+/// - **Extent**: [`SIDE_CELLS`] nutrient cells a side, with the recipe's
+///   nutrient pool kept at its density per area, so each cell holds what a
+///   cell of the recipe's world does.
+/// - **Trophic decay 0.60** (#772). The recipe's 2.38 lies outside flow 7's
+///   domain bound (world rules, flow 7, *What the two parameters stand for,
+///   and their domain bounds*: decay in about [0.36, 0.98]); the spec keeps
+///   the recipe's `base_trophic_efficiency` (0.78, in bound). At 0.60 the
+///   kernel's factor at the reference distance `√2` is about 0.43, near the
+///   bound's midpoint, and a decomposer founder at the heterotroph vertex
+///   assimilates `0.78 · exp(−0.60 · 1.52) ≈ 0.31` of the producer litter it
+///   drains, against 0.021 at the recipe's decay (reference-modes.md, mode 1,
+///   *Parameters*).
+/// - **Wear** ([`Mode1Spec::wear`]): #766's calibration
+///   (`docs/research/766-mode1-wear-recalibration.md`), which supersedes the
+///   old repair law's (#753). Wear comes from use alone: a producer wears
+///   with the energy it captures, relaxes towards `w* = a / (ρ · κ)` over
+///   about 95 ticks, and dies senescent at `η · w`. Established producers
+///   (past [`ESTABLISHMENT_AGE`]) live a median of about 230 ticks, under the
+///   leaching half-life of 277, and the unperturbed centre patch held
+///   producers through every second-half sample in 10 seeds of 10.
+///   Calibrated with the decomposer founders dying out early (#764), so it
+///   may need revisiting once they persist.
+/// - **Founders**: the two trophic vertices the recipe's initial
+///   distribution lays its clusters on (`World::new`): all its mean trophic
+///   investment in autotrophy (a producer) or in heterotrophy (a decomposer),
+///   its other traits at their means, each with the recipe's energy per agent.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Mode1Spec {
+    /// Every world parameter, the mesocosm's extent, nutrient pool, wear and
+    /// trophic decay among them.
+    pub parameters: WorldParameters,
+    /// The producer founders' traits: all trophic investment in autotrophy.
+    pub producer: TraitVector,
+    /// The decomposer founders' traits: all trophic investment in heterotrophy.
+    pub decomposer: TraitVector,
+    /// Each founder's starting reserve.
+    pub founder_reserve: f32,
+    pub max_ticks: u64,
+}
+
+impl Mode1Spec {
+    /// The committed spec's path, `crates/explorers-reference-modes/mode1.json`.
+    pub const COMMITTED_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/mode1.json");
+
+    /// The committed spec, compiled in.
+    pub fn committed() -> Self {
+        serde_json::from_str(include_str!("../mode1.json")).expect("mode1.json parses")
+    }
+
+    /// The four parameters of the wear law the spec carries: the mesocosm's
+    /// calibrated wear, and the instrument's default.
+    pub fn wear(&self) -> Wear {
+        let p = &self.parameters;
+        Wear {
+            wear_rate: p.wear_rate,
+            use_wear_rate: p.use_wear_rate,
+            repair_rate: p.repair_rate,
+            senescence_hazard: p.senescence_hazard,
+        }
+    }
 }
 
 /// Which founders the mesocosm is seeded with. Without decomposers the
@@ -91,48 +127,34 @@ pub enum Community {
 }
 
 /// Build the mode-1 mesocosm (reference-modes.md, *Colonisation overshoot*,
-/// *Mesocosm*): the recipe's world parameters on a [`SIDE_CELLS`]² torus of
-/// nutrient cells, with somatic wear under `wear` and trophic transfer inside
-/// flow 7's domain bound ([`MESOCOSM_TROPHIC_DISTANCE_DECAY`]), seeded with producer and
-/// decomposer founders (producers alone with [`Community::ProducersOnly`])
-/// and no consumers, on a stand of litter: every cell holds
-/// [`CARCASSES_PER_CELL`] standing carcasses. The recipe's nutrient is kept at
-/// its density per area, so each cell holds what a cell of the recipe's world
-/// does; the founders' and the litter's nutrient is drawn from it, so total
-/// nutrient at founding is that pool.
+/// *Mesocosm*) from its spec: the spec's world parameters on a
+/// [`SIDE_CELLS`]² torus of nutrient cells, with somatic wear under `wear`,
+/// seeded with producer and decomposer founders (producers alone with
+/// [`Community::ProducersOnly`]) and no consumers, on a stand of litter: every
+/// cell holds [`CARCASSES_PER_CELL`] standing carcasses. The founders' and the
+/// litter's nutrient is drawn from the spec's pool, so total nutrient at
+/// founding is that pool.
 ///
-/// Founders take the two trophic vertices the recipe's initial distribution
-/// lays its clusters on (`World::new`): all the recipe's trophic investment
-/// in autotrophy (a producer) or in heterotrophy (a decomposer), its other
-/// traits at their means. They are placed uniformly over the torus from
-/// `seed`, so the state is deterministic per seed.
-pub fn mode1_mesocosm(recipe: &WorldRecipe, wear: Wear, seed: u64, community: Community) -> World {
-    let distribution = recipe
-        .initial_distribution
-        .as_ref()
-        .expect("the mesocosm founders read the recipe's initial distribution");
-    let mut params = recipe.parameters.clone();
+/// Founders take the spec's two trophic vertices, [`Mode1Spec::producer`]
+/// and [`Mode1Spec::decomposer`], each with [`Mode1Spec::founder_reserve`].
+/// They are placed uniformly over the torus from `seed`, so the state is
+/// deterministic per seed. The mesocosm makes no parameter adjustment of its
+/// own beyond setting `wear` and counting its founders.
+///
+/// Panics if the spec's extent is not [`SIDE_CELLS`] nutrient cells.
+pub fn mode1_mesocosm(spec: &Mode1Spec, wear: Wear, seed: u64, community: Community) -> World {
+    let mut params = spec.parameters.clone();
     let extent = SIDE_CELLS as f32 * params.nutrient_grid_cell_size;
-    params.initial_nutrient_pool *= (extent / params.world_extent).powi(2);
-    params.world_extent = extent;
+    assert_eq!(
+        params.world_extent, extent,
+        "the spec's world_extent is SIDE_CELLS x nutrient_grid_cell_size"
+    );
     params.wear_rate = wear.wear_rate;
     params.use_wear_rate = wear.use_wear_rate;
     params.repair_rate = wear.repair_rate;
     params.senescence_hazard = wear.senescence_hazard;
-    params.trophic_distance_decay = MESOCOSM_TROPHIC_DISTANCE_DECAY;
 
-    let mean = distribution.mean_traits;
-    let trophic_total = mean.photosynthetic_absorption + mean.heterotrophy;
-    let producer = TraitVector {
-        photosynthetic_absorption: trophic_total,
-        heterotrophy: 0.0,
-        ..mean
-    };
-    let decomposer = TraitVector {
-        photosynthetic_absorption: 0.0,
-        heterotrophy: trophic_total,
-        ..mean
-    };
+    let (producer, decomposer) = (spec.producer, spec.decomposer);
     let cells = SIDE_CELLS * SIDE_CELLS;
     let decomposers = match community {
         Community::ProducersAndDecomposers => DECOMPOSERS_PER_CELL * cells,
@@ -163,7 +185,7 @@ pub fn mode1_mesocosm(recipe: &WorldRecipe, wear: Wear, seed: u64, community: Co
     let agents: Vec<AgentSpec> = roster
         .map(|traits| AgentSpec {
             position: (rng.random_range(-half..half), rng.random_range(-half..half)),
-            reserve: distribution.initial_energy_per_agent,
+            reserve: spec.founder_reserve,
             traits,
             nutrient: 0.0,
         })
@@ -176,7 +198,7 @@ pub fn mode1_mesocosm(recipe: &WorldRecipe, wear: Wear, seed: u64, community: Co
             initial_distribution: None,
             agents: Some(agents),
             carcasses: Some(carcasses),
-            max_ticks: recipe.max_ticks,
+            max_ticks: spec.max_ticks,
         },
         seed,
     );
@@ -945,12 +967,39 @@ pub fn paired_summary(header: &str, report: &PairedReport) -> String {
 mod tests {
     use super::*;
 
-    fn committed_recipe() -> WorldRecipe {
-        serde_json::from_str(include_str!("../../../recipe.json")).unwrap()
+    /// The mesocosm's calibrated wear, as the committed spec carries it.
+    fn mesocosm_wear() -> Wear {
+        Mode1Spec::committed().wear()
+    }
+
+    /// The committed spec states the mesocosm's parameters in full (#782):
+    /// trophic transfer inside flow 7's domain bound (decay 0.60, #772, at the
+    /// recipe's base efficiency 0.78), a 9-cell extent, and #766's calibrated
+    /// wear.
+    #[test]
+    fn the_committed_spec_pins_the_mesocosms_parameters() {
+        let spec = Mode1Spec::committed();
+        let p = &spec.parameters;
+        assert_eq!(p.trophic_distance_decay, 0.60);
+        assert!((p.base_trophic_efficiency - 0.78).abs() < 0.005);
+        assert_eq!(
+            p.world_extent,
+            SIDE_CELLS as f32 * p.nutrient_grid_cell_size
+        );
+        assert_eq!(SIDE_CELLS, 9);
+        assert_eq!(
+            spec.wear(),
+            Wear {
+                wear_rate: 0.0,
+                use_wear_rate: 0.0007,
+                repair_rate: 0.03,
+                senescence_hazard: 0.022,
+            }
+        );
     }
 
     /// The mesocosm sets all four parameters of the wear law, whatever the
-    /// recipe carries.
+    /// spec carries: the instrument's wear overrides reach the world.
     #[test]
     fn the_mesocosm_runs_under_the_wear_it_is_given() {
         let wear = Wear {
@@ -959,7 +1008,7 @@ mod tests {
             repair_rate: 0.5,
             senescence_hazard: 0.002,
         };
-        let world = mode1_mesocosm(&committed_recipe(), wear, 7, Community::ProducersOnly);
+        let world = mode1_mesocosm(&Mode1Spec::committed(), wear, 7, Community::ProducersOnly);
         let p = world.params();
         assert_eq!(
             (
@@ -972,46 +1021,43 @@ mod tests {
         );
     }
 
-    /// Trophic transfer runs inside flow 7's domain bound (#772): the recipe's
-    /// base efficiency, decay 0.60, and every other world parameter the
-    /// recipe's but for the mesocosm's own size, nutrient and wear.
+    /// The mesocosm runs the spec's parameters as they stand (#782): it makes
+    /// no adjustment of its own but to count its founders. Trophic transfer
+    /// runs inside flow 7's domain bound (#772): decay 0.60 at base
+    /// efficiency 0.78.
     #[test]
-    fn the_mesocosm_runs_trophic_transfer_within_flow_7s_bound() {
-        let recipe = committed_recipe();
-        let world = mode1_mesocosm(
-            &recipe,
-            Wear::MESOCOSM,
-            7,
-            Community::ProducersAndDecomposers,
-        );
-        let p = world.params();
-        assert_eq!(p.trophic_distance_decay, 0.60);
-        assert_eq!(MESOCOSM_TROPHIC_DISTANCE_DECAY, 0.60);
-        assert_eq!(
-            p.base_trophic_efficiency,
-            recipe.parameters.base_trophic_efficiency
-        );
-        assert!((p.base_trophic_efficiency - 0.78).abs() < 0.005);
+    fn the_mesocosm_runs_the_specs_parameters_as_they_stand() {
+        let spec = Mode1Spec::committed();
+        for community in [Community::ProducersAndDecomposers, Community::ProducersOnly] {
+            let world = mode1_mesocosm(&spec, spec.wear(), 7, community);
+            let p = world.params();
+            assert_eq!(p.trophic_distance_decay, 0.60);
+            assert!((p.base_trophic_efficiency - 0.78).abs() < 0.005);
+            let expected = WorldParameters {
+                initial_population_size: world.agents().len() as u32,
+                ..spec.parameters.clone()
+            };
+            assert_eq!(*p, expected);
+        }
+    }
 
-        let mut expected = recipe.parameters.clone();
-        expected.trophic_distance_decay = 0.60;
-        expected.world_extent = p.world_extent;
-        expected.initial_nutrient_pool = p.initial_nutrient_pool;
-        expected.initial_population_size = p.initial_population_size;
-        expected.wear_rate = p.wear_rate;
-        expected.use_wear_rate = p.use_wear_rate;
-        expected.repair_rate = p.repair_rate;
-        expected.senescence_hazard = p.senescence_hazard;
-        assert_eq!(*p, expected);
+    /// The spec must describe the mesocosm's own geometry: its extent is
+    /// [`SIDE_CELLS`] nutrient cells.
+    #[test]
+    #[should_panic(expected = "SIDE_CELLS")]
+    fn a_spec_whose_extent_is_not_nine_cells_is_refused() {
+        let mut spec = Mode1Spec::committed();
+        spec.parameters.world_extent = 10.0 * spec.parameters.nutrient_grid_cell_size;
+        mode1_mesocosm(&spec, spec.wear(), 7, Community::ProducersOnly);
     }
 
     #[test]
     fn mode1_mesocosm_is_a_nine_by_nine_cell_torus_of_producer_and_decomposer_founders_with_wear_on()
      {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         let world = mode1_mesocosm(
-            &recipe,
-            Wear::MESOCOSM,
+            &spec,
+            mesocosm_wear(),
             7,
             Community::ProducersAndDecomposers,
         );
@@ -1019,7 +1065,7 @@ mod tests {
 
         assert_eq!(
             p.world_extent,
-            9.0 * recipe.parameters.nutrient_grid_cell_size
+            9.0 * spec.parameters.nutrient_grid_cell_size
         );
         assert_eq!(world.nutrient_grid().cells().len(), 81);
         assert!(p.wear_rate + p.use_wear_rate > 0.0 && p.senescence_hazard > 0.0);
@@ -1042,9 +1088,9 @@ mod tests {
     /// litter.
     #[test]
     fn every_cell_stands_the_settled_carcass_stock_at_founding() {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         for community in [Community::ProducersAndDecomposers, Community::ProducersOnly] {
-            let world = mode1_mesocosm(&recipe, Wear::MESOCOSM, 7, community);
+            let world = mode1_mesocosm(&spec, mesocosm_wear(), 7, community);
             let grid = world.nutrient_grid();
             let producer = world.agents()[0].traits;
             for cell in 0..grid.cells().len() {
@@ -1069,9 +1115,9 @@ mod tests {
     /// a run's budget closes from tick 0.
     #[test]
     fn conservation_holds_from_tick_0_with_the_standing_carcasses() {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         for community in [Community::ProducersAndDecomposers, Community::ProducersOnly] {
-            let mut world = mode1_mesocosm(&recipe, Wear::MESOCOSM, 3, community);
+            let mut world = mode1_mesocosm(&spec, mesocosm_wear(), 3, community);
             let params = world.params().clone();
             let total = world.nutrient_pool()
                 + world
@@ -1094,8 +1140,8 @@ mod tests {
     #[test]
     fn a_run_samples_the_centre_patch_every_interval_and_reads_its_pool_and_carcasses() {
         let mut world = mode1_mesocosm(
-            &committed_recipe(),
-            Wear::MESOCOSM,
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
             3,
             Community::ProducersAndDecomposers,
         );
@@ -1127,11 +1173,11 @@ mod tests {
     /// reproduction out of reach no mutant offspring blurs the founders.
     #[test]
     fn centre_patch_producers_are_read_from_income() {
-        let mut recipe = committed_recipe();
-        recipe.parameters.reproduction_energy_threshold = f32::MAX;
+        let mut spec = Mode1Spec::committed();
+        spec.parameters.reproduction_energy_threshold = f32::MAX;
         let mut world = mode1_mesocosm(
-            &recipe,
-            Wear::MESOCOSM,
+            &spec,
+            mesocosm_wear(),
             5,
             Community::ProducersAndDecomposers,
         );
@@ -1156,8 +1202,8 @@ mod tests {
     fn producer_deaths_record_their_age_at_death() {
         let ticks = 150;
         let mut world = mode1_mesocosm(
-            &committed_recipe(),
-            Wear::MESOCOSM,
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
             11,
             Community::ProducersAndDecomposers,
         );
@@ -1179,14 +1225,14 @@ mod tests {
     /// none is.
     #[test]
     fn senescent_producer_deaths_are_recorded_apart() {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         let run = |senescence_hazard| {
             let wear = Wear {
                 senescence_hazard,
-                ..Wear::MESOCOSM
+                ..mesocosm_wear()
             };
             run_mode1(
-                &mut mode1_mesocosm(&recipe, wear, 11, Community::ProducersOnly),
+                &mut mode1_mesocosm(&spec, wear, 11, Community::ProducersOnly),
                 100,
                 50,
             )
@@ -1233,11 +1279,11 @@ mod tests {
     /// centre's mean producer age is the time since the start.
     #[test]
     fn mean_producer_age_counts_from_the_start_for_founders() {
-        let mut recipe = committed_recipe();
-        recipe.parameters.reproduction_energy_threshold = f32::MAX;
+        let mut spec = Mode1Spec::committed();
+        spec.parameters.reproduction_energy_threshold = f32::MAX;
         let mut world = mode1_mesocosm(
-            &recipe,
-            Wear::MESOCOSM,
+            &spec,
+            mesocosm_wear(),
             5,
             Community::ProducersAndDecomposers,
         );
@@ -1252,12 +1298,12 @@ mod tests {
 
     #[test]
     fn the_same_seed_gives_the_same_report() {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         let run = |seed| {
             run_mode1(
                 &mut mode1_mesocosm(
-                    &recipe,
-                    Wear::MESOCOSM,
+                    &spec,
+                    mesocosm_wear(),
                     seed,
                     Community::ProducersAndDecomposers,
                 ),
@@ -1283,8 +1329,8 @@ mod tests {
     #[test]
     fn clearing_the_centre_patch_removes_its_agents_and_carcasses_and_records_them() {
         let mut world = mode1_mesocosm(
-            &committed_recipe(),
-            Wear::MESOCOSM,
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
             2,
             Community::ProducersAndDecomposers,
         );
@@ -1334,12 +1380,12 @@ mod tests {
     /// one uninterrupted run over the settle and the arm's span.
     #[test]
     fn the_control_arm_is_the_unperturbed_run_over_the_same_span() {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         let (settle, ticks, every) = (60, 60, 10);
         let paired = run_paired(
             mode1_mesocosm(
-                &recipe,
-                Wear::MESOCOSM,
+                &spec,
+                mesocosm_wear(),
                 6,
                 Community::ProducersAndDecomposers,
             ),
@@ -1348,8 +1394,8 @@ mod tests {
             every,
         );
         let mut whole = mode1_mesocosm(
-            &recipe,
-            Wear::MESOCOSM,
+            &spec,
+            mesocosm_wear(),
             6,
             Community::ProducersAndDecomposers,
         );
@@ -1375,8 +1421,8 @@ mod tests {
     fn both_arms_conserve_energy_and_nutrient_with_the_clearance_as_an_outflow() {
         let paired = run_paired(
             mode1_mesocosm(
-                &committed_recipe(),
-                Wear::MESOCOSM,
+                &Mode1Spec::committed(),
+                mesocosm_wear(),
                 8,
                 Community::ProducersAndDecomposers,
             ),
@@ -1412,14 +1458,14 @@ mod tests {
     /// founders: the same producers in the same places.
     #[test]
     fn the_producers_only_mesocosm_has_no_decomposer_founders() {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         let full = mode1_mesocosm(
-            &recipe,
-            Wear::MESOCOSM,
+            &spec,
+            mesocosm_wear(),
             4,
             Community::ProducersAndDecomposers,
         );
-        let bare = mode1_mesocosm(&recipe, Wear::MESOCOSM, 4, Community::ProducersOnly);
+        let bare = mode1_mesocosm(&spec, mesocosm_wear(), 4, Community::ProducersOnly);
 
         let producers = |w: &World| -> Vec<((f32, f32), TraitVector)> {
             w.agents()
@@ -1435,9 +1481,9 @@ mod tests {
 
     #[test]
     fn the_same_seed_gives_the_same_paired_report() {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         let run = |seed| {
-            let world = mode1_mesocosm(&recipe, Wear::MESOCOSM, seed, Community::ProducersOnly);
+            let world = mode1_mesocosm(&spec, mesocosm_wear(), seed, Community::ProducersOnly);
             run_paired(world, 40, 40, 10)
         };
         assert_eq!(run(3), run(3));
@@ -1449,8 +1495,8 @@ mod tests {
     #[test]
     fn the_paired_summary_sets_the_arms_side_by_side() {
         let world = mode1_mesocosm(
-            &committed_recipe(),
-            Wear::MESOCOSM,
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
             3,
             Community::ProducersAndDecomposers,
         );
@@ -1494,8 +1540,8 @@ mod tests {
     #[test]
     fn each_sample_counts_the_worlds_decomposers() {
         let mut world = mode1_mesocosm(
-            &committed_recipe(),
-            Wear::MESOCOSM,
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
             4,
             Community::ProducersAndDecomposers,
         );
@@ -1506,8 +1552,8 @@ mod tests {
         assert_eq!(last.decomposers, report.final_roles.decomposers);
 
         let mut bare = mode1_mesocosm(
-            &committed_recipe(),
-            Wear::MESOCOSM,
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
             4,
             Community::ProducersOnly,
         );
@@ -1519,10 +1565,10 @@ mod tests {
     /// in each row.
     #[test]
     fn the_summaries_report_the_centre_patch_and_the_worlds_decomposers() {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         let mut world = mode1_mesocosm(
-            &recipe,
-            Wear::MESOCOSM,
+            &spec,
+            mesocosm_wear(),
             4,
             Community::ProducersAndDecomposers,
         );
@@ -1536,8 +1582,8 @@ mod tests {
 
         let paired = run_paired(
             mode1_mesocosm(
-                &recipe,
-                Wear::MESOCOSM,
+                &spec,
+                mesocosm_wear(),
                 4,
                 Community::ProducersAndDecomposers,
             ),
@@ -1556,8 +1602,8 @@ mod tests {
     #[test]
     fn the_world_roster_at_the_end_is_tallied_by_role() {
         let mut world = mode1_mesocosm(
-            &committed_recipe(),
-            Wear::MESOCOSM,
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
             4,
             Community::ProducersAndDecomposers,
         );
@@ -1576,11 +1622,11 @@ mod tests {
     /// log of the same run, with each drainer's traits from the roster.
     #[test]
     fn carcass_drain_energy_is_split_by_the_drainers_autotrophy() {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         let build = || {
             mode1_mesocosm(
-                &recipe,
-                Wear::MESOCOSM,
+                &spec,
+                mesocosm_wear(),
                 4,
                 Community::ProducersAndDecomposers,
             )
@@ -1624,11 +1670,11 @@ mod tests {
     /// control's whole-horizon split is the uninterrupted run's.
     #[test]
     fn a_paired_arms_drain_split_carries_the_settles_history() {
-        let recipe = committed_recipe();
+        let spec = Mode1Spec::committed();
         let build = || {
             mode1_mesocosm(
-                &recipe,
-                Wear::MESOCOSM,
+                &spec,
+                mesocosm_wear(),
                 6,
                 Community::ProducersAndDecomposers,
             )
@@ -1713,8 +1759,8 @@ mod tests {
     #[test]
     fn the_end_roster_counts_heterotroph_dominant_agents_by_traits() {
         let mut world = mode1_mesocosm(
-            &committed_recipe(),
-            Wear::MESOCOSM,
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
             4,
             Community::ProducersAndDecomposers,
         );
@@ -1728,8 +1774,8 @@ mod tests {
         assert_eq!(report.heterotroph_dominant, expected);
 
         let mut bare = mode1_mesocosm(
-            &committed_recipe(),
-            Wear::MESOCOSM,
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
             4,
             Community::ProducersOnly,
         );
