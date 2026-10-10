@@ -86,3 +86,51 @@ fn the_usage_names_spec_and_refuses_recipe() {
     assert!(stderr.contains("--spec PATH"), "{stderr}");
     assert!(!stderr.contains("--recipe PATH"), "{stderr}");
 }
+
+fn run_with(out: &Path, extra: &[&str]) -> serde_json::Value {
+    let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+        .args(["--ticks", "10", "--sample-every", "5"])
+        .args(extra)
+        .arg("--out")
+        .arg(out)
+        .output()
+        .expect("the instrument runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_str(&std::fs::read_to_string(out).unwrap()).unwrap()
+}
+
+/// `--litter-x N` (#781) stands N times the settled litter, and records it;
+/// without the flag, or at 1, the run is the committed mesocosm's.
+#[test]
+fn litter_x_scales_the_founding_litter_and_leaves_the_default_run_unchanged() {
+    let dir = scratch("litter-x");
+    let default = run_with(&dir.join("default.json"), &[]);
+    let one = run_with(&dir.join("one.json"), &["--litter-x", "1"]);
+    let ten = run_with(&dir.join("ten.json"), &["--litter-x", "10"]);
+
+    assert_eq!(default["litter_x"], 1);
+    assert_eq!(ten["litter_x"], 10);
+    assert_eq!(default["report"], one["report"]);
+    let carcass_n = |a: &serde_json::Value| {
+        a["report"]["samples"][0]["carcass_nutrient"]
+            .as_f64()
+            .unwrap()
+    };
+    let ratio = carcass_n(&ten) / carcass_n(&default);
+    assert!((ratio - 10.0).abs() < 1e-3, "{ratio}");
+}
+
+#[test]
+fn litter_x_refuses_zero() {
+    let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+        .args(["--litter-x", "0"])
+        .output()
+        .expect("the instrument runs");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--litter-x"), "{stderr}");
+}

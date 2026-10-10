@@ -143,6 +143,25 @@ pub enum Community {
 ///
 /// Panics if the spec's extent is not [`SIDE_CELLS`] nutrient cells.
 pub fn mode1_mesocosm(spec: &Mode1Spec, wear: Wear, seed: u64, community: Community) -> World {
+    mode1_mesocosm_with_litter(spec, wear, seed, community, 1)
+}
+
+/// [`mode1_mesocosm`] standing `litter_x` times the settled litter stock: every
+/// cell holds `litter_x` × [`CARCASSES_PER_CELL`] carcasses of the same size,
+/// so `litter_x` times the energy and nutrient. A diagnostic instrument
+/// setting (#781), not a new default: at 1 it is the committed mesocosm,
+/// carcass for carcass. The extra litter is placed after the founders, so
+/// the founders stand in the same places at any multiplier.
+///
+/// Panics if `litter_x` is 0 or the pool cannot cover the litter.
+pub fn mode1_mesocosm_with_litter(
+    spec: &Mode1Spec,
+    wear: Wear,
+    seed: u64,
+    community: Community,
+    litter_x: usize,
+) -> World {
+    assert!(litter_x >= 1, "the litter multiplier is at least 1");
     let mut params = spec.parameters.clone();
     let extent = SIDE_CELLS as f32 * params.nutrient_grid_cell_size;
     assert_eq!(
@@ -165,23 +184,27 @@ pub fn mode1_mesocosm(spec: &Mode1Spec, wear: Wear, seed: u64, community: Commun
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let half = extent / 2.0;
     let size = params.nutrient_grid_cell_size;
+    // One settled stock of litter, `per_cell` carcasses in every cell.
+    let litter = |rng: &mut ChaCha8Rng, per_cell: usize| -> Vec<CarcassSpec> {
+        (0..cells)
+            .flat_map(|cell| std::iter::repeat_n(cell, per_cell))
+            .map(|cell| {
+                let (col, row) = ((cell % SIDE_CELLS) as f32, (cell / SIDE_CELLS) as f32);
+                CarcassSpec {
+                    position: (
+                        -half + (col + rng.random_range(0.0..1.0)) * size,
+                        -half + (row + rng.random_range(0.0..1.0)) * size,
+                    ),
+                    energy: CARCASS_ENERGY_PER_CELL / CARCASSES_PER_CELL as f32,
+                    traits: producer,
+                    nutrient: CARCASS_NUTRIENT_PER_CELL / CARCASSES_PER_CELL as f32,
+                }
+            })
+            .collect()
+    };
     // Litter is placed before the founders, so both communities stand the
     // same carcasses and the same producers.
-    let carcasses: Vec<CarcassSpec> = (0..cells)
-        .flat_map(|cell| std::iter::repeat_n(cell, CARCASSES_PER_CELL))
-        .map(|cell| {
-            let (col, row) = ((cell % SIDE_CELLS) as f32, (cell / SIDE_CELLS) as f32);
-            CarcassSpec {
-                position: (
-                    -half + (col + rng.random_range(0.0..1.0)) * size,
-                    -half + (row + rng.random_range(0.0..1.0)) * size,
-                ),
-                energy: CARCASS_ENERGY_PER_CELL / CARCASSES_PER_CELL as f32,
-                traits: producer,
-                nutrient: CARCASS_NUTRIENT_PER_CELL / CARCASSES_PER_CELL as f32,
-            }
-        })
-        .collect();
+    let mut carcasses = litter(&mut rng, CARCASSES_PER_CELL);
     let agents: Vec<AgentSpec> = roster
         .map(|traits| AgentSpec {
             position: (rng.random_range(-half..half), rng.random_range(-half..half)),
@@ -190,6 +213,9 @@ pub fn mode1_mesocosm(spec: &Mode1Spec, wear: Wear, seed: u64, community: Commun
             nutrient: 0.0,
         })
         .collect();
+    // A multiplier's extra litter comes after the founders, so they stand
+    // where they do at 1x.
+    carcasses.extend(litter(&mut rng, (litter_x - 1) * CARCASSES_PER_CELL));
     params.initial_population_size = agents.len() as u32;
 
     let mut world = World::from_recipe(
@@ -254,6 +280,66 @@ impl DrainSplit {
             pure_vertex: self.pure_vertex - earlier.pure_vertex,
             mixotroph: self.mixotroph - earlier.mixotroph,
         }
+    }
+}
+
+/// The founders' fate and income (#781): the agents at the pure heterotroph
+/// vertex when the run began (nominal autotrophy 0, heterotrophy above 0),
+/// tracked by id. In the mesocosm these are the decomposer founders.
+///
+/// Income is energy *gained*: each drain's structure times the trophic
+/// efficiency the stepper applied to it (flow 7, for the founder's traits
+/// against the target's). A `Consumed` event's `energy_delta` is the
+/// structure drained, before efficiency (764-founder-death-diagnosis.md,
+/// *A reading trap*), so the readout books both and keeps them apart.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct FounderReadout {
+    /// Founders at the run's start.
+    pub founders: usize,
+    /// The world's tick at the run's start.
+    pub start_tick: u64,
+    /// The world's tick at the run's (or arm's) end.
+    pub end_tick: u64,
+    /// The world's tick after the step in which each founder died.
+    pub death_ticks: Vec<u64>,
+    /// Energy the founders gained in each step from the start, while any
+    /// founder lived as the step began: entry `i` is the step ending at tick
+    /// `start_tick + i + 1`.
+    pub gained: Vec<f64>,
+    /// The structure they drained in the same steps, before efficiency.
+    pub drained: Vec<f64>,
+    /// Living agents at the end descended from a founder, founders included:
+    /// the founders' line.
+    pub line_alive_at_end: usize,
+}
+
+impl FounderReadout {
+    /// Founders alive at the world's tick `tick` (from the start on).
+    pub fn alive_at(&self, tick: u64) -> usize {
+        self.founders - self.death_ticks.iter().filter(|&&d| d <= tick).count()
+    }
+
+    /// Energy gained over the steps ending at ticks `from` through `to`.
+    fn window_gain(&self, from: u64, to: u64) -> f64 {
+        (from..=to)
+            .filter_map(|t| t.checked_sub(self.start_tick + 1))
+            .filter_map(|i| self.gained.get(i as usize))
+            .sum()
+    }
+
+    /// Mean founder income over the steps ending at ticks `from` through
+    /// `to`, per living founder-tick: the energy gained over the founders
+    /// alive as each step began (`None` with none alive).
+    pub fn mean_income(&self, from: u64, to: u64) -> Option<f64> {
+        let founder_ticks: usize = (from..=to).map(|t| self.alive_at(t - 1)).sum();
+        (founder_ticks > 0).then(|| self.window_gain(from, to) / founder_ticks as f64)
+    }
+
+    /// The same gain per founding founder per tick, the dead counting as
+    /// earning nothing (`None` with no founders).
+    pub fn mean_income_per_founder(&self, from: u64, to: u64) -> Option<f64> {
+        let steps = (to + 1 - from) as f64;
+        (self.founders > 0).then(|| self.window_gain(from, to) / (self.founders as f64 * steps))
     }
 }
 
@@ -350,6 +436,9 @@ pub struct Mode1Report {
     pub arm_carcass_drain: DrainSplit,
     /// The world's energy and nutrient budget over the run.
     pub ledger: Ledger,
+    /// The founders' fate and income from the world's founding (#781); a
+    /// paired arm's carries the settle's history.
+    pub founders: FounderReadout,
 }
 
 /// The whole world's energy and nutrient budget over a run, with what a
@@ -554,6 +643,13 @@ fn run_arm(
             .count(),
         carcass_drain: observer.carcass_drain,
         arm_carcass_drain: observer.carcass_drain.minus(&drain_at_start),
+        founders: FounderReadout {
+            end_tick: world.tick(),
+            line_alive_at_end: (world.agents().iter())
+                .filter(|a| observer.line.contains(&a.id))
+                .count(),
+            ..observer.founders.clone()
+        },
         ledger: {
             let end = Stock::of(world);
             Ledger {
@@ -645,6 +741,16 @@ struct Observer {
     autotrophy: HashMap<u64, f32>,
     /// Carcass-drain energy since the observer began, by drainer autotrophy.
     carcass_drain: DrainSplit,
+    /// The living founders' traits, by id.
+    living_founders: HashMap<u64, TraitVector>,
+    /// The founders and every agent descended from one.
+    line: std::collections::HashSet<u64>,
+    /// Traits of the agents and carcasses standing before the step about to
+    /// be read, kept while any founder lives: the targets a founder's drain
+    /// can name, whose traits set the efficiency it gets.
+    agent_traits: HashMap<u64, TraitVector>,
+    carcass_traits: HashMap<u64, TraitVector>,
+    founders: FounderReadout,
 }
 
 impl Observer {
@@ -668,7 +774,41 @@ impl Observer {
                 .map(|a| (a.id, a.traits.photosynthetic_absorption))
                 .collect(),
             carcass_drain: DrainSplit::default(),
+            living_founders: HashMap::new(),
+            line: std::collections::HashSet::new(),
+            agent_traits: HashMap::new(),
+            carcass_traits: HashMap::new(),
+            founders: FounderReadout::default(),
         }
+        .with_founders(world)
+    }
+
+    /// Take the agents at the pure heterotroph vertex as the founders.
+    fn with_founders(mut self, world: &World) -> Self {
+        self.living_founders = (world.agents().iter())
+            .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
+            .map(|a| (a.id, a.traits))
+            .collect();
+        self.line = self.living_founders.keys().copied().collect();
+        self.founders = FounderReadout {
+            founders: self.living_founders.len(),
+            start_tick: world.tick(),
+            ..FounderReadout::default()
+        };
+        self.remember_targets(world);
+        self
+    }
+
+    /// Remember the traits of what stands now, for the next step's founder
+    /// drains; forget them once no founder lives.
+    fn remember_targets(&mut self, world: &World) {
+        self.agent_traits.clear();
+        self.carcass_traits.clear();
+        if self.living_founders.is_empty() {
+            return;
+        }
+        (self.agent_traits).extend(world.agents().iter().map(|a| (a.id, a.traits)));
+        (self.carcass_traits).extend(world.carcasses().iter().map(|c| (c.id, c.traits)));
     }
 
     /// Read the step just taken, then drop it from the log. Roles are read
@@ -679,6 +819,8 @@ impl Observer {
         // The stepper marks a senescent death with `Senesced` just before its
         // `Died`, in the same step.
         let mut senesced = std::collections::HashSet::new();
+        let founders_began = !self.living_founders.is_empty();
+        let (mut gained, mut drained) = (0.0_f64, 0.0_f64);
         // Agents born in this step are on the roster now; those that died in
         // it are still in the map from the step before.
         self.autotrophy.extend(
@@ -694,6 +836,10 @@ impl Observer {
             match event.kind {
                 EventKind::Born => {
                     self.birth_tick.insert(event.source, after);
+                    let parents = [event.target, event.second_parent];
+                    if parents.iter().flatten().any(|p| self.line.contains(p)) {
+                        self.line.insert(event.source);
+                    }
                     let parent = event.target.and_then(|id| self.income.role(id));
                     if in_centre && parent == Some(TrophicRole::Producer) {
                         self.births += 1;
@@ -702,17 +848,34 @@ impl Observer {
                 EventKind::Senesced => {
                     senesced.insert(event.source);
                 }
-                EventKind::Consumed if event.target_was_carcass => {
-                    let drained = event.energy_delta as f64;
-                    let autotrophy = self.autotrophy[&event.source];
-                    if autotrophy < MIXOTROPH_AUTOTROPHY {
-                        self.carcass_drain.pure_vertex += drained;
+                EventKind::Consumed if self.living_founders.contains_key(&event.source) => {
+                    let consumer = &self.living_founders[&event.source];
+                    let target = event.target.expect("a drain names its target");
+                    let target = if event.target_was_carcass {
+                        &self.carcass_traits[&target]
                     } else {
-                        self.carcass_drain.mixotroph += drained;
+                        &self.agent_traits[&target]
+                    };
+                    let efficiency = explorers_sim::trophic_transfer_efficiency(
+                        consumer,
+                        target,
+                        world.params(),
+                    );
+                    gained += (event.energy_delta * efficiency) as f64;
+                    drained += event.energy_delta as f64;
+                    if event.target_was_carcass {
+                        self.book_carcass_drain(event.source, event.energy_delta);
                     }
+                }
+                EventKind::Consumed if event.target_was_carcass => {
+                    self.book_carcass_drain(event.source, event.energy_delta);
                 }
                 EventKind::Died => {
                     self.autotrophy.remove(&event.source);
+                    if self.living_founders.remove(&event.source).is_some() {
+                        self.founders.death_ticks.push(after);
+                    }
+                    self.line.remove(&event.source);
                     let born = self.birth_tick.remove(&event.source);
                     if self.income.role(event.source) == Some(TrophicRole::Producer) {
                         let age = after - born.expect("every agent has a birth tick");
@@ -728,9 +891,24 @@ impl Observer {
                 _ => {}
             }
         }
+        if founders_began {
+            self.founders.gained.push(gained);
+            self.founders.drained.push(drained);
+        }
+        self.remember_targets(world);
         self.income.update(world.event_log());
         self.cursor = world.event_log().len();
         world.compact_event_log_before(self.cursor);
+    }
+
+    /// Book a carcass drain to the drainer's side of [`MIXOTROPH_AUTOTROPHY`].
+    fn book_carcass_drain(&mut self, drainer: u64, drained: f32) {
+        let drained = drained as f64;
+        if self.autotrophy[&drainer] < MIXOTROPH_AUTOTROPHY {
+            self.carcass_drain.pure_vertex += drained;
+        } else {
+            self.carcass_drain.mixotroph += drained;
+        }
     }
 
     fn sample_centre(&mut self, world: &World) -> CentreSample {
@@ -772,6 +950,49 @@ impl Observer {
             }),
         }
     }
+}
+
+/// The ticks at which the founder readout counts founders alive (#781).
+pub const FOUNDER_CHECKPOINTS: [u64; 3] = [20, 50, 100];
+/// The ticks over which the founder readout reads mean income (#779's
+/// pre-registered window): the steps ending at ticks 5 through 20.
+pub const FOUNDER_INCOME_WINDOW: (u64, u64) = (5, 20);
+
+/// The header of the founder readout's table (#781): one row per arm, from
+/// [`founder_row`].
+const FOUNDER_HEADER: &str = "| founders | alive at 20 | alive at 50 | alive at 100 | alive at end | line alive at end | mean income, ticks 5–20, per living founder-tick: gained (drained) | gained per founder-tick, the dead at 0 |";
+
+/// One arm's founder readout. A checkpoint past the arm's end reads `-`.
+fn founder_row(f: &FounderReadout) -> String {
+    let checkpoints: Vec<String> = FOUNDER_CHECKPOINTS
+        .iter()
+        .map(|&t| {
+            if t <= f.end_tick {
+                f.alive_at(t).to_string()
+            } else {
+                "-".to_string()
+            }
+        })
+        .collect();
+    let (from, to) = FOUNDER_INCOME_WINDOW;
+    let drained = FounderReadout {
+        gained: f.drained.clone(),
+        ..f.clone()
+    };
+    let income = match (f.mean_income(from, to), drained.mean_income(from, to)) {
+        (Some(g), Some(d)) => format!("{g:.3} ({d:.3})"),
+        _ => "-".to_string(),
+    };
+    let per_founder = f
+        .mean_income_per_founder(from, to)
+        .map_or_else(|| "-".to_string(), |g| format!("{g:.3}"));
+    format!(
+        "| {} | {} | {} | {} | {income} | {per_founder} |",
+        f.founders,
+        checkpoints.join(" | "),
+        f.alive_at(f.end_tick),
+        f.line_alive_at_end
+    )
 }
 
 /// The header of the decomposer reading's table (#764, #772): one row per
@@ -842,6 +1063,11 @@ pub fn mode1_summary(header: &str, report: &Mode1Report) -> String {
         out,
         "## Decomposers and carcass-drain income\n\n{DECOMPOSER_HEADER}\n|---|---:|---:|---:|---:|\n{}\n",
         decomposer_row(report)
+    );
+    let _ = writeln!(
+        out,
+        "## Founders (pure heterotroph vertex at founding, by id)\n\n{FOUNDER_HEADER}\n|---:|---:|---:|---:|---:|---:|---:|---:|\n{}\n",
+        founder_row(&report.founders)
     );
     let second_half = &report.samples[report.samples.len() / 2..];
     let min_late = second_half.iter().map(|s| s.producers).min().unwrap_or(0);
@@ -926,6 +1152,16 @@ pub fn paired_summary(header: &str, report: &PairedReport) -> String {
         ("control", &report.control),
     ] {
         let _ = writeln!(out, "| {name} {}", decomposer_row(arm));
+    }
+    let _ = writeln!(
+        out,
+        "\n## Founders (pure heterotroph vertex at founding, by id)\n\n| arm {FOUNDER_HEADER}\n|---|---:|---:|---:|---:|---:|---:|---:|---:|"
+    );
+    for (name, arm) in [
+        ("perturbed", &report.perturbed),
+        ("control", &report.control),
+    ] {
+        let _ = writeln!(out, "| {name} {}", founder_row(&arm.founders));
     }
     let _ = writeln!(
         out,
@@ -1109,6 +1345,219 @@ mod tests {
         }
     }
 
+    /// The diagnostic litter multiplier (#781) stands `N` times the settled
+    /// stock in every cell, as `N` times the carcasses of the same size, on
+    /// the same founders in the same places, with total nutrient at founding
+    /// still the pool.
+    #[test]
+    fn a_litter_multiplier_scales_every_cells_carcass_count_energy_and_nutrient() {
+        let spec = Mode1Spec::committed();
+        let x = 10;
+        let base = mode1_mesocosm(
+            &spec,
+            mesocosm_wear(),
+            7,
+            Community::ProducersAndDecomposers,
+        );
+        let world = mode1_mesocosm_with_litter(
+            &spec,
+            mesocosm_wear(),
+            7,
+            Community::ProducersAndDecomposers,
+            x,
+        );
+        let grid = world.nutrient_grid();
+        for cell in 0..grid.cells().len() {
+            let standing: Vec<_> = world
+                .carcasses()
+                .iter()
+                .filter(|c| grid.cell_index_for(c.position) == cell)
+                .collect();
+            assert_eq!(standing.len(), x * CARCASSES_PER_CELL);
+            let energy: f32 = standing.iter().map(|c| c.energy).sum();
+            let nutrient: f32 = standing.iter().map(|c| c.nutrient).sum();
+            assert!((energy - x as f32 * CARCASS_ENERGY_PER_CELL).abs() < 1e-2);
+            assert!((nutrient - x as f32 * CARCASS_NUTRIENT_PER_CELL).abs() < 1e-2);
+        }
+        let placed = |w: &World| -> Vec<((f32, f32), TraitVector)> {
+            w.agents().iter().map(|a| (a.position, a.traits)).collect()
+        };
+        assert_eq!(placed(&world), placed(&base));
+        let params = world.params().clone();
+        let total = world.nutrient_pool()
+            + world
+                .agents()
+                .iter()
+                .map(|a| a.nutrient_total(&params))
+                .sum::<f32>()
+            + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
+        let pool = params.initial_nutrient_pool;
+        assert!((total - pool).abs() <= 1e-4 * pool, "{total} vs {pool}");
+    }
+
+    /// At 1× the multiplier is the committed mesocosm, carcass for carcass:
+    /// the default run is unchanged.
+    #[test]
+    fn a_litter_multiplier_of_one_is_the_committed_mesocosm() {
+        let spec = Mode1Spec::committed();
+        for community in [Community::ProducersAndDecomposers, Community::ProducersOnly] {
+            let base = mode1_mesocosm(&spec, mesocosm_wear(), 7, community);
+            let one = mode1_mesocosm_with_litter(&spec, mesocosm_wear(), 7, community, 1);
+            let carcasses = |w: &World| -> Vec<_> {
+                (w.carcasses().iter())
+                    .map(|c| (c.id, c.position, c.energy, c.nutrient, c.traits))
+                    .collect()
+            };
+            let agents = |w: &World| -> Vec<_> {
+                (w.agents().iter())
+                    .map(|a| (a.id, a.position, a.reserve, a.structure, a.traits))
+                    .collect()
+            };
+            assert_eq!(carcasses(&one), carcasses(&base));
+            assert_eq!(agents(&one), agents(&base));
+            assert_eq!(one.nutrient_grid().cells(), base.nutrient_grid().cells());
+        }
+    }
+
+    /// The founders are the agents at the pure heterotroph vertex at
+    /// founding, tracked by id (#781): the readout counts those ids alive at
+    /// every tick, read independently off the roster of the same run.
+    #[test]
+    fn the_founder_readout_counts_the_founding_decomposers_alive_by_id() {
+        let spec = Mode1Spec::committed();
+        let build = || {
+            mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                4,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let ticks = 30;
+        let report = run_mode1(&mut build(), ticks, 10);
+
+        let mut world = build();
+        let founders: std::collections::HashSet<u64> = world
+            .agents()
+            .iter()
+            .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(
+            founders.len(),
+            DECOMPOSERS_PER_CELL * SIDE_CELLS * SIDE_CELLS
+        );
+        let f = &report.founders;
+        assert_eq!(f.founders, founders.len());
+        assert_eq!(f.alive_at(0), founders.len());
+        let mut fell = false;
+        for _ in 0..ticks {
+            world.step();
+            let alive = world
+                .agents()
+                .iter()
+                .filter(|a| founders.contains(&a.id))
+                .count();
+            assert_eq!(f.alive_at(world.tick()), alive, "tick {}", world.tick());
+            fell |= alive < founders.len();
+        }
+        assert!(fell, "some founder dies within the run");
+
+        let bare = run_mode1(
+            &mut mode1_mesocosm(&spec, mesocosm_wear(), 4, Community::ProducersOnly),
+            5,
+            5,
+        );
+        assert_eq!(bare.founders.founders, 0);
+    }
+
+    /// Founder income is energy *gained*: each drain's structure times the
+    /// trophic efficiency the stepper applied to it, read independently off a
+    /// full event log. A `Consumed` event's `energy_delta` is the structure
+    /// drained, before efficiency, so reading it as income would overstate
+    /// income about threefold (764-founder-death-diagnosis.md, *A reading
+    /// trap*): the readout keeps the two apart.
+    #[test]
+    fn founder_income_is_drained_structure_times_the_trophic_efficiency_applied() {
+        let spec = Mode1Spec::committed();
+        let build = || {
+            mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                4,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let ticks = 20;
+        let report = run_mode1(&mut build(), ticks, 10);
+
+        let mut world = build();
+        let founders: HashMap<u64, TraitVector> = world
+            .agents()
+            .iter()
+            .filter(|a| a.traits.photosynthetic_absorption == 0.0)
+            .map(|a| (a.id, a.traits))
+            .collect();
+        let (mut gained, mut drained) = (vec![], vec![]);
+        for _ in 0..ticks {
+            let agents: HashMap<u64, TraitVector> =
+                world.agents().iter().map(|a| (a.id, a.traits)).collect();
+            let carcasses: HashMap<u64, TraitVector> =
+                world.carcasses().iter().map(|c| (c.id, c.traits)).collect();
+            let cursor = world.event_log().len();
+            world.step();
+            let (mut g, mut d) = (0.0_f64, 0.0_f64);
+            for e in world.event_log().since(cursor) {
+                let Some(consumer) = founders.get(&e.source) else {
+                    continue;
+                };
+                if e.kind != EventKind::Consumed {
+                    continue;
+                }
+                let target = e.target.unwrap();
+                let target = if e.target_was_carcass {
+                    carcasses[&target]
+                } else {
+                    agents[&target]
+                };
+                let eff =
+                    explorers_sim::trophic_transfer_efficiency(consumer, &target, world.params());
+                g += (e.energy_delta * eff) as f64;
+                d += e.energy_delta as f64;
+            }
+            gained.push(g);
+            drained.push(d);
+        }
+        let f = &report.founders;
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * b.abs().max(1.0);
+        let (sum_g, sum_d): (f64, f64) = (gained.iter().sum(), drained.iter().sum());
+        assert!(sum_d > 0.0);
+        assert!(
+            close(f.gained.iter().sum(), sum_g),
+            "{:?} vs {gained:?}",
+            f.gained
+        );
+        assert!(close(f.drained.iter().sum(), sum_d));
+        // The founders drain producer litter, which they keep about 0.31 of.
+        assert!(
+            sum_g < 0.5 * sum_d,
+            "income is not the drain: {sum_g} vs {sum_d}"
+        );
+
+        // Mean income over ticks 5–20 per living founder-tick: the gain in the
+        // steps ending at ticks 5 through 20 over the founders alive as each
+        // step began.
+        let window_gain: f64 = gained[4..20].iter().sum();
+        let founder_ticks: usize = (5..=20).map(|t| f.alive_at(t - 1)).sum();
+        let mean = f.mean_income(5, 20).unwrap();
+        assert!(close(mean, window_gain / founder_ticks as f64), "{mean}");
+        let per_founder = f.mean_income_per_founder(5, 20).unwrap();
+        assert!(close(
+            per_founder,
+            window_gain / (16.0 * founders.len() as f64)
+        ));
+    }
+
     /// The standing carcasses' nutrient comes out of the pool, as the
     /// founders' does (world rules, *Founders bind nutrient at world
     /// creation*): total nutrient at founding is the world's initial pool, and
@@ -1266,6 +1715,7 @@ mod tests {
             carcass_drain: DrainSplit::default(),
             arm_carcass_drain: DrainSplit::default(),
             ledger: Ledger::default(),
+            founders: FounderReadout::default(),
         };
         let summary = mode1_summary("h", &report);
         assert_eq!(ESTABLISHMENT_AGE, 50);
@@ -1730,6 +2180,7 @@ mod tests {
                 mixotroph: 3.0,
             },
             ledger: Ledger::default(),
+            founders: FounderReadout::default(),
         };
         let line = "| yes | 2 | 3 | 30.0 / 10.0 (0.250) | 1.0 / 3.0 (0.750) |";
         let summary = mode1_summary("h", &report);
@@ -1748,6 +2199,65 @@ mod tests {
         assert!(summary.contains(&format!("| control {line}")), "{summary}");
         assert!(
             summary.contains("| perturbed | no | 0 | 3 | 30.0 / 10.0 (0.250) | 0.0 / 0.0 (-) |"),
+            "{summary}"
+        );
+    }
+
+    /// Both summaries carry the founder readout (#781) per arm: founders
+    /// alive at ticks 20, 50 and 100 and at the end, the line alive at the
+    /// end, and mean income over ticks 5–20 as energy gained, with the
+    /// structure drained beside it in brackets.
+    #[test]
+    fn the_summaries_report_the_founder_readout() {
+        // 4 founders; one dies in the step ending at tick 10, one at 60.
+        // Each living founder gains 0.1 a tick and drains 0.3.
+        let mut gained = vec![];
+        let mut drained = vec![];
+        for t in 1..=200u64 {
+            let alive = 4 - (t > 10) as usize - (t > 60) as usize;
+            gained.push(0.1 * alive as f64);
+            drained.push(0.3 * alive as f64);
+        }
+        let founders = FounderReadout {
+            founders: 4,
+            start_tick: 0,
+            end_tick: 200,
+            death_ticks: vec![10, 60],
+            gained,
+            drained,
+            line_alive_at_end: 5,
+        };
+        // Ticks 5–20: alive at the start of each step 4 (steps 5–10) then 3.
+        let mean = founders.mean_income(5, 20).unwrap();
+        assert!((mean - 0.1).abs() < 1e-12);
+        let mut report = Mode1Report {
+            samples: vec![],
+            producer_lifespans: vec![],
+            senescent_lifespans: vec![],
+            final_roles: RoleTally::default(),
+            heterotroph_dominant: 0,
+            carcass_drain: DrainSplit::default(),
+            arm_carcass_drain: DrainSplit::default(),
+            ledger: Ledger::default(),
+            founders,
+        };
+        let line = "| 4 | 3 | 3 | 2 | 2 | 5 | 0.100 (0.300) | 0.084 |";
+        let summary = mode1_summary("h", &report);
+        assert!(summary.contains(line), "{summary}");
+
+        let control = report.clone();
+        report.founders.end_tick = 40;
+        let paired = PairedReport {
+            fork_tick: 0,
+            clearance: Clearance::default(),
+            perturbed: report,
+            control,
+        };
+        let summary = paired_summary("h", &paired);
+        assert!(summary.contains(&format!("| control {line}")), "{summary}");
+        // Checkpoints past an arm's end are not read.
+        assert!(
+            summary.contains("| perturbed | 4 | 3 | - | - | 3 | 5 | 0.100 (0.300) | 0.084 |"),
             "{summary}"
         );
     }

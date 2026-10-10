@@ -10,7 +10,15 @@
 //! calibrated (#766). Each run or arm also reports #764's decomposer reading
 //! (#772): whether decomposers persist, the heterotroph-dominant agents alive
 //! at the end, and the carcass-drain energy split by the drainer's autotrophy
-//! at 0.1, over the whole horizon and over the arm.
+//! at 0.1, over the whole horizon and over the arm. And it reports the
+//! founder readout (#781): the decomposer founders, tracked by id, alive at
+//! ticks 20, 50 and 100 and at the end, and their mean income over ticks
+//! 5–20 as energy gained (drained structure × the trophic efficiency
+//! applied).
+//!
+//! `--litter-x N` (#781) stands N times the settled litter at founding: N
+//! times the carcasses per cell, so N times their energy and nutrient. It is
+//! a diagnostic instrument setting; the committed mesocosm is 1×.
 //!
 //! With `--clear-at T` (#752) it reads the perturbation against its paired
 //! control: it settles the mesocosm to tick `T`, clones it, clears every agent
@@ -23,23 +31,24 @@
 //! reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W]
 //!                [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H]
 //!                [--sample-every K] [--clear-at T] [--no-decomposers]
-//!                [--out PATH]
+//!                [--litter-x N] [--out PATH]
 //! ```
 //!
 //! Defaults: the committed `crates/explorers-reference-modes/mode1.json`
 //! (found from any working directory), 3000 ticks, seed 1, the spec's wear
 //! (the four wear flags override its parameters), a sample every 25 ticks, no clearance, with
-//! decomposers, artifact `target/reference-mode/mode1.json` (or
+//! decomposers, 1× litter, artifact `target/reference-mode/mode1.json` (or
 //! `mode1-paired.json` with `--clear-at`) with the human-readable summary
 //! beside it as `.md` (also printed). Deterministic per seed and arguments.
 
 use std::path::PathBuf;
 
 use explorers_reference_modes::mesocosm::{
-    Community, Mode1Spec, mode1_mesocosm, mode1_summary, paired_summary, run_mode1, run_paired,
+    Community, Mode1Spec, mode1_mesocosm_with_litter, mode1_summary, paired_summary, run_mode1,
+    run_paired,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -51,6 +60,9 @@ struct Cli {
     sample_every: u64,
     clear_at: Option<u64>,
     community: Community,
+    /// The diagnostic litter multiplier (#781): N times the settled litter
+    /// stock at founding. 1 is the committed mesocosm.
+    litter_x: usize,
     out: Option<PathBuf>,
 }
 
@@ -64,6 +76,7 @@ impl Cli {
             sample_every: 25,
             clear_at: None,
             community: Community::ProducersAndDecomposers,
+            litter_x: 1,
             out: None,
         };
         while let Some(flag) = args.next() {
@@ -82,10 +95,14 @@ impl Cli {
                 "--repair-rate" => cli.wear[2] = Some(value.parse().map_err(|e| bad(&e))?),
                 "--senescence-hazard" => cli.wear[3] = Some(value.parse().map_err(|e| bad(&e))?),
                 "--sample-every" => cli.sample_every = value.parse().map_err(|e| bad(&e))?,
+                "--litter-x" => cli.litter_x = value.parse().map_err(|e| bad(&e))?,
                 "--clear-at" => cli.clear_at = Some(value.parse().map_err(|e| bad(&e))?),
                 "--out" => cli.out = Some(PathBuf::from(&value)),
                 _ => return Err(format!("unknown flag {flag}")),
             }
+        }
+        if cli.litter_x == 0 {
+            return Err("--litter-x must be at least 1".into());
         }
         if cli.sample_every == 0 {
             return Err("--sample-every must be at least 1".into());
@@ -118,13 +135,13 @@ fn main() {
         }
     }
 
-    let mut world = mode1_mesocosm(&spec, wear, cli.seed, cli.community);
+    let mut world = mode1_mesocosm_with_litter(&spec, wear, cli.seed, cli.community, cli.litter_x);
     let community = match cli.community {
         Community::ProducersAndDecomposers => "producers and decomposers",
         Community::ProducersOnly => "producers only",
     };
     let header = format!(
-        "spec {}, seed {}, {} ticks, wear rate {}, use-wear rate {}, repair rate {}, senescence hazard {}, sample every {}, {community}",
+        "spec {}, seed {}, {} ticks, wear rate {}, use-wear rate {}, repair rate {}, senescence hazard {}, sample every {}, {community}, litter x{}",
         cli.spec.display(),
         cli.seed,
         cli.ticks,
@@ -132,7 +149,8 @@ fn main() {
         wear.use_wear_rate,
         wear.repair_rate,
         wear.senescence_hazard,
-        cli.sample_every
+        cli.sample_every,
+        cli.litter_x
     );
     let (summary, report, default_out) = match cli.clear_at {
         None => {
@@ -163,6 +181,7 @@ fn main() {
         "sample_every": cli.sample_every,
         "clear_at": cli.clear_at,
         "community": cli.community,
+        "litter_x": cli.litter_x,
         "report": report.expect("the report serialises"),
     });
     std::fs::write(&out, serde_json::to_string(&artifact).unwrap()).expect("write the artifact");
