@@ -436,6 +436,44 @@ The surface carries both perception and physical channels. Each operates at a ra
 - **Surface perception** — detecting agents and carcasses on the surface. Chemical gradients, visual detection, vibration. The range at which an agent perceives its surroundings is derived from its mobility investment — sensing is subordinate to mobility, not a separately-priced capability. A more mobile agent both reaches further and perceives further. Signals are distance-weighted: closer agents produce stronger signals. Perception range bounds the interactions an agent initiates by sensing; the one exception is mate-finding, where gamete broadcast (dispersal) extends a low-mobility agent's reproductive reach beyond what it could perceive — a sessile producer finds mates it cannot sense (see Reproduction, reproductive reach).
 - **Surface contact** — physical interaction on the surface. Required for consumption, reproduction, and nutrient uptake. The range at which an agent can physically interact is determined by its trait vector — not a uniform world parameter. An agent's physical reach is a property of the agent, not the world.
 
+### Foraging movement follows what a resource releases
+
+Each tick a mobile agent steps its full stride, `eff_mobility × u_M`. The step's direction is the sum of a **chemotactic pull** and a **random-walk term**, normalised. The random-walk term points in a random direction with magnitude uniform on `[0, 1]`. The chemotactic pull is
+
+```
+pull = eff_heterotrophy · (Σ s_i û_i / d_i) / (Σ s_i / d_i)
+```
+
+The sums run over the targets the agent senses within its sensing range (*Channels on the surface*):
+- `û_i` is the unit vector toward target `i`, and `d_i` is the distance to it;
+- `s_i` is the target's **cue**, the stock a drain would take from it, times the agent's expression toward it (*Consumption is incremental*):
+  - a carcass's cue is its remaining energy;
+  - a living target's cue is its structure × `max(0, 1 − w(d))`, where `w` is its resemblance to the agent.
+
+When the agent senses no cue (`Σ s_i = 0`), the pull is 0 and the step is a random walk.
+
+**What the shape means.**
+- **The cue is what the target releases.** In the domain, organisms steer by what a resource releases, not by whether it is there ([spatial ecology](../ecology/spatial-ecology.md), *How decomposers find food*). The stock a drain takes from is this world's measure of it. So a richer target pulls harder, and an exhausted one pulls nothing.
+- **Remaining energy, not nutrient, is a carcass's cue.** A heterotroph's income is energy-limited (flow 3), so the cue tracks what the forager can gain. A carcass loses energy and nutrient together, because the bite that exhausts it takes its remaining nutrient, so the two rank carcasses almost alike. A carcass's nutrient returns to the pool through drains and leaching whatever its cue.
+- **The cue falls as `1/d`.** That is a point source's steady-state concentration under diffusion in three dimensions. It is also what *Channels on the surface* already requires: closer signals are stronger.
+- **The pull is the fractional gradient.** Dividing by the summed cue gives the domain's logarithmic sensing: bacterial drift follows ∇c / c, not ∇c (Kalinin et al. 2009).
+  - The pull is dimensionless and at most `eff_heterotrophy`, so how directed a forager's movement is does not depend on how much litter or prey there is in absolute terms.
+  - In an even field the pull is near zero, and the forager random-walks.
+  - On one-sided ground it heads for the richer side.
+- **Heterotrophy sets aim; mobility sets stride.** The pull is weighted by `eff_heterotrophy`, the investment in consuming what the cue advertises. An autotroph (`eff_heterotrophy = 0`) does not steer toward food.
+  - The domain separates how well a forager aims from how fast it goes. Mycelial fungi are slow but strongly directed toward resources, and they abandon depleted ground.
+  - Weighting the pull by mobility as well would penalise a slow forager twice, in stride and in aim. A slow, specialised decomposer would barely steer.
+  - **Sensing range** still derives from mobility. That coupling is unexamined.
+- **Movement reads the same two quantities as the drains,** the stock a bite takes from and expression. So an agent moves toward what it would eat, in proportion to how much there is to take. A recognised twin is spared by the drains and pulls nothing. Kin and conspecifics are not attractors that the drains then refuse.
+
+**Why the tempting alternatives fail.**
+- **One fixed pull per sensed target**, as the stepper had, is the rule this replaces. Each entity's weight `1/d` cancelled its displacement's length, so every target pulled with the same length whatever its distance or contents. That included the living agents and conspecifics around the forager. A forager surrounded by targets felt pulls that largely cancelled. It random-walked inside ground it had emptied while fresh litter lay just beyond its reach. ([764-founder-death-diagnosis.md](../research/764-founder-death-diagnosis.md), finding 3.)
+- **A pull linear in the cue,** `Σ s_i û_i / d_i` without the division, is in energy units. A large carcass would swamp everything, and a poor field would be drowned by the random walk, so litter density would set how purposeful movement is.
+- **Separate fields for the living and the dead** would need a relative weight between them, which the domain gives no reason for.
+- **A cue from drain rate** would make a fresh, undrained carcass pull nothing, so new litter would never be found.
+
+*Current state (2026-10-10): specified, not implemented. The stepper still sums one fixed-length pull per sensed agent and carcass, weighted by `eff_mobility × eff_heterotrophy`.*
+
 ### Channels on the network
 
 The network carries both perception and physical channels.

@@ -50,6 +50,13 @@ Seeds 1–5 were used for the litter test, seeds 1–3 elsewhere, and seed 1 for
 - A founder's feeding disc has radius `1.07 × 1.28 ≈ 1.37`, and `body_reach_coefficient` is 0, so the disc covers about 5.9 unit².
 - At founding there are 1.1–1.2 carcasses within reach, holding about 2.5 energy. By tick 3 they hold 0.4.
 
+> **Correction (2026-10-10).** The second bullet below is wrong, and the first and fourth needed tightening:
+> - **Drained carcasses do not linger.** The bite that exhausts a carcass takes all of its remaining nutrient. What the drainer does not keep goes to the cell, and the carcass leaves the world that tick (`phase.rs`, the carcass pass). So a carcass loses energy and nutrient together.
+> - **Every sensed entity pulls with the same length, `chemotaxis × heterotrophy`, whatever its distance or contents.** The weight's `1 / dist` cancels the displacement's length. That holds for every carcass sensed, fresh or part-drained, and for every living agent.
+> - **What cancels is a ring of entities on all sides.** It is the fresh carcasses between reach (1.37) and sensing (2.07), and the living agents around the founder, not drained litter. Their pulls largely cancel, and the random walk dominates.
+>
+> The measured effect of weighting attraction by carcass energy stands.
+
 **3. Foraging movement cannot find fresh litter.**
 - **Attraction ignores how much a carcass holds.** It is `chemotaxis × heterotrophy / dist` times the displacement, so an empty carcass pulls as hard as a fresh one. The same weight applies to every living agent sensed.
 - **Empty carcasses linger.** A carcass is removed only when both its energy and its nutrient are 0, and its nutrient leaves only by leaching.

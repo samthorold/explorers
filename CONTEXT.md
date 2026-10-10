@@ -162,7 +162,7 @@ _Avoid_: old age (suggests a fixed lifespan), natural death (every death in the 
 ### Movement and sensing
 
 **Chemotaxis**:
-Movement biased toward a detected signal gradient. An agent's mobility trait governs how strongly it can steer toward a signal source — chemotaxis is subordinate to mobility, not an independent trait dimension. Targets depend on what the agent can consume: producers emit signals attractive to consumers, carcasses emit signals attractive to decomposers.
+Movement biased up the gradient of what a resource releases, so a richer or nearer source pulls harder and an exhausted one pulls nothing. How strongly an agent steers is set by its investment in consuming that resource (heterotrophy, for carcasses and prey); how far it moves each tick is set by mobility. Chemotaxis is not an independent trait dimension. Targets depend on what the agent can consume: producers emit signals attractive to consumers, carcasses emit signals attractive to decomposers.
 _Avoid_: pathfinding, tracking, homing
 
 **Social foraging**:
