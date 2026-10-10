@@ -134,3 +134,57 @@ fn litter_x_refuses_zero() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--litter-x"), "{stderr}");
 }
+
+/// `--body-reach-pieces k` (#795) sets the body-reach coefficient from k and
+/// records k, the coefficient, the founders' reach and the clamp in the
+/// artifact and summary; without it, or at 0, the run is the committed
+/// mesocosm's, byte for byte.
+#[test]
+fn body_reach_pieces_sets_and_records_the_coefficient_and_zero_is_absent() {
+    let dir = scratch("body-reach-pieces");
+    let read = |name: &str| {
+        let out = dir.join(name);
+        (
+            std::fs::read_to_string(&out).unwrap(),
+            std::fs::read_to_string(out.with_extension("md")).unwrap(),
+        )
+    };
+    let default = run_with(&dir.join("default.json"), &[]);
+    run_with(&dir.join("zero.json"), &["--body-reach-pieces", "0"]);
+    let ten = run_with(&dir.join("ten.json"), &["--body-reach-pieces", "10"]);
+    let one = run_with(&dir.join("one.json"), &["--body-reach-pieces", "1"]);
+
+    assert_eq!(read("default.json"), read("zero.json"));
+    assert!(default.get("body_reach").is_none());
+    let reach = &ten["body_reach"];
+    assert_eq!(reach["pieces"], 10.0);
+    assert!(reach["coefficient"].as_f64().unwrap() > 0.0, "{reach}");
+    assert!(reach["founder_reach"].as_f64().unwrap() > 1.37, "{reach}");
+    assert_eq!(reach["clamped"], false);
+    assert_ne!(default["report"], ten["report"]);
+    let (_, md) = read("ten.json");
+    assert!(md.contains("## Feeding reach"), "{md}");
+    assert!(md.contains("clamped to 0: no"), "{md}");
+    // About one piece is the contact-only reach at 1x: the clamp applies and
+    // the world is the committed one.
+    assert_eq!(one["body_reach"]["clamped"], true);
+    assert_eq!(one["body_reach"]["coefficient"], 0.0);
+    assert_eq!(default["report"], one["report"]);
+}
+
+#[test]
+fn body_reach_pieces_needs_decomposer_founders() {
+    let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+        .args([
+            "--ticks",
+            "1",
+            "--no-decomposers",
+            "--body-reach-pieces",
+            "10",
+        ])
+        .output()
+        .expect("the instrument runs");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--body-reach-pieces"), "{stderr}");
+}

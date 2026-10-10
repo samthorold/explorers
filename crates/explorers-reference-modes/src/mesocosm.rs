@@ -8,6 +8,7 @@ use explorers_genesis_eval::guild::{
 };
 use explorers_genesis_eval::income::IncomeLedger;
 use explorers_sim::event::{Event, EventKind};
+use explorers_sim::phase::consumption_reach;
 use explorers_sim::topology::TrophicRole;
 use explorers_sim::{AgentSpec, CarcassSpec, TraitVector, World, WorldParameters, WorldRecipe};
 use rand::{Rng, SeedableRng};
@@ -244,6 +245,115 @@ pub fn mode1_mesocosm_with_litter(
         assert_eq!(shortfall, 0.0, "the pool covers the mesocosm's litter");
     }
     world
+}
+
+/// The coefficient of flow 3's body-reach term at which a founder's feeding
+/// reach spans `pieces` litter pieces (#795; reference-modes.md, mode 1,
+/// *Mesocosm → Parameters → Feeding reach*). Reach is `r = h · (c + b · √S)`
+/// for effective heterotrophy `h`, contact range coefficient `c` and structure
+/// `S`; a disc of radius `r_k = √(k / (π ρ))` holds `k` pieces on average at
+/// litter density `ρ`, so `b = (r_k / h − c) / √S`. Where `r_k ≤ h · c` the
+/// contact-only reach already spans `k` pieces, and `b` clamps to 0, the
+/// unit-restricted case: returns `(b, clamped)`.
+pub fn body_reach_coefficient_for_pieces(
+    pieces: f32,
+    heterotrophy: f32,
+    structure: f32,
+    litter_density: f32,
+    contact_range_coefficient: f32,
+) -> (f32, bool) {
+    let r_k = (pieces / (std::f32::consts::PI * litter_density)).sqrt();
+    let b = (r_k / heterotrophy - contact_range_coefficient) / structure.sqrt();
+    if b > 0.0 { (b, false) } else { (0.0, true) }
+}
+
+/// The feeding reach `--body-reach-pieces` set (#795), read from the world
+/// the run built.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct BodyReach {
+    /// `k`: the litter pieces a decomposer founder's reach is to span at
+    /// founding.
+    pub pieces: f32,
+    /// `ρ`: standing carcasses per unit area at founding.
+    pub litter_density: f32,
+    /// `h`: the decomposer founders' mean effective heterotrophy at founding,
+    /// as the stepper reads it.
+    pub founder_heterotrophy: f32,
+    /// `S`: their mean founding structure, after nutrient co-limiting.
+    pub founder_structure: f32,
+    /// `c`: the world's contact range coefficient.
+    pub contact_range_coefficient: f32,
+    /// `b`: the body-reach coefficient set on the world.
+    pub coefficient: f32,
+    /// The founders' feeding reach at founding under `b`.
+    pub founder_reach: f32,
+    /// The litter pieces that reach spans, `π r² ρ`: `k`, unless clamped.
+    pub pieces_spanned: f32,
+    /// Whether `b` clamped to 0: the contact-only reach already spans `k`.
+    pub clamped: bool,
+}
+
+/// Set `world`'s body-reach coefficient so that a decomposer founder's
+/// feeding reach at founding spans `pieces` litter pieces
+/// ([`body_reach_coefficient_for_pieces`]). `h` and `S` are the founders' at
+/// the pure heterotroph vertex as built: effective heterotrophy under the
+/// world's wear steepness and structure after co-limiting, averaged over the
+/// founders. `ρ` is the world's standing carcasses over its area, so it
+/// follows the litter multiplier. Call it on a world at founding. `None`,
+/// leaving the world untouched, when it has no decomposer founders.
+pub fn set_body_reach_pieces(world: &mut World, pieces: f32) -> Option<BodyReach> {
+    let steepness = world.params().wear_degradation_steepness;
+    let founders: Vec<(f32, f32)> = world
+        .agents()
+        .iter()
+        .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
+        .map(|a| (a.effective_trait_with_steepness(1, steepness), a.structure))
+        .collect();
+    if founders.is_empty() {
+        return None;
+    }
+    // Averaged in f64, so identical founders give their own value back.
+    let mean = |v: fn(&(f32, f32)) -> f32| {
+        (founders.iter().map(|f| v(f) as f64).sum::<f64>() / founders.len() as f64) as f32
+    };
+    let heterotrophy = mean(|f| f.0);
+    let structure = mean(|f| f.1);
+    let litter_density = world.carcasses().len() as f32 / world.params().world_extent.powi(2);
+    let c = world.params().contact_range_coefficient;
+    let (coefficient, clamped) =
+        body_reach_coefficient_for_pieces(pieces, heterotrophy, structure, litter_density, c);
+    world.params_mut().body_reach_coefficient = coefficient;
+    let founder_reach = consumption_reach(heterotrophy, structure, world.params());
+    Some(BodyReach {
+        pieces,
+        litter_density,
+        founder_heterotrophy: heterotrophy,
+        founder_structure: structure,
+        contact_range_coefficient: c,
+        coefficient,
+        founder_reach,
+        pieces_spanned: std::f32::consts::PI * founder_reach.powi(2) * litter_density,
+        clamped,
+    })
+}
+
+/// The summary's account of the feeding reach `--body-reach-pieces` set.
+pub fn body_reach_section(r: &BodyReach) -> String {
+    format!(
+        "## Feeding reach (--body-reach-pieces)\n\n\
+         pieces k {} | litter density ρ {:.4} per unit area | founder effective heterotrophy h {:.4} | \
+         founder structure S {:.4} | contact range coefficient c {:.4} | body reach coefficient b {:.4} | \
+         founder reach at founding {:.3} | pieces spanned {:.2} | clamped to 0: {}",
+        r.pieces,
+        r.litter_density,
+        r.founder_heterotrophy,
+        r.founder_structure,
+        r.contact_range_coefficient,
+        r.coefficient,
+        r.founder_reach,
+        r.pieces_spanned,
+        if r.clamped { "yes" } else { "no" }
+    )
 }
 
 /// The autotrophy at which a carcass drainer counts as a mixotroph rather
@@ -2635,5 +2745,92 @@ mod tests {
             summary.contains("| perturbed | no | 0 | - | 0.0 / 0.0 (-) | no | no |"),
             "{summary}"
         );
+    }
+
+    /// The conversion (#795): at the coefficient it gives, a reach disc of
+    /// `h · (c + b · √S)` holds k carcasses at density ρ; with `r_k ≤ h · c`
+    /// it clamps to 0, the world's contact-only reach.
+    #[test]
+    fn body_reach_coefficient_spans_k_pieces_and_clamps_at_contact_range() {
+        let mut params = Mode1Spec::committed().parameters;
+        let (h, s, rho) = (1.07, 9.0, 0.17);
+        let c = params.contact_range_coefficient;
+        for k in [3.0, 10.0, 30.0] {
+            let (b, clamped) = body_reach_coefficient_for_pieces(k, h, s, rho, c);
+            assert!(!clamped && b > 0.0, "k {k}: b {b}");
+            params.body_reach_coefficient = b;
+            let r = consumption_reach(h, s, &params);
+            let held = std::f32::consts::PI * r * r * rho;
+            assert!((held - k).abs() < 1e-3 * k, "k {k}: the disc holds {held}");
+        }
+        // h · c = 1.07 · 1.28 ≈ 1.37 spans π · 1.37² · 0.17 ≈ 1.0 pieces.
+        let at_contact = std::f32::consts::PI * (h * c).powi(2) * rho;
+        for k in [0.5, at_contact] {
+            assert_eq!(
+                body_reach_coefficient_for_pieces(k, h, s, rho, c),
+                (0.0, true),
+                "k {k}"
+            );
+        }
+    }
+
+    /// `set_body_reach_pieces` reads h and S from the decomposer founders the
+    /// world built (effective heterotrophy, co-limited structure) and ρ from
+    /// its litter, so ρ follows `--litter-x`, and sets the world's coefficient.
+    #[test]
+    fn set_body_reach_pieces_reads_the_built_founders_and_litter() {
+        let spec = Mode1Spec::committed();
+        for x in [1, 10] {
+            let mut world = mode1_mesocosm_with_litter(
+                &spec,
+                mesocosm_wear(),
+                1,
+                Community::ProducersAndDecomposers,
+                x,
+            );
+            let founder = world
+                .agents()
+                .iter()
+                .find(|a| a.traits.photosynthetic_absorption == 0.0)
+                .unwrap()
+                .clone();
+            let k_steep = world.params().wear_degradation_steepness;
+            // 30 pieces, since at 10x litter about 10 is the contact-only reach.
+            let reach = set_body_reach_pieces(&mut world, 30.0).unwrap();
+            assert_eq!(reach.pieces, 30.0);
+            assert_eq!(
+                reach.founder_heterotrophy,
+                founder.effective_trait_with_steepness(1, k_steep)
+            );
+            assert_eq!(reach.founder_structure, founder.structure);
+            let area = spec.parameters.world_extent.powi(2);
+            let rho = (x * CARCASSES_PER_CELL * SIDE_CELLS * SIDE_CELLS) as f32 / area;
+            assert!((reach.litter_density - rho).abs() < 1e-6, "x {x}");
+            assert_eq!(world.params().body_reach_coefficient, reach.coefficient);
+            assert!(!reach.clamped);
+            assert_eq!(
+                reach.founder_reach,
+                consumption_reach(
+                    reach.founder_heterotrophy,
+                    reach.founder_structure,
+                    world.params()
+                )
+            );
+            assert!((reach.pieces_spanned - 30.0).abs() < 3e-2, "{reach:?}");
+        }
+        // At 1x, about one piece is the contact-only reach: the clamp applies
+        // and the world keeps its coefficient of 0.
+        let mut world = mode1_mesocosm(
+            &spec,
+            mesocosm_wear(),
+            1,
+            Community::ProducersAndDecomposers,
+        );
+        let reach = set_body_reach_pieces(&mut world, 1.0).unwrap();
+        assert!(reach.clamped, "{reach:?}");
+        assert_eq!(world.params().body_reach_coefficient, 0.0);
+        // Without decomposer founders there is no founder reach to set.
+        let mut world = mode1_mesocosm(&spec, mesocosm_wear(), 1, Community::ProducersOnly);
+        assert!(set_body_reach_pieces(&mut world, 10.0).is_none());
     }
 }

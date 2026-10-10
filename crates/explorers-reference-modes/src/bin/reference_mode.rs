@@ -29,6 +29,16 @@
 //! times the carcasses per cell, so N times their energy and nutrient. It is
 //! a diagnostic instrument setting; the committed mesocosm is 1×.
 //!
+//! `--body-reach-pieces k` (#795; `reference-modes.md`, mode 1, *Feeding
+//! reach*) sets the body-reach coefficient so that a decomposer founder's
+//! feeding reach at founding spans k litter pieces, from the founders' effective
+//! heterotrophy and co-limited structure and the litter the run builds (so it
+//! follows `--litter-x`). Where the contact-only reach already spans k, the
+//! coefficient clamps to 0, the unit-restricted case. The summary and
+//! artifact record k, the coefficient, the founders' reach and the clamp.
+//! Without the flag, or at 0, the coefficient is the spec's and nothing is
+//! recorded.
+//!
 //! With `--clear-at T` (#752) it reads the perturbation against its paired
 //! control: it settles the mesocosm to tick `T`, clones it, clears every agent
 //! and carcass from one copy's centre patch (an outflow, booked in each arm's
@@ -40,7 +50,7 @@
 //! reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W]
 //!                [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H]
 //!                [--sample-every K] [--clear-at T] [--no-decomposers]
-//!                [--litter-x N] [--out PATH]
+//!                [--litter-x N] [--body-reach-pieces K] [--out PATH]
 //! ```
 //!
 //! Defaults: the committed `crates/explorers-reference-modes/mode1.json`
@@ -53,11 +63,11 @@
 use std::path::PathBuf;
 
 use explorers_reference_modes::mesocosm::{
-    Community, Mode1Spec, mode1_mesocosm_with_litter, mode1_summary, paired_summary, run_mode1,
-    run_paired,
+    Community, Mode1Spec, body_reach_section, mode1_mesocosm_with_litter, mode1_summary,
+    paired_summary, run_mode1, run_paired, set_body_reach_pieces,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--body-reach-pieces K] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -72,6 +82,9 @@ struct Cli {
     /// The diagnostic litter multiplier (#781): N times the settled litter
     /// stock at founding. 1 is the committed mesocosm.
     litter_x: usize,
+    /// The litter pieces a decomposer founder's reach spans at founding
+    /// (#795); `None`, as at 0, keeps the spec's coefficient.
+    body_reach_pieces: Option<f32>,
     out: Option<PathBuf>,
 }
 
@@ -86,6 +99,7 @@ impl Cli {
             clear_at: None,
             community: Community::ProducersAndDecomposers,
             litter_x: 1,
+            body_reach_pieces: None,
             out: None,
         };
         while let Some(flag) = args.next() {
@@ -105,6 +119,13 @@ impl Cli {
                 "--senescence-hazard" => cli.wear[3] = Some(value.parse().map_err(|e| bad(&e))?),
                 "--sample-every" => cli.sample_every = value.parse().map_err(|e| bad(&e))?,
                 "--litter-x" => cli.litter_x = value.parse().map_err(|e| bad(&e))?,
+                "--body-reach-pieces" => {
+                    let k: f32 = value.parse().map_err(|e| bad(&e))?;
+                    if !(k >= 0.0 && k.is_finite()) {
+                        return Err("--body-reach-pieces must be a finite k >= 0".into());
+                    }
+                    cli.body_reach_pieces = (k > 0.0).then_some(k);
+                }
                 "--clear-at" => cli.clear_at = Some(value.parse().map_err(|e| bad(&e))?),
                 "--out" => cli.out = Some(PathBuf::from(&value)),
                 _ => return Err(format!("unknown flag {flag}")),
@@ -112,6 +133,9 @@ impl Cli {
         }
         if cli.litter_x == 0 {
             return Err("--litter-x must be at least 1".into());
+        }
+        if cli.body_reach_pieces.is_some() && cli.community == Community::ProducersOnly {
+            return Err("--body-reach-pieces needs decomposer founders".into());
         }
         if cli.sample_every == 0 {
             return Err("--sample-every must be at least 1".into());
@@ -145,6 +169,9 @@ fn main() {
     }
 
     let mut world = mode1_mesocosm_with_litter(&spec, wear, cli.seed, cli.community, cli.litter_x);
+    let body_reach = cli.body_reach_pieces.map(|k| {
+        set_body_reach_pieces(&mut world, k).expect("the mesocosm has decomposer founders")
+    });
     let community = match cli.community {
         Community::ProducersAndDecomposers => "producers and decomposers",
         Community::ProducersOnly => "producers only",
@@ -161,15 +188,20 @@ fn main() {
         cli.sample_every,
         cli.litter_x
     );
+    // The feeding reach set is a run setting, so it follows the header.
+    let with_reach = |header: String| match &body_reach {
+        Some(r) => format!("{header}\n\n{}", body_reach_section(r)),
+        None => header,
+    };
     let (summary, report, default_out) = match cli.clear_at {
         None => {
             let report = run_mode1(&mut world, cli.ticks, cli.sample_every);
-            let summary = mode1_summary(&header, &report);
+            let summary = mode1_summary(&with_reach(header), &report);
             (summary, serde_json::to_value(report), "mode1.json")
         }
         Some(settle) => {
             let report = run_paired(world, settle, cli.ticks, cli.sample_every);
-            let header = format!("{header}, settled to tick {settle} then cleared");
+            let header = with_reach(format!("{header}, settled to tick {settle} then cleared"));
             let summary = paired_summary(&header, &report);
             (summary, serde_json::to_value(report), "mode1-paired.json")
         }
@@ -182,7 +214,7 @@ fn main() {
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).expect("create the artifact directory");
     }
-    let artifact = serde_json::json!({
+    let mut artifact = serde_json::json!({
         "spec": cli.spec,
         "seed": cli.seed,
         "ticks": cli.ticks,
@@ -193,6 +225,9 @@ fn main() {
         "litter_x": cli.litter_x,
         "report": report.expect("the report serialises"),
     });
+    if let Some(r) = body_reach {
+        artifact["body_reach"] = serde_json::to_value(r).expect("the body reach serialises");
+    }
     std::fs::write(&out, serde_json::to_string(&artifact).unwrap()).expect("write the artifact");
     std::fs::write(out.with_extension("md"), &summary).expect("write the summary");
     eprintln!("wrote {} and its .md summary", out.display());
