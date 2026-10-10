@@ -72,25 +72,32 @@ fn recipe() -> WorldRecipe {
 /// new — a different world, not a changed read. All three seeds now score,
 /// at fitness 0.744, 0.725 and 0.720 (refined 0.704 at n = 32), with full
 /// clustering and coexistence 1.0, 0.99 and 1.0.
+/// Re-pinned under #780: foraging movement follows what a resource releases
+/// (the cue rule), and light competition and nutrient uptake sum in stable id
+/// order, as does carcass leaching — a physics change, not a changed read.
+/// The summing order alone moved only last bits; the movement rule moved
+/// every seed, all still
+/// scoring with full clustering: fitness 0.718, 0.764 and 0.764, coexistence
+/// 1.0, 1.0 and 0.99.
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
     (
         1,
         [
-            1061051518, 1051978254, 1065353216, 1065353216, 1059028206, 1036442166,
+            1060617075, 1051002521, 1065353216, 1065353216, 1057778303, 1041240023,
         ],
     ),
     (
         2,
         [
-            1060746356, 1043317283, 1065353216, 1065185444, 1060991140, 1032010827,
+            1061395074, 1045375255, 1065353216, 1065353216, 1062903742, 1035722258,
         ],
     ),
     (
         3,
         [
-            1060660819, 1051251803, 1065353216, 1065353216, 1057828635, 1037270525,
+            1061386492, 1051973695, 1065353216, 1065185444, 1060538155, 1039706700,
         ],
     ),
 ];

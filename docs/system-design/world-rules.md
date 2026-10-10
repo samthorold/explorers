@@ -472,7 +472,7 @@ When the agent senses no cue (`Σ s_i = 0`), the pull is 0 and the step is a ran
 - **Separate fields for the living and the dead** would need a relative weight between them, which the domain gives no reason for.
 - **A cue from drain rate** would make a fresh, undrained carcass pull nothing, so new litter would never be found.
 
-*Current state (2026-10-10): specified, not implemented. The stepper still sums one fixed-length pull per sensed agent and carcass, weighted by `eff_mobility × eff_heterotrophy`.*
+*Current state (2026-10-10): implemented (#780) in `phase::move_agents`, in every world and with no switch. The old fixed-length pull per sensed target and its `eff_mobility` aim weight are deleted. A target exactly under the agent has no direction and is left out of both sums. Because the cues are stores, the phases that feed them sum in stable id order, so positions stay exactly invariant under a permutation of the population ([execution model](execution-model.md), *What this buys, and what stays out of scope*).*
 
 ### Channels on the network
 

@@ -47,15 +47,17 @@ pub fn photosynthesise(
             continue;
         }
 
-        // Compute total weight among co-located producers.
-        // Use grid query but deduplicate results (grid can return duplicates
-        // when query radius exceeds half the world extent).
-        let mut total_weight = my_weight;
-        let mut seen = std::collections::HashSet::new();
-        seen.insert(i as u64);
+        // Compute total weight among co-located producers, self included.
+        // The grid yields neighbours in cell (slice-insertion) order and can
+        // return duplicates when the query radius exceeds half the world
+        // extent, so collect them by stable id, dedupe, and sum in ascending
+        // id order: the light share then rounds the same way under any
+        // permutation of the population, which movement relies on since it
+        // reads structure (#780).
+        let mut weights: Vec<(u64, usize, f32)> = vec![(agents[i].id, i, my_weight)];
         for j_id in grid.query_radius(agents[i].position, competition_radius) {
             let j = j_id as usize;
-            if !seen.insert(j_id) {
+            if j == i {
                 continue;
             }
             let other_eff = agents[j].effective_trait_with_steepness(0, k);
@@ -69,9 +71,12 @@ pub fn photosynthesise(
             if crate::toroidal_distance(agents[i].position, agents[j].position, extent)
                 < competition_radius
             {
-                total_weight += other_weight;
+                weights.push((agents[j].id, j, other_weight));
             }
         }
+        weights.sort_unstable_by_key(|&(id, j, _)| (id, j));
+        weights.dedup_by_key(|&mut (id, j, _)| (id, j));
+        let total_weight: f32 = weights.iter().map(|&(_, _, w)| w).sum();
         let light_share = my_weight / total_weight;
         let income = flux * light_share;
 
@@ -186,7 +191,11 @@ pub fn absorb_nutrients_after_moves(
     }
 
     // Process each cell independently
-    for (cell_idx, agent_demands) in &cell_agents {
+    for (cell_idx, agent_demands) in &mut cell_agents {
+        // Within a cell, sum demands and draw down the pool in stable id
+        // order, so uptake rounds the same way under any permutation of the
+        // population (movement reads the structure it feeds; #780).
+        agent_demands.sort_unstable_by_key(|&(i, _)| agents[i].id);
         let cell_pool = nutrient_grid.cell_mut(*cell_idx);
         if *cell_pool <= 0.0 {
             continue;
@@ -198,7 +207,7 @@ pub fn absorb_nutrients_after_moves(
         }
 
         let available = *cell_pool;
-        for &(i, demand) in agent_demands {
+        for &(i, demand) in agent_demands.iter() {
             let uptake = if total_demand <= available {
                 demand
             } else {
@@ -1481,7 +1490,13 @@ pub fn leach_carcasses(
     if params.leaching_rate == 0.0 {
         return events;
     }
-    for carcass in carcasses.iter_mut() {
+    // Carcasses leach in stable id order, not list order (which follows
+    // death order and so the agent slice), so each cell's pool rounds the
+    // same under any permutation of the population (#780).
+    let mut order: Vec<usize> = (0..carcasses.len()).collect();
+    order.sort_by_key(|&i| carcasses[i].id);
+    for i in order {
+        let carcass = &mut carcasses[i];
         let bound = crate::stoichiometric_demand(&carcass.traits, carcass.energy, params);
         let leached = params.leaching_rate * (carcass.nutrient - bound).max(0.0);
         if leached <= 0.0 {
@@ -1610,10 +1625,28 @@ pub struct MoveResult {
 }
 
 /// Move agents: the final repositioning phase of the tick loop, running after
-/// all energy-affecting phases but before wear and the death check. Agents reposition based on
-/// spatial context (nearby agents and carcasses), traits (chemotaxis, consumption,
-/// scavenging, mobility), and a random walk component. Movement costs energy
-/// proportional to distance.
+/// all energy-affecting phases but before wear and the death check
+/// (world-rules.md, "Foraging movement follows what a resource releases").
+///
+/// Each mobile agent steps its full stride, `eff_mobility × u_M`, in the
+/// direction of the normalised sum of a chemotactic pull and a random-walk
+/// term. The random-walk term has a keyed-random direction and a magnitude
+/// uniform on `[0, 1]`. The pull is
+///
+/// ```text
+/// pull = eff_heterotrophy · (Σ s_i û_i / d_i) / (Σ s_i / d_i)
+/// ```
+///
+/// over the living agents and carcasses within the agent's sensing range
+/// (`eff_mobility × sensing_range_coefficient`), where `û_i` and `d_i` are the
+/// unit vector and distance to target `i` and `s_i` is its cue: a carcass's
+/// remaining energy, or a living target's structure × `max(0, 1 − w)`, with
+/// `w` its [`resemblance`] to the agent (the drain pass's recognition). When
+/// no sensed target has a cue the pull is 0. A target exactly under the agent
+/// has no direction and is left out of both sums. The sums run in ascending
+/// id order (living agents, then carcasses), so the step does not depend on
+/// slice order. Movement costs `stride × movement_cost_coefficient ×
+/// structure`, capped at the reserve.
 pub fn move_agents(
     agents: &mut [Agent],
     carcasses: &[Carcass],
@@ -1691,8 +1724,7 @@ fn move_agents_with(
         let eff_mobility = agents[i].effective_trait_with_steepness(2, k);
         // Sensing range derived from mobility: mobile agents perceive farther
         let eff_sensing = eff_mobility * params.sensing_range_coefficient;
-        // Chemotaxis strength derived from mobility (no separate trait)
-        let eff_chemotaxis = eff_mobility;
+        // Heterotrophy sets aim; mobility sets stride (and sensing range).
         let eff_heterotrophy = agents[i].effective_trait_with_steepness(1, k);
 
         if eff_mobility <= 0.0 {
@@ -1700,16 +1732,30 @@ fn move_agents_with(
             continue;
         }
 
-        // Query spatial grid for nearby agents within sensing range
-        let mut dir_x = 0.0_f32;
-        let mut dir_y = 0.0_f32;
+        // The chemotactic pull's two sums over the sensed targets:
+        // Σ s_i û_i / d_i (a vector) and Σ s_i / d_i.
+        let mut cue_x = 0.0_f32;
+        let mut cue_y = 0.0_f32;
+        let mut cue_total = 0.0_f32;
         let mut detected_count = 0.0_f32;
+        let mut sense = |cue: f32, dist: f32, (dx, dy): (f32, f32)| {
+            // A target under the agent has no direction, so it neither pulls
+            // nor enters the normalising sum.
+            if dist < 1e-6 || cue <= 0.0 {
+                return;
+            }
+            // û / d = displacement / d².
+            let w = cue / dist;
+            cue_x += w * dx / dist;
+            cue_y += w * dy / dist;
+            cue_total += w;
+        };
 
         if eff_sensing > 0.0 {
             // Detect nearby living agents. The grid yields neighbours in cell
-            // (i.e. slice-insertion) order; the attraction terms are summed in
-            // f32, so sum them in a canonical order — ascending stable id —
-            // to keep the result independent of iteration order.
+            // (i.e. slice-insertion) order; the cue sums are in f32, so sum
+            // them in a canonical order — ascending stable id — to keep the
+            // result independent of iteration order.
             let mut nearby: Vec<(u64, usize)> = grid
                 .query_radius(agents[i].position, eff_sensing)
                 .into_iter()
@@ -1722,17 +1768,21 @@ fn move_agents_with(
             for (_, j) in nearby {
                 let neighbour_pos = start_positions[j];
                 let dist = crate::toroidal_distance(agents[i].position, neighbour_pos, extent);
-                if dist < 1e-6 {
-                    detected_count += 1.0;
-                    continue;
-                }
-                let (dx, dy) =
-                    crate::toroidal_displacement(agents[i].position, neighbour_pos, extent);
-                // Attraction weighted by chemotaxis * heterotrophy (toward living agents)
-                let weight = eff_chemotaxis * eff_heterotrophy / dist;
-                dir_x += dx * weight;
-                dir_y += dy * weight;
                 detected_count += 1.0;
+                // A living target's cue: its structure times the expression
+                // the drain pass's recognition gives toward it, so a
+                // recognised twin pulls nothing.
+                let expression = living_target_expression(resemblance(
+                    &agents[i].traits,
+                    &agents[j].traits,
+                    params,
+                ));
+                let cue = agents[j].structure.max(0.0) * expression;
+                sense(
+                    cue,
+                    dist,
+                    crate::toroidal_displacement(agents[i].position, neighbour_pos, extent),
+                );
             }
 
             // Detect nearby carcasses, in ascending id order.
@@ -1760,17 +1810,25 @@ fn move_agents_with(
                 let carcass = carcasses_by_id[k];
                 let dist = crate::toroidal_distance(agents[i].position, carcass.position, extent);
                 detected_count += 1.0;
-                if dist < 1e-6 {
-                    continue;
-                }
-                let (dx, dy) =
-                    crate::toroidal_displacement(agents[i].position, carcass.position, extent);
-                // Attraction weighted by chemotaxis * heterotrophy (toward carcasses)
-                let weight = eff_chemotaxis * eff_heterotrophy / dist;
-                dir_x += dx * weight;
-                dir_y += dy * weight;
+                // A carcass's cue: its remaining energy.
+                sense(
+                    carcass.energy.max(0.0),
+                    dist,
+                    crate::toroidal_displacement(agents[i].position, carcass.position, extent),
+                );
             }
         }
+
+        // The pull is the fractional gradient, weighted by heterotrophy: at
+        // most `eff_heterotrophy` long, and 0 when nothing sensed has a cue.
+        let (mut dir_x, mut dir_y) = if cue_total > 0.0 {
+            (
+                eff_heterotrophy * cue_x / cue_total,
+                eff_heterotrophy * cue_y / cue_total,
+            )
+        } else {
+            (0.0, 0.0)
+        };
 
         sensing_throughput[i] = detected_count;
 
@@ -5701,7 +5759,9 @@ mod tests {
 
     #[test]
     fn move_direction_attracted_to_nearby_living_agent_by_heterotrophy() {
-        // Agent with heterotrophy and chemotaxis should move toward a nearby living agent.
+        // A lone sensed living target (kin-blind params, so unrecognised)
+        // pulls with the full heterotrophy toward it: the fractional gradient
+        // of a single source is its unit vector.
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0; // isolate direction test
         let mover_traits = TraitVector {
@@ -5719,6 +5779,7 @@ mod tests {
             make_agent(1, (20.0, 0.0), 100.0, target_traits),
         ];
         agents[1].structure = 10.0;
+        let expected = expected_position(&agents[0], (0.5, 0.0), &params, 0);
         let carcasses = vec![];
         let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
@@ -5726,12 +5787,7 @@ mod tests {
 
         let result = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
 
-        // Agent should have moved in the +x direction (toward target)
-        assert!(
-            agents[0].position.0 > 0.0,
-            "agent should move toward target in +x, got x={}",
-            agents[0].position.0
-        );
+        assert_close(agents[0].position, expected);
         assert!(!result.events.is_empty());
         assert_eq!(result.events[0].kind, EventKind::Moved);
     }
@@ -5966,6 +6022,341 @@ mod tests {
         );
     }
 
+    // --- Foraging movement follows what a resource releases (#780) ---
+    // world-rules.md, "Foraging movement follows what a resource releases":
+    // the step direction is normalise(pull + random-walk term), with
+    // pull = eff_heterotrophy · (Σ s_i û_i / d_i) / (Σ s_i / d_i).
+
+    /// A foraging probe: senses 5.0 (mobility 0.5 × coefficient 10), steers
+    /// with heterotrophy 0.8.
+    fn forager_traits() -> TraitVector {
+        TraitVector {
+            heterotrophy: 0.8,
+            mobility: 0.5,
+            ..zero_traits()
+        }
+    }
+
+    fn carcass_at(id: u64, position: (f32, f32), energy: f32) -> Carcass {
+        Carcass {
+            id,
+            position,
+            energy,
+            nutrient: 0.0,
+            traits: zero_traits(),
+        }
+    }
+
+    /// Where `mover` (standing where it is now, at tick 0) lands under the
+    /// specified rule, given the chemotactic `pull` the test expects: the
+    /// keyed random-walk term (uniform angle, magnitude uniform on [0, 1])
+    /// plus `pull`, normalised, times the stride `eff_mobility × u_M`.
+    fn expected_position(
+        mover: &Agent,
+        pull: (f32, f32),
+        params: &WorldParameters,
+        run_seed: u64,
+    ) -> (f32, f32) {
+        let mut rng = crate::keyed_rng::agent_rng(
+            run_seed,
+            mover.id,
+            0,
+            crate::keyed_rng::PhaseTag::Movement,
+        );
+        let angle: f32 = rng.random::<f32>() * std::f32::consts::TAU;
+        let magnitude: f32 = rng.random::<f32>();
+        let dir = (
+            pull.0 + angle.cos() * magnitude,
+            pull.1 + angle.sin() * magnitude,
+        );
+        let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt();
+        let stride = mover.effective_trait_with_steepness(2, params.wear_degradation_steepness)
+            * crate::units::MOBILITY_DISTANCE_PER_TICK;
+        crate::wrap_position(
+            (
+                mover.position.0 + dir.0 / len * stride,
+                mover.position.1 + dir.1 / len * stride,
+            ),
+            params.world_extent,
+        )
+    }
+
+    /// Run one movement tick for `agents` (all indexed into the living grid)
+    /// among `carcasses`, and return agent 0's new position.
+    fn step_first(
+        agents: &mut [Agent],
+        carcasses: &[Carcass],
+        params: &WorldParameters,
+        run_seed: u64,
+    ) -> (f32, f32) {
+        let mut grid = crate::spatial::SpatialGrid::new(params.world_extent, 10.0);
+        for (i, a) in agents.iter().enumerate() {
+            grid.insert(i as u64, a.position);
+        }
+        move_agents(agents, carcasses, &grid, params, run_seed, 0);
+        agents[0].position
+    }
+
+    fn assert_close(actual: (f32, f32), expected: (f32, f32)) {
+        assert!(
+            (actual.0 - expected.0).abs() < 1e-5 && (actual.1 - expected.1).abs() < 1e-5,
+            "expected {expected:?}, got {actual:?}"
+        );
+    }
+
+    #[test]
+    fn leaching_fills_each_cell_the_same_whatever_the_carcass_slice_order() {
+        // Movement reads stores the pool feeds, so the pool must round the
+        // same under any carcass order: several carcasses share one cell.
+        let mut params = test_params();
+        params.leaching_rate = 0.3;
+        let carcasses: Vec<Carcass> = (0..12u64)
+            .map(|n| Carcass {
+                id: (n * 7919) % 101,
+                position: (1.0 + 0.1 * n as f32, 2.0),
+                energy: 0.1,
+                nutrient: 0.1 + 0.37 * n as f32 + 1.0e-3 * (n * n) as f32,
+                traits: zero_traits(),
+            })
+            .collect();
+        let pool = |mut carcasses: Vec<Carcass>| {
+            let mut grid = crate::spatial::NutrientGrid::new(params.world_extent, 10.0, 3.3);
+            leach_carcasses(&mut carcasses, &mut grid, &params);
+            grid.at_position((1.5, 2.0)).to_bits()
+        };
+        let reference = pool(carcasses.clone());
+        for shift in 1..12 {
+            let mut rotated = carcasses.clone();
+            rotated.rotate_left(shift);
+            assert_eq!(pool(rotated), reference, "rotation {shift}");
+        }
+        let mut reversed = carcasses;
+        reversed.reverse();
+        assert_eq!(pool(reversed), reference);
+    }
+
+    #[test]
+    fn a_carcass_with_no_energy_left_pulls_nothing() {
+        let params = test_params();
+        for seed in 0..20 {
+            let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, forager_traits())];
+            let expected = expected_position(&agents[0], (0.0, 0.0), &params, seed);
+            let carcasses = vec![carcass_at(9, (0.0, 2.0), 0.0)];
+            assert_close(step_first(&mut agents, &carcasses, &params, seed), expected);
+        }
+    }
+
+    #[test]
+    fn a_forager_heads_for_fresh_litter_over_a_depleted_even_field() {
+        // Fresh litter on +x; an even field of nearly exhausted carcasses
+        // spread over the -x half. Under the old fixed pull per target the
+        // field's count won; under the cue rule the litter's contents do.
+        let params = test_params();
+        let mut carcasses = vec![carcass_at(100, (3.5, 0.0), 20.0)];
+        for n in 0..7 {
+            let angle = std::f32::consts::FRAC_PI_2 + n as f32 * std::f32::consts::PI / 6.0;
+            carcasses.push(carcass_at(
+                200 + n,
+                (2.5 * angle.cos(), 2.5 * angle.sin()),
+                0.5,
+            ));
+        }
+        let seeds = 400;
+        let toward_litter = (0..seeds)
+            .filter(|&seed| {
+                let mut agents = vec![make_agent(0, (0.0, 0.0), 100.0, forager_traits())];
+                step_first(&mut agents, &carcasses, &params, seed).0 > 0.0
+            })
+            .count();
+        assert!(
+            toward_litter * 2 > seeds as usize,
+            "stepped toward the litter on {toward_litter} of {seeds} seeds"
+        );
+    }
+
+    #[test]
+    fn a_recognised_identical_living_agent_pulls_nothing() {
+        let params = recognising_params();
+        for seed in 0..20 {
+            let mut agents = vec![
+                make_agent(0, (0.0, 0.0), 100.0, forager_traits()),
+                make_agent(1, (2.0, 0.0), 100.0, forager_traits()),
+            ];
+            agents[1].structure = 10.0;
+            let expected = expected_position(&agents[0], (0.0, 0.0), &params, seed);
+            assert_close(step_first(&mut agents, &[], &params, seed), expected);
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_living_agent_pulls_in_proportion_to_its_structure() {
+        // Two unrecognised targets at equal distance on either side, with
+        // structures 3 and 1: the fractional gradient is (3 − 1)/(3 + 1) of
+        // the full heterotrophy, toward the larger.
+        let params = recognising_params();
+        let prey = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        assert_eq!(resemblance(&forager_traits(), &prey, &params), 0.0);
+        for seed in 0..20 {
+            let mut agents = vec![
+                make_agent(0, (0.0, 0.0), 100.0, forager_traits()),
+                make_agent(1, (2.0, 0.0), 100.0, prey),
+                make_agent(2, (-2.0, 0.0), 100.0, prey),
+            ];
+            agents[1].structure = 3.0;
+            agents[2].structure = 1.0;
+            let expected = expected_position(&agents[0], (0.8 * 0.5, 0.0), &params, seed);
+            assert_close(step_first(&mut agents, &[], &params, seed), expected);
+        }
+    }
+
+    #[test]
+    fn a_partly_resembling_living_agent_pulls_as_its_unspared_structure() {
+        // A living target's cue is its structure × (1 − w): a partly
+        // resembling target of structure S balances a carcass of energy
+        // S(1 − w) at the same distance opposite.
+        let params = recognising_params();
+        let cousin = TraitVector {
+            heterotrophy: 0.9,
+            ..forager_traits()
+        };
+        let w = resemblance(&forager_traits(), &cousin, &params);
+        assert!(w > 0.0 && w < 1.0, "resemblance {w}");
+        for seed in 0..20 {
+            let mut agents = vec![
+                make_agent(0, (0.0, 0.0), 100.0, forager_traits()),
+                make_agent(1, (2.0, 0.0), 100.0, cousin),
+            ];
+            agents[1].structure = 8.0;
+            let carcasses = vec![carcass_at(9, (-2.0, 0.0), 8.0 * (1.0 - w))];
+            let expected = expected_position(&agents[0], (0.0, 0.0), &params, seed);
+            assert_close(step_first(&mut agents, &carcasses, &params, seed), expected);
+        }
+    }
+
+    #[test]
+    fn a_symmetric_field_of_equal_targets_gives_no_net_pull() {
+        let params = test_params();
+        let prey = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        for seed in 0..20 {
+            let mut agents = vec![
+                make_agent(0, (0.0, 0.0), 100.0, forager_traits()),
+                make_agent(1, (1.5, 1.5), 100.0, prey),
+                make_agent(2, (-1.5, -1.5), 100.0, prey),
+            ];
+            agents[1].structure = 4.0;
+            agents[2].structure = 4.0;
+            let carcasses = vec![
+                carcass_at(10, (2.0, 0.0), 4.0),
+                carcass_at(11, (-2.0, 0.0), 4.0),
+                carcass_at(12, (0.0, 2.0), 4.0),
+                carcass_at(13, (0.0, -2.0), 4.0),
+            ];
+            let expected = expected_position(&agents[0], (0.0, 0.0), &params, seed);
+            assert_close(step_first(&mut agents, &carcasses, &params, seed), expected);
+        }
+    }
+
+    #[test]
+    fn an_agent_without_heterotrophy_is_not_steered_by_any_cue() {
+        let params = test_params();
+        let autotroph = TraitVector {
+            heterotrophy: 0.0,
+            photosynthetic_absorption: 1.0,
+            ..forager_traits()
+        };
+        let prey = TraitVector {
+            photosynthetic_absorption: 1.0,
+            ..zero_traits()
+        };
+        for seed in 0..20 {
+            let mut agents = vec![
+                make_agent(0, (0.0, 0.0), 100.0, autotroph),
+                make_agent(1, (2.0, 0.0), 100.0, prey),
+            ];
+            agents[1].structure = 10.0;
+            let carcasses = vec![carcass_at(9, (0.0, 2.0), 30.0)];
+            let expected = expected_position(&agents[0], (0.0, 0.0), &params, seed);
+            assert_close(step_first(&mut agents, &carcasses, &params, seed), expected);
+        }
+    }
+
+    #[test]
+    fn the_step_is_independent_of_agent_and_carcass_slice_order() {
+        use rand::SeedableRng;
+        use rand::distr::Uniform;
+        use rand_chacha::ChaCha8Rng;
+
+        // Many foragers, prey and carcasses of varied cue; reversing and
+        // rotating both slices moves every agent (by id) bit-identically.
+        let mut params = recognising_params();
+        params.movement_cost_coefficient = 0.01;
+        let mut rng = ChaCha8Rng::seed_from_u64(780);
+        let pos = Uniform::new(-6.0_f32, 6.0).unwrap();
+        let unit = Uniform::new(0.0_f32, 1.0).unwrap();
+        let mut agents: Vec<Agent> = (0..40u64)
+            .map(|id| {
+                let traits = TraitVector {
+                    mobility: 0.1 + 0.4 * rng.sample(unit),
+                    heterotrophy: rng.sample(unit),
+                    photosynthetic_absorption: rng.sample(unit),
+                    ..zero_traits()
+                };
+                let mut a =
+                    make_agent(id * 7 + 3, (rng.sample(pos), rng.sample(pos)), 50.0, traits);
+                a.structure = 10.0 * rng.sample(unit);
+                a
+            })
+            .collect();
+        agents[1].traits = agents[0].traits; // a recognised twin somewhere
+        let carcasses: Vec<Carcass> = (0..60u64)
+            .map(|id| {
+                carcass_at(
+                    1_000 + (id * 37) % 101,
+                    (rng.sample(pos), rng.sample(pos)),
+                    20.0 * rng.sample(unit),
+                )
+            })
+            .collect();
+
+        let run = |mut agents: Vec<Agent>, carcasses: Vec<Carcass>| {
+            let mut grid = crate::spatial::SpatialGrid::new(params.world_extent, 10.0);
+            for (i, a) in agents.iter().enumerate() {
+                grid.insert(i as u64, a.position);
+            }
+            move_agents(&mut agents, &carcasses, &grid, &params, 11, 4);
+            let mut out: Vec<(u64, u32, u32, u32)> = agents
+                .iter()
+                .map(|a| {
+                    (
+                        a.id,
+                        a.position.0.to_bits(),
+                        a.position.1.to_bits(),
+                        a.reserve.to_bits(),
+                    )
+                })
+                .collect();
+            out.sort_unstable();
+            out
+        };
+
+        let reference = run(agents.clone(), carcasses.clone());
+        let mut rev_agents = agents.clone();
+        rev_agents.reverse();
+        let mut rev_carcasses = carcasses.clone();
+        rev_carcasses.reverse();
+        assert_eq!(reference, run(rev_agents, rev_carcasses));
+        agents.rotate_left(13);
+        let mut rot_carcasses = carcasses;
+        rot_carcasses.rotate_left(29);
+        assert_eq!(reference, run(agents, rot_carcasses));
+    }
+
     /// #785: finding carcasses through a spatial grid is a pure refactor of the
     /// brute-force scan. Over many ticks, with carcasses spread over the torus,
     /// some exactly at an agent's sensing range (directly and across the wrap),
@@ -5977,7 +6368,7 @@ mod tests {
         use rand::distr::Uniform;
         use rand_chacha::ChaCha8Rng;
 
-        let mut params = test_params();
+        let mut params = recognising_params();
         params.movement_cost_coefficient = 0.01;
         let extent = params.world_extent;
         let half = extent / 2.0;
@@ -6001,12 +6392,13 @@ mod tests {
                 heterotrophy: rng.sample(unit),
                 ..zero_traits()
             };
-            agents.push(make_agent(
-                id,
-                (rng.sample(pos), rng.sample(pos)),
-                100.0,
-                traits,
-            ));
+            let mut agent = make_agent(id, (rng.sample(pos), rng.sample(pos)), 100.0, traits);
+            // Living cues: structure, and some twins of the probes to recognise.
+            agent.structure = 10.0 * rng.sample(unit);
+            if id % 9 == 0 {
+                agent.traits = probe;
+            }
+            agents.push(agent);
         }
         // A sessile agent: it never scans.
         agents.push(make_agent(60, (1.0, 1.0), 100.0, zero_traits()));
@@ -6014,7 +6406,8 @@ mod tests {
         let carcass = |id: u64, position: (f32, f32)| Carcass {
             id,
             position,
-            energy: 5.0,
+            // Varied cues, some exhausted.
+            energy: (id % 7) as f32,
             nutrient: 0.0,
             traits: zero_traits(),
         };
@@ -8449,30 +8842,24 @@ mod tests {
         }
     }
 
-    // --- Chemotaxis derived from mobility ---
+    // --- Heterotrophy sets aim; mobility sets stride (#780) ---
 
     #[test]
-    fn move_chemotaxis_proportional_to_mobility() {
-        // Chemotaxis strength is derived from mobility. Higher mobility agents
-        // have stronger directional bias toward detected signals.
+    fn mobility_sets_stride_but_not_aim() {
+        // The pull is weighted by heterotrophy alone: two foragers that
+        // differ only in mobility, both sensing the same target, step in the
+        // same direction, and the more mobile one strides further in
+        // proportion.
         let mut params = test_params();
         params.movement_cost_coefficient = 0.0;
         params.sensing_range_coefficient = 100.0; // ensure both can sense
-
         let target_traits = TraitVector {
             photosynthetic_absorption: 1.0,
             ..zero_traits()
         };
-
-        // Strong chemotaxis signal: a close, attractive target and high
-        // heterotrophy so the deterministic directional bias dominates the
-        // bounded (unit-magnitude) random-walk jitter. The keyed-stateless RNG
-        // (#376) makes the jitter a fixed per-agent vector, so the test must
-        // ensure chemotaxis clearly outweighs it rather than relying on a
-        // particular seed's jitter happening to point the right way.
-        let run = |mob: f32| -> f32 {
+        let run = |mob: f32| -> (f32, f32) {
             let mover = TraitVector {
-                heterotrophy: 5.0,
+                heterotrophy: 0.6,
                 mobility: mob,
                 ..zero_traits()
             };
@@ -8481,23 +8868,14 @@ mod tests {
                 make_agent(1, (1.0, 0.0), 100.0, target_traits),
             ];
             agents[1].structure = 5.0;
-            let carcasses = vec![];
-            let mut grid = crate::spatial::SpatialGrid::new(100.0, 10.0);
-            grid.insert(0, (0.0, 0.0));
-            grid.insert(1, (1.0, 0.0));
-
-            let _ = move_agents(&mut agents, &carcasses, &grid, &params, 0, 0);
-            agents[0].position.0 // x position after move
+            step_first(&mut agents, &[], &params, 3)
         };
 
-        let low_mob_x = run(0.1);
-        let high_mob_x = run(1.0);
-        // Higher mobility -> larger movement distance AND stronger chemotaxis bias
+        let low = run(0.1);
+        let high = run(1.0);
         assert!(
-            high_mob_x > low_mob_x,
-            "higher mobility should move further toward target: low={}, high={}",
-            low_mob_x,
-            high_mob_x
+            (high.0 - 10.0 * low.0).abs() < 1e-4 && (high.1 - 10.0 * low.1).abs() < 1e-4,
+            "same direction, ten times the stride: low={low:?}, high={high:?}"
         );
     }
 

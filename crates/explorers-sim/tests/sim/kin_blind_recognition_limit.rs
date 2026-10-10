@@ -19,6 +19,11 @@
 //! world is now the flat, ungated drain, and the example4, example9 and
 //! example10 fingerprints are exactly the pre-need-gating ones the former
 //! `flat_satiation_limit` test pinned (f6a1c1f with #652's retention cap).
+//! Re-pinned for #780: every world moves because light competition and
+//! nutrient uptake now sum in stable id order (rounding only), and example4,
+//! example10, example11 and example13, whose mobile heterotrophs sense cues,
+//! move again because foraging movement follows what a resource releases.
+//! Recognition still subtracts nothing at `recognition_distance = 0`.
 
 use explorers_sim::{World, WorldRecipe};
 
@@ -65,25 +70,25 @@ fn fingerprint(world: &World) -> u64 {
 /// The scenarios, seeds and horizons, with the pre-recognition fingerprint of
 /// each.
 const PINNED: [(&str, u64, u64, u64); 5] = [
-    ("example4.json", 7, 200, 0xd804_3d11_47fc_99a9),
+    ("example4.json", 7, 200, 0x44a1_e670_cbfa_2309),
     (
         "example9_detrital_pathway.json",
         11,
         200,
-        0x7654_dd4b_64cc_b3d8,
+        0x3bae_d4a1_50c5_90bf,
     ),
     (
         "example10_predator_prey_hopf.json",
         3,
         200,
-        0xb416_319f_dae4_51b7,
+        0x6705_0beb_531b_e0a6,
     ),
-    ("example13_closed_web.json", 5, 200, 0x3729_25a6_f93b_4990),
+    ("example13_closed_web.json", 5, 200, 0x6986_21d5_b496_b2a6),
     (
         "example11_branching_coexistence.json",
         2,
         200,
-        0x9749_9876_7d6e_76ca,
+        0x102f_5b5d_e082_e613,
     ),
 ];
 

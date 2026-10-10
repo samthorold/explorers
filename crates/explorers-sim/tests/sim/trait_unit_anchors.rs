@@ -85,14 +85,20 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// `use_wear_rate` 0.01), so the wear law (first-order repair, the
 /// senescence hazard, mobility use-wear by energy) moves it. example4 and
 /// example10 run wear-free and are unchanged.
+/// All three re-pinned for #780: light competition and nutrient uptake now
+/// sum in stable id order, which moves every trajectory by rounding; example4
+/// and example10 move again because foraging movement follows what a resource
+/// releases (example8 is moved by the summing order alone: its four
+/// heterotrophs start ~9 from the producer ring, beyond their sensing range
+/// of 3–3.5, and the movement rule leaves its trajectory bit-identical).
 const GOLDEN: [(&str, u64, u64, u64); 3] = [
-    ("example4.json", 7, 300, 0x1dc20e4bb35be8eb),
-    ("example8.json", 11, 300, 0x458996bf2981df18),
+    ("example4.json", 7, 300, 0x62ea225e32de936b),
+    ("example8.json", 11, 300, 0xfccbfcec81f91f38),
     (
         "example10_predator_prey_hopf.json",
         3,
         300,
-        0x21bbe174a767fc54,
+        0x16c8e39cb9189023,
     ),
 ];
 
