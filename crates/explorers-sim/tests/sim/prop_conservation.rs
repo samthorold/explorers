@@ -2,7 +2,7 @@
 //! Workstream C1). The ledgers are already asserted on curated scenarios; here
 //! they are checked as invariants of the physics across the search space.
 
-mod support;
+use crate::support;
 
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use proptest::prelude::*;
@@ -35,7 +35,7 @@ fn run(case: &WorldCase) -> World {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Energy ledger identity over the full search domain: after `k` steps,
     /// `endowment + solar input == dissipated + retained (agents + carcasses)`.
@@ -76,7 +76,7 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
+    #![proptest_config(support::proptest_config(128))]
 
     /// The three conservation invariants with size-scaled uptake on (#644):
     /// scaling each agent's demand by its body changes who takes how much,

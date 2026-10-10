@@ -7,7 +7,7 @@ resolver = "3"
 opt-level = 3
 
 # explorers-sim is a numerical step loop; tests run it for millions of ticks
-# (see tests/headless_decomposer.rs). Optimise it in dev/test builds too.
+# (see tests/sim/headless_decomposer.rs). Optimise it in dev/test builds too.
 # (The old workspace-wide `[profile.dev] opt-level = 1` was Bevy's recommended
 # tuning; Bevy has been removed, so that split now under-optimises the sim's own
 # hot loop. Scoped to explorers-sim to keep fast dev compiles for the app crates.)

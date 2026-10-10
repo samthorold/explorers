@@ -12,7 +12,7 @@
 //! number, and repair `ρ · κ · w` is a rate on wear, so `ρ` carries the `1/T`.
 //!
 //! Every anchor is `1.0` in today's units. Naming them changes no number and
-//! no trajectory (guarded by `tests/trait_unit_anchors.rs`). Whether any of
+//! no trajectory (guarded by `tests/sim/trait_unit_anchors.rs`). Whether any of
 //! them should become a `WorldParameters` field is a later design decision,
 //! not one this module makes; see `world-rules.md`, *Unit anchors*.
 //!

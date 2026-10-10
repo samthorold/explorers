@@ -3,7 +3,7 @@
 //! so (#612). See `docs/system-design/world-rules.md`, "Founders bind nutrient
 //! at world creation".
 
-mod support;
+use crate::support;
 
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters, WorldRecipe};
 

@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "intent": "Twenty producers plus two consumers with heterogeneous traits, calibrated so consumers clear both reproduction gates. Companion to the headless diagnostic harness (tests/headless_example4.rs); the reference for how a self-contained scenario should look — every world parameter explicit.",
+    "intent": "Twenty producers plus two consumers with heterogeneous traits, calibrated so consumers clear both reproduction gates. Companion to the headless diagnostic harness (tests/sim/headless_example4.rs); the reference for how a self-contained scenario should look — every world parameter explicit.",
     "source_issue": 291,
     "roster": "20 producers + 2 consumers (heterogeneous traits)",
     "probes": "extinction",

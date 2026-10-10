@@ -8,7 +8,7 @@
 //! A failing property is a design/implementation disagreement: it is filed as
 //! a bug and kept (ignored with a reference), never weakened.
 
-mod support;
+use crate::support;
 
 use explorers_sim::spatial::SpatialGrid;
 use explorers_sim::{Agent, Carcass, World, WorldParameters, phase};
@@ -79,7 +79,7 @@ fn photosynthetic_income(world: &World, params: &WorldParameters) -> HashMap<u64
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Input flows, flow 1 (Photosynthesis): producers absorb energy from the
     /// constant solar flux, attenuated only by light competition — a share of
@@ -115,7 +115,7 @@ fn reserve_after_metabolise(world: &World, params: &WorldParameters) -> HashMap<
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Dissipation, flow 8 (Metabolism): every living agent pays a base rate —
     /// "the minimum cost of being alive, independent of traits or activity" —
@@ -175,7 +175,7 @@ fn drain_energy_gain(world: &World, params: &WorldParameters) -> HashMap<u64, f3
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Dissipation, flow 7 (Trophic transfer loss): a consumer retains
     /// `base_trophic_efficiency · exp(−trophic_distance_decay · d)` of the
@@ -215,7 +215,7 @@ fn maintenance_charge(world: &World, params: &WorldParameters) -> HashMap<u64, f
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Cost structure, trade-off 1 (Acquire vs. maintain) / flow 8: each
     /// capability costs energy to maintain whether or not it is in use, as
@@ -261,7 +261,7 @@ fn nutrient_uptake(world: &World, focus: f32, pool: f32) -> HashMap<u64, f32> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Input flows, flow 2 (Nutrient uptake): agents extract nutrient from the
     /// available pool at their location, and co-located agents share that pool
@@ -301,7 +301,7 @@ fn structure_growth(world: &World, params: &WorldParameters) -> HashMap<u64, f32
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Dissipation, flow 9 (Growth): only reserve above the retention buffer
     /// `metabolic_cost × growth_retention_multiplier` is mobilisable, and the

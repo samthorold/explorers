@@ -4,7 +4,7 @@
 //! patches (towards 1) to today's well-mixed scatter over the whole torus (0).
 //! See `docs/system-design/expected-properties.md`, "Founder placement".
 
-mod support;
+use crate::support;
 
 use explorers_sim::{
     Agent, DEFAULT_FOUNDER_AGGREGATION, InitialDistribution, TraitVector, World, WorldParameters,

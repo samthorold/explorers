@@ -16,7 +16,7 @@
 //! the fix.
 //!
 //! Run with:
-//!   cargo test -p explorers-sim --test seeded_consumer_liquidity -- --nocapture
+//!   cargo test -p explorers-sim --test sim seeded_consumer_liquidity:: -- --nocapture
 
 use explorers_sim::{Agent, World, WorldParameters, WorldRecipe};
 

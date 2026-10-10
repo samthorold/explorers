@@ -1,6 +1,6 @@
 //! Headless run of scenarios/example4.json to diagnose why no
 //! reproduction is observed. Run with:
-//!   cargo test -p explorers-sim --test headless_example4 -- --nocapture
+//!   cargo test -p explorers-sim --test sim headless_example4:: -- --nocapture
 
 use explorers_sim::{Agent, World, WorldRecipe};
 

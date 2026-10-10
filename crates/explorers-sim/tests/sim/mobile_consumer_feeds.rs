@@ -13,7 +13,7 @@
 //! real energy from it and survive past tick 2.
 //!
 //! Run with:
-//!   cargo test -p explorers-sim --test mobile_consumer_feeds -- --nocapture
+//!   cargo test -p explorers-sim --test sim mobile_consumer_feeds:: -- --nocapture
 
 use explorers_sim::{Agent, TraitVector, World, WorldParameters, WorldRecipe};
 
