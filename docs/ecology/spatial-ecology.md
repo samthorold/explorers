@@ -69,6 +69,19 @@ Dispersal is one component of a broader phenomenon: animal movement. Nathan et a
 
 Organisms foraging via gradient-following in a landscape with patchy resource distributions produce movement patterns that fall somewhere on this continuum. The emergent movement statistics depend on the interaction between the organism's sensory range, the resource distribution, and the movement strategy.
 
+**How decomposers find food.** Organisms steer by what a resource releases, not by whether it is there.
+- **Bacteria** follow the concentration gradient of an attractant, and they respond to fractional change. Their drift rises with the gradient of log concentration over two to three orders of magnitude (Mesibov, Ordal & Adler 1973; Kalinin et al. 2009). So a source pulls in proportion to what it releases, and the pull falls with distance. A source that is exhausted releases nothing and pulls nothing.
+- **Mycelial cord-forming fungi** extend toward new resources and thicken the cords that connect to them. Mycelium in regions with no new resource regresses, and its biomass is redeployed (Wood et al. 2006). Whether a mycelium stays in its resource or relocates to a new one depends on the quantity and location of the new resource (Fukasawa, Savoury & Boddy 2020).
+- **Soil animals** locate food by volatile cues. Earthworms are drawn at a distance to volatiles from the fungi they eat (Zirbes et al. 2011).
+
+The common pattern is that attraction scales with the resource's output, and a forager abandons depleted ground for richer ground. That is the marginal-value logic below, carried out by gradient-following.
+
+*Evidence quality.*
+- **The bacterial gradient response is well supported,** by classic capillary assays and microfluidic measurements.
+- **The fungal results are moderate.** They come from one group's tray experiments and were read from abstracts and repository summaries.
+- **The invertebrate result rests on one study,** of volatiles from fungi rather than from litter itself.
+- **The domain does not say which property of dead matter sets the strength of its cue,** whether its remaining energy, its nutrient or its decomposition rate. It says only that the cue scales with what the resource releases.
+
 **Optimal foraging in patchy landscapes.** The marginal value theorem (Charnov 1976) predicts when a forager should leave a depleting patch: when the instantaneous intake rate in the current patch drops below the average rate achievable by traveling to a new patch. This creates a coupling between movement and resource dynamics — the forager's decision to stay or leave depends on both local resource state and landscape-level patch distribution (travel time). In spatially explicit models, this produces characteristic patterns: foragers aggregate in high-quality patches, deplete them, then disperse to find new patches — a spatial analogue of the predator-prey oscillation.
 
 **Home range formation.** Many animals restrict their movement to a defined home range rather than wandering freely. Home ranges emerge from the interaction of site fidelity (returning to familiar areas where resource locations and refugia are known) and avoidance of areas occupied by conspecifics (territorial exclusion) or depleted of resources. Mechanistic home range models (Moorcroft & Lewis 2006) derive home range patterns from movement rules — advection toward a central place, diffusion during foraging, and conspecific avoidance — producing realistic territory mosaics without imposing home ranges as a boundary condition.
@@ -178,6 +191,7 @@ Spatial ecology is where agent-based models are not merely useful but arguably n
 - de Roos, A.M., McCauley, E. & Wilson, W.G. (1991) Mobility versus density-limited predator-prey dynamics on different spatial scales. *Proceedings of the Royal Society B*, 246, 117-122.
 - Durrett, R. & Levin, S.A. (1994) The importance of being discrete (and spatial). *Theoretical Population Biology*, 46, 363-394.
 - Fischer, R., Bohn, F., Dantas de Paula, M. et al. (2016) Lessons learned from applying a forest gap model to understand ecosystem and carbon dynamics of complex tropical forests. *Ecological Modelling*, 326, 124-133.
+- Fukasawa, Y., Savoury, M. & Boddy, L. (2020) Ecological memory and relocation decisions in fungal mycelial networks: responses to quantity and location of new resources. *The ISME Journal*, 14, 380-388.
 - Grimm, V. & Railsback, S.F. (2005) *Individual-based Modeling and Ecology*. Princeton University Press.
 - Grimm, V., Berger, U., Bastiansen, F. et al. (2006) A standard protocol for describing individual-based and agent-based models. *Ecological Modelling*, 198, 115-126.
 - Grimm, V., Berger, U., DeAngelis, D.L., Polhill, J.G., Giske, J. & Railsback, S.F. (2010) The ODD protocol: A review and first update. *Ecological Modelling*, 221, 2760-2768.
@@ -187,10 +201,12 @@ Spatial ecology is where agent-based models are not merely useful but arguably n
 - Hanski, I. (1999) *Metapopulation Ecology*. Oxford University Press.
 - Hardin, G. (1960) The competitive exclusion principle. *Science*, 131, 1292-1297.
 - Humphries, N.E., Queiroz, N., Dyer, J.R.M. et al. (2010) Environmental context explains Levy and Brownian movement patterns of marine predators. *Nature*, 465, 1066-1069.
+- Kalinin, Y.V., Jiang, L., Tu, Y. & Wu, M. (2009) Logarithmic sensing in *Escherichia coli* bacterial chemotaxis. *Biophysical Journal*, 96(6), 2439-2448.
 - Kefi, S., Rietkerk, M., Alados, C.L. et al. (2007) Spatial vegetation patterns and imminent desertification in Mediterranean arid ecosystems. *Nature*, 449, 213-217.
 - Kohler, P. & Huth, A. (1998) The effects of tree species grouping in tropical rainforest modelling. *Ecological Modelling*, 109, 301-321.
 - Levins, R. (1969) Some demographic and genetic consequences of environmental heterogeneity for biological control. *Bulletin of the Entomological Society of America*, 15, 237-240.
 - Levins, R. & Culver, D. (1971) Regional coexistence of species and competition between rare species. *Proceedings of the National Academy of Sciences*, 68, 1246-1248.
+- Mesibov, R., Ordal, G.W. & Adler, J. (1973) The range of attractant concentrations for bacterial chemotaxis and the threshold and size of response over this range: Weber law and related phenomena. *Journal of General Physiology*, 62(2), 203-223.
 - Moorcroft, P.R. & Lewis, M.A. (2006) *Mechanistic Home Range Analysis*. Princeton University Press.
 - Nathan, R. & Muller-Landau, H.C. (2000) Spatial patterns of seed dispersal, their determinants and consequences for recruitment. *Trends in Ecology & Evolution*, 15, 278-285.
 - Nathan, R., Getz, W.M., Revilla, E. et al. (2008) A movement ecology paradigm for unifying organismal movement research. *Proceedings of the National Academy of Sciences*, 105, 19052-19059.
@@ -212,4 +228,6 @@ Spatial ecology is where agent-based models are not merely useful but arguably n
 - Weiner, J. (1990) Asymmetric competition in plant populations. *Trends in Ecology & Evolution*, 5, 360-364.
 - Wilensky, U. (1999) NetLogo. Center for Connected Learning and Computer-Based Modeling, Northwestern University.
 - Wilson, J.B. & Agnew, A.D.Q. (1992) Positive-feedback switches in plant communities. *Advances in Ecological Research*, 23, 263-336.
+- Wood, J., Tordoff, G.M., Jones, T.H. & Boddy, L. (2006) Reorganization of mycelial networks of *Phanerochaete velutina* in response to new woody resources and collembola (*Folsomia candida*) grazing. *Mycological Research*, 110, 985-993.
 - Wright, S. (1943) Isolation by distance. *Genetics*, 28, 114-138.
+- Zirbes, L., Mescher, M., Vrancken, V., Wathelet, J.P., Verheggen, F.J., Thonart, P. & Haubruge, E. (2011) Earthworms use odor cues to locate and feed on microorganisms in soil. *PLoS ONE*, 6(7), e21927.
