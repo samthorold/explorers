@@ -627,6 +627,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "explorers-reference-modes"
+version = "0.1.0"
+dependencies = [
+ "explorers-genesis-eval",
+ "explorers-sim",
+ "rand",
+ "rand_chacha",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "explorers-search"
 version = "0.1.0"
 dependencies = [
