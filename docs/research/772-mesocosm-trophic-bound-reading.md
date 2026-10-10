@@ -6,6 +6,12 @@ trophic transfer inside flow 7's domain bound: the recipe's `base_trophic_effici
 #764's pre-registered reading (#771) was run on it. Verdict: ambiguous between rows 2 and 3 of the
 table (see the dated reading below, which supersedes the row-2 verdict in the TL;DR).**
 
+> **Owner's reading (2026-10-10): row 3.** Row 2 begins "they persist", and the decomposers
+> founded at the pure vertex did not: their line died out within 50 ticks in all 5 seeds. The
+> mixotrophs that took up the litter afterwards never competed with them, so the trait-dependent
+> kernel's case does not arise. Efficiency was not the binding cause of the founders' death. The
+> diagnosis reopens on reach, metabolism and wear, with no further retuning of decay (#764).
+>
 > **Orchestrator's reading (2026-10-10): ambiguous between row 2 and row 3.** The operationalisation
 > below counted persistence by income role over all agents, and under it the result is row 2. But
 > the table's rows are about *decomposers founded at the pure vertex*, and that line died out within
