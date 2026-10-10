@@ -3,8 +3,11 @@
 
 use std::collections::HashMap;
 
+use explorers_genesis_eval::guild::{
+    Birth, GUILD_MIN_SIZE, RoleSnapshot, role_guilds_from_samples,
+};
 use explorers_genesis_eval::income::IncomeLedger;
-use explorers_sim::event::EventKind;
+use explorers_sim::event::{Event, EventKind};
 use explorers_sim::topology::TrophicRole;
 use explorers_sim::{AgentSpec, CarcassSpec, TraitVector, World, WorldParameters, WorldRecipe};
 use rand::{Rng, SeedableRng};
@@ -283,6 +286,90 @@ impl DrainSplit {
     }
 }
 
+/// Whether an agent is a member of the mesocosm's decomposer guild
+/// (reference-modes.md, mode 1, *Community*): the income read calls it a
+/// decomposer, and its heterotrophy exceeds its autotrophy. The line is drawn
+/// by the agent's own investment, with no threshold of its own, so a
+/// producer-line mixotroph living on carcasses carries the role and is out.
+pub fn is_guild_member(role: Option<TrophicRole>, traits: &TraitVector) -> bool {
+    role == Some(TrophicRole::Decomposer) && traits.heterotrophy > traits.photosynthetic_absorption
+}
+
+/// What the guild's members drained (`Consumed` events, structure before
+/// trophic efficiency), split between living targets and carcasses, beside
+/// the carcass drain by every agent over the same steps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct GuildDrain {
+    /// Drained from living targets by members.
+    pub living: f64,
+    /// Drained from carcasses by members.
+    pub carcass: f64,
+    /// Drained from carcasses by every agent, members or not.
+    pub all_carcass: f64,
+}
+
+impl GuildDrain {
+    /// Book one event; `member` says whether its source was a guild member
+    /// when it drained. Anything but a drain is ignored.
+    pub fn book(&mut self, event: &Event, member: bool) {
+        if event.kind != EventKind::Consumed {
+            return;
+        }
+        let drained = event.energy_delta as f64;
+        if event.target_was_carcass {
+            self.all_carcass += drained;
+        }
+        if member {
+            if event.target_was_carcass {
+                self.carcass += drained;
+            } else {
+                self.living += drained;
+            }
+        }
+    }
+
+    /// The members' share of all the carcass drain (`None` with none drained).
+    pub fn carcass_share(&self) -> Option<f64> {
+        (self.all_carcass > 0.0).then(|| self.carcass / self.all_carcass)
+    }
+
+    /// The living targets' share of the members' drain (`None` with none):
+    /// a guild that persists by grazing the stand is not a saprotroph guild.
+    pub fn living_share(&self) -> Option<f64> {
+        let total = self.living + self.carcass;
+        (total > 0.0).then(|| self.living / total)
+    }
+
+    fn minus(&self, earlier: &GuildDrain) -> GuildDrain {
+        GuildDrain {
+            living: self.living - earlier.living,
+            carcass: self.carcass - earlier.carcass,
+            all_carcass: self.all_carcass - earlier.all_carcass,
+        }
+    }
+}
+
+/// Mode 1's reading (reference-modes.md, mode 1, *Feeding reach → The
+/// reading*): whether a heterotroph-dominant decomposer guild holds over the
+/// second half of a run or arm, what it drained there, and whether it holds
+/// with the producers persisting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct GuildReadout {
+    /// The committed *heterotroph guild* predicate
+    /// ([`role_guilds_from_samples`]) over the [`is_guild_member`] agents:
+    /// at least `GUILD_MIN_SIZE` on every sample of the second half, and a
+    /// birth there with a member as parent.
+    pub holds: bool,
+    /// The fewest members on any sample of the second half (0 with none).
+    pub fewest_members: usize,
+    /// The members' drain over the second half's steps.
+    pub drain: GuildDrain,
+    /// The centre patch's producers persist ([`Mode1Report::producers_persist`]).
+    pub producers_persist: bool,
+    /// The guild holds and the producers persist.
+    pub passes: bool,
+}
+
 /// The founders' fate and income (#781): the agents at the pure heterotroph
 /// vertex when the run began (nominal autotrophy 0, heterotrophy above 0),
 /// tracked by id. In the mesocosm these are the decomposer founders.
@@ -439,6 +526,17 @@ pub struct Mode1Report {
     /// The founders' fate and income from the world's founding (#781); a
     /// paired arm's carries the settle's history.
     pub founders: FounderReadout,
+    /// The decomposer guild over the run's or arm's second half (#794).
+    pub guild: GuildReadout,
+}
+
+impl Mode1Report {
+    /// Whether the centre patch held producers on every sample of the second
+    /// half of the series.
+    pub fn producers_persist(&self) -> bool {
+        let second_half = &self.samples[self.samples.len() / 2..];
+        second_half.iter().map(|s| s.producers).min().unwrap_or(0) > 0
+    }
 }
 
 /// The whole world's energy and nutrient budget over a run, with what a
@@ -614,14 +712,39 @@ fn run_arm(
 ) -> Mode1Report {
     let start = world.tick();
     let drain_at_start = observer.carcass_drain;
+    // The guild is read over the arm's second half, ticks after `start` from
+    // `window_start` on, as the committed predicate reads a run's; its drain
+    // over the steps that end there.
+    let window_start = ticks / 2 + 1;
+    observer.births_log.clear();
+    let mut guild_drain_at_window = observer.guild_drain;
+    let mut guild_samples: Vec<RoleSnapshot> = vec![(0, observer.guild_members(world))];
     let mut samples = vec![observer.sample_centre(world)];
     for _ in 0..ticks {
         world.step();
         observer.observe(world);
-        if (world.tick() - start) % sample_every == 0 {
+        let elapsed = world.tick() - start;
+        if elapsed + 1 == window_start {
+            guild_drain_at_window = observer.guild_drain;
+        }
+        if elapsed % sample_every == 0 {
             samples.push(observer.sample_centre(world));
+            guild_samples.push((elapsed, observer.guild_members(world)));
         }
     }
+    let births: Vec<Birth> = std::mem::take(&mut observer.births_log)
+        .into_iter()
+        .map(|b| Birth {
+            tick: b.tick - start,
+            ..b
+        })
+        .collect();
+    let guild_holds = role_guilds_from_samples(&guild_samples, &births, ticks).decomposer;
+    let fewest_members = (guild_samples.iter())
+        .filter(|(t, _)| *t >= window_start)
+        .map(|(_, members)| members.len())
+        .min()
+        .unwrap_or(0);
     let mut final_roles = RoleTally::default();
     for agent in world.agents() {
         match observer.income.role(agent.id) {
@@ -631,7 +754,7 @@ fn run_arm(
             None => final_roles.no_role += 1,
         }
     }
-    Mode1Report {
+    let mut report = Mode1Report {
         samples,
         producer_lifespans: std::mem::take(&mut observer.lifespans),
         senescent_lifespans: std::mem::take(&mut observer.senescent_lifespans),
@@ -663,7 +786,17 @@ fn run_arm(
                 nutrient_end: end.nutrient,
             }
         },
-    }
+        guild: GuildReadout::default(),
+    };
+    let producers_persist = report.producers_persist();
+    report.guild = GuildReadout {
+        holds: guild_holds,
+        fewest_members,
+        drain: observer.guild_drain.minus(&guild_drain_at_window),
+        producers_persist,
+        passes: guild_holds && producers_persist,
+    };
+    report
 }
 
 /// What a centre-patch clearance took out of the world: the matter that
@@ -736,11 +869,15 @@ struct Observer {
     deaths: usize,
     lifespans: Vec<u64>,
     senescent_lifespans: Vec<u64>,
-    /// Each agent's nominal autotrophy, kept while it lives so a drain in the
+    /// Each agent's nominal traits, kept while it lives so a drain in the
     /// step it dies is still booked to its side.
-    autotrophy: HashMap<u64, f32>,
+    traits: HashMap<u64, TraitVector>,
     /// Carcass-drain energy since the observer began, by drainer autotrophy.
     carcass_drain: DrainSplit,
+    /// The guild members' drain since the observer began.
+    guild_drain: GuildDrain,
+    /// Every birth since the log was last taken (`run_arm` takes it).
+    births_log: Vec<Birth>,
     /// The living founders' traits, by id.
     living_founders: HashMap<u64, TraitVector>,
     /// The founders and every agent descended from one.
@@ -768,12 +905,10 @@ impl Observer {
             deaths: 0,
             lifespans: Vec::new(),
             senescent_lifespans: Vec::new(),
-            autotrophy: world
-                .agents()
-                .iter()
-                .map(|a| (a.id, a.traits.photosynthetic_absorption))
-                .collect(),
+            traits: world.agents().iter().map(|a| (a.id, a.traits)).collect(),
             carcass_drain: DrainSplit::default(),
+            guild_drain: GuildDrain::default(),
+            births_log: Vec::new(),
             living_founders: HashMap::new(),
             line: std::collections::HashSet::new(),
             agent_traits: HashMap::new(),
@@ -823,18 +958,17 @@ impl Observer {
         let (mut gained, mut drained) = (0.0_f64, 0.0_f64);
         // Agents born in this step are on the roster now; those that died in
         // it are still in the map from the step before.
-        self.autotrophy.extend(
-            world
-                .agents()
-                .iter()
-                .map(|a| (a.id, a.traits.photosynthetic_absorption)),
-        );
+        (self.traits).extend(world.agents().iter().map(|a| (a.id, a.traits)));
         for event in world.event_log().since(self.cursor) {
+            let member = (self.traits.get(&event.source))
+                .is_some_and(|t| is_guild_member(self.income.role(event.source), t));
+            self.guild_drain.book(event, member);
             let in_centre = event
                 .position
                 .is_some_and(|p| in_centre_patch(grid.cell_index_for(p)));
             match event.kind {
                 EventKind::Born => {
+                    self.births_log.extend(Birth::of(event));
                     self.birth_tick.insert(event.source, after);
                     let parents = [event.target, event.second_parent];
                     if parents.iter().flatten().any(|p| self.line.contains(p)) {
@@ -871,7 +1005,7 @@ impl Observer {
                     self.book_carcass_drain(event.source, event.energy_delta);
                 }
                 EventKind::Died => {
-                    self.autotrophy.remove(&event.source);
+                    self.traits.remove(&event.source);
                     if self.living_founders.remove(&event.source).is_some() {
                         self.founders.death_ticks.push(after);
                     }
@@ -904,11 +1038,20 @@ impl Observer {
     /// Book a carcass drain to the drainer's side of [`MIXOTROPH_AUTOTROPHY`].
     fn book_carcass_drain(&mut self, drainer: u64, drained: f32) {
         let drained = drained as f64;
-        if self.autotrophy[&drainer] < MIXOTROPH_AUTOTROPHY {
+        if self.traits[&drainer].photosynthetic_absorption < MIXOTROPH_AUTOTROPHY {
             self.carcass_drain.pure_vertex += drained;
         } else {
             self.carcass_drain.mixotroph += drained;
         }
+    }
+
+    /// The living guild members, read into the decomposer role for the
+    /// committed guild predicate.
+    fn guild_members(&self, world: &World) -> HashMap<u64, TrophicRole> {
+        (world.agents().iter())
+            .filter(|a| is_guild_member(self.income.role(a.id), &a.traits))
+            .map(|a| (a.id, TrophicRole::Decomposer))
+            .collect()
     }
 
     fn sample_centre(&mut self, world: &World) -> CentreSample {
@@ -1020,6 +1163,34 @@ fn decomposer_row(report: &Mode1Report) -> String {
     )
 }
 
+/// The header of the guild reading's table (#794): one row per arm, from
+/// [`guild_row`].
+const GUILD_HEADER: &str = "| guild holds | fewest members | guild share of carcass drain | guild drain: living / carcass (living share) | producers persist | pass |";
+
+/// One arm's guild reading over its second half.
+fn guild_row(g: &GuildReadout) -> String {
+    let yes = |b: bool| if b { "yes" } else { "no" };
+    let share = |s: Option<f64>| s.map_or_else(|| "-".to_string(), |s| format!("{s:.3}"));
+    format!(
+        "| {} | {} | {} | {:.1} / {:.1} ({}) | {} | {} |",
+        yes(g.holds),
+        g.fewest_members,
+        share(g.drain.carcass_share()),
+        g.drain.living,
+        g.drain.carcass,
+        share(g.drain.living_share()),
+        yes(g.producers_persist),
+        yes(g.passes)
+    )
+}
+
+/// The title of the guild reading's section.
+fn guild_title() -> String {
+    format!(
+        "## Heterotroph-dominant decomposer guild, second half (decomposer role, heterotrophy > autotrophy; at least {GUILD_MIN_SIZE} on every sample and a member's birth)"
+    )
+}
+
 /// The human-readable summary of a mode-1 run: the producer-lifespan
 /// distribution, whether producers held the centre patch, and the patch's
 /// time series beside the world's decomposers.
@@ -1066,6 +1237,12 @@ pub fn mode1_summary(header: &str, report: &Mode1Report) -> String {
     );
     let _ = writeln!(
         out,
+        "{}\n\n{GUILD_HEADER}\n|---|---:|---:|---:|---|---|\n{}\n",
+        guild_title(),
+        guild_row(&report.guild)
+    );
+    let _ = writeln!(
+        out,
         "## Founders (pure heterotroph vertex at founding, by id)\n\n{FOUNDER_HEADER}\n|---:|---:|---:|---:|---:|---:|---:|---:|\n{}\n",
         founder_row(&report.founders)
     );
@@ -1076,7 +1253,11 @@ pub fn mode1_summary(header: &str, report: &Mode1Report) -> String {
         out,
         "## Centre-patch producers\n\n\
          at the end {last} | fewest over the second half {min_late} | persisted: {}\n",
-        if min_late > 0 { "yes" } else { "no" }
+        if report.producers_persist() {
+            "yes"
+        } else {
+            "no"
+        }
     );
     let _ = writeln!(
         out,
@@ -1152,6 +1333,17 @@ pub fn paired_summary(header: &str, report: &PairedReport) -> String {
         ("control", &report.control),
     ] {
         let _ = writeln!(out, "| {name} {}", decomposer_row(arm));
+    }
+    let _ = writeln!(
+        out,
+        "\n{}\n\n| arm {GUILD_HEADER}\n|---|---|---:|---:|---:|---|---|",
+        guild_title()
+    );
+    for (name, arm) in [
+        ("perturbed", &report.perturbed),
+        ("control", &report.control),
+    ] {
+        let _ = writeln!(out, "| {name} {}", guild_row(&arm.guild));
     }
     let _ = writeln!(
         out,
@@ -1716,6 +1908,7 @@ mod tests {
             arm_carcass_drain: DrainSplit::default(),
             ledger: Ledger::default(),
             founders: FounderReadout::default(),
+            guild: GuildReadout::default(),
         };
         let summary = mode1_summary("h", &report);
         assert_eq!(ESTABLISHMENT_AGE, 50);
@@ -2181,6 +2374,7 @@ mod tests {
             },
             ledger: Ledger::default(),
             founders: FounderReadout::default(),
+            guild: GuildReadout::default(),
         };
         let line = "| yes | 2 | 3 | 30.0 / 10.0 (0.250) | 1.0 / 3.0 (0.750) |";
         let summary = mode1_summary("h", &report);
@@ -2240,6 +2434,7 @@ mod tests {
             arm_carcass_drain: DrainSplit::default(),
             ledger: Ledger::default(),
             founders,
+            guild: GuildReadout::default(),
         };
         let line = "| 4 | 3 | 3 | 2 | 2 | 5 | 0.100 (0.300) | 0.084 |";
         let summary = mode1_summary("h", &report);
@@ -2290,5 +2485,155 @@ mod tests {
             Community::ProducersOnly,
         );
         assert_eq!(run_mode1(&mut bare, 5, 5).heterotroph_dominant, 0);
+    }
+
+    fn traits(autotrophy: f32, heterotrophy: f32) -> TraitVector {
+        TraitVector {
+            photosynthetic_absorption: autotrophy,
+            heterotrophy,
+            ..Mode1Spec::committed().decomposer
+        }
+    }
+
+    /// The guild's members are agents the income read calls decomposers whose
+    /// heterotrophy exceeds their autotrophy (reference-modes.md, mode 1,
+    /// *Community*). A producer-line mixotroph living on carcasses carries
+    /// the decomposer role and is out.
+    #[test]
+    fn a_guild_member_is_a_decomposer_whose_heterotrophy_exceeds_its_autotrophy() {
+        let decomposer = Some(TrophicRole::Decomposer);
+        assert!(is_guild_member(decomposer, &traits(0.0, 1.07)));
+        assert!(is_guild_member(decomposer, &traits(0.15, 0.9)));
+        // A producer-line mixotroph draining carcasses.
+        assert!(!is_guild_member(decomposer, &traits(0.9, 0.2)));
+        assert!(!is_guild_member(decomposer, &traits(0.5, 0.5)));
+        // Heterotroph-dominant by investment, but not living on carcasses.
+        assert!(!is_guild_member(
+            Some(TrophicRole::Producer),
+            &traits(0.0, 1.0)
+        ));
+        assert!(!is_guild_member(
+            Some(TrophicRole::Consumer),
+            &traits(0.0, 1.0)
+        ));
+        assert!(!is_guild_member(None, &traits(0.0, 1.0)));
+    }
+
+    /// The guild's drain splits between living targets and carcasses, and its
+    /// carcass drain is read as a share of all the carcass drain.
+    #[test]
+    fn the_guild_drain_splits_living_targets_from_carcasses() {
+        use explorers_sim::event::{Event, EventLog};
+        let event = |seq: u64, kind: EventKind, source: u64, carcass: bool, drained: f32| Event {
+            tick: 0,
+            seq,
+            kind,
+            source,
+            target: Some(100 + seq),
+            energy_delta: drained,
+            position: None,
+            target_was_carcass: carcass,
+            second_parent: None,
+            nutrient_delta: 0.0,
+        };
+        let mut log = EventLog::new();
+        for e in [
+            event(0, EventKind::Consumed, 1, true, 5.0),
+            event(1, EventKind::Consumed, 2, false, 2.0),
+            event(2, EventKind::Consumed, 1, false, 1.0),
+            event(3, EventKind::Consumed, 3, true, 3.0),
+            event(4, EventKind::Consumed, 3, false, 7.0),
+            event(5, EventKind::Photosynthesized, 1, false, 4.0),
+        ] {
+            log.append(e).unwrap();
+        }
+        let members = [1, 2];
+        let mut drain = GuildDrain::default();
+        for e in log.since(0) {
+            drain.book(e, members.contains(&e.source));
+        }
+        assert_eq!(
+            drain,
+            GuildDrain {
+                living: 3.0,
+                carcass: 5.0,
+                all_carcass: 8.0,
+            }
+        );
+        assert_eq!(drain.carcass_share(), Some(5.0 / 8.0));
+        assert_eq!(drain.living_share(), Some(3.0 / 8.0));
+        assert_eq!(GuildDrain::default().carcass_share(), None);
+        assert_eq!(GuildDrain::default().living_share(), None);
+    }
+
+    /// A run reads the guild over its second half: the verdict is the
+    /// committed predicate over its members, the drain is booked over the
+    /// same window, and the pass needs the producers to persist too.
+    #[test]
+    fn a_run_reads_the_guild_over_its_second_half() {
+        let mut world = mode1_mesocosm(
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
+            4,
+            Community::ProducersAndDecomposers,
+        );
+        let report = run_mode1(&mut world, 60, 10);
+        let g = &report.guild;
+        assert_eq!(g.producers_persist, report.producers_persist());
+        assert_eq!(g.passes, g.holds && g.producers_persist);
+        if g.fewest_members < explorers_genesis_eval::guild::GUILD_MIN_SIZE {
+            assert!(!g.holds);
+        }
+        assert!(g.drain.carcass <= g.drain.all_carcass);
+        assert!(g.drain.all_carcass > 0.0);
+        assert!(g.drain.all_carcass <= report.arm_carcass_drain.total() + 1e-9);
+    }
+
+    /// Both summaries carry the guild reading per arm: the verdict, its
+    /// fewest members, its share of the carcass drain, its living / carcass
+    /// drain split, whether the producers persist, and the combined pass.
+    #[test]
+    fn the_summaries_report_the_guild_reading() {
+        let mut report = Mode1Report {
+            samples: vec![],
+            producer_lifespans: vec![],
+            senescent_lifespans: vec![],
+            final_roles: RoleTally::default(),
+            heterotroph_dominant: 0,
+            carcass_drain: DrainSplit::default(),
+            arm_carcass_drain: DrainSplit::default(),
+            ledger: Ledger::default(),
+            founders: FounderReadout::default(),
+            guild: GuildReadout {
+                holds: true,
+                fewest_members: 6,
+                drain: GuildDrain {
+                    living: 1.0,
+                    carcass: 3.0,
+                    all_carcass: 12.0,
+                },
+                producers_persist: true,
+                passes: true,
+            },
+        };
+        let line = "| yes | 6 | 0.250 | 1.0 / 3.0 (0.250) | yes | yes |";
+        let summary = mode1_summary("h", &report);
+        assert!(summary.contains(GUILD_HEADER), "{summary}");
+        assert!(summary.contains(line), "{summary}");
+
+        let control = report.clone();
+        report.guild = GuildReadout::default();
+        let paired = PairedReport {
+            fork_tick: 0,
+            clearance: Clearance::default(),
+            perturbed: report,
+            control,
+        };
+        let summary = paired_summary("h", &paired);
+        assert!(summary.contains(&format!("| control {line}")), "{summary}");
+        assert!(
+            summary.contains("| perturbed | no | 0 | - | 0.0 / 0.0 (-) | no | no |"),
+            "{summary}"
+        );
     }
 }

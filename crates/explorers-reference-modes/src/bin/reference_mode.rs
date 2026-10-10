@@ -16,6 +16,15 @@
 //! 5–20 as energy gained (drained structure × the trophic efficiency
 //! applied).
 //!
+//! Each run or arm also reports mode 1's reading (#794;
+//! `reference-modes.md`, mode 1, *Feeding reach → The reading*) over its
+//! second half: whether the heterotroph-dominant decomposer guild holds (the
+//! committed *heterotroph guild* predicate over agents with the decomposer
+//! role whose heterotrophy exceeds their autotrophy), its fewest members, its
+//! share of the carcass drain, its drain split between living targets and
+//! carcasses, whether the centre patch's producers persist, and the pass:
+//! the guild holds and the producers persist.
+//!
 //! `--litter-x N` (#781) stands N times the settled litter at founding: N
 //! times the carcasses per cell, so N times their energy and nutrient. It is
 //! a diagnostic instrument setting; the committed mesocosm is 1×.
