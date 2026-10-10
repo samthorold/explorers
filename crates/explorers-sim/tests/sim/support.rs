@@ -10,7 +10,7 @@
 //! tag `atlas-search-archive`. Two dimensions are narrowed
 //! for test speed — world extent and population — and are documented inline.
 //!
-//! Reuse from a property suite with `mod support;` and `support::world_case()`.
+//! Reuse from a property suite with `use crate::support;` and `support::world_case()`.
 
 #![allow(dead_code)]
 
@@ -307,4 +307,23 @@ pub fn world_case_with_network() -> impl Strategy<Value = WorldCase> {
             case.params.network_transfer_efficiency = efficiency;
             case
         })
+}
+
+/// The `ProptestConfig` every property suite in this binary uses: `cases`
+/// cases, with failures persisted beside the suite's source file as
+/// `<module>.proptest-regressions` (#784).
+///
+/// proptest's default (`SourceParallel`) walks up from the source file to the
+/// nearest `lib.rs` / `main.rs` and writes to a sibling `proptest-regressions/`
+/// directory. With this binary's `main.rs` beside the suites, that would be
+/// `tests/proptest-regressions/<module>.txt`, and the committed
+/// `<module>.proptest-regressions` seeds would silently stop being replayed.
+/// `WithSource` pins the file next to the module instead.
+pub fn proptest_config(cases: u32) -> ProptestConfig {
+    ProptestConfig {
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+        )),
+        ..ProptestConfig::with_cases(cases)
+    }
 }

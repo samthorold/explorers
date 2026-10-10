@@ -23,7 +23,7 @@
 //! uses the same fully-specified parameter template.
 //!
 //! Run with:
-//!   cargo test -p explorers-sim --test headless_decomposer -- --nocapture
+//!   cargo test -p explorers-sim --test sim headless_decomposer:: -- --nocapture
 //!
 //! ## The `slow_` marker convention
 //!

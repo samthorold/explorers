@@ -7,9 +7,9 @@
 //! a world bit-identical to the autotrophic rule.
 //!
 //! Run with:
-//!   cargo test -p explorers-sim --test hyphal_uptake
+//!   cargo test -p explorers-sim --test sim hyphal_uptake::
 
-mod support;
+use crate::support;
 
 use explorers_sim::event::EventKind;
 use explorers_sim::{Agent, TraitVector, World, WorldParameters, WorldRecipe};

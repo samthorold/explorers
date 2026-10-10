@@ -3,7 +3,7 @@
 //! permutation, toroidal translation, extensive scaling — checked as invariants
 //! of the stepper across the search space, reusing the C1 harness.
 
-mod support;
+use crate::support;
 
 use explorers_sim::spatial::SpatialGrid;
 use explorers_sim::{
@@ -154,7 +154,7 @@ fn world_case_bounded_dispersal() -> impl Strategy<Value = WorldCase> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Agent-order permutation over the full search domain:
     /// stepping a world with its agent slice permuted before every tick yields
@@ -182,7 +182,7 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
+    #![proptest_config(support::proptest_config(128))]
 
     /// Determinism with size-scaled uptake on (#644): the same case stepped
     /// twice is bit-identical.
@@ -548,7 +548,7 @@ fn could_reach_reproduction_threshold(a: &Agent, params: &explorers_sim::WorldPa
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Toroidal translation: founding the same roster shifted by a constant
     /// whole-cell vector yields the same trajectory shifted — identity, traits
@@ -859,7 +859,7 @@ fn assert_ensemble_means_agree(
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    #![proptest_config(support::proptest_config(64))]
 
     /// Extensive scaling: doubling the extent with 4× population and 4×
     /// nutrient pool leaves per-area living energy and per-area available

@@ -17,3 +17,7 @@ The fix is to add the terminal app to System Settings → Privacy & Security →
 ## `reinvasion_barrier`'s accounted artifacts are not byte-identical across runs
 
 In `--accounting` and `--dispersal` modes, the per-member `account` floats in the JSON differ in the last ulp between two runs of the same command. `LineageAccountant` sums over `HashMap`s, whose hasher is seeded randomly per process. Trajectories, counts and every printed table are identical (#619). To check that a change leaves a run unchanged, diff the `.md` summaries, or compare the JSON with the `account` fields stripped. Plain mode is byte-identical.
+
+## proptest seeds stop replaying when a suite moves under a `main.rs`
+
+proptest's default failure persistence (`SourceParallel`) walks up from a test's source file to the nearest directory holding a `lib.rs` or `main.rs`, and stores failures in a sibling `proptest-regressions/<path>.txt`. Only when it finds none does it fall back to `<file>.proptest-regressions` beside the source. The sim's property suites now live in the one test binary `crates/explorers-sim/tests/sim/`, whose `main.rs` sits beside them, so the default would read and write `tests/proptest-regressions/<module>.txt` and silently ignore the committed `<module>.proptest-regressions` seeds (#784). Every suite there therefore takes its config from `support::proptest_config(cases)`, which pins `WithSource("proptest-regressions")`. Use it for any new `proptest!` block in that binary. A stray `tests/proptest-regressions/` directory means a block bypassed it.

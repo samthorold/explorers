@@ -3,7 +3,7 @@
 //! that note, checked against the real stepper over the search domain so the
 //! proof stays falsifiable rather than a paper exercise.
 
-mod support;
+use crate::support;
 
 use explorers_sim::World;
 use proptest::prelude::*;
@@ -25,7 +25,7 @@ fn solar_income_cap(case: &WorldCase, producers_at_tick_start: usize) -> f32 {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Per-tick total solar input never exceeds the config-only cap of Lemma 1.
     #[test]
@@ -62,7 +62,7 @@ fn total_energy(world: &World) -> f32 {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(support::proptest_config(256))]
 
     /// Lemma 2 of the note: every agent alive at the start of a tick that is
     /// still alive at its end paid its full metabolic cost (at least the base
