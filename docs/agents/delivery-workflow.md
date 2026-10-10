@@ -13,11 +13,11 @@ For an epic: `grill-with-docs` (settle the design against `CONTEXT.md`, `docs/ec
 
 ## The test loop
 
-The full `cargo test --workspace` runs 827 tests, but they take only ~25 s. The rest is compiling: an edit to `explorers-sim` rebuilds the 15 binaries in `explorers-search` (each ~11–13 s, and most are built twice because they carry unit tests), ~100 s on 8 cores. So iterate on the crate you are changing and run the workspace once before committing:
+The full `cargo test --workspace` runs 665 tests (660 with `--skip slow_`), and running them takes ~20 s; the rest is compiling. After a `touch` of `crates/explorers-sim/src/lib.rs`, `cargo test --workspace --no-run` takes ~135–180 s wall-clock and ~800–1,200 CPU-s on 8 cores (measured for #783, warm dependencies; the `--timings` CPU sum varies with load). Most of that is `explorers-sim` itself (~570–850 CPU-s, its lib, bins and integration-test binaries, at `opt-level = 3`). Before #783 archived `explorers-search` (tag `atlas-search-archive`), the same build took ~340–430 s and ~2,100–2,500 CPU-s, of which `explorers-search` (16 bins, most built twice) was ~50–60 %. So iterate on the crate you are changing and run the workspace once before committing:
 
 - **Inner loop:** `cargo test -p <crate> -- --skip slow_` — e.g. `-p explorers-sim` is ~40 s to rebuild after a sim edit and ~15 s to run. `--lib` or `--test <name>` narrows further.
 - **Before committing:** `cargo test --workspace`, `slow_` sweeps included.
-- **`slow_` is the slow-test category.** Multi-seed sweeps stay in the default run (not `#[ignore]`d) but carry a `slow_` name prefix so the inner loop can skip them; the heaviest is `qd::tests::slow_carcass_direction_populates_the_lockup_layer_across_a_seed_sweep` (~15 s). Give any new slow test the prefix.
+- **`slow_` is the slow-test category.** Multi-seed sweeps stay in the default run (not `#[ignore]`d) but carry a `slow_` name prefix so the inner loop can skip them; the heaviest today are the `slow_pathway_*` tests in `explorers-sim`'s `tests/headless_decomposer.rs` (~4 s for the suite). `--skip slow_` is a substring filter, so it also skips the app's `slow_down_*` tests; that is harmless. Give any new slow test the prefix.
 - **The first `-p` run of a crate rebuilds its dependencies** (features resolve per package, not per workspace), so it is slow once, then incremental.
 - If test binaries take minutes to *start* rather than to run, see "macOS scans every freshly linked test binary" in `known-traps.md`.
 

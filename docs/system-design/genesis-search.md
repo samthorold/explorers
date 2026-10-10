@@ -39,6 +39,18 @@ native output *is* the atlas. And a covariance-adapting emitter learns the relev
 moves, retiring the manual dimension-fixing prefilter the surrogate optimiser needed. The specific
 emitter and archive are implementation; the illumination contract is the design.
 
+## Genesis searches a settled physics
+
+An atlas maps where sensible worlds live *for one physics*. Each change to the world rules makes it stale: the box, the scores and the recipe all describe worlds the stepper no longer runs. A search with its audits costs hours of wall-clock (`docs/agents/instrument-runtimes.md`). A mesocosm reading costs minutes, and it can say *why* a world fails, not only that it does ([reference modes](reference-modes.md), *How a reference mode is read*).
+
+So while the physics is still being built up flow by flow, the physics is calibrated on mesocosms and genesis does not search. Its code is frozen, not maintained against each rule change. It lives in version control at the tag `atlas-search-archive`, outside the workspace, so it costs no compile time. The committed atlas and recipe stay as they are, frozen at atlas:31. They are a record of the last search, not a calibrated world.
+
+Genesis is revisited once **reference modes 1 and 2 are produced in their mesocosms**. That is a decision point, not an automatic restart. Gap dynamics (mode 2) runs through light competition, the carcass pool, decomposition and the nutrient pulse. Once it is produced, the flows a search depends on have stopped moving in the ways that matter. At that point genesis has two jobs that only a settled physics can give it:
+- testing whether the modes arise in worlds nobody designed, which is what found states are for;
+- supplying the game's world.
+
+Reviving it means restoring the crate from the tag and bringing it up to the current physics and box before the first search. Before that search, settle how genesis's worlds carry somatic wear: whether wear is fixed or searched, at what value, and what becomes of the branching axis's validated regime once wear is on (#756's questions). The committed atlas and recipe were searched with wear off.
+
 ## The search box: the full box by default, a narrowed box held in reserve
 
 A config is a point of the unit cube, and `decode` maps it onto 34 raw fields — 25 world parameters
@@ -62,7 +74,7 @@ The **leaching rate** `λ` is not in the box. Genesis's worlds run at a fixed `�
 - `base_trophic_efficiency`: [0.6, 0.9], linear;
 - `trophic_distance_decay`: [0.36, 0.98], linear.
 
-world-rules.md flow 7 (*What the two parameters stand for, and their domain bounds*) gives the bounds and why they are anchored at the reference distance `√2`. A wider decay range would let the search find worlds where a specialist decomposer cannot live on plant litter, which inverts the domain. *Current state (#773, 2026-10-10): implemented in the box. The full box is the **bounded box** (`bounded_ranges()`), the untaxed box with these two ranges; the untaxed box keeps base over [0.1, 0.9] and decay over [0.1, 5.0], as the committed atlas records it. The committed atlas and recipe predate the bound: only 2 of the atlas's 78 cells lie inside it (median decay 1.93, median base 0.44), and the recipe (decay 2.38) lies outside it, so a new search, a separate human-scheduled issue, is needed before genesis worlds can be trusted on the detrital pathway.*
+world-rules.md flow 7 (*What the two parameters stand for, and their domain bounds*) gives the bounds and why they are anchored at the reference distance `√2`. A wider decay range would let the search find worlds where a specialist decomposer cannot live on plant litter, which inverts the domain. *Current state (#773, 2026-10-10): implemented in the box. The full box is the **bounded box** (`bounded_ranges()`), the untaxed box with these two ranges; the untaxed box keeps base over [0.1, 0.9] and decay over [0.1, 5.0], as the committed atlas records it. The committed atlas and recipe predate the bound: only 2 of the atlas's 78 cells lie inside it (median decay 1.93, median base 0.44), and the recipe (decay 2.38) lies outside it, so genesis worlds cannot be trusted on the detrital pathway. No new search is run while genesis is frozen (*Genesis searches a settled physics*, above).*
 
 **`decode` reads a coordinate by its name, not its position.** Each range carries the name of the field it decodes to, and `decode` looks every field up by that name. A field the box has no coordinate for keeps the known-viable baseline's value, which for the fields later boxes added (`b`, `c_AH`, `λ`) is the latent 0 every earlier world ran. A box cannot be identified by its length: the taxed box and the leached box both have 34 coordinates, and the 34th is `c_AH` in one and `λ` in the other. Read by position, every cell of #677's atlas would have decoded with its `c_AH` coordinate as a leaching rate and no cross-trait cost. Read by name, atlases under every box an atlas has recorded (the taxed, untaxed, leached and size-blind boxes) decode to the same worlds bit for bit, which a digest of their decoded worlds pins. A search checkpoint stamps its box the same way, scales included, so a checkpoint from the taxed box is refused by a search under the leached box (the 34th coordinate's name differs) rather than resumed into it.
 

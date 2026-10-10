@@ -26,7 +26,7 @@ The game the simulation serves (confusion → wonder → symbiosis). See `docs/a
 
 ### Instrument runtimes
 
-Wall-clock for the search and research bins, and how to drive long sweeps in-harness. See `docs/agents/instrument-runtimes.md`.
+Wall-clock for the reference-mode runs (the archived search bins' figures live at the tag `atlas-search-archive`), and how to drive long sweeps in-harness. See `docs/agents/instrument-runtimes.md`.
 
 ### Known traps
 

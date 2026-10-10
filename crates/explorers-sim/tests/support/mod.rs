@@ -6,7 +6,8 @@
 //!
 //! The ranges are copied verbatim from `explorers-search::default_ranges()` /
 //! `viable_baseline()` rather than imported: the sim must never depend on the
-//! search crate (see docs/agents/architecture.md). Two dimensions are narrowed
+//! search crate (see docs/agents/architecture.md), which is now archived at the
+//! tag `atlas-search-archive`. Two dimensions are narrowed
 //! for test speed — world extent and population — and are documented inline.
 //!
 //! Reuse from a property suite with `mod support;` and `support::world_case()`.
