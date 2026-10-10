@@ -36,6 +36,18 @@ pub const CARCASS_ENERGY_PER_CELL: f32 = 54.0;
 /// pool; see [`CARCASSES_PER_CELL`].
 pub const CARCASS_NUTRIENT_PER_CELL: f32 = 58.0;
 
+/// The mesocosm's trophic distance decay (#772). The recipe's 2.38 lies
+/// outside flow 7's domain bound (world rules, flow 7, *What the two
+/// parameters stand for, and their domain bounds*: decay in about
+/// [0.36, 0.98]), so the mesocosm overrides it and keeps the recipe's
+/// `base_trophic_efficiency` (0.78, in bound). At 0.60 the kernel's factor at
+/// the reference distance `√2` is about 0.43, near the bound's midpoint, and a
+/// decomposer founder at the recipe's heterotroph vertex assimilates
+/// `0.78 · exp(−0.60 · 1.52) ≈ 0.31` of the producer litter it drains,
+/// against 0.021 at the recipe's decay (reference-modes.md, mode 1,
+/// *Parameters*).
+pub const MESOCOSM_TROPHIC_DISTANCE_DECAY: f32 = 0.60;
+
 /// The mesocosm's somatic wear: the four parameters of the wear law (world
 /// rules, *Somatic wear*), which together set producer lifespans.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
@@ -80,7 +92,8 @@ pub enum Community {
 
 /// Build the mode-1 mesocosm (reference-modes.md, *Colonisation overshoot*,
 /// *Mesocosm*): the recipe's world parameters on a [`SIDE_CELLS`]² torus of
-/// nutrient cells, with somatic wear under `wear`, seeded with producer and
+/// nutrient cells, with somatic wear under `wear` and trophic transfer inside
+/// flow 7's domain bound ([`MESOCOSM_TROPHIC_DISTANCE_DECAY`]), seeded with producer and
 /// decomposer founders (producers alone with [`Community::ProducersOnly`])
 /// and no consumers, on a stand of litter: every cell holds
 /// [`CARCASSES_PER_CELL`] standing carcasses. The recipe's nutrient is kept at
@@ -106,6 +119,7 @@ pub fn mode1_mesocosm(recipe: &WorldRecipe, wear: Wear, seed: u64, community: Co
     params.use_wear_rate = wear.use_wear_rate;
     params.repair_rate = wear.repair_rate;
     params.senescence_hazard = wear.senescence_hazard;
+    params.trophic_distance_decay = MESOCOSM_TROPHIC_DISTANCE_DECAY;
 
     let mean = distribution.mean_traits;
     let trophic_total = mean.photosynthetic_absorption + mean.heterotrophy;
@@ -179,6 +193,46 @@ pub fn mode1_mesocosm(recipe: &WorldRecipe, wear: Wear, seed: u64, community: Co
         assert_eq!(shortfall, 0.0, "the pool covers the mesocosm's litter");
     }
     world
+}
+
+/// The autotrophy at which a carcass drainer counts as a mixotroph rather
+/// than a specialist at the pure heterotroph vertex (#772). #764's
+/// pre-registered reading splits decomposer income here: the settled recipe
+/// world's heterotrophs carry autotrophy 0.02–0.18, and flow 7's bound says a
+/// mixotroph with 0.1–0.2 autotrophy sits a little nearer producer litter.
+pub const MIXOTROPH_AUTOTROPHY: f32 = 0.1;
+
+/// Energy drained from carcasses (the `Consumed` events on a carcass, before
+/// trophic efficiency), split by the draining agent's nominal autotrophy at
+/// [`MIXOTROPH_AUTOTROPHY`]. Counted by income, not by role: every drain is
+/// booked, whatever the drainer's role.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct DrainSplit {
+    /// Drained by agents with autotrophy below [`MIXOTROPH_AUTOTROPHY`]: the
+    /// pure-vertex side.
+    pub pure_vertex: f64,
+    /// Drained by agents with autotrophy at or above it: mixotrophs.
+    pub mixotroph: f64,
+}
+
+impl DrainSplit {
+    /// Both sides together.
+    pub fn total(&self) -> f64 {
+        self.pure_vertex + self.mixotroph
+    }
+
+    /// The mixotroph side's share of the total (`None` with nothing drained).
+    pub fn mixotroph_share(&self) -> Option<f64> {
+        let total = self.total();
+        (total > 0.0).then(|| self.mixotroph / total)
+    }
+
+    fn minus(&self, earlier: &DrainSplit) -> DrainSplit {
+        DrainSplit {
+            pure_vertex: self.pure_vertex - earlier.pure_vertex,
+            mixotroph: self.mixotroph - earlier.mixotroph,
+        }
+    }
 }
 
 /// The establishment cut-off, in ticks: a producer that dies older than this
@@ -263,6 +317,15 @@ pub struct Mode1Report {
     pub senescent_lifespans: Vec<u64>,
     /// The whole world's living roster at the end, by income role.
     pub final_roles: RoleTally,
+    /// Living agents at the end whose nominal traits are heterotroph-dominant
+    /// (heterotrophy above autotrophy), whatever their income (#772).
+    pub heterotroph_dominant: usize,
+    /// Carcass-drain energy by the drainer's autotrophy over the whole
+    /// horizon: from the world's founding, so a paired arm's carries the
+    /// settle's history.
+    pub carcass_drain: DrainSplit,
+    /// The same over this run or arm alone (after the fork for a paired arm).
+    pub arm_carcass_drain: DrainSplit,
     /// The world's energy and nutrient budget over the run.
     pub ledger: Ledger,
 }
@@ -439,6 +502,7 @@ fn run_arm(
     sample_every: u64,
 ) -> Mode1Report {
     let start = world.tick();
+    let drain_at_start = observer.carcass_drain;
     let mut samples = vec![observer.sample_centre(world)];
     for _ in 0..ticks {
         world.step();
@@ -461,6 +525,13 @@ fn run_arm(
         producer_lifespans: std::mem::take(&mut observer.lifespans),
         senescent_lifespans: std::mem::take(&mut observer.senescent_lifespans),
         final_roles,
+        heterotroph_dominant: world
+            .agents()
+            .iter()
+            .filter(|a| a.traits.heterotrophy > a.traits.photosynthetic_absorption)
+            .count(),
+        carcass_drain: observer.carcass_drain,
+        arm_carcass_drain: observer.carcass_drain.minus(&drain_at_start),
         ledger: {
             let end = Stock::of(world);
             Ledger {
@@ -547,6 +618,11 @@ struct Observer {
     deaths: usize,
     lifespans: Vec<u64>,
     senescent_lifespans: Vec<u64>,
+    /// Each agent's nominal autotrophy, kept while it lives so a drain in the
+    /// step it dies is still booked to its side.
+    autotrophy: HashMap<u64, f32>,
+    /// Carcass-drain energy since the observer began, by drainer autotrophy.
+    carcass_drain: DrainSplit,
 }
 
 impl Observer {
@@ -564,6 +640,12 @@ impl Observer {
             deaths: 0,
             lifespans: Vec::new(),
             senescent_lifespans: Vec::new(),
+            autotrophy: world
+                .agents()
+                .iter()
+                .map(|a| (a.id, a.traits.photosynthetic_absorption))
+                .collect(),
+            carcass_drain: DrainSplit::default(),
         }
     }
 
@@ -575,6 +657,14 @@ impl Observer {
         // The stepper marks a senescent death with `Senesced` just before its
         // `Died`, in the same step.
         let mut senesced = std::collections::HashSet::new();
+        // Agents born in this step are on the roster now; those that died in
+        // it are still in the map from the step before.
+        self.autotrophy.extend(
+            world
+                .agents()
+                .iter()
+                .map(|a| (a.id, a.traits.photosynthetic_absorption)),
+        );
         for event in world.event_log().since(self.cursor) {
             let in_centre = event
                 .position
@@ -590,7 +680,17 @@ impl Observer {
                 EventKind::Senesced => {
                     senesced.insert(event.source);
                 }
+                EventKind::Consumed if event.target_was_carcass => {
+                    let drained = event.energy_delta as f64;
+                    let autotrophy = self.autotrophy[&event.source];
+                    if autotrophy < MIXOTROPH_AUTOTROPHY {
+                        self.carcass_drain.pure_vertex += drained;
+                    } else {
+                        self.carcass_drain.mixotroph += drained;
+                    }
+                }
                 EventKind::Died => {
+                    self.autotrophy.remove(&event.source);
                     let born = self.birth_tick.remove(&event.source);
                     if self.income.role(event.source) == Some(TrophicRole::Producer) {
                         let age = after - born.expect("every agent has a birth tick");
@@ -652,6 +752,31 @@ impl Observer {
     }
 }
 
+/// The header of the decomposer reading's table (#764, #772): one row per
+/// arm, from [`decomposer_row`].
+const DECOMPOSER_HEADER: &str = "| decomposers persist | decomposers at end | heterotroph-dominant at end | carcass drain, whole horizon: autotrophy < 0.1 / >= 0.1 (mixotroph share) | carcass drain, this arm |";
+
+/// One arm's decomposer reading: whether any agent the income read calls a
+/// decomposer is alive at the end, how many, the heterotroph-dominant agents
+/// alive at the end, and the carcass-drain split over the whole horizon and
+/// over the arm.
+fn decomposer_row(report: &Mode1Report) -> String {
+    let split = |d: &DrainSplit| {
+        let share = d
+            .mixotroph_share()
+            .map_or_else(|| "-".to_string(), |s| format!("{s:.3}"));
+        format!("{:.1} / {:.1} ({share})", d.pure_vertex, d.mixotroph)
+    };
+    let decomposers = report.final_roles.decomposers;
+    format!(
+        "| {} | {decomposers} | {} | {} | {} |",
+        if decomposers > 0 { "yes" } else { "no" },
+        report.heterotroph_dominant,
+        split(&report.carcass_drain),
+        split(&report.arm_carcass_drain)
+    )
+}
+
 /// The human-readable summary of a mode-1 run: the producer-lifespan
 /// distribution, whether producers held the centre patch, and the patch's
 /// time series beside the world's decomposers.
@@ -690,6 +815,11 @@ pub fn mode1_summary(header: &str, report: &Mode1Report) -> String {
         "## World roster at the end, by income role\n\n\
          producers {} | decomposers {} | consumers {} | no role yet {}\n",
         r.producers, r.decomposers, r.consumers, r.no_role
+    );
+    let _ = writeln!(
+        out,
+        "## Decomposers and carcass-drain income\n\n{DECOMPOSER_HEADER}\n|---|---:|---:|---:|---:|\n{}\n",
+        decomposer_row(report)
     );
     let second_half = &report.samples[report.samples.len() / 2..];
     let min_late = second_half.iter().map(|s| s.producers).min().unwrap_or(0);
@@ -767,6 +897,16 @@ pub fn paired_summary(header: &str, report: &PairedReport) -> String {
     }
     let _ = writeln!(
         out,
+        "\n## Decomposers and carcass-drain income\n\n| arm {DECOMPOSER_HEADER}\n|---|---|---:|---:|---:|---:|"
+    );
+    for (name, arm) in [
+        ("perturbed", &report.perturbed),
+        ("control", &report.control),
+    ] {
+        let _ = writeln!(out, "| {name} {}", decomposer_row(arm));
+    }
+    let _ = writeln!(
+        out,
         "\n## Centre patch, perturbed / control\n\n\
          | tick | producers | structure | pool N | carcass N | births | deaths | mean age | decomposers (world) |\n\
          |---:|---:|---:|---:|---:|---:|---:|---:|---:|"
@@ -830,6 +970,39 @@ mod tests {
             ),
             (0.03, 0.004, 0.5, 0.002)
         );
+    }
+
+    /// Trophic transfer runs inside flow 7's domain bound (#772): the recipe's
+    /// base efficiency, decay 0.60, and every other world parameter the
+    /// recipe's but for the mesocosm's own size, nutrient and wear.
+    #[test]
+    fn the_mesocosm_runs_trophic_transfer_within_flow_7s_bound() {
+        let recipe = committed_recipe();
+        let world = mode1_mesocosm(
+            &recipe,
+            Wear::MESOCOSM,
+            7,
+            Community::ProducersAndDecomposers,
+        );
+        let p = world.params();
+        assert_eq!(p.trophic_distance_decay, 0.60);
+        assert_eq!(MESOCOSM_TROPHIC_DISTANCE_DECAY, 0.60);
+        assert_eq!(
+            p.base_trophic_efficiency,
+            recipe.parameters.base_trophic_efficiency
+        );
+        assert!((p.base_trophic_efficiency - 0.78).abs() < 0.005);
+
+        let mut expected = recipe.parameters.clone();
+        expected.trophic_distance_decay = 0.60;
+        expected.world_extent = p.world_extent;
+        expected.initial_nutrient_pool = p.initial_nutrient_pool;
+        expected.initial_population_size = p.initial_population_size;
+        expected.wear_rate = p.wear_rate;
+        expected.use_wear_rate = p.use_wear_rate;
+        expected.repair_rate = p.repair_rate;
+        expected.senescence_hazard = p.senescence_hazard;
+        assert_eq!(*p, expected);
     }
 
     #[test]
@@ -1043,6 +1216,9 @@ mod tests {
             producer_lifespans: vec![3, 8, 60, 90, 120, 400, 10],
             senescent_lifespans: vec![8, 90, 400],
             final_roles: RoleTally::default(),
+            heterotroph_dominant: 0,
+            carcass_drain: DrainSplit::default(),
+            arm_carcass_drain: DrainSplit::default(),
             ledger: Ledger::default(),
         };
         let summary = mode1_summary("h", &report);
@@ -1393,5 +1569,170 @@ mod tests {
             world.agents().len()
         );
         assert!(r.producers > 0);
+    }
+
+    /// Carcass-drain energy is booked by the draining agent's autotrophy,
+    /// split at [`MIXOTROPH_AUTOTROPHY`]: read independently off a full event
+    /// log of the same run, with each drainer's traits from the roster.
+    #[test]
+    fn carcass_drain_energy_is_split_by_the_drainers_autotrophy() {
+        let recipe = committed_recipe();
+        let build = || {
+            mode1_mesocosm(
+                &recipe,
+                Wear::MESOCOSM,
+                4,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let ticks = 40;
+        let report = run_mode1(&mut build(), ticks, 10);
+
+        let mut world = build();
+        let mut traits: HashMap<u64, TraitVector> = HashMap::new();
+        let mut expected = DrainSplit::default();
+        for _ in 0..ticks {
+            traits.extend(world.agents().iter().map(|a| (a.id, a.traits)));
+            let cursor = world.event_log().len();
+            world.step();
+            traits.extend(world.agents().iter().map(|a| (a.id, a.traits)));
+            for e in world.event_log().since(cursor) {
+                if e.kind == EventKind::Consumed && e.target_was_carcass {
+                    let drained = e.energy_delta as f64;
+                    if traits[&e.source].photosynthetic_absorption < 0.1 {
+                        expected.pure_vertex += drained;
+                    } else {
+                        expected.mixotroph += drained;
+                    }
+                }
+            }
+        }
+        assert_eq!(MIXOTROPH_AUTOTROPHY, 0.1);
+        assert!(expected.pure_vertex > 0.0);
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * b.abs().max(1.0);
+        assert!(
+            close(report.carcass_drain.pure_vertex, expected.pure_vertex)
+                && close(report.carcass_drain.mixotroph, expected.mixotroph),
+            "{:?} vs {expected:?}",
+            report.carcass_drain
+        );
+        assert_eq!(report.arm_carcass_drain, report.carcass_drain);
+    }
+
+    /// A paired arm's drain split covers the whole horizon, the settle's
+    /// history included, and separately its own span after the fork: the
+    /// control's whole-horizon split is the uninterrupted run's.
+    #[test]
+    fn a_paired_arms_drain_split_carries_the_settles_history() {
+        let recipe = committed_recipe();
+        let build = || {
+            mode1_mesocosm(
+                &recipe,
+                Wear::MESOCOSM,
+                6,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let (settle, ticks) = (30, 30);
+        let paired = run_paired(build(), settle, ticks, 10);
+        let settled = run_mode1(&mut build(), settle, 10);
+        let whole = run_mode1(&mut build(), settle + ticks, 10);
+
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * b.abs().max(1.0);
+        let c = paired.control;
+        assert!(close(
+            c.carcass_drain.pure_vertex,
+            whole.carcass_drain.pure_vertex
+        ));
+        assert!(close(
+            c.carcass_drain.mixotroph,
+            whole.carcass_drain.mixotroph
+        ));
+        assert!(close(
+            c.arm_carcass_drain.pure_vertex,
+            whole.carcass_drain.pure_vertex - settled.carcass_drain.pure_vertex
+        ));
+        let p = paired.perturbed;
+        assert!(close(
+            p.carcass_drain.pure_vertex - p.arm_carcass_drain.pure_vertex,
+            settled.carcass_drain.pure_vertex
+        ));
+    }
+
+    /// Both summaries carry #764's reading per arm: whether decomposers
+    /// persist, the heterotroph-dominant agents alive at the end, and the
+    /// carcass-drain split over the whole horizon and over the arm.
+    #[test]
+    fn the_summaries_report_the_decomposer_reading() {
+        let mut report = Mode1Report {
+            samples: vec![],
+            producer_lifespans: vec![],
+            senescent_lifespans: vec![],
+            final_roles: RoleTally {
+                producers: 5,
+                decomposers: 2,
+                consumers: 0,
+                no_role: 0,
+            },
+            heterotroph_dominant: 3,
+            carcass_drain: DrainSplit {
+                pure_vertex: 30.0,
+                mixotroph: 10.0,
+            },
+            arm_carcass_drain: DrainSplit {
+                pure_vertex: 1.0,
+                mixotroph: 3.0,
+            },
+            ledger: Ledger::default(),
+        };
+        let line = "| yes | 2 | 3 | 30.0 / 10.0 (0.250) | 1.0 / 3.0 (0.750) |";
+        let summary = mode1_summary("h", &report);
+        assert!(summary.contains(line), "{summary}");
+
+        let control = report.clone();
+        report.final_roles.decomposers = 0;
+        report.arm_carcass_drain = DrainSplit::default();
+        let paired = PairedReport {
+            fork_tick: 0,
+            clearance: Clearance::default(),
+            perturbed: report,
+            control,
+        };
+        let summary = paired_summary("h", &paired);
+        assert!(summary.contains(&format!("| control {line}")), "{summary}");
+        assert!(
+            summary.contains("| perturbed | no | 0 | 3 | 30.0 / 10.0 (0.250) | 0.0 / 0.0 (-) |"),
+            "{summary}"
+        );
+    }
+
+    /// The end roster also counts the living agents whose nominal traits are
+    /// heterotroph-dominant (heterotrophy above autotrophy), whatever their
+    /// income, so a reader sees whether the decomposer founders' side of
+    /// trait space is still alive (#772).
+    #[test]
+    fn the_end_roster_counts_heterotroph_dominant_agents_by_traits() {
+        let mut world = mode1_mesocosm(
+            &committed_recipe(),
+            Wear::MESOCOSM,
+            4,
+            Community::ProducersAndDecomposers,
+        );
+        let report = run_mode1(&mut world, 5, 5);
+        let expected = world
+            .agents()
+            .iter()
+            .filter(|a| a.traits.heterotrophy > a.traits.photosynthetic_absorption)
+            .count();
+        assert!(expected > 0);
+        assert_eq!(report.heterotroph_dominant, expected);
+
+        let mut bare = mode1_mesocosm(
+            &committed_recipe(),
+            Wear::MESOCOSM,
+            4,
+            Community::ProducersOnly,
+        );
+        assert_eq!(run_mode1(&mut bare, 5, 5).heterotroph_dominant, 0);
     }
 }

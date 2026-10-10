@@ -300,7 +300,7 @@ Grounded in Lindeman's (1942) trophic-dynamic concept. Real trophic transfer eff
 
 **Why the kernel's form stays.** The domain says a decomposer's efficiency on dead plant tissue is far higher than a gut digester's on the same food. It does not say that efficiency is independent of how dissimilar the substrate is. So the distance kernel is kept, and only its range is bounded.
 
-A kernel whose distance penalty shrinks with the consumer's heterotrophic investment, standing in for matched enzymes, is the alternative. It is held in reserve, not adopted. What would bring it out is a pre-registered mesocosm reading in which, at decay within the bound, mixotrophs take most of the decomposer income from specialists at the vertex. *Current state (2026-10-10): the bound is specified; the search box and the mode 1 mesocosm do not yet follow it.*
+A kernel whose distance penalty shrinks with the consumer's heterotrophic investment, standing in for matched enzymes, is the alternative. It is held in reserve, not adopted. What would bring it out is a pre-registered mesocosm reading in which, at decay within the bound, mixotrophs take most of the decomposer income from specialists at the vertex. *Current state (2026-10-10): the bound is specified; the mode 1 mesocosm follows it (#772), and the search box does not yet.*
 
 **8. Metabolism.** Living agent (reserve) → Heat. Every living agent pays a continuous energy cost from reserve simply to exist. This cost has three components:
 - A base rate — the minimum cost of being alive, independent of traits or activity.

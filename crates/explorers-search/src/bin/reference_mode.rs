@@ -7,7 +7,10 @@
 //! clears, per sampled tick beside the world's decomposers, plus the
 //! distribution of producer lifespans over the run, read also over producers
 //! past establishment with their senescent share, against which the wear is
-//! calibrated (#766).
+//! calibrated (#766). Each run or arm also reports #764's decomposer reading
+//! (#772): whether decomposers persist, the heterotroph-dominant agents alive
+//! at the end, and the carcass-drain energy split by the drainer's autotrophy
+//! at 0.1, over the whole horizon and over the arm.
 //!
 //! With `--clear-at T` (#752) it reads the perturbation against its paired
 //! control: it settles the mesocosm to tick `T`, clones it, clears every agent
