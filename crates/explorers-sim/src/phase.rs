@@ -803,6 +803,12 @@ pub struct DrainResult {
     pub dissipated: f32,
     pub dead_agents: Vec<u64>,
     pub new_carcasses: Vec<Carcass>,
+    /// Ids of the carcasses that fell below the remnant floor this pass
+    /// (saturating decomposition, [`crate::CARCASS_REMNANT_FLOOR_FRACTION`]).
+    /// Each is already empty on both stocks, its last structure counted in
+    /// `dissipated` and its nutrient mineralised to its cell; the stepper
+    /// removes it from the world. Always empty at decay constant 0.
+    pub removed_carcasses: Vec<u64>,
 }
 
 /// Consumption (feeding) reach for a consumer with the given effective
@@ -1071,6 +1077,7 @@ pub fn resolve_drains_routed(
     let mut dissipated = 0.0_f32;
     let mut dead_agents: Vec<u64> = Vec::new();
     let mut new_carcasses: Vec<Carcass> = Vec::new();
+    let mut removed_carcasses: Vec<u64> = Vec::new();
     let k = params.wear_degradation_steepness;
     let extent = params.world_extent;
 
@@ -1291,6 +1298,7 @@ pub fn resolve_drains_routed(
                 id: agent.id,
                 position: agent.position,
                 energy: agent.structure.max(0.0),
+                energy_at_death: agent.structure.max(0.0),
                 nutrient: agent.nutrient_total(params),
                 traits: agent.traits,
             });
@@ -1374,8 +1382,21 @@ pub fn resolve_drains_routed(
         // A spent carcass's energy can sit a rounding error below zero after
         // the split that emptied it; it has nothing left to give, not a debt.
         let available = carcasses[carcass_idx].energy.max(0.0);
+        // Σc, summed in consumer-id order (sorted above).
         let total_demand: f32 = consumers.iter().map(|(_, d, _)| *d).sum();
-        let exhausted = total_demand >= available;
+        // Saturating decomposition (world-rules.md, *Carcass decomposition
+        // saturates in its decomposers*): the carcass yields
+        // D = k_d · S · Σc / (K + Σc) in all, each drainer taking c / Σc of
+        // it, capped by the structure present. Off (k_d = 0), the yield is
+        // the additive Σc, shared only at the cap.
+        let saturating = params.carcass_decay_constant > 0.0;
+        let total_yield = if saturating {
+            params.carcass_decay_constant * available * total_demand
+                / (params.carcass_half_saturation + total_demand)
+        } else {
+            total_demand
+        };
+        let exhausted = total_yield >= available;
         // Every consumer's nutrient share is taken against the carcass's
         // tick-start nutrient (gather-pass state, like demand), never against
         // the stock as the previous consumer left it: shares are then a
@@ -1387,6 +1408,8 @@ pub fn resolve_drains_routed(
         for &(consumer_idx, demand, trophic_eff) in &consumers {
             let actual_drain = if exhausted {
                 (demand / total_demand) * available
+            } else if saturating {
+                (demand / total_demand) * total_yield
             } else {
                 demand
             };
@@ -1464,6 +1487,21 @@ pub fn resolve_drains_routed(
             *nutrient_grid.at_position(carcass_pos) += carcasses[carcass_idx].nutrient;
             carcasses[carcass_idx].nutrient = 0.0;
         }
+
+        // The remnant floor: under first-order decay no drain empties a
+        // carcass, so a drained one below a tiny fraction of its structure at
+        // death leaves the world. Its last structure dissipates and its
+        // nutrient mineralises to its cell.
+        if saturating
+            && carcasses[carcass_idx].energy
+                < crate::CARCASS_REMNANT_FLOOR_FRACTION * carcasses[carcass_idx].energy_at_death
+        {
+            dissipated += carcasses[carcass_idx].energy.max(0.0);
+            carcasses[carcass_idx].energy = 0.0;
+            *nutrient_grid.at_position(carcass_pos) += carcasses[carcass_idx].nutrient;
+            carcasses[carcass_idx].nutrient = 0.0;
+            removed_carcasses.push(carcasses[carcass_idx].id);
+        }
     }
 
     DrainResult {
@@ -1471,6 +1509,7 @@ pub fn resolve_drains_routed(
         dissipated,
         dead_agents,
         new_carcasses,
+        removed_carcasses,
     }
 }
 
@@ -1596,6 +1635,7 @@ pub fn check_death_thresholds(
                 id: agent.id,
                 position: agent.position,
                 energy: carcass_energy,
+                energy_at_death: carcass_energy,
                 nutrient: agent.nutrient_total(params),
                 traits: agent.traits,
             });
@@ -2659,6 +2699,8 @@ mod tests {
             recognition_distance: 0.0,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
+            carcass_decay_constant: 0.0,
+            carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             hyphal_uptake: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
         }
@@ -5363,6 +5405,7 @@ mod tests {
             id: 50,
             position: (0.0, 1.0),
             energy: 1000.0,
+            energy_at_death: 1000.0,
             nutrient: 0.0,
             traits: parent_traits(),
         }];
@@ -5692,6 +5735,7 @@ mod tests {
             id: 99,
             position: (2.0, 0.0), // within contact_radius=5.0
             energy: 10.0,
+            energy_at_death: 10.0,
             nutrient: 0.0,
             traits: zero_traits(),
         }];
@@ -5807,6 +5851,7 @@ mod tests {
             id: 99,
             position: (0.0, 20.0),
             energy: 10.0,
+            energy_at_death: 10.0,
             nutrient: 0.0,
             traits: zero_traits(),
         }];
@@ -6004,6 +6049,7 @@ mod tests {
             id: 99,
             position: (3.0, 0.0),
             energy: 5.0,
+            energy_at_death: 5.0,
             nutrient: 0.0,
             traits: zero_traits(),
         }];
@@ -6042,6 +6088,7 @@ mod tests {
             id,
             position,
             energy,
+            energy_at_death: energy,
             nutrient: 0.0,
             traits: zero_traits(),
         }
@@ -6115,6 +6162,7 @@ mod tests {
                 id: (n * 7919) % 101,
                 position: (1.0 + 0.1 * n as f32, 2.0),
                 energy: 0.1,
+                energy_at_death: 0.1,
                 nutrient: 0.1 + 0.37 * n as f32 + 1.0e-3 * (n * n) as f32,
                 traits: zero_traits(),
             })
@@ -6408,6 +6456,7 @@ mod tests {
             position,
             // Varied cues, some exhausted.
             energy: (id % 7) as f32,
+            energy_at_death: (id % 7) as f32,
             nutrient: 0.0,
             traits: zero_traits(),
         };
@@ -6683,6 +6732,7 @@ mod tests {
             id: 99,
             position: (40.0, 0.0),
             energy: 10.0,
+            energy_at_death: 10.0,
             nutrient: 20.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.5,
@@ -7018,6 +7068,7 @@ mod tests {
             id: 99,
             position: carcass_pos,
             energy: 10.0,
+            energy_at_death: 10.0,
             nutrient: 20.0, // nutrient-rich target
             traits: carcass_traits,
         }];
@@ -7096,6 +7147,7 @@ mod tests {
             id: 99,
             position: carcass_pos,
             energy: 4.0, // == total demand: exhausted this tick
+            energy_at_death: 4.0,
             nutrient: 8.0,
             traits: zero_traits(),
         }];
@@ -7163,6 +7215,7 @@ mod tests {
             id: 99,
             position: carcass_pos,
             energy: 8.0, // demand 4.0 of 8.0: half drained
+            energy_at_death: 8.0,
             nutrient: 8.0,
             traits: zero_traits(),
         }];
@@ -7228,6 +7281,7 @@ mod tests {
             id: 99,
             position: carcass_pos,
             energy: 10.0,
+            energy_at_death: 10.0,
             nutrient: 20.0,
             traits: carcass_traits,
         }];
@@ -7287,6 +7341,7 @@ mod tests {
             id: 99,
             position: (41.0, 0.0),
             energy: 100.0,
+            energy_at_death: 100.0,
             nutrient: 1000.0,
             traits,
         }];
@@ -7349,6 +7404,7 @@ mod tests {
             id: 99,
             position: (2.0, 0.0),
             energy: 10.0,
+            energy_at_death: 10.0,
             nutrient: 20.0,
             traits: rich,
         }];
@@ -7396,6 +7452,7 @@ mod tests {
             id,
             position: (41.0, 0.0),
             energy: 100.0,
+            energy_at_death: 100.0,
             nutrient: 1000.0,
             traits,
         };
@@ -7516,6 +7573,7 @@ mod tests {
                 id: 99,
                 position: (0.0, 0.0), // co-located with consumer
                 energy: 100.0,
+                energy_at_death: 100.0,
                 nutrient: 0.0,
                 traits: carcass_traits,
             }];
@@ -10835,6 +10893,7 @@ mod tests {
                 id: 100,
                 position: (8.0, 0.0),
                 energy: 20.0,
+                energy_at_death: 20.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
             },
@@ -10842,6 +10901,7 @@ mod tests {
                 id: 101,
                 position: (58.0, 0.0),
                 energy: 20.0,
+                energy_at_death: 20.0,
                 nutrient: 0.0,
                 traits: zero_traits(),
             },
@@ -11040,6 +11100,7 @@ mod tests {
             id: 99,
             position: (40.0, 0.0),
             energy: 10.0,
+            energy_at_death: 10.0,
             nutrient: 20.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.5,
@@ -11106,6 +11167,7 @@ mod tests {
             id: 99,
             position: (40.0, 0.0),
             energy: 10.0,
+            energy_at_death: 10.0,
             nutrient: 20.0,
             traits: TraitVector {
                 photosynthetic_absorption: 0.5,

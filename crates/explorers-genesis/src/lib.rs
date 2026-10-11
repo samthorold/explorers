@@ -439,6 +439,8 @@ mod tests {
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
+            carcass_decay_constant: 0.0,
+            carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
             hyphal_uptake: false,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
         }

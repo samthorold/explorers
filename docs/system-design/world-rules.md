@@ -533,7 +533,7 @@ Drains on **living** targets do not saturate this way. They stay additive, as ab
 - **How large `k_d` is: litter half-life against producer lifespan.** The domain gives decay in years: litter half-lives of roughly 0.5–4 years, from `k` of 0.17–1.45 per year in one intersite study. This world's time is ticks. The anchor is the lifespan of the producer the litter came from, which a world fixes by design. Short-lived plants leave litter whose half-life is of the same order as their lifespan, so `k_d` is stated as the litter half-life *under full saturation* (`Σc ≫ K`) in producer lifespans, and read across the band 0.5–4. The decomposer's own generation time is not used as the anchor, because it is an output of the dynamics.
 - **`K` has no magnitude in the domain.** Schimel and Weintraub call their enzyme half-saturation constant "the most completely arbitrary" parameter in their model. It is stated in units of one decomposer founder's drain capability and read across a range.
 
-*Current state (2026-10-11): designed, not implemented. Carcass drains are additive, shared only when they would exceed the structure present.*
+*Current state (2026-10-11): implemented, off by default (#803). The decay constant `k_d` is `carcass_decay_constant` and the half-saturation constant `K` is `carcass_half_saturation`, in drain capability (structure per tick; its default is `u_H`, one drainer at effective heterotrophy 1). The remnant floor is `CARCASS_REMNANT_FLOOR_FRACTION`, 10⁻⁶ of the structure at death. With `carcass_decay_constant` at 0, its default, carcass drains are additive, shared only when they would exceed the structure present, and no carcass leaves the world.*
 
 #### Capability and expression are decoupled: expression is ungated
 
