@@ -229,3 +229,35 @@ fn enzyme_half_saturation_without_litter_half_life_is_refused() {
     assert!(stderr.contains("--enzyme-half-saturation"), "{stderr}");
     assert!(stderr.contains("--litter-half-life"), "{stderr}");
 }
+
+/// `--size-scaled-base-rate` (#807) turns the size-scaled base rate on at
+/// `b = base_metabolic_rate / S_p + structure_maintenance_coefficient` and
+/// records `b`, `S_p` and the founders' upkeep under both rules in the
+/// artifact and summary; without it nothing is recorded.
+#[test]
+fn size_scaled_base_rate_sets_and_records_b() {
+    let dir = scratch("size-scaled");
+    let default = run_with(&dir.join("default.json"), &[]);
+    let set = run_with(&dir.join("set.json"), &["--size-scaled-base-rate"]);
+    assert!(default.get("size_scaled_base_rate").is_none());
+    let r = &set["size_scaled_base_rate"];
+    let s_p = r["established_producer_structure"].as_f64().unwrap();
+    assert!((s_p - 21.6).abs() < 1e-5, "{r}");
+    let b = r["mass_specific_base_rate"].as_f64().unwrap();
+    let expected = r["base_metabolic_rate"].as_f64().unwrap() / s_p
+        + r["structure_maintenance_coefficient"].as_f64().unwrap();
+    assert!((b - expected).abs() < 1e-6, "{r}");
+    let founder = &r["decomposer_founder"];
+    assert!(founder["per_agent"]["total"].as_f64().unwrap() > 0.4, "{r}");
+    assert!(
+        founder["size_scaled"]["total"].as_f64().unwrap() < 0.13,
+        "{r}"
+    );
+    assert!(
+        r["median_producer"]["size_scaled"]["total"].is_number(),
+        "{r}"
+    );
+    assert_ne!(default["report"], set["report"]);
+    let md = std::fs::read_to_string(dir.join("set.md")).unwrap();
+    assert!(md.contains("## Size-scaled base rate"), "{md}");
+}

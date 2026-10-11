@@ -688,6 +688,19 @@ pub struct WorldParameters {
     /// [`DEFAULT_CARCASS_HALF_SATURATION`].
     #[serde(default = "default_carcass_half_saturation")]
     pub carcass_half_saturation: f32,
+    /// Mass-specific base metabolic rate `b` (world-rules.md flow 8, *The
+    /// base rate scales with structure*, *`β` is 1*): when positive, an
+    /// agent's base metabolic cost is `b · S`, `S` its structure, in place of
+    /// the per-agent constant `base_metabolic_rate` *and* of the linear
+    /// structure term `structure_maintenance_coefficient · S`, which `b`
+    /// absorbs (the design sets `b = base_metabolic_rate / S_p +
+    /// structure_maintenance_coefficient`), so neither is charged as well.
+    /// Trait maintenance, the cross-trait cost and movement are unchanged.
+    /// Energy per unit structure per tick. Default `0.0` is off: the
+    /// per-agent rule, so every existing recipe, pin and fixture is
+    /// bit-unchanged.
+    #[serde(default)]
+    pub mass_specific_base_rate: f32,
     /// Hyphal uptake switch (#654, #727; world-rules.md flow 2, *Hyphal
     /// uptake*): when on, pool demand adds `contact × effective
     /// heterotrophy × u_A` to the autotrophic demand, `contact` being
@@ -2192,6 +2205,7 @@ mod tests {
             leaching_rate: 0.0,
             carcass_decay_constant: 0.0,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
+            mass_specific_base_rate: 0.0,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -2991,6 +3005,25 @@ mod tests {
         value.as_object_mut().unwrap().remove("leaching_rate");
         let without: WorldParameters = serde_json::from_value(value).unwrap();
         assert_eq!(without.leaching_rate, 0.0);
+    }
+
+    #[test]
+    fn mass_specific_base_rate_round_trips_and_defaults_off() {
+        // #807: a recipe or checkpoint that predates the size-scaled base
+        // rate loads with it off (b = 0, the per-agent rule).
+        let mut params = test_params();
+        params.mass_specific_base_rate = 0.025;
+        let json = serde_json::to_string(&params).unwrap();
+        let back: WorldParameters = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, params);
+
+        let mut value = serde_json::to_value(test_params()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("mass_specific_base_rate");
+        let without: WorldParameters = serde_json::from_value(value).unwrap();
+        assert_eq!(without.mass_specific_base_rate, 0.0);
     }
 
     #[test]
@@ -4547,6 +4580,7 @@ mod tests {
             leaching_rate: 0.0,
             carcass_decay_constant: 0.0,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
+            mass_specific_base_rate: 0.0,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,

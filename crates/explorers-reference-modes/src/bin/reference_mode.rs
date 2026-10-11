@@ -52,6 +52,15 @@
 //! founders' capability and K in founder capabilities and absolute units.
 //! Without the flags nothing is recorded and the world is unchanged.
 //!
+//! `--size-scaled-base-rate` (#807; world rules, flow 8, *The base rate
+//! scales with structure*) makes the base metabolic cost `b · S`, with
+//! `b = base_metabolic_rate / S_p + structure_maintenance_coefficient`, `S_p`
+//! the established producers' median structure #804 read (21.6), so a
+//! producer of that size pays what it did. The summary and artifact record
+//! `b`, `S_p`, and the decomposer founder's and the median producer
+//! founder's upkeep at founding under both rules. Without the flag nothing is
+//! recorded and the world is unchanged.
+//!
 //! With `--clear-at T` (#752) it reads the perturbation against its paired
 //! control: it settles the mesocosm to tick `T`, clones it, clears every agent
 //! and carcass from one copy's centre patch (an outflow, booked in each arm's
@@ -64,7 +73,8 @@
 //!                [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H]
 //!                [--sample-every K] [--clear-at T] [--no-decomposers]
 //!                [--litter-x N] [--body-reach-pieces K]
-//!                [--litter-half-life L] [--enzyme-half-saturation K] [--out PATH]
+//!                [--litter-half-life L] [--enzyme-half-saturation K]
+//!                [--size-scaled-base-rate] [--out PATH]
 //! ```
 //!
 //! Defaults: the committed `crates/explorers-reference-modes/mode1.json`
@@ -80,10 +90,11 @@ use explorers_reference_modes::mesocosm::{
     Community, ESTABLISHED_PRODUCER_LIFESPAN_TICKS, Mode1Spec, body_reach_section,
     carcass_decay_constant_for_half_life, decomposition_kinetics_section,
     mode1_mesocosm_with_litter, mode1_summary, paired_summary, run_mode1, run_paired,
-    set_body_reach_pieces, set_decomposition_kinetics,
+    set_body_reach_pieces, set_decomposition_kinetics, set_size_scaled_base_rate,
+    size_scaled_base_rate_section,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -107,6 +118,8 @@ struct Cli {
     /// The half-saturation constant in decomposer founder drain capabilities
     /// (#805); `None` keeps the world's default.
     enzyme_half_saturation: Option<f32>,
+    /// Whether the base metabolic rate scales with structure (#807).
+    size_scaled_base_rate: bool,
     out: Option<PathBuf>,
 }
 
@@ -124,11 +137,16 @@ impl Cli {
             body_reach_pieces: None,
             litter_half_life: None,
             enzyme_half_saturation: None,
+            size_scaled_base_rate: false,
             out: None,
         };
         while let Some(flag) = args.next() {
             if flag == "--no-decomposers" {
                 cli.community = Community::ProducersOnly;
+                continue;
+            }
+            if flag == "--size-scaled-base-rate" {
+                cli.size_scaled_base_rate = true;
                 continue;
             }
             let value = args.next().ok_or(format!("{flag} needs a value"))?;
@@ -233,6 +251,9 @@ fn main() {
         set_decomposition_kinetics(&mut world, l, cli.enzyme_half_saturation)
             .expect("K is given only with decomposer founders")
     });
+    let size_scaled = cli
+        .size_scaled_base_rate
+        .then(|| set_size_scaled_base_rate(&mut world));
     let community = match cli.community {
         Community::ProducersAndDecomposers => "producers and decomposers",
         Community::ProducersOnly => "producers only",
@@ -249,15 +270,19 @@ fn main() {
         cli.sample_every,
         cli.litter_x
     );
-    // The feeding reach and kinetics set are run settings, so they follow
-    // the header.
+    // The feeding reach, kinetics and base rate set are run settings, so
+    // they follow the header.
     let with_reach = |header: String| {
         let header = match &body_reach {
             Some(r) => format!("{header}\n\n{}", body_reach_section(r)),
             None => header,
         };
-        match &kinetics {
+        let header = match &kinetics {
             Some(k) => format!("{header}\n\n{}", decomposition_kinetics_section(k)),
+            None => header,
+        };
+        match &size_scaled {
+            Some(r) => format!("{header}\n\n{}", size_scaled_base_rate_section(r)),
             None => header,
         }
     };
@@ -299,6 +324,10 @@ fn main() {
     if let Some(k) = kinetics {
         artifact["decomposition_kinetics"] =
             serde_json::to_value(k).expect("the decomposition kinetics serialise");
+    }
+    if let Some(r) = size_scaled {
+        artifact["size_scaled_base_rate"] =
+            serde_json::to_value(r).expect("the size-scaled base rate serialises");
     }
     std::fs::write(&out, serde_json::to_string(&artifact).unwrap()).expect("write the artifact");
     std::fs::write(out.with_extension("md"), &summary).expect("write the summary");
