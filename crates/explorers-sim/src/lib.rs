@@ -701,6 +701,17 @@ pub struct WorldParameters {
     /// bit-unchanged.
     #[serde(default)]
     pub mass_specific_base_rate: f32,
+    /// Living-tissue resistance `ρ` (world-rules.md, *Consumption is
+    /// incremental → Living tissue resists drains*): every drain on a living
+    /// target is multiplied by `1 − ρ`, after expression and recognition and
+    /// before the proportional split among co-feeders, so a resisted drain
+    /// also shrinks its share of a split. Carcass drains carry no `ρ`, on the
+    /// additive and the saturating path alike. Dimensionless, in `[0, 1]`;
+    /// `1` closes living tissue to every consumer. Default `0.0` is off: the
+    /// world without resistance, so every existing recipe, pin and fixture is
+    /// bit-unchanged.
+    #[serde(default)]
+    pub living_resistance: f32,
     /// Hyphal uptake switch (#654, #727; world-rules.md flow 2, *Hyphal
     /// uptake*): when on, pool demand adds `contact × effective
     /// heterotrophy × u_A` to the autotrophic demand, `contact` being
@@ -2206,6 +2217,7 @@ mod tests {
             carcass_decay_constant: 0.0,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             mass_specific_base_rate: 0.0,
+            living_resistance: 0.0,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -3024,6 +3036,22 @@ mod tests {
             .remove("mass_specific_base_rate");
         let without: WorldParameters = serde_json::from_value(value).unwrap();
         assert_eq!(without.mass_specific_base_rate, 0.0);
+    }
+
+    #[test]
+    fn living_resistance_round_trips_and_defaults_off() {
+        // #813: a recipe or checkpoint that predates living-tissue
+        // resistance loads with it off (ρ = 0, no resistance).
+        let mut params = test_params();
+        params.living_resistance = 1.0;
+        let json = serde_json::to_string(&params).unwrap();
+        let back: WorldParameters = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, params);
+
+        let mut value = serde_json::to_value(test_params()).unwrap();
+        value.as_object_mut().unwrap().remove("living_resistance");
+        let without: WorldParameters = serde_json::from_value(value).unwrap();
+        assert_eq!(without.living_resistance, 0.0);
     }
 
     #[test]
@@ -4581,6 +4609,7 @@ mod tests {
             carcass_decay_constant: 0.0,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             mass_specific_base_rate: 0.0,
+            living_resistance: 0.0,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,

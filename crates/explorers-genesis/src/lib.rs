@@ -442,6 +442,7 @@ mod tests {
             carcass_decay_constant: 0.0,
             carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
             mass_specific_base_rate: 0.0,
+            living_resistance: 0.0,
             hyphal_uptake: false,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
         }

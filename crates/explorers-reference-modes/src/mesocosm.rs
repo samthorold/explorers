@@ -611,6 +611,30 @@ pub fn size_scaled_base_rate_section(r: &SizeScaledBaseRate) -> String {
     out
 }
 
+/// Mode 1's living-tissue resistance `ρ` (world rules, *Consumption is
+/// incremental → Living tissue resists drains*, *How large `ρ` is*): mode 1's
+/// heterotrophs are decomposers and producer-line mixotrophs, consumers not
+/// adapted to living tissue, so the domain closes it to them. The domain's
+/// value for those consumers, not a fitted one.
+pub const MODE1_LIVING_RESISTANCE: f32 = 1.0;
+
+/// Turn living-tissue resistance on in `world` at [`MODE1_LIVING_RESISTANCE`]
+/// and return the `ρ` set.
+pub fn set_living_resistance(world: &mut World) -> f32 {
+    world.params_mut().living_resistance = MODE1_LIVING_RESISTANCE;
+    MODE1_LIVING_RESISTANCE
+}
+
+/// The summary section recording the living-tissue resistance a run set.
+pub fn living_resistance_section(rho: f32) -> String {
+    format!(
+        "## Living-tissue resistance (--living-resistance)\n\n\
+         ρ = {rho}: every drain on a living target is multiplied by 1 − ρ = {}; \
+         carcass drains are unchanged",
+        1.0 - rho
+    )
+}
+
 /// The summary's account of the feeding reach `--body-reach-pieces` set.
 pub fn body_reach_section(r: &BodyReach) -> String {
     format!(

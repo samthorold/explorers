@@ -634,7 +634,7 @@ A living target resists every consumer that drains it, and death removes the res
 
 **How large `ρ` is.** Against consumers not adapted to it, the domain's living tissue is closed: nonhost resistance is the norm, and saprotrophs feed only on what is already dead. What does consume living plants are adapted lineages, pathogens with effectors and herbivores taking 5–15 % of net primary production, and a uniform `ρ` cannot represent them. So where a world's heterotrophs are all decomposers and producer-line mixotrophs, as in mode 1, `ρ` is 1. That is the domain's value for those consumers, not a fitted one. A value below 1 would stand for partly adapted consumers, which the domain has only as specific lineages. It is settled with the consumer-side alternative when consumers enter.
 
-*Current state (2026-10-11): designed, not implemented. The world default will be `ρ = 0`, which is off; mode 1 sets `ρ = 1`.*
+*Current state (2026-10-12): implemented, off by default (#813). `ρ` is `living_resistance`: the stepper multiplies each consumer's expressed demand on a living target by `1 − ρ` before the proportional split, and leaves carcass drains, additive and saturating, as they were. At its default 0 every world is unchanged. `reference_mode --living-resistance` sets `ρ = 1` for mode 1 and records it; the guild readout's living-versus-carcass split is the check. A smoke run (seed 1, 300 ticks, body reach of 10 pieces) moved the guild's living share of its drain from 0.047 to 0. Movement is unchanged: a living target's cue to a sensing consumer does not carry `ρ`.*
 
 ### Hard distance predicates are an accepted discontinuity in position
 
