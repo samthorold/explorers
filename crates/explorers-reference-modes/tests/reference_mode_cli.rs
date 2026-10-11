@@ -188,3 +188,44 @@ fn body_reach_pieces_needs_decomposer_founders() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--body-reach-pieces"), "{stderr}");
 }
+
+/// `--litter-half-life L` and `--enzyme-half-saturation K` (#805) set the
+/// saturating-decomposition kinetics in domain units and record L, `T_p`,
+/// `k_d` and K in founder capabilities and absolute units in the artifact and
+/// summary; without them nothing is recorded and the run is unchanged.
+#[test]
+fn kinetics_options_set_and_record_the_decomposition_parameters() {
+    let dir = scratch("kinetics");
+    let default = run_with(&dir.join("default.json"), &[]);
+    let set = run_with(
+        &dir.join("set.json"),
+        &["--litter-half-life", "1", "--enzyme-half-saturation", "2"],
+    );
+    assert!(default.get("decomposition_kinetics").is_none());
+    let k = &set["decomposition_kinetics"];
+    assert_eq!(k["litter_half_life"], 1.0);
+    assert_eq!(k["producer_lifespan"], 229.0);
+    let k_d = k["decay_constant"].as_f64().unwrap();
+    assert!((k_d - std::f64::consts::LN_2 / 229.0).abs() < 1e-6, "{k}");
+    assert_eq!(k["half_saturation_founder_capabilities"], 2.0);
+    let capability = k["founder_drain_capability"].as_f64().unwrap();
+    let absolute = k["half_saturation"].as_f64().unwrap();
+    assert!((absolute - 2.0 * capability).abs() < 1e-5, "{k}");
+    assert_ne!(default["report"], set["report"]);
+    let md = std::fs::read_to_string(dir.join("set.md")).unwrap();
+    assert!(md.contains("## Decomposition kinetics"), "{md}");
+}
+
+/// K has no effect while `k_d` is 0, so `--enzyme-half-saturation` without
+/// `--litter-half-life` is refused.
+#[test]
+fn enzyme_half_saturation_without_litter_half_life_is_refused() {
+    let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+        .args(["--ticks", "1", "--enzyme-half-saturation", "1"])
+        .output()
+        .expect("the instrument runs");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--enzyme-half-saturation"), "{stderr}");
+    assert!(stderr.contains("--litter-half-life"), "{stderr}");
+}

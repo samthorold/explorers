@@ -293,15 +293,11 @@ pub struct BodyReach {
     pub clamped: bool,
 }
 
-/// Set `world`'s body-reach coefficient so that a decomposer founder's
-/// feeding reach at founding spans `pieces` litter pieces
-/// ([`body_reach_coefficient_for_pieces`]). `h` and `S` are the founders' at
-/// the pure heterotroph vertex as built: effective heterotrophy under the
-/// world's wear steepness and structure after co-limiting, averaged over the
-/// founders. `ρ` is the world's standing carcasses over its area, so it
-/// follows the litter multiplier. Call it on a world at founding. `None`,
-/// leaving the world untouched, when it has no decomposer founders.
-pub fn set_body_reach_pieces(world: &mut World, pieces: f32) -> Option<BodyReach> {
+/// The decomposer founders' mean effective heterotrophy, under the world's
+/// wear steepness, and mean structure after co-limiting, read from a world at
+/// founding: the agents at the pure heterotroph vertex. Averaged in f64, so
+/// identical founders give their own value back. `None` without founders.
+fn decomposer_founders(world: &World) -> Option<(f32, f32)> {
     let steepness = world.params().wear_degradation_steepness;
     let founders: Vec<(f32, f32)> = world
         .agents()
@@ -312,12 +308,22 @@ pub fn set_body_reach_pieces(world: &mut World, pieces: f32) -> Option<BodyReach
     if founders.is_empty() {
         return None;
     }
-    // Averaged in f64, so identical founders give their own value back.
     let mean = |v: fn(&(f32, f32)) -> f32| {
         (founders.iter().map(|f| v(f) as f64).sum::<f64>() / founders.len() as f64) as f32
     };
-    let heterotrophy = mean(|f| f.0);
-    let structure = mean(|f| f.1);
+    Some((mean(|f| f.0), mean(|f| f.1)))
+}
+
+/// Set `world`'s body-reach coefficient so that a decomposer founder's
+/// feeding reach at founding spans `pieces` litter pieces
+/// ([`body_reach_coefficient_for_pieces`]). `h` and `S` are the founders' at
+/// the pure heterotroph vertex as built: effective heterotrophy under the
+/// world's wear steepness and structure after co-limiting, averaged over the
+/// founders. `ρ` is the world's standing carcasses over its area, so it
+/// follows the litter multiplier. Call it on a world at founding. `None`,
+/// leaving the world untouched, when it has no decomposer founders.
+pub fn set_body_reach_pieces(world: &mut World, pieces: f32) -> Option<BodyReach> {
+    let (heterotrophy, structure) = decomposer_founders(world)?;
     let litter_density = world.carcasses().len() as f32 / world.params().world_extent.powi(2);
     let c = world.params().contact_range_coefficient;
     let (coefficient, clamped) =
@@ -335,6 +341,102 @@ pub fn set_body_reach_pieces(world: &mut World, pieces: f32) -> Option<BodyReach
         pieces_spanned: std::f32::consts::PI * founder_reach.powi(2) * litter_density,
         clamped,
     })
+}
+
+/// `T_p`, the mesocosm's producer lifespan in ticks against which
+/// `--litter-half-life` states litter decay (#805; world rules, *Carcass
+/// decomposition saturates in its decomposers → How large `k_d` is*): the
+/// median lifespan of *established* producers (age at death over 50 ticks) at
+/// the committed wear, 229 ticks, as recorded in
+/// `docs/research/766-mode1-wear-recalibration.md` (#804 measured 207–238 per
+/// seed). Not the median over all producer deaths, about 15 ticks, which
+/// seedlings dominate. A constant, because a run's own lifespan is one of its
+/// outputs and is not known when `k_d` is set.
+pub const ESTABLISHED_PRODUCER_LIFESPAN_TICKS: f32 = 229.0;
+
+/// The decay constant `k_d` at which a carcass under full saturation
+/// (`Σc ≫ K`) has a half-life of `lifespans` producer lifespans of
+/// `producer_lifespan` ticks: `k_d = ln 2 / (L × T_p)`, per tick.
+pub fn carcass_decay_constant_for_half_life(lifespans: f32, producer_lifespan: f32) -> f32 {
+    std::f32::consts::LN_2 / (lifespans * producer_lifespan)
+}
+
+/// The saturating-decomposition kinetics `--litter-half-life` and
+/// `--enzyme-half-saturation` set (#805), read from the world the run built.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct DecompositionKinetics {
+    /// `L`: the litter half-life under full saturation, in producer
+    /// lifespans.
+    pub litter_half_life: f32,
+    /// `T_p`: the producer lifespan in ticks
+    /// ([`ESTABLISHED_PRODUCER_LIFESPAN_TICKS`]).
+    pub producer_lifespan: f32,
+    /// `k_d = ln 2 / (L × T_p)`, set on the world, per tick.
+    pub decay_constant: f32,
+    /// One decomposer founder's drain capability at founding, effective
+    /// heterotrophy × `u_H` (mean over the founders): `None` without
+    /// founders.
+    pub founder_drain_capability: Option<f32>,
+    /// `K` in founder drain capabilities: the value given, or the world's
+    /// `K` re-expressed when none was. `None` without founders.
+    pub half_saturation_founder_capabilities: Option<f32>,
+    /// `K` in absolute units (drain capability, structure per tick), set on
+    /// the world.
+    pub half_saturation: f32,
+}
+
+/// Set `world`'s saturating-decomposition kinetics: `k_d` from a litter
+/// half-life of `litter_half_life` producer lifespans
+/// ([`carcass_decay_constant_for_half_life`] at
+/// [`ESTABLISHED_PRODUCER_LIFESPAN_TICKS`]), and, when given, `K` as
+/// `half_saturation` decomposer founder drain capabilities, each the
+/// founders' mean effective heterotrophy at founding × `u_H` (full hunger and
+/// expression: a carcass drain is ungated). Without it the world keeps its
+/// `K`. Call it on a world at founding. `None`, leaving the world untouched,
+/// when `K` is given and the world has no decomposer founders.
+pub fn set_decomposition_kinetics(
+    world: &mut World,
+    litter_half_life: f32,
+    half_saturation: Option<f32>,
+) -> Option<DecompositionKinetics> {
+    let founder_drain_capability = decomposer_founders(world)
+        .map(|(h, _)| h * explorers_sim::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK);
+    let absolute = match (half_saturation, founder_drain_capability) {
+        (Some(k), Some(c)) => k * c,
+        (Some(_), None) => return None,
+        (None, _) => world.params().carcass_half_saturation,
+    };
+    let producer_lifespan = ESTABLISHED_PRODUCER_LIFESPAN_TICKS;
+    let decay_constant = carcass_decay_constant_for_half_life(litter_half_life, producer_lifespan);
+    let params = world.params_mut();
+    params.carcass_decay_constant = decay_constant;
+    params.carcass_half_saturation = absolute;
+    Some(DecompositionKinetics {
+        litter_half_life,
+        producer_lifespan,
+        decay_constant,
+        founder_drain_capability,
+        half_saturation_founder_capabilities: half_saturation
+            .or(founder_drain_capability.map(|c| absolute / c)),
+        half_saturation: absolute,
+    })
+}
+
+/// The summary's account of the decomposition kinetics set.
+pub fn decomposition_kinetics_section(k: &DecompositionKinetics) -> String {
+    let in_founders = |v: Option<f32>| v.map_or("-".to_string(), |v| format!("{v:.4}"));
+    format!(
+        "## Decomposition kinetics (--litter-half-life, --enzyme-half-saturation)\n\n\
+         litter half-life L {} producer lifespans | producer lifespan T_p {} ticks | \
+         decay constant k_d {:.6} per tick | founder drain capability {} | \
+         half-saturation K {} founder capabilities, {:.4} absolute",
+        k.litter_half_life,
+        k.producer_lifespan,
+        k.decay_constant,
+        in_founders(k.founder_drain_capability),
+        in_founders(k.half_saturation_founder_capabilities),
+        k.half_saturation,
+    )
 }
 
 /// The summary's account of the feeding reach `--body-reach-pieces` set.
@@ -3182,6 +3284,171 @@ mod tests {
         // Without decomposer founders there is no founder reach to set.
         let mut world = mode1_mesocosm(&spec, mesocosm_wear(), 1, Community::ProducersOnly);
         assert!(set_body_reach_pieces(&mut world, 10.0).is_none());
+    }
+
+    /// Ticks until a carcass drained every tick by one unit-heterotrophy
+    /// drainer under `params` holds half its structure at death, by the
+    /// stepper's own drain pass.
+    fn drained_half_life(params: &WorldParameters) -> u64 {
+        use explorers_sim::spatial::{NutrientGrid, SpatialGrid};
+        let extent = params.world_extent;
+        let site = (extent / 2.0, extent / 2.0);
+        let heterotroph = TraitVector {
+            photosynthetic_absorption: 0.0,
+            heterotrophy: 1.0,
+            mobility: 0.0,
+            kappa: 0.5,
+            fecundity: 0.0,
+            asexual_propensity: 0.0,
+            dispersal: 0.0,
+        };
+        let mut agents = vec![explorers_sim::Agent {
+            id: 0,
+            position: site,
+            reserve: 100.0,
+            structure: 5.0,
+            peak_structure: 5.0,
+            nutrient: 5.0,
+            traits: heterotroph,
+            wear: Default::default(),
+            repro_reserve: 0.0,
+            repro_nutrient: 0.0,
+        }];
+        let structure = 1000.0;
+        let mut carcasses = vec![explorers_sim::Carcass {
+            id: 1,
+            position: site,
+            energy: structure,
+            energy_at_death: structure,
+            nutrient: 0.0,
+            traits: TraitVector {
+                photosynthetic_absorption: 0.5,
+                heterotrophy: 0.0,
+                ..heterotroph
+            },
+        }];
+        let mut grid = SpatialGrid::new(extent, extent / 10.0);
+        grid.insert(0, site);
+        let mut nutrient_grid = NutrientGrid::new(extent, extent / 10.0, 0.0);
+        for tick in 1..=100_000 {
+            explorers_sim::phase::resolve_drains(
+                &mut agents,
+                &mut carcasses,
+                &grid,
+                params,
+                &mut nutrient_grid,
+            );
+            agents[0].reserve = 100.0;
+            if carcasses[0].energy <= structure / 2.0 {
+                return tick;
+            }
+        }
+        panic!("the carcass never halved");
+    }
+
+    /// The `k_d` conversion (#805; world rules, *Carcass decomposition
+    /// saturates in its decomposers → How large `k_d` is*): a litter
+    /// half-life of L producer lifespans is `k_d = ln 2 / (L × T_p)`, so
+    /// under full saturation (`Σc ≫ K`, here K a millionth of the drainer's
+    /// capability) a carcass drained every tick halves in L × `T_p` ticks.
+    #[test]
+    fn litter_half_life_under_full_saturation_is_l_producer_lifespans() {
+        let t_p = ESTABLISHED_PRODUCER_LIFESPAN_TICKS;
+        assert_eq!(t_p, 229.0);
+        let mut params = Mode1Spec::committed().parameters;
+        params.carcass_half_saturation =
+            1e-6 * explorers_sim::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+        for l in [0.5, 1.0, 4.0] {
+            let k_d = carcass_decay_constant_for_half_life(l, t_p);
+            assert!(
+                (k_d - std::f32::consts::LN_2 / (l * t_p)).abs() < 1e-9,
+                "L {l}: k_d {k_d}"
+            );
+            params.carcass_decay_constant = k_d;
+            let half_life = drained_half_life(&params) as f32;
+            assert!(
+                (half_life - l * t_p).abs() <= 1.0,
+                "L {l}: half-life {half_life} ticks, expected {}",
+                l * t_p
+            );
+        }
+    }
+
+    /// `set_decomposition_kinetics` (#805) sets `k_d` from L and `T_p`, and
+    /// `K` from K founder capabilities: one decomposer founder's drain
+    /// capability at founding, effective heterotrophy × `u_H`, read from the
+    /// world built. Without K the world keeps its default `K`, recorded in
+    /// founder capabilities too.
+    #[test]
+    fn set_decomposition_kinetics_reads_the_founders_drain_capability() {
+        let spec = Mode1Spec::committed();
+        let mut world = mode1_mesocosm(
+            &spec,
+            mesocosm_wear(),
+            1,
+            Community::ProducersAndDecomposers,
+        );
+        let founder = world
+            .agents()
+            .iter()
+            .find(|a| a.traits.photosynthetic_absorption == 0.0)
+            .unwrap()
+            .clone();
+        let capability = founder
+            .effective_trait_with_steepness(1, world.params().wear_degradation_steepness)
+            * explorers_sim::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+        let kinetics = set_decomposition_kinetics(&mut world, 2.0, Some(3.0)).unwrap();
+        assert_eq!(kinetics.litter_half_life, 2.0);
+        assert_eq!(
+            kinetics.producer_lifespan,
+            ESTABLISHED_PRODUCER_LIFESPAN_TICKS
+        );
+        assert_eq!(
+            kinetics.decay_constant,
+            carcass_decay_constant_for_half_life(2.0, ESTABLISHED_PRODUCER_LIFESPAN_TICKS)
+        );
+        assert_eq!(kinetics.founder_drain_capability, Some(capability));
+        assert_eq!(kinetics.half_saturation_founder_capabilities, Some(3.0));
+        assert_eq!(kinetics.half_saturation, 3.0 * capability);
+        assert_eq!(
+            world.params().carcass_decay_constant,
+            kinetics.decay_constant
+        );
+        assert_eq!(
+            world.params().carcass_half_saturation,
+            kinetics.half_saturation
+        );
+
+        // L alone: K stays the default u_H, about 0.93 founder capabilities.
+        let mut world = mode1_mesocosm(
+            &spec,
+            mesocosm_wear(),
+            1,
+            Community::ProducersAndDecomposers,
+        );
+        let kinetics = set_decomposition_kinetics(&mut world, 1.0, None).unwrap();
+        assert_eq!(
+            kinetics.half_saturation,
+            explorers_sim::DEFAULT_CARCASS_HALF_SATURATION
+        );
+        assert_eq!(
+            world.params().carcass_half_saturation,
+            kinetics.half_saturation
+        );
+        let in_founders = kinetics.half_saturation_founder_capabilities.unwrap();
+        assert!(
+            (in_founders - kinetics.half_saturation / capability).abs() < 1e-6,
+            "{kinetics:?}"
+        );
+
+        // Without decomposer founders, L still converts; K cannot.
+        let mut world = mode1_mesocosm(&spec, mesocosm_wear(), 1, Community::ProducersOnly);
+        let kinetics = set_decomposition_kinetics(&mut world, 1.0, None).unwrap();
+        assert_eq!(kinetics.founder_drain_capability, None);
+        assert_eq!(kinetics.half_saturation_founder_capabilities, None);
+        let mut world = mode1_mesocosm(&spec, mesocosm_wear(), 1, Community::ProducersOnly);
+        assert!(set_decomposition_kinetics(&mut world, 1.0, Some(1.0)).is_none());
+        assert_eq!(world.params().carcass_decay_constant, 0.0);
     }
 
     /// Litter inflow (#804): a death adds the structure its carcass held at
