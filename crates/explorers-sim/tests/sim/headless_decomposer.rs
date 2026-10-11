@@ -122,6 +122,7 @@ fn decomposer_drains_carcass_after_a_death_reindexes_agents() {
         id: 999,
         position: (10.0, 10.0),
         energy: 50.0,
+        energy_at_death: 50.0,
         nutrient: 3.0,
         traits: TraitVector {
             photosynthetic_absorption: 0.45,

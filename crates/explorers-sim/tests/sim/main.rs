@@ -22,6 +22,7 @@ mod prop_conservation;
 mod prop_energy_bound;
 mod prop_monotonicity;
 mod prop_symmetry;
+mod saturating_decomposition;
 mod seeded_consumer_liquidity;
 mod soa_differential;
 mod support;

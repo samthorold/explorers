@@ -8,7 +8,8 @@ use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use proptest::prelude::*;
 use support::{
     WorldCase, world_case, world_case_with_hyphal_uptake, world_case_with_network,
-    world_case_with_size_scaled_uptake, world_case_with_wear,
+    world_case_with_saturating_decomposition, world_case_with_size_scaled_uptake,
+    world_case_with_wear,
 };
 
 /// Relative f32 tolerance for the energy identity: f32 carries ~7 significant
@@ -108,6 +109,19 @@ proptest! {
     /// carcass like any other.
     #[test]
     fn conservation_holds_with_wear_and_senescence(case in world_case_with_wear()) {
+        check_energy_ledger_identity(&case)?;
+        check_nutrient_closure(&case)?;
+        check_stores_non_negative(&case)?;
+    }
+
+    /// The three conservation invariants with saturating carcass
+    /// decomposition on (#803): the saturating split and the remnant floor
+    /// move structure to drainers and dissipation and nutrient to the cell,
+    /// never create or destroy them.
+    #[test]
+    fn conservation_holds_with_saturating_decomposition(
+        case in world_case_with_saturating_decomposition()
+    ) {
         check_energy_ledger_identity(&case)?;
         check_nutrient_closure(&case)?;
         check_stores_non_negative(&case)?;

@@ -157,6 +157,7 @@ fn drain_energy_gain(world: &World, params: &WorldParameters) -> HashMap<u64, f3
             id: c.id,
             position: c.position,
             energy: c.energy,
+            energy_at_death: c.energy,
             nutrient: c.nutrient,
             traits: c.traits,
         })

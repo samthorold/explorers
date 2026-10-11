@@ -89,6 +89,8 @@ pub fn viable_baseline() -> WorldParameters {
         recognition_distance: 0.5,
         cross_trait_cost: 0.0,
         leaching_rate: 0.0,
+        carcass_decay_constant: 0.0,
+        carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
         hyphal_uptake: false,
         contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
     }
@@ -281,6 +283,26 @@ pub fn world_case_with_wear() -> impl Strategy<Value = WorldCase> {
             case.params.use_wear_rate = use_wear;
             case.params.repair_rate = repair;
             case.params.senescence_hazard = hazard;
+            case
+        })
+}
+
+/// A stepper case with saturating carcass decomposition on (#803): the wear
+/// case, so senescent and starved agents leave carcasses within the run, with
+/// the decay constant drawn from slow to total per tick and the
+/// half-saturation constant either from a hundredth of one unit drainer to
+/// several, where carcasses persist, or far below one drainer, where a fast
+/// decay crosses the remnant floor within a few ticks. A separate strategy,
+/// so `world_case()` draws exactly the inputs it always has.
+pub fn world_case_with_saturating_decomposition() -> impl Strategy<Value = WorldCase> {
+    (
+        world_case_with_wear(),
+        prop_oneof![0.01f32..=1.0, 0.9f32..=1.0],
+        prop_oneof![0.01f32..=5.0, 1.0e-5f32..=1.0e-3],
+    )
+        .prop_map(|(mut case, k_d, k)| {
+            case.params.carcass_decay_constant = k_d;
+            case.params.carcass_half_saturation = k;
             case
         })
 }

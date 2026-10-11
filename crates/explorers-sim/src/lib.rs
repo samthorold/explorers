@@ -668,6 +668,26 @@ pub struct WorldParameters {
     /// atlas are bit-unchanged.
     #[serde(default)]
     pub leaching_rate: f32,
+    /// Carcass decay constant `k_d` (world-rules.md, *Consumption is
+    /// incremental → Carcass decomposition saturates in its decomposers*):
+    /// the most a carcass yields in a tick is `k_d · S`, `S` the structure it
+    /// holds. The total drained from one carcass is
+    /// `D = k_d · S · Σc / (K + Σc)`, `Σc` the summed drain capability of its
+    /// drainers, and each drainer takes `c / Σc` of it. Per tick, in `[0, 1]`.
+    /// A carcass that falls below [`CARCASS_REMNANT_FLOOR_FRACTION`] of its
+    /// structure at death leaves the world. Default `0.0` keeps carcass drains
+    /// additive, shared only at the cap, with no floor, so every existing
+    /// recipe, pin and fixture is bit-unchanged.
+    #[serde(default)]
+    pub carcass_decay_constant: f32,
+    /// Half-saturation constant `K` of saturating carcass decomposition: the
+    /// summed drain capability `Σc` at which a carcass yields half of
+    /// `k_d · S`. Units of drain capability, structure per tick (one agent at
+    /// effective heterotrophy 1 has capability `u_H`). Inert while
+    /// `carcass_decay_constant` is 0. Default
+    /// [`DEFAULT_CARCASS_HALF_SATURATION`].
+    #[serde(default = "default_carcass_half_saturation")]
+    pub carcass_half_saturation: f32,
     /// Hyphal uptake switch (#654, #727; world-rules.md flow 2, *Hyphal
     /// uptake*): when on, pool demand adds `contact × effective
     /// heterotrophy × u_A` to the autotrophic demand, `contact` being
@@ -690,6 +710,24 @@ pub struct WorldParameters {
 /// anchors*): fixed in units of the mobility anchor, so it moves with `u_M`
 /// if that is ever rescaled.
 pub const DEFAULT_CONTACT_DISTANCE: f32 = 0.1 * units::MOBILITY_DISTANCE_PER_TICK;
+
+/// Default half-saturation constant `K` of saturating carcass decomposition:
+/// one drainer at effective heterotrophy 1, `u_H`. The domain gives `K` no
+/// magnitude (world-rules.md, *Carcass decomposition saturates in its
+/// decomposers*), so instruments read it across a range.
+pub const DEFAULT_CARCASS_HALF_SATURATION: f32 = units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
+
+fn default_carcass_half_saturation() -> f32 {
+    DEFAULT_CARCASS_HALF_SATURATION
+}
+
+/// Remnant floor of saturating carcass decomposition: a drained carcass whose
+/// structure falls below this fraction of its structure at death leaves the
+/// world, its last structure dissipated and its nutrient mineralised to its
+/// cell. A numerical floor, not an ecological claim: under first-order decay
+/// no drain ever empties a carcass. Applies only while
+/// `carcass_decay_constant` is positive.
+pub const CARCASS_REMNANT_FLOOR_FRACTION: f32 = 1.0e-6;
 
 fn default_contact_distance() -> f32 {
     DEFAULT_CONTACT_DISTANCE
@@ -957,6 +995,10 @@ pub struct Carcass {
     pub id: u64,
     pub position: (f32, f32),
     pub energy: f32,
+    /// The structure the carcass held at death (or when seeded): the
+    /// reference for the remnant floor of saturating decomposition
+    /// ([`CARCASS_REMNANT_FLOOR_FRACTION`]). Never changes.
+    pub energy_at_death: f32,
     pub nutrient: f32,
     /// Original agent's trait vector, used for distance-dependent trophic efficiency.
     pub traits: TraitVector,
@@ -1311,6 +1353,7 @@ impl World {
                     id: SEEDED_CARCASS_ID_BASE + i as u64,
                     position: spec.position,
                     energy: spec.energy,
+                    energy_at_death: spec.energy,
                     nutrient: spec.nutrient,
                     traits: spec.traits,
                 })
@@ -1506,6 +1549,12 @@ impl World {
                 agent.reserve = 0.0; // mark for removal
                 agent.repro_reserve = 0.0;
             }
+        }
+        // Carcasses that fell below the remnant floor leave the world; the
+        // drain pass has already emptied them into dissipation and the pool.
+        if !drain_result.removed_carcasses.is_empty() {
+            let removed = &drain_result.removed_carcasses;
+            self.carcasses.retain(|c| !removed.contains(&c.id));
         }
         // Add new carcasses from drain kills (not in this tick's spatial grid)
         for c in drain_result.new_carcasses {
@@ -2141,6 +2190,8 @@ mod tests {
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
+            carcass_decay_constant: 0.0,
+            carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -2283,6 +2334,7 @@ mod tests {
             id: 9999,
             position: (0.0, 0.0),
             energy: 500.0,
+            energy_at_death: 500.0,
             nutrient: 0.0,
             traits: zero_traits(),
         });
@@ -2316,6 +2368,7 @@ mod tests {
             id: 9999,
             position: (0.0, 0.0),
             energy: 0.0,
+            energy_at_death: 0.0,
             nutrient: 40.0,
             traits: zero_traits(),
         });
@@ -2502,6 +2555,7 @@ mod tests {
             id: 0,
             position: (0.0, 0.0),
             energy: 50.0,
+            energy_at_death: 50.0,
             nutrient: 3.0,
             traits: zero_traits(),
         };
@@ -2731,6 +2785,7 @@ mod tests {
             id: 1,
             position: (50.0, 50.0),
             energy: initial_energy,
+            energy_at_death: initial_energy,
             nutrient: initial_nutrient,
             traits: zero_traits(),
         });
@@ -2821,6 +2876,7 @@ mod tests {
             id: 9999,
             position,
             energy,
+            energy_at_death: energy,
             nutrient,
             traits,
         });
@@ -2857,6 +2913,7 @@ mod tests {
             id: 7777,
             position: (0.0, 0.0),
             energy: 10.0,
+            energy_at_death: 10.0,
             nutrient: 1.0, // below its ratio: leaches nothing, logs nothing
             traits: zero_traits(),
         });
@@ -2934,6 +2991,29 @@ mod tests {
         value.as_object_mut().unwrap().remove("leaching_rate");
         let without: WorldParameters = serde_json::from_value(value).unwrap();
         assert_eq!(without.leaching_rate, 0.0);
+    }
+
+    #[test]
+    fn saturating_decomposition_parameters_round_trip_and_default_off() {
+        // #803: a recipe or checkpoint that predates saturating carcass
+        // decomposition loads with it off (k_d = 0) and K at its default.
+        let mut params = test_params();
+        params.carcass_decay_constant = 0.3;
+        params.carcass_half_saturation = 2.5;
+        let json = serde_json::to_string(&params).unwrap();
+        let back: WorldParameters = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, params);
+
+        let mut value = serde_json::to_value(test_params()).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        obj.remove("carcass_decay_constant");
+        obj.remove("carcass_half_saturation");
+        let without: WorldParameters = serde_json::from_value(value).unwrap();
+        assert_eq!(without.carcass_decay_constant, 0.0);
+        assert_eq!(
+            without.carcass_half_saturation,
+            DEFAULT_CARCASS_HALF_SATURATION
+        );
     }
 
     #[test]
@@ -4345,6 +4425,7 @@ mod tests {
                 id,
                 position: (x, 0.0),
                 energy: 10.0,
+                energy_at_death: 10.0,
                 nutrient: 2.0,
                 traits,
             });
@@ -4464,6 +4545,8 @@ mod tests {
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
+            carcass_decay_constant: 0.0,
+            carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,
