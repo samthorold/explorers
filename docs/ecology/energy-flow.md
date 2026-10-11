@@ -58,7 +58,7 @@ Organisms cope with stochastic variation through reserves (fat stores, starch re
 
 ### Kleiber's law
 
-Max Kleiber (1932) established empirically that basal metabolic rate scales with body mass as B ∝ M^(3/4). This three-quarter power law holds across roughly 20 orders of magnitude in body mass, from bacteria to whales. It is one of the most robust quantitative relationships in biology.
+Max Kleiber (1932) established empirically that basal metabolic rate scales with body mass as B ∝ M^(3/4). Within animals it is one of the most robust quantitative relationships in biology. It does not hold across all of life: see *Criticisms and limits*.
 
 The exponent matters. A 2/3 exponent would follow from surface-area-to-volume scaling (heat dissipation through body surface). The observed 3/4 exponent is steeper — large organisms have higher metabolic rates than surface-area scaling predicts, though still lower per unit mass than small organisms.
 
@@ -83,6 +83,18 @@ The MTE claims that metabolism — constrained by body size and temperature — 
 ### Criticisms and limits
 
 The universality of the 3/4 exponent is contested. Kozłowski & Konarzewski (2004) argued that the WBE derivation's assumptions are too restrictive and that multiple different mechanisms could produce the same prediction, making the model underdetermined. Empirical analyses find that the exponent varies by taxon, life stage, and physiological state — it is not a universal constant but a central tendency with meaningful variation (Price et al. 2012). The MTE successfully predicts broad cross-species patterns but does not explain the large, systematic residual variation within taxa.
+
+**The exponent shifts across life's major transitions.** In a compilation across groups, metabolic rate scales superlinearly with mass in prokaryotes (exponent about 1.7 for active cells), close to linearly in protists (about 0.9), and sublinearly in metazoans (DeLong et al. 2010). So the 3/4 law is a metazoan result, not one that holds from bacteria to whales. Across 3,006 species spanning more than 20 orders of magnitude in mass, mean mass-specific resting rates of the major groups still fall in a narrow band of about 0.3–9 W/kg (Makarieva et al. 2008). Mass-specific rate varies within that band, but in every group an organism's maintenance is a rate per unit of its biomass.
+
+**Microbes and modular organisms pay maintenance per unit biomass.**
+- Microbial physiology states maintenance as a coefficient per unit biomass per unit time, the substrate used to keep existing cells alive apart from building new ones (Pirt 1965). *Aspergillus nidulans* in glucose-limited culture uses about 0.018–0.029 g of glucose per g of biomass per hour for maintenance (Carter et al. 1971).
+- Two-dimensional colonial animals (bryozoans) scale isometrically, exponent 1, because edge and central modules run equivalent energy budgets. Three-dimensional colonies scale allometrically.
+- A meta-analysis of bacteria and fungi found community production scaling with biomass at exponents of 0.85 (fungi) and 0.72 (bacteria).
+- In DEB theory, somatic maintenance is proportional to structural volume ([Dynamic Energy Budget theory](#dynamic-energy-budget-theory)). The empirical fit across species is loose.
+
+None of these frameworks has a cost an organism pays per individual, independent of its size. Maintenance is biomass times a mass-specific rate, and only the exponent varies between groups.
+
+*Evidence quality.* The exponents and the W/kg band are from the papers' abstracts and from tables that reproduce them. The *Aspergillus* coefficients are one organism in one study. The bryozoan and microbial-community results were read from abstracts. That maintenance scales with biomass, with no per-individual constant, is common to all of them.
 
 The theory is most powerful as a first-order constraint: given body size and temperature, metabolic rate is predictable within an order of magnitude. Finer predictions require taxon-specific biology.
 
@@ -214,9 +226,13 @@ Bar-On, Y. M., Phillips, R., & Milo, R. (2018). The biomass distribution on Eart
 
 Brown, J. H., Gillooly, J. F., Allen, A. P., Savage, V. M., & West, G. B. (2004). Toward a metabolic theory of ecology. *Ecology*, 85(7), 1771-1789.
 
+Carter, B.L.A., Bull, A.T., Pirt, S.J. & Rowley, B.I. (1971). Relationship between energy substrate utilization and specific growth rate in *Aspergillus nidulans*. *Journal of Bacteriology*, 108, 309-313. (Title and pages not verified.)
+
 Cebrian, J. (1999). Patterns in the fate of production in plant communities. *American Naturalist*, 154(4), 449-468.
 
 Cyr, H., & Pace, M. L. (1993). Magnitude and patterns of herbivory in aquatic and terrestrial ecosystems. *Nature*, 361(6408), 148-150.
+
+DeLong, J.P., Okie, J.G., Moses, M.E., Sibly, R.M. & Brown, J.H. (2010). Shifts in metabolic scaling, production, and efficiency across major evolutionary transitions of life. *PNAS*, 107(29), 12941-12945.
 
 Gasol, J. M., del Giorgio, P. A., & Duarte, C. M. (1997). Biomass distribution in marine planktonic communities. *Limnology and Oceanography*, 42(6), 1353–1363.
 
@@ -238,6 +254,8 @@ Lloyd, J., & Taylor, J. A. (1994). On the temperature dependence of soil respira
 
 Lotka, A. J. (1922). Contribution to the energetics of evolution. *Proceedings of the National Academy of Sciences*, 8(6), 147-151.
 
+Makarieva, A.M., Gorshkov, V.G., Li, B.-L., Chown, S.L., Reich, P.B. & Gavrilets, V.M. (2008). Mean mass-specific metabolic rates are strikingly similar across life's major domains: evidence for life's metabolic optimum. *PNAS*, 105(44), 16994-16999.
+
 Marques, G. M., Augustine, S., Lika, K., Pecquerie, L., Domingos, T., & Kooijman, S. A. L. M. (2018). The AmP project: comparing species on the basis of dynamic energy budget parameters. *PLoS Computational Biology*, 14(5), e1006100.
 
 Nisbet, R. M., Muller, E. B., Lika, K., & Kooijman, S. A. L. M. (2010). From molecules to ecosystems through dynamic energy budget models. *Journal of Animal Ecology*, 69(6), 913-926.
@@ -245,6 +263,8 @@ Nisbet, R. M., Muller, E. B., Lika, K., & Kooijman, S. A. L. M. (2010). From mol
 Odum, E. P. (1969). The strategy of ecosystem development. *Science*, 164(3877), 262-270.
 
 Odum, H. T. (1983). *Systems Ecology: An Introduction*. Wiley.
+
+Pirt, S.J. (1965). The maintenance energy of bacteria in growing cultures. *Proceedings of the Royal Society B*, 163, 224-231.
 
 Price, C. A., Weitz, J. S., Savage, V. M., Stegen, J., Clarke, A., Coomes, D. A., ... & Brown, J. H. (2012). Testing the metabolic theory of ecology. *Ecology Letters*, 15(12), 1465-1474.
 
