@@ -17,6 +17,7 @@ mod headless_decomposer;
 mod headless_example4;
 mod hyphal_uptake;
 mod kin_blind_recognition_limit;
+mod living_resistance;
 mod mobile_consumer_feeds;
 mod prop_conservation;
 mod prop_energy_bound;

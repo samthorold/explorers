@@ -261,3 +261,26 @@ fn size_scaled_base_rate_sets_and_records_b() {
     let md = std::fs::read_to_string(dir.join("set.md")).unwrap();
     assert!(md.contains("## Size-scaled base rate"), "{md}");
 }
+
+/// `--living-resistance` (#813) sets `ρ` = 1, the design's value for mode 1's
+/// consumers (world rules, *Living tissue resists drains*), and records it in
+/// the artifact and summary. With body reach exposing the producers, the
+/// guild drains living targets without it and none with it; without the
+/// option nothing is recorded.
+#[test]
+fn living_resistance_sets_rho_to_one_and_closes_living_targets() {
+    let dir = scratch("living-resistance");
+    let reach = ["--body-reach-pieces", "10"];
+    let open = run_with(&dir.join("open.json"), &reach);
+    let resisted = run_with(
+        &dir.join("resisted.json"),
+        &[&reach[..], &["--living-resistance"]].concat(),
+    );
+    assert!(open.get("living_resistance").is_none());
+    assert_eq!(resisted["living_resistance"].as_f64(), Some(1.0));
+    let living = |a: &serde_json::Value| a["report"]["guild"]["drain"]["living"].as_f64().unwrap();
+    assert!(living(&open) > 0.0, "{}", open["report"]["guild"]);
+    assert_eq!(living(&resisted), 0.0, "{}", resisted["report"]["guild"]);
+    let md = std::fs::read_to_string(dir.join("resisted.md")).unwrap();
+    assert!(md.contains("## Living-tissue resistance"), "{md}");
+}

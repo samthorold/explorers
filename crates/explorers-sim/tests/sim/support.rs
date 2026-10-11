@@ -92,6 +92,7 @@ pub fn viable_baseline() -> WorldParameters {
         carcass_decay_constant: 0.0,
         carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
         mass_specific_base_rate: 0.0,
+        living_resistance: 0.0,
         hyphal_uptake: false,
         contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
     }
@@ -304,6 +305,25 @@ pub fn world_case_with_saturating_decomposition() -> impl Strategy<Value = World
         .prop_map(|(mut case, k_d, k)| {
             case.params.carcass_decay_constant = k_d;
             case.params.carcass_half_saturation = k;
+            case
+        })
+}
+
+/// A stepper case with living-tissue resistance on (#813): the wear case, so
+/// living targets are drained and carcasses form within the run, with `ρ`
+/// drawn across `[0, 1]` or at 1, where no living target is drained, and
+/// saturating carcass decomposition on in half the cases, so both carcass
+/// paths run beside the resisted living drains. A separate strategy, so
+/// `world_case()` draws exactly the inputs it always has.
+pub fn world_case_with_living_resistance() -> impl Strategy<Value = WorldCase> {
+    (
+        world_case_with_wear(),
+        prop_oneof![0.0f32..=1.0, Just(1.0f32)],
+        prop_oneof![Just(0.0f32), 0.01f32..=1.0],
+    )
+        .prop_map(|(mut case, rho, k_d)| {
+            case.params.living_resistance = rho;
+            case.params.carcass_decay_constant = k_d;
             case
         })
 }

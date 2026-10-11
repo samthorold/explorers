@@ -1192,12 +1192,18 @@ pub fn resolve_drains_routed(
                     &agents[target_idx].traits,
                     params,
                 ));
+                // Living tissue resists drains (world-rules.md, *Living
+                // tissue resists drains*): the expressed demand is scaled by
+                // `1 − ρ` before the split, so the split shares resisted
+                // demands. At ρ = 0 the factor is exactly 1.
                 let demand = eff_heterotrophy
                     * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK
-                    * expression;
-                // A consumer sparing a resembling target expresses no drain: it is not a consumer of this target this
-                // tick (and must not enter the proportional split, where an
-                // all-zero demand would be 0/0).
+                    * expression
+                    * (1.0 - params.living_resistance);
+                // A consumer sparing a resembling target, or wholly resisted
+                // by it, expresses no drain: it is not a consumer of this
+                // target this tick (and must not enter the proportional
+                // split, where an all-zero demand would be 0/0).
                 if demand <= 0.0 {
                     continue;
                 }
@@ -2723,6 +2729,7 @@ mod tests {
             carcass_decay_constant: 0.0,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             mass_specific_base_rate: 0.0,
+            living_resistance: 0.0,
             hyphal_uptake: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
         }
