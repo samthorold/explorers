@@ -1817,11 +1817,17 @@ impl World {
             }
         }
 
+        // Every endpoint's inflow and outflow, in one pass over the tick's flows
+        // (#797). The residual records below only add `Agent(id)` and
+        // `Carcass(id)` flows into Dissipation for an id already read, so they
+        // change no total either loop has yet to read.
+        let totals = self.ledger.endpoint_totals();
+
         // For each pre-tick agent: compute residual dissipation
         // (everything not accounted for by consumption, death, or retained energy)
         for (&id, &_pre_energy) in &pre_agent_energy {
-            let total_in = self.ledger.net_received(&EnergyEndpoint::Agent(id));
-            let total_out = self.ledger.net_sent(&EnergyEndpoint::Agent(id));
+            let total_in = totals.received(&EnergyEndpoint::Agent(id));
+            let total_out = totals.sent(&EnergyEndpoint::Agent(id));
             let post_energy = post_agent_energy.get(&id).copied().unwrap_or(0.0);
             let unaccounted = total_in - total_out - post_energy;
             if unaccounted > 1e-6 {
@@ -1835,8 +1841,8 @@ impl World {
 
         // For pre-tick carcasses: compute residual dissipation
         for (&id, &_pre_energy) in &pre_carcass_energy {
-            let total_in = self.ledger.net_received(&EnergyEndpoint::Carcass(id));
-            let total_out = self.ledger.net_sent(&EnergyEndpoint::Carcass(id));
+            let total_in = totals.received(&EnergyEndpoint::Carcass(id));
+            let total_out = totals.sent(&EnergyEndpoint::Carcass(id));
             let post_energy = post_carcass_energy.get(&id).copied().unwrap_or(0.0);
             let unaccounted = total_in - total_out - post_energy;
             if unaccounted > 1e-6 {

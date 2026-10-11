@@ -57,6 +57,28 @@ impl EnergyLedger {
             .sum()
     }
 
+    /// Every endpoint's inflow and outflow totals, in one pass over the flows.
+    ///
+    /// Each total equals [`net_received`](Self::net_received) or
+    /// [`net_sent`](Self::net_sent) for that endpoint to the bit: it adds the
+    /// same amounts in the same (flow) order, from the value an empty
+    /// `f32` sum starts at. Use it where many endpoints are read at once,
+    /// since each of those calls scans every flow.
+    pub fn endpoint_totals(&self) -> EndpointTotals {
+        let mut totals = EndpointTotals {
+            received: HashMap::new(),
+            sent: HashMap::new(),
+        };
+        for (source, destination, amount) in &self.flows {
+            *totals.sent.entry(source.clone()).or_insert_with(empty_sum) += amount;
+            *totals
+                .received
+                .entry(destination.clone())
+                .or_insert_with(empty_sum) += amount;
+        }
+        totals
+    }
+
     /// Total energy entering the system from SolarTap.
     pub fn total_solar_input(&self) -> f32 {
         self.net_sent(&EnergyEndpoint::SolarTap)
@@ -180,6 +202,33 @@ impl EnergyLedger {
     }
 }
 
+/// The value an `f32` sum over no items starts at (and returns).
+fn empty_sum() -> f32 {
+    std::iter::empty::<f32>().sum()
+}
+
+/// Per-endpoint inflow and outflow totals of a ledger's flows, as
+/// [`EnergyLedger::endpoint_totals`] takes them.
+pub struct EndpointTotals {
+    received: HashMap<EnergyEndpoint, f32>,
+    sent: HashMap<EnergyEndpoint, f32>,
+}
+
+impl EndpointTotals {
+    /// Total energy received by this endpoint, as [`EnergyLedger::net_received`].
+    pub fn received(&self, endpoint: &EnergyEndpoint) -> f32 {
+        self.received
+            .get(endpoint)
+            .copied()
+            .unwrap_or_else(empty_sum)
+    }
+
+    /// Total energy sent by this endpoint, as [`EnergyLedger::net_sent`].
+    pub fn sent(&self, endpoint: &EnergyEndpoint) -> f32 {
+        self.sent.get(endpoint).copied().unwrap_or_else(empty_sum)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +291,56 @@ mod tests {
         ledger.record(EnergyEndpoint::Agent(1), EnergyEndpoint::Dissipation, 3.0);
         ledger.record(EnergyEndpoint::Agent(1), EnergyEndpoint::Agent(2), 2.0);
         assert!((ledger.net_sent(&EnergyEndpoint::Agent(1)) - 5.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn endpoint_totals_match_net_received_and_net_sent_to_the_bit() {
+        // Amounts whose f32 sum depends on the order they are added in, so a
+        // total taken in any order but flow order would differ in the last bit.
+        let amounts = [1.0e8_f32, 0.3, -1.0e8, 0.7, 1.0e-3, 3.3e7, 0.1, -0.0];
+        let endpoints = [
+            EnergyEndpoint::SolarTap,
+            EnergyEndpoint::Agent(1),
+            EnergyEndpoint::Agent(2),
+            EnergyEndpoint::Carcass(1),
+            EnergyEndpoint::Carcass(3),
+            EnergyEndpoint::Dissipation,
+            EnergyEndpoint::Endowment,
+        ];
+        let mut ledger = EnergyLedger::new();
+        for (i, &amount) in amounts.iter().cycle().take(60).enumerate() {
+            let source = endpoints[(i * 3) % endpoints.len()].clone();
+            let destination = endpoints[(i * 5 + 1) % endpoints.len()].clone();
+            ledger.record(source, destination, amount);
+        }
+        let totals = ledger.endpoint_totals();
+        for endpoint in endpoints.iter().chain([&EnergyEndpoint::Agent(99)]) {
+            assert_eq!(
+                totals.received(endpoint).to_bits(),
+                ledger.net_received(endpoint).to_bits(),
+                "received by {endpoint:?}"
+            );
+            assert_eq!(
+                totals.sent(endpoint).to_bits(),
+                ledger.net_sent(endpoint).to_bits(),
+                "sent by {endpoint:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_totals_of_an_untouched_endpoint_are_the_empty_sum() {
+        let ledger = EnergyLedger::new();
+        let totals = ledger.endpoint_totals();
+        let agent = EnergyEndpoint::Agent(7);
+        assert_eq!(
+            totals.received(&agent).to_bits(),
+            ledger.net_received(&agent).to_bits()
+        );
+        assert_eq!(
+            totals.sent(&agent).to_bits(),
+            ledger.net_sent(&agent).to_bits()
+        );
     }
 
     #[test]
