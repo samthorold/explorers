@@ -39,6 +39,19 @@
 //! Without the flag, or at 0, the coefficient is the spec's and nothing is
 //! recorded.
 //!
+//! `--litter-half-life L` (#805; world rules, *Carcass decomposition
+//! saturates in its decomposers*) turns saturating decomposition on, with
+//! the decay constant `k_d = ln 2 / (L × T_p)` at which a carcass under full
+//! saturation halves in L producer lifespans, `T_p` the median established
+//! producer lifespan at the committed wear (229 ticks).
+//! `--enzyme-half-saturation K` sets the half-saturation constant to K
+//! decomposer founder drain capabilities (effective heterotrophy × `u_H` at
+//! founding, read from the world the run builds); without it, the world's
+//! default. K needs L, since it has no effect while `k_d` is 0, and needs
+//! decomposer founders. The summary and artifact record L, `T_p`, `k_d`, the
+//! founders' capability and K in founder capabilities and absolute units.
+//! Without the flags nothing is recorded and the world is unchanged.
+//!
 //! With `--clear-at T` (#752) it reads the perturbation against its paired
 //! control: it settles the mesocosm to tick `T`, clones it, clears every agent
 //! and carcass from one copy's centre patch (an outflow, booked in each arm's
@@ -50,7 +63,8 @@
 //! reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W]
 //!                [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H]
 //!                [--sample-every K] [--clear-at T] [--no-decomposers]
-//!                [--litter-x N] [--body-reach-pieces K] [--out PATH]
+//!                [--litter-x N] [--body-reach-pieces K]
+//!                [--litter-half-life L] [--enzyme-half-saturation K] [--out PATH]
 //! ```
 //!
 //! Defaults: the committed `crates/explorers-reference-modes/mode1.json`
@@ -63,11 +77,13 @@
 use std::path::PathBuf;
 
 use explorers_reference_modes::mesocosm::{
-    Community, Mode1Spec, body_reach_section, mode1_mesocosm_with_litter, mode1_summary,
-    paired_summary, run_mode1, run_paired, set_body_reach_pieces,
+    Community, ESTABLISHED_PRODUCER_LIFESPAN_TICKS, Mode1Spec, body_reach_section,
+    carcass_decay_constant_for_half_life, decomposition_kinetics_section,
+    mode1_mesocosm_with_litter, mode1_summary, paired_summary, run_mode1, run_paired,
+    set_body_reach_pieces, set_decomposition_kinetics,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--body-reach-pieces K] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -85,6 +101,12 @@ struct Cli {
     /// The litter pieces a decomposer founder's reach spans at founding
     /// (#795); `None`, as at 0, keeps the spec's coefficient.
     body_reach_pieces: Option<f32>,
+    /// The litter half-life under full saturation, in producer lifespans
+    /// (#805); `None` keeps carcass drains additive.
+    litter_half_life: Option<f32>,
+    /// The half-saturation constant in decomposer founder drain capabilities
+    /// (#805); `None` keeps the world's default.
+    enzyme_half_saturation: Option<f32>,
     out: Option<PathBuf>,
 }
 
@@ -100,6 +122,8 @@ impl Cli {
             community: Community::ProducersAndDecomposers,
             litter_x: 1,
             body_reach_pieces: None,
+            litter_half_life: None,
+            enzyme_half_saturation: None,
             out: None,
         };
         while let Some(flag) = args.next() {
@@ -126,6 +150,20 @@ impl Cli {
                     }
                     cli.body_reach_pieces = (k > 0.0).then_some(k);
                 }
+                "--litter-half-life" => {
+                    let l: f32 = value.parse().map_err(|e| bad(&e))?;
+                    if !(l > 0.0 && l.is_finite()) {
+                        return Err("--litter-half-life must be a finite L > 0".into());
+                    }
+                    cli.litter_half_life = Some(l);
+                }
+                "--enzyme-half-saturation" => {
+                    let k: f32 = value.parse().map_err(|e| bad(&e))?;
+                    if !(k > 0.0 && k.is_finite()) {
+                        return Err("--enzyme-half-saturation must be a finite K > 0".into());
+                    }
+                    cli.enzyme_half_saturation = Some(k);
+                }
                 "--clear-at" => cli.clear_at = Some(value.parse().map_err(|e| bad(&e))?),
                 "--out" => cli.out = Some(PathBuf::from(&value)),
                 _ => return Err(format!("unknown flag {flag}")),
@@ -136,6 +174,25 @@ impl Cli {
         }
         if cli.body_reach_pieces.is_some() && cli.community == Community::ProducersOnly {
             return Err("--body-reach-pieces needs decomposer founders".into());
+        }
+        if cli.enzyme_half_saturation.is_some() {
+            if cli.litter_half_life.is_none() {
+                return Err(
+                    "--enzyme-half-saturation needs --litter-half-life: K has no effect while k_d is 0"
+                        .into(),
+                );
+            }
+            if cli.community == Community::ProducersOnly {
+                return Err("--enzyme-half-saturation needs decomposer founders".into());
+            }
+        }
+        if let Some(l) = cli.litter_half_life {
+            let k_d = carcass_decay_constant_for_half_life(l, ESTABLISHED_PRODUCER_LIFESPAN_TICKS);
+            if k_d > 1.0 {
+                return Err(format!(
+                    "--litter-half-life {l} gives k_d {k_d} per tick, above 1"
+                ));
+            }
         }
         if cli.sample_every == 0 {
             return Err("--sample-every must be at least 1".into());
@@ -172,6 +229,10 @@ fn main() {
     let body_reach = cli.body_reach_pieces.map(|k| {
         set_body_reach_pieces(&mut world, k).expect("the mesocosm has decomposer founders")
     });
+    let kinetics = cli.litter_half_life.map(|l| {
+        set_decomposition_kinetics(&mut world, l, cli.enzyme_half_saturation)
+            .expect("K is given only with decomposer founders")
+    });
     let community = match cli.community {
         Community::ProducersAndDecomposers => "producers and decomposers",
         Community::ProducersOnly => "producers only",
@@ -188,10 +249,17 @@ fn main() {
         cli.sample_every,
         cli.litter_x
     );
-    // The feeding reach set is a run setting, so it follows the header.
-    let with_reach = |header: String| match &body_reach {
-        Some(r) => format!("{header}\n\n{}", body_reach_section(r)),
-        None => header,
+    // The feeding reach and kinetics set are run settings, so they follow
+    // the header.
+    let with_reach = |header: String| {
+        let header = match &body_reach {
+            Some(r) => format!("{header}\n\n{}", body_reach_section(r)),
+            None => header,
+        };
+        match &kinetics {
+            Some(k) => format!("{header}\n\n{}", decomposition_kinetics_section(k)),
+            None => header,
+        }
     };
     let (summary, report, default_out) = match cli.clear_at {
         None => {
@@ -227,6 +295,10 @@ fn main() {
     });
     if let Some(r) = body_reach {
         artifact["body_reach"] = serde_json::to_value(r).expect("the body reach serialises");
+    }
+    if let Some(k) = kinetics {
+        artifact["decomposition_kinetics"] =
+            serde_json::to_value(k).expect("the decomposition kinetics serialise");
     }
     std::fs::write(&out, serde_json::to_string(&artifact).unwrap()).expect("write the artifact");
     std::fs::write(out.with_extension("md"), &summary).expect("write the summary");
