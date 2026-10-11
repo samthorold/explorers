@@ -1838,13 +1838,17 @@ fn move_agents_with(
                 detected_count += 1.0;
                 // A living target's cue: its structure times the expression
                 // the drain pass's recognition gives toward it, so a
-                // recognised twin pulls nothing.
+                // recognised twin pulls nothing; then times `1 − ρ`, the
+                // factor living-tissue resistance puts on its drain, so a
+                // wholly resisted target pulls nothing either. At ρ = 0 the
+                // factor is exactly 1.
                 let expression = living_target_expression(resemblance(
                     &agents[i].traits,
                     &agents[j].traits,
                     params,
                 ));
-                let cue = agents[j].structure.max(0.0) * expression;
+                let cue =
+                    agents[j].structure.max(0.0) * expression * (1.0 - params.living_resistance);
                 sense(
                     cue,
                     dist,

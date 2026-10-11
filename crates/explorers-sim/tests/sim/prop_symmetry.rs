@@ -10,7 +10,9 @@ use explorers_sim::{
     Agent, AgentSpec, World, WorldRecipe, phase, toroidal_distance, wrap_position,
 };
 use proptest::prelude::*;
-use support::{WorldCase, world_case, world_case_with_size_scaled_uptake};
+use support::{
+    WorldCase, world_case, world_case_with_living_resistance, world_case_with_size_scaled_uptake,
+};
 
 /// Relative tolerance for *summed* world totals under a permutation. The
 /// execution model commits every RNG-derived quantity and every agent's
@@ -218,6 +220,21 @@ proptest! {
         tc in translation_case_from(world_case_with_size_scaled_uptake())
     ) {
         check_translation_covariance(&tc)?;
+    }
+}
+
+proptest! {
+    #![proptest_config(support::proptest_config(128))]
+
+    /// Agent-order permutation with living-tissue resistance on (#813, #816):
+    /// `ρ` scales both a living target's drain and its movement cue, each a
+    /// per-pair factor read from tick-start state, so the trajectory stays
+    /// order-invariant.
+    #[test]
+    fn trajectory_is_invariant_under_agent_order_permutation_with_living_resistance(
+        case in world_case_with_living_resistance()
+    ) {
+        check_order_permutation_invariance(&case)?;
     }
 }
 

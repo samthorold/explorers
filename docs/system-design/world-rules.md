@@ -454,7 +454,7 @@ The sums run over the targets the agent senses within its sensing range (*Channe
 - `û_i` is the unit vector toward target `i`, and `d_i` is the distance to it;
 - `s_i` is the target's **cue**, the stock a drain would take from it, times the agent's expression toward it (*Consumption is incremental*):
   - a carcass's cue is its remaining energy;
-  - a living target's cue is its structure × `max(0, 1 − w(d))`, where `w` is its resemblance to the agent.
+  - a living target's cue is its structure × `max(0, 1 − w(d))` × `(1 − ρ)`, where `w` is its resemblance to the agent and `ρ` is the world's living-tissue resistance (*Consumption is incremental → Living tissue resists drains*).
 
 When the agent senses no cue (`Σ s_i = 0`), the pull is 0 and the step is a random walk.
 
@@ -470,7 +470,7 @@ When the agent senses no cue (`Σ s_i = 0`), the pull is 0 and the step is a ran
   - The domain separates how well a forager aims from how fast it goes. Mycelial fungi are slow but strongly directed toward resources, and they abandon depleted ground.
   - Weighting the pull by mobility as well would penalise a slow forager twice, in stride and in aim. A slow, specialised decomposer would barely steer.
   - **Sensing range** still derives from mobility. That coupling is unexamined.
-- **Movement reads the same two quantities as the drains,** the stock a bite takes from and expression. So an agent moves toward what it would eat, in proportion to how much there is to take. A recognised twin is spared by the drains and pulls nothing. Kin and conspecifics are not attractors that the drains then refuse.
+- **Movement reads the same two quantities as the drains,** the stock a bite takes from and expression. So an agent moves toward what it would eat, in proportion to how much there is to take. A recognised twin is spared by the drains and pulls nothing. Kin and conspecifics are not attractors that the drains then refuse. Living-tissue resistance scales a living target's drain by `1 − ρ`, so it scales its cue by the same factor. At `ρ = 1` no living target pulls, and a forager that senses only living targets random-walks. A carcass's cue carries no `ρ`.
 
 **Why the tempting alternatives fail.**
 - **One fixed pull per sensed target**, as the stepper had, is the rule this replaces. Each entity's weight `1/d` cancelled its displacement's length, so every target pulled with the same length whatever its distance or contents. That included the living agents and conspecifics around the forager. A forager surrounded by targets felt pulls that largely cancelled. It random-walked inside ground it had emptied while fresh litter lay just beyond its reach. ([764-founder-death-diagnosis.md](../research/764-founder-death-diagnosis.md), finding 3.)
@@ -478,7 +478,7 @@ When the agent senses no cue (`Σ s_i = 0`), the pull is 0 and the step is a ran
 - **Separate fields for the living and the dead** would need a relative weight between them, which the domain gives no reason for.
 - **A cue from drain rate** would make a fresh, undrained carcass pull nothing, so new litter would never be found.
 
-*Current state (2026-10-10): implemented (#780) in `phase::move_agents`, in every world and with no switch. The old fixed-length pull per sensed target and its `eff_mobility` aim weight are deleted. A target exactly under the agent has no direction and is left out of both sums. Because the cues are stores, the phases that feed them sum in stable id order, so positions stay exactly invariant under a permutation of the population ([execution model](execution-model.md), *What this buys, and what stays out of scope*).*
+*Current state (2026-10-10): implemented (#780) in `phase::move_agents`, in every world and with no switch. The old fixed-length pull per sensed target and its `eff_mobility` aim weight are deleted. A target exactly under the agent has no direction and is left out of both sums. Because the cues are stores, the phases that feed them sum in stable id order, so positions stay exactly invariant under a permutation of the population ([execution model](execution-model.md), *What this buys, and what stays out of scope*).* *Current state (2026-10-12): a living target's cue carries `1 − ρ` (#816), the factor its drain carries (#813). At `ρ`'s default 0 the factor is exactly 1 and every world is unchanged.*
 
 ### Channels on the network
 
@@ -634,7 +634,7 @@ A living target resists every consumer that drains it, and death removes the res
 
 **How large `ρ` is.** Against consumers not adapted to it, the domain's living tissue is closed: nonhost resistance is the norm, and saprotrophs feed only on what is already dead. What does consume living plants are adapted lineages, pathogens with effectors and herbivores taking 5–15 % of net primary production, and a uniform `ρ` cannot represent them. So where a world's heterotrophs are all decomposers and producer-line mixotrophs, as in mode 1, `ρ` is 1. That is the domain's value for those consumers, not a fitted one. A value below 1 would stand for partly adapted consumers, which the domain has only as specific lineages. It is settled with the consumer-side alternative when consumers enter.
 
-*Current state (2026-10-12): implemented, off by default (#813). `ρ` is `living_resistance`: the stepper multiplies each consumer's expressed demand on a living target by `1 − ρ` before the proportional split, and leaves carcass drains, additive and saturating, as they were. At its default 0 every world is unchanged. `reference_mode --living-resistance` sets `ρ = 1` for mode 1 and records it; the guild readout's living-versus-carcass split is the check. A smoke run (seed 1, 300 ticks, body reach of 10 pieces) moved the guild's living share of its drain from 0.047 to 0. Movement is unchanged: a living target's cue to a sensing consumer does not carry `ρ`.*
+*Current state (2026-10-12): implemented, off by default (#813). `ρ` is `living_resistance`: the stepper multiplies each consumer's expressed demand on a living target by `1 − ρ` before the proportional split, and leaves carcass drains, additive and saturating, as they were. At its default 0 every world is unchanged. `reference_mode --living-resistance` sets `ρ = 1` for mode 1 and records it; the guild readout's living-versus-carcass split is the check. A smoke run (seed 1, 300 ticks, body reach of 10 pieces) moved the guild's living share of its drain from 0.047 to 0. Since #816, movement carries the same factor: a living target's cue to a sensing consumer is scaled by `1 − ρ`, so at `ρ = 1` living tissue neither feeds nor attracts. A carcass's cue is unchanged. On the same smoke run with the cue scaled, the guild drained nothing in the second half, founders alive at tick 20 fell from 7 without the option to 3 with it, and every founder was dead by tick 50 either way.*
 
 ### Hard distance predicates are an accepted discontinuity in position
 
