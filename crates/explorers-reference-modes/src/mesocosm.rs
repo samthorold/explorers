@@ -480,6 +480,211 @@ pub struct GuildReadout {
     pub passes: bool,
 }
 
+/// Litter inflow (#804): the structure of the carcasses deaths create, split
+/// by whether the dead was a producer (the income read) or anything else.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct LitterInflow {
+    /// Carcass structure at death from producer deaths.
+    pub producer: f64,
+    /// Carcass structure at death from every other death.
+    pub other: f64,
+}
+
+impl LitterInflow {
+    /// Book one event. A `Died` adds the structure its carcass held at death,
+    /// read from `at_death` by the carcass's id (a runtime carcass keeps its
+    /// agent's id); `producer` says whether the dead was a producer. Anything
+    /// else is ignored.
+    pub fn book(&mut self, event: &Event, producer: bool, at_death: &HashMap<u64, f32>) {
+        if event.kind != EventKind::Died {
+            return;
+        }
+        let structure = *at_death
+            .get(&event.source)
+            .expect("every death leaves a carcass") as f64;
+        if producer {
+            self.producer += structure;
+        } else {
+            self.other += structure;
+        }
+    }
+
+    /// Producer and other inflow together.
+    pub fn total(&self) -> f64 {
+        self.producer + self.other
+    }
+}
+
+/// One sample of the whole world's litter (#804), taken with each
+/// [`CentreSample`].
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct LitterSample {
+    /// The world's tick at the sample.
+    pub tick: u64,
+    /// Standing litter: the summed structure (energy) of every carcass, over
+    /// the world's nutrient cells.
+    pub standing_per_cell: f64,
+    /// Carcasses standing, spent ones included: with saturating decomposition
+    /// off, a drained carcass stands at structure 0 and is never removed.
+    pub carcasses: usize,
+    /// Carcasses still holding structure.
+    pub nonempty_carcasses: usize,
+    /// Litter inflow over the whole world since the previous sample (world
+    /// totals, not per cell).
+    pub inflow: LitterInflow,
+    /// The ticks that inflow covers (0 for a run's first sample).
+    pub inflow_ticks: u64,
+    /// The structure of each living producer (the income read) older than
+    /// [`ESTABLISHMENT_AGE`], in roster order.
+    pub established_structures: Vec<f32>,
+}
+
+/// Mean, least and greatest of a series.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Spread {
+    pub mean: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl Spread {
+    /// The spread of `values` around a `mean` given apart (a rate's mean is
+    /// its total over its time, not the mean of its intervals). All zero
+    /// with no values.
+    fn of(values: &[f64], mean: f64) -> Self {
+        if values.is_empty() {
+            return Self::default();
+        }
+        Self {
+            mean,
+            min: values.iter().copied().fold(f64::INFINITY, f64::min),
+            max: values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        }
+    }
+
+    /// The spread of `values` around their own mean.
+    fn of_mean(values: &[f64]) -> Self {
+        let mean = values.iter().sum::<f64>() / values.len().max(1) as f64;
+        Self::of(values, mean)
+    }
+}
+
+/// Distribution of a structure, quantiles by nearest rank as
+/// [`LifespanDistribution`]'s; all zero with no values.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct StructureDistribution {
+    pub count: usize,
+    pub min: f64,
+    pub p10: f64,
+    pub p25: f64,
+    pub median: f64,
+    pub p75: f64,
+    pub p90: f64,
+    pub max: f64,
+    pub mean: f64,
+}
+
+impl StructureDistribution {
+    pub fn of(values: &[f64]) -> Self {
+        if values.is_empty() {
+            return Self::default();
+        }
+        let mut sorted = values.to_vec();
+        sorted.sort_unstable_by(f64::total_cmp);
+        let n = sorted.len();
+        let rank = |p: f64| sorted[((p * n as f64).ceil() as usize).clamp(1, n) - 1];
+        Self {
+            count: n,
+            min: sorted[0],
+            p10: rank(0.10),
+            p25: rank(0.25),
+            median: rank(0.50),
+            p75: rank(0.75),
+            p90: rank(0.90),
+            max: sorted[n - 1],
+            mean: sorted.iter().sum::<f64>() / n as f64,
+        }
+    }
+}
+
+/// The litter reading over a run's or arm's second half (#804).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct LitterWindow {
+    /// The ticks of the window's first and last samples: the second half of
+    /// the series, as [`Mode1Report::producers_persist`] reads it.
+    pub from_tick: u64,
+    pub to_tick: u64,
+    /// Standing litter per cell over the window's samples.
+    pub standing_per_cell: Spread,
+    /// Carcasses standing, and those holding structure, over its samples.
+    pub carcasses: Spread,
+    pub nonempty_carcasses: Spread,
+    /// Inflow per cell per tick over the sample intervals ending after the
+    /// window's first sample: the mean is the window's total over its time,
+    /// the least and greatest are the intervals'.
+    pub inflow: Spread,
+    pub producer_inflow: Spread,
+    pub other_inflow: Spread,
+    /// The structure of the established producers alive at each of the
+    /// window's samples, pooled: `S_p` (world rules, flow 8, *How large `b`
+    /// is*).
+    pub established_structure: StructureDistribution,
+    /// The median age at death of the run's or arm's producers that died
+    /// older than [`ESTABLISHMENT_AGE`] (0 with none).
+    pub established_lifespan_median: u64,
+}
+
+/// The litter readout of a run or arm (#804): the series at the sample
+/// cadence and its second half's reading.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct LitterReadout {
+    pub samples: Vec<LitterSample>,
+    pub second_half: LitterWindow,
+}
+
+impl LitterWindow {
+    /// Read the second half of `samples`, with the run's or arm's producer
+    /// `lifespans`.
+    fn read(samples: &[LitterSample], lifespans: &[u64]) -> Self {
+        let from = samples.len() / 2;
+        let half = &samples[from..];
+        let Some(first) = half.first() else {
+            return Self::default();
+        };
+        let cells = (SIDE_CELLS * SIDE_CELLS) as f64;
+        let of = |f: fn(&LitterSample) -> f64| -> Vec<f64> { half.iter().map(f).collect() };
+        let intervals = &half[1..];
+        let ticks: u64 = intervals.iter().map(|s| s.inflow_ticks).sum();
+        let rate = |f: fn(&LitterInflow) -> f64| {
+            let rates: Vec<f64> = (intervals.iter())
+                .filter(|s| s.inflow_ticks > 0)
+                .map(|s| f(&s.inflow) / (cells * s.inflow_ticks as f64))
+                .collect();
+            let total: f64 = intervals.iter().map(|s| f(&s.inflow)).sum();
+            Spread::of(&rates, total / (cells * ticks.max(1) as f64))
+        };
+        let established: Vec<u64> = (lifespans.iter().copied())
+            .filter(|&a| a > ESTABLISHMENT_AGE)
+            .collect();
+        Self {
+            from_tick: first.tick,
+            to_tick: half[half.len() - 1].tick,
+            standing_per_cell: Spread::of_mean(&of(|s| s.standing_per_cell)),
+            carcasses: Spread::of_mean(&of(|s| s.carcasses as f64)),
+            nonempty_carcasses: Spread::of_mean(&of(|s| s.nonempty_carcasses as f64)),
+            inflow: rate(LitterInflow::total),
+            producer_inflow: rate(|i| i.producer),
+            other_inflow: rate(|i| i.other),
+            established_structure: StructureDistribution::of(
+                &(half.iter())
+                    .flat_map(|s| s.established_structures.iter().map(|&x| x as f64))
+                    .collect::<Vec<_>>(),
+            ),
+            established_lifespan_median: LifespanDistribution::of(&established).median,
+        }
+    }
+}
+
 /// The founders' fate and income (#781): the agents at the pure heterotroph
 /// vertex when the run began (nominal autotrophy 0, heterotrophy above 0),
 /// tracked by id. In the mesocosm these are the decomposer founders.
@@ -638,6 +843,9 @@ pub struct Mode1Report {
     pub founders: FounderReadout,
     /// The decomposer guild over the run's or arm's second half (#794).
     pub guild: GuildReadout,
+    /// The whole world's litter, sampled with the centre patch, and its
+    /// second half's reading (#804).
+    pub litter: LitterReadout,
 }
 
 impl Mode1Report {
@@ -775,8 +983,10 @@ pub fn run_paired(mut world: World, settle: u64, ticks: u64, sample_every: u64) 
             // The settle's samples before the fork are not reported, but
             // taking them resets the birth and death counts, so the fork's
             // sample counts only those since the settle's last sample, as a
-            // run sampled straight through does.
+            // run sampled straight through does. The litter inflow
+            // likewise.
             observer.sample_centre(&world);
+            observer.sample_litter(&world);
         }
     }
     observer.lifespans.clear();
@@ -830,6 +1040,7 @@ fn run_arm(
     let mut guild_drain_at_window = observer.guild_drain;
     let mut guild_samples: Vec<RoleSnapshot> = vec![(0, observer.guild_members(world))];
     let mut samples = vec![observer.sample_centre(world)];
+    let mut litter_samples = vec![observer.sample_litter(world)];
     for _ in 0..ticks {
         world.step();
         observer.observe(world);
@@ -839,6 +1050,7 @@ fn run_arm(
         }
         if elapsed % sample_every == 0 {
             samples.push(observer.sample_centre(world));
+            litter_samples.push(observer.sample_litter(world));
             guild_samples.push((elapsed, observer.guild_members(world)));
         }
     }
@@ -897,6 +1109,11 @@ fn run_arm(
             }
         },
         guild: GuildReadout::default(),
+        litter: LitterReadout::default(),
+    };
+    report.litter = LitterReadout {
+        second_half: LitterWindow::read(&litter_samples, &report.producer_lifespans),
+        samples: litter_samples,
     };
     let producers_persist = report.producers_persist();
     report.guild = GuildReadout {
@@ -998,6 +1215,9 @@ struct Observer {
     agent_traits: HashMap<u64, TraitVector>,
     carcass_traits: HashMap<u64, TraitVector>,
     founders: FounderReadout,
+    /// Litter inflow since the last litter sample, and that sample's tick.
+    litter_inflow: LitterInflow,
+    litter_sampled_at: u64,
 }
 
 impl Observer {
@@ -1024,6 +1244,8 @@ impl Observer {
             agent_traits: HashMap::new(),
             carcass_traits: HashMap::new(),
             founders: FounderReadout::default(),
+            litter_inflow: LitterInflow::default(),
+            litter_sampled_at: world.tick(),
         }
         .with_founders(world)
     }
@@ -1069,10 +1291,25 @@ impl Observer {
         // Agents born in this step are on the roster now; those that died in
         // it are still in the map from the step before.
         (self.traits).extend(world.agents().iter().map(|a| (a.id, a.traits)));
+        // The carcasses this step's deaths left, by id, for the litter inflow.
+        let died: std::collections::HashSet<u64> = (world.event_log().since(self.cursor).iter())
+            .filter(|e| e.kind == EventKind::Died)
+            .map(|e| e.source)
+            .collect();
+        let at_death: HashMap<u64, f32> = if died.is_empty() {
+            HashMap::new()
+        } else {
+            (world.carcasses().iter())
+                .filter(|c| died.contains(&c.id))
+                .map(|c| (c.id, c.energy_at_death))
+                .collect()
+        };
         for event in world.event_log().since(self.cursor) {
             let member = (self.traits.get(&event.source))
                 .is_some_and(|t| is_guild_member(self.income.role(event.source), t));
             self.guild_drain.book(event, member);
+            let producer = self.income.role(event.source) == Some(TrophicRole::Producer);
+            self.litter_inflow.book(event, producer, &at_death);
             let in_centre = event
                 .position
                 .is_some_and(|p| in_centre_patch(grid.cell_index_for(p)));
@@ -1162,6 +1399,28 @@ impl Observer {
             .filter(|a| is_guild_member(self.income.role(a.id), &a.traits))
             .map(|a| (a.id, TrophicRole::Decomposer))
             .collect()
+    }
+
+    /// Sample the whole world's litter, taking the inflow since the last
+    /// litter sample.
+    fn sample_litter(&mut self, world: &World) -> LitterSample {
+        let tick = world.tick();
+        let established_structures: Vec<f32> = (world.agents().iter())
+            .filter(|a| self.income.role(a.id) == Some(TrophicRole::Producer))
+            .filter(|a| tick - self.birth_tick[&a.id] > ESTABLISHMENT_AGE)
+            .map(|a| a.structure)
+            .collect();
+        let carcasses = world.carcasses();
+        LitterSample {
+            tick,
+            standing_per_cell: carcasses.iter().map(|c| c.energy as f64).sum::<f64>()
+                / (SIDE_CELLS * SIDE_CELLS) as f64,
+            carcasses: carcasses.len(),
+            nonempty_carcasses: carcasses.iter().filter(|c| c.energy > 0.0).count(),
+            inflow: std::mem::take(&mut self.litter_inflow),
+            inflow_ticks: tick - std::mem::replace(&mut self.litter_sampled_at, tick),
+            established_structures,
+        }
     }
 
     fn sample_centre(&mut self, world: &World) -> CentreSample {
@@ -1301,6 +1560,66 @@ fn guild_title() -> String {
     )
 }
 
+/// The title of the litter reading's section (#804).
+const LITTER_TITLE: &str =
+    "## Litter supply, second half (whole world, carcass structure per nutrient cell)";
+
+/// The header of the litter reading's table: one row per arm, from
+/// [`litter_row`].
+const LITTER_HEADER: &str = "| ticks | standing litter per cell: mean (min–max) | inflow per cell per tick: mean (min–max) | from producer deaths | from other deaths | carcasses: all / holding structure (means) |";
+
+/// One arm's litter reading over its second half.
+fn litter_row(w: &LitterWindow) -> String {
+    let s = |s: &Spread, digits: usize| {
+        format!(
+            "{:.digits$} ({:.digits$}–{:.digits$})",
+            s.mean + 0.0,
+            s.min + 0.0,
+            s.max + 0.0
+        )
+    };
+    format!(
+        "| {}–{} | {} | {} | {} | {} | {:.0} / {:.0} |",
+        w.from_tick,
+        w.to_tick,
+        s(&w.standing_per_cell, 2),
+        s(&w.inflow, 4),
+        s(&w.producer_inflow, 4),
+        s(&w.other_inflow, 4),
+        w.carcasses.mean,
+        w.nonempty_carcasses.mean
+    )
+}
+
+/// The title of the established producers' section (#804).
+fn established_title() -> String {
+    format!(
+        "## Established producers, second half (producers alive older than {ESTABLISHMENT_AGE} ticks, structure pooled over the samples: S_p)"
+    )
+}
+
+/// The header of the established producers' table: one row per arm, from
+/// [`established_row`].
+const ESTABLISHED_HEADER: &str = "| producer-samples | structure min | p10 | p25 | median | p75 | p90 | max | mean | established lifespan median |";
+
+/// One arm's established producers over its second half.
+fn established_row(w: &LitterWindow) -> String {
+    let d = &w.established_structure;
+    format!(
+        "| {} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {} |",
+        d.count,
+        d.min,
+        d.p10,
+        d.p25,
+        d.median,
+        d.p75,
+        d.p90,
+        d.max,
+        d.mean,
+        w.established_lifespan_median
+    )
+}
+
 /// The human-readable summary of a mode-1 run: the producer-lifespan
 /// distribution, whether producers held the centre patch, and the patch's
 /// time series beside the world's decomposers.
@@ -1355,6 +1674,14 @@ pub fn mode1_summary(header: &str, report: &Mode1Report) -> String {
         out,
         "## Founders (pure heterotroph vertex at founding, by id)\n\n{FOUNDER_HEADER}\n|---:|---:|---:|---:|---:|---:|---:|---:|\n{}\n",
         founder_row(&report.founders)
+    );
+    let w = &report.litter.second_half;
+    let _ = writeln!(
+        out,
+        "{LITTER_TITLE}\n\n{LITTER_HEADER}\n|---|---:|---:|---:|---:|---:|\n{}\n\n{}\n\n{ESTABLISHED_HEADER}\n|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n{}\n",
+        litter_row(w),
+        established_title(),
+        established_row(w)
     );
     let second_half = &report.samples[report.samples.len() / 2..];
     let min_late = second_half.iter().map(|s| s.producers).min().unwrap_or(0);
@@ -1464,6 +1791,25 @@ pub fn paired_summary(header: &str, report: &PairedReport) -> String {
         ("control", &report.control),
     ] {
         let _ = writeln!(out, "| {name} {}", founder_row(&arm.founders));
+    }
+    let arms = [
+        ("perturbed", &report.perturbed),
+        ("control", &report.control),
+    ];
+    let _ = writeln!(
+        out,
+        "\n{LITTER_TITLE}\n\n| arm {LITTER_HEADER}\n|---|---|---:|---:|---:|---:|---:|"
+    );
+    for (name, arm) in arms {
+        let _ = writeln!(out, "| {name} {}", litter_row(&arm.litter.second_half));
+    }
+    let _ = writeln!(
+        out,
+        "\n{}\n\n| arm {ESTABLISHED_HEADER}\n|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        established_title()
+    );
+    for (name, arm) in arms {
+        let _ = writeln!(out, "| {name} {}", established_row(&arm.litter.second_half));
     }
     let _ = writeln!(
         out,
@@ -2017,6 +2363,7 @@ mod tests {
             carcass_drain: DrainSplit::default(),
             arm_carcass_drain: DrainSplit::default(),
             ledger: Ledger::default(),
+            litter: LitterReadout::default(),
             founders: FounderReadout::default(),
             guild: GuildReadout::default(),
         };
@@ -2483,6 +2830,7 @@ mod tests {
                 mixotroph: 3.0,
             },
             ledger: Ledger::default(),
+            litter: LitterReadout::default(),
             founders: FounderReadout::default(),
             guild: GuildReadout::default(),
         };
@@ -2543,6 +2891,7 @@ mod tests {
             carcass_drain: DrainSplit::default(),
             arm_carcass_drain: DrainSplit::default(),
             ledger: Ledger::default(),
+            litter: LitterReadout::default(),
             founders,
             guild: GuildReadout::default(),
         };
@@ -2713,6 +3062,7 @@ mod tests {
             carcass_drain: DrainSplit::default(),
             arm_carcass_drain: DrainSplit::default(),
             ledger: Ledger::default(),
+            litter: LitterReadout::default(),
             founders: FounderReadout::default(),
             guild: GuildReadout {
                 holds: true,
@@ -2832,5 +3182,243 @@ mod tests {
         // Without decomposer founders there is no founder reach to set.
         let mut world = mode1_mesocosm(&spec, mesocosm_wear(), 1, Community::ProducersOnly);
         assert!(set_body_reach_pieces(&mut world, 10.0).is_none());
+    }
+
+    /// Litter inflow (#804): a death adds the structure its carcass held at
+    /// death, booked to producers when the dead was a producer and to the
+    /// others otherwise. Drains, births and every other event add nothing.
+    #[test]
+    fn a_death_adds_its_carcass_structure_at_death_to_the_litter_inflow() {
+        use explorers_sim::event::{Event, EventLog};
+        let event = |seq: u64, kind: EventKind, source: u64| Event {
+            tick: 0,
+            seq,
+            target_was_carcass: matches!(kind, EventKind::Consumed),
+            kind,
+            source,
+            target: None,
+            energy_delta: 9.0,
+            position: None,
+            second_parent: None,
+            nutrient_delta: 0.0,
+        };
+        let mut log = EventLog::new();
+        for e in [
+            event(0, EventKind::Consumed, 1),
+            event(1, EventKind::Senesced, 1),
+            event(2, EventKind::Died, 1),
+            event(3, EventKind::Born, 4),
+            event(4, EventKind::Died, 2),
+            event(5, EventKind::Died, 3),
+        ] {
+            log.append(e).unwrap();
+        }
+        // Agents 1 and 3 were producers; their carcasses held 4.0 and 0.5 at
+        // death, agent 2's held 1.5.
+        let at_death = HashMap::from([(1, 4.0_f32), (2, 1.5), (3, 0.5)]);
+        let producers = [1, 3];
+        let mut inflow = LitterInflow::default();
+        for e in log.since(0) {
+            inflow.book(e, producers.contains(&e.source), &at_death);
+        }
+        assert_eq!(
+            inflow,
+            LitterInflow {
+                producer: 4.5,
+                other: 1.5,
+            }
+        );
+        assert_eq!(inflow.total(), 6.0);
+    }
+
+    /// A run samples the world's litter beside the centre patch (#804): the
+    /// standing carcass structure per cell, the carcasses standing and those
+    /// still holding structure, the inflow since the previous sample, and
+    /// the established producers alive. With no carcass ever removed, the
+    /// inflow over the run is the structure at death of every carcass that
+    /// was not standing at the start.
+    #[test]
+    fn a_run_samples_the_worlds_litter_and_its_inflow() {
+        let mut world = mode1_mesocosm(
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
+            3,
+            Community::ProducersAndDecomposers,
+        );
+        let seeded: std::collections::HashSet<u64> =
+            world.carcasses().iter().map(|c| c.id).collect();
+        let report = run_mode1(&mut world, 120, 10);
+        let litter = &report.litter;
+        assert_eq!(litter.samples.len(), report.samples.len());
+        for (l, c) in litter.samples.iter().zip(&report.samples) {
+            assert_eq!(l.tick, c.tick);
+            assert!(l.nonempty_carcasses <= l.carcasses);
+        }
+        let first = &litter.samples[0];
+        assert_eq!(
+            (first.inflow, first.inflow_ticks),
+            (LitterInflow::default(), 0)
+        );
+        assert!(litter.samples[1..].iter().all(|s| s.inflow_ticks == 10));
+
+        let cells = (SIDE_CELLS * SIDE_CELLS) as f64;
+        let last = litter.samples.last().unwrap();
+        let standing: f64 = world.carcasses().iter().map(|c| c.energy as f64).sum();
+        assert!((last.standing_per_cell - standing / cells).abs() < 1e-6);
+        assert_eq!(last.carcasses, world.carcasses().len());
+        assert_eq!(
+            last.nonempty_carcasses,
+            world.carcasses().iter().filter(|c| c.energy > 0.0).count()
+        );
+
+        let inflow: f64 = litter.samples.iter().map(|s| s.inflow.total()).sum();
+        let created: f64 = (world.carcasses().iter())
+            .filter(|c| !seeded.contains(&c.id))
+            .map(|c| c.energy_at_death as f64)
+            .sum();
+        assert!(inflow > 0.0);
+        assert!(
+            (inflow - created).abs() < 1e-3 * created,
+            "{inflow} vs {created}"
+        );
+        assert!(litter.samples.iter().any(|s| s.inflow.producer > 0.0));
+
+        // Established producers: alive older than ESTABLISHMENT_AGE, so none
+        // before then, and never more than the world's producers.
+        for s in &litter.samples {
+            if s.tick <= ESTABLISHMENT_AGE {
+                assert!(s.established_structures.is_empty());
+            }
+        }
+        assert!(!last.established_structures.is_empty());
+        assert!(last.established_structures.iter().all(|&x| x > 0.0));
+    }
+
+    /// The second half's litter reading (#804): standing litter and carcass
+    /// counts over the second half's samples, inflow per cell per tick over
+    /// the intervals ending after its first sample, and the structure of the
+    /// established producers pooled over its samples (`S_p`).
+    #[test]
+    fn the_litter_window_reads_the_second_half() {
+        let mut world = mode1_mesocosm(
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
+            3,
+            Community::ProducersAndDecomposers,
+        );
+        let report = run_mode1(&mut world, 120, 10);
+        let (samples, w) = (&report.litter.samples, &report.litter.second_half);
+        let half = &samples[samples.len() / 2..];
+        let cells = (SIDE_CELLS * SIDE_CELLS) as f64;
+        let standing: Vec<f64> = half.iter().map(|s| s.standing_per_cell).collect();
+        let mean = standing.iter().sum::<f64>() / standing.len() as f64;
+        assert!((w.standing_per_cell.mean - mean).abs() < 1e-9);
+        assert_eq!(
+            w.standing_per_cell.min,
+            standing.iter().copied().fold(f64::INFINITY, f64::min)
+        );
+        assert_eq!(
+            w.standing_per_cell.max,
+            standing.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        );
+        assert_eq!(
+            (w.from_tick, w.to_tick),
+            (half[0].tick, half.last().unwrap().tick)
+        );
+
+        let intervals = &half[1..];
+        let ticks: u64 = intervals.iter().map(|s| s.inflow_ticks).sum();
+        let total: f64 = intervals.iter().map(|s| s.inflow.total()).sum();
+        let producer: f64 = intervals.iter().map(|s| s.inflow.producer).sum();
+        assert!((w.inflow.mean - total / (cells * ticks as f64)).abs() < 1e-9);
+        assert!((w.producer_inflow.mean - producer / (cells * ticks as f64)).abs() < 1e-9);
+        assert!(w.inflow.min <= w.inflow.mean && w.inflow.mean <= w.inflow.max);
+
+        let pooled: Vec<f64> = (half.iter())
+            .flat_map(|s| s.established_structures.iter().map(|&x| x as f64))
+            .collect();
+        let s_p = &w.established_structure;
+        assert_eq!(*s_p, StructureDistribution::of(&pooled));
+        assert!(s_p.count > 0);
+        assert!(s_p.min <= s_p.p25 && s_p.p25 <= s_p.median && s_p.median <= s_p.p75);
+        assert!(s_p.p75 <= s_p.max && s_p.median > 0.0);
+        let lifespans: Vec<u64> = (report.producer_lifespans.iter().copied())
+            .filter(|&a| a > ESTABLISHMENT_AGE)
+            .collect();
+        assert_eq!(
+            w.established_lifespan_median,
+            LifespanDistribution::of(&lifespans).median
+        );
+    }
+
+    /// Both summaries carry the litter reading per arm (#804): standing
+    /// litter, inflow by source and carcass counts, and the established
+    /// producers' structure and lifespan.
+    #[test]
+    fn the_summaries_report_the_litter_reading() {
+        let spread = |mean, min, max| Spread { mean, min, max };
+        let mut report = Mode1Report {
+            samples: vec![],
+            producer_lifespans: vec![],
+            senescent_lifespans: vec![],
+            final_roles: RoleTally::default(),
+            heterotroph_dominant: 0,
+            carcass_drain: DrainSplit::default(),
+            arm_carcass_drain: DrainSplit::default(),
+            ledger: Ledger::default(),
+            founders: FounderReadout::default(),
+            guild: GuildReadout::default(),
+            litter: LitterReadout {
+                samples: vec![],
+                second_half: LitterWindow {
+                    from_tick: 750,
+                    to_tick: 1500,
+                    standing_per_cell: spread(54.0, 50.5, 58.25),
+                    carcasses: spread(1400.0, 1377.0, 1420.0),
+                    nonempty_carcasses: spread(900.4, 850.0, 950.0),
+                    inflow: spread(0.125, 0.05, 0.2),
+                    producer_inflow: spread(0.12, 0.05, 0.19),
+                    other_inflow: spread(0.005, 0.0, 0.01),
+                    established_structure: StructureDistribution {
+                        count: 4000,
+                        min: 1.0,
+                        p10: 2.0,
+                        p25: 4.0,
+                        median: 8.0,
+                        p75: 12.0,
+                        p90: 16.0,
+                        max: 30.0,
+                        mean: 9.5,
+                    },
+                    established_lifespan_median: 229,
+                },
+            },
+        };
+        let litter = "| 750–1500 | 54.00 (50.50–58.25) | 0.1250 (0.0500–0.2000) | 0.1200 (0.0500–0.1900) | 0.0050 (0.0000–0.0100) | 1400 / 900 |";
+        let established =
+            "| 4000 | 1.00 | 2.00 | 4.00 | 8.00 | 12.00 | 16.00 | 30.00 | 9.50 | 229 |";
+        let summary = mode1_summary("h", &report);
+        for line in [LITTER_HEADER, ESTABLISHED_HEADER, litter, established] {
+            assert!(summary.contains(line), "{line}\n{summary}");
+        }
+
+        let control = report.clone();
+        report.litter = LitterReadout::default();
+        let paired = PairedReport {
+            fork_tick: 0,
+            clearance: Clearance::default(),
+            perturbed: report,
+            control,
+        };
+        let summary = paired_summary("h", &paired);
+        for line in [litter, established] {
+            assert!(summary.contains(&format!("| control {line}")), "{summary}");
+        }
+        assert!(
+            summary.contains(
+                "| perturbed | 0 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0 |"
+            ),
+            "{summary}"
+        );
     }
 }
