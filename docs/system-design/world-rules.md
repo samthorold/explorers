@@ -497,6 +497,38 @@ The sessile-versus-mobile feeding trade-off lives in **feeding reach** (flow 3),
 
 A tempting alternative — making feeding effectiveness ramp with contact *duration*, so staying put feeds better — is deliberately **not** used, and not merely as a calibration choice. It corresponds to no variable in the domain: ecology says predation-versus-grazing is a size-ratio phenomenon, not a duration one. And any duration ramp keyed to stillness forbids mobile feeding outright — a chemotactic pursuer that moves to reach prey resets its own clock every tick and never eats, defeating the very pursuit predators the sensing and chemotaxis machinery exists to serve. The autotroph's stillness requirement (trade-off #2) is expressed through the cost structure and through reach, never through a temporal gate; the same holds for heterotrophy.
 
+#### Carcass decomposition saturates in its decomposers
+
+A carcass yields structure to the agents draining it at a rate that **saturates in their summed drain capability**. The total drained from one carcass in a tick is
+
+```
+D = k_d · S · Σc / (K + Σc)
+```
+
+`S` is the structure the carcass still holds, and `k_d` its decay constant per tick, so `k_d · S` is the most it can yield in a tick, `D_max`.
+
+- `Σc` is the summed per-tick drain capability of every agent draining that carcass this tick: each one's drain before the cap, as *Consumption is incremental* defines it.
+- Each drainer takes the share `c / Σc` of `D`, still capped by the structure present.
+- A lone drainer on a fresh carcass gets less than its capability. A crowded carcass yields at most `k_d · S` however many agents drain it.
+- **The yield is first order in what the carcass holds.** Field decay of a single litter cohort is Olson's exponential, first order in the mass remaining. Schimel and Weintraub's full rate is first order in substrate as well as in enzyme; they drop the substrate term only for a soil-sized stock that is large and nearly unchanging on a microbe's timescale ([nutrient cycling](../ecology/nutrient-cycling.md), *Decomposition kinetics*). A carcass is a single cohort, small against what its decomposers take, so the term stays. Under saturation a carcass loses a fixed fraction of what it holds each tick, so it lasts as long as `k_d` says, not as long as the crowd on it allows. The domain makes the decay constant depend on litter quality, its strongest control (Zhang et al. 2008). Here `k_d` is one world parameter. Whether it varies from carcass to carcass is open.
+- **A carcass leaves the world when what it holds is negligible:** below a tiny fraction of its structure at death, a numerical floor such as 10⁻⁶. Its last scraps go to dissipation, and its bound nutrient to the cell's available pool, through the ledgers. Under first-order decay no drain ever empties a carcass, so without a floor every remnant would stand forever, drained by ever smaller amounts. The floor is not an ecological claim. The energy it dissipates is negligible by construction, so the principle that energy is transformed only by agents holds. A carcass that no agent drains still stands indefinitely.
+  - The domain's own answer is different. Litter decay slows to a limit value, and the remnant, up to about half the cohort, becomes soil organic matter that decomposes very slowly ([nutrient cycling](../ecology/nutrient-cycling.md), *Decomposition kinetics*). This world has no soil-organic-matter stock. Adding one is a new compartment, an open gap with its own grill.
+- **The catalyst `c` is the drainer's per-tick drain capability:** effective heterotrophy, scaled by hunger and expression, as for every drain. In the domain, enzymes are a costly investment that the decomposer pays for out of its own budget (Schimel & Weintraub 2003). Heterotrophy is this world's paid investment in consumption machinery, so it plays the enzyme without a new mechanism. The domain also has enzyme output grow with the decomposer's throughput and so with its biomass. This world has no body-size scaling of feeding rate for any target, so whether `c` should grow with size is a question about feeding in general, open beyond decomposition.
+
+Drains on **living** targets do not saturate this way. They stay additive, as above.
+
+**Why it has this shape.** In the domain, dead organic matter is broken down by extracellular enzymes the decomposer makes, so the rate depends on the decomposer's catalyst as well as on the litter ([nutrient cycling](../ecology/nutrient-cycling.md), *Decomposition kinetics*). A decomposer–substrate system whose rate is first order in the catalyst is unstable: each added decomposer adds the same decomposition, so decomposers multiply until the substrate is gone and then starve. The domain's mechanism for the saturation is competition for binding sites on a solid substrate (Schimel & Weintraub 2003). With saturation, decomposer biomass levels off where its maintenance meets the substrate's saturating supply. That is the stable, persistent decomposer the domain describes, living on litter that lasts many of its generations.
+
+**Why the tempting alternatives fail.**
+- **Additive drains,** each agent taking its full capability until the carcass is empty, are the first-order case. Body reach that lets several decomposers reach one carcass empties a stand's litter in about 20 ticks, followed by a bust (#796).
+- **Saturation in the carcass's stock** (ordinary Michaelis–Menten on substrate) is not what binds. Substrate kinetics saturate only when substrate swamps the enzyme. A carcass is small against its decomposers' enzymes, which is the first-order range that `k_d · S` already is. The saturation that binds is enzyme on substrate.
+- **Saturating living targets too** would borrow a mechanism from dead solid substrate for feeding on living tissue. What limits that in the domain is the target's defence, which is a separate question.
+
+- **How large `k_d` is: litter half-life against producer lifespan.** The domain gives decay in years: litter half-lives of roughly 0.5–4 years, from `k` of 0.17–1.45 per year in one intersite study. This world's time is ticks. The anchor is the lifespan of the producer the litter came from, which a world fixes by design. Short-lived plants leave litter whose half-life is of the same order as their lifespan, so `k_d` is stated as the litter half-life *under full saturation* (`Σc ≫ K`) in producer lifespans, and read across the band 0.5–4. The decomposer's own generation time is not used as the anchor, because it is an output of the dynamics.
+- **`K` has no magnitude in the domain.** Schimel and Weintraub call their enzyme half-saturation constant "the most completely arbitrary" parameter in their model. It is stated in units of one decomposer founder's drain capability and read across a range.
+
+*Current state (2026-10-11): designed, not implemented. Carcass drains are additive, shared only when they would exceed the structure present.*
+
 #### Capability and expression are decoupled: expression is ungated
 
 Heterotrophy is **capability**: the most an agent can drain per tick from each target in its reach. What it drains is **expression**, that capability scaled by a factor in [0, 1]. Capability and expression stay decoupled, so a regulated intake can be added without a new trait. But expression is **ungated**: it is 1 for every consumer in every state, and what an agent drains is its capability, shared among co-feeders and reduced toward resembling living targets by recognition (next). Light-fed mixotrophs' kin-killing is left to recognition, dispersal and the cross-trait cost (trade-off #5), not to their state of hunger.
