@@ -102,6 +102,35 @@ In marine systems, Redfield (1958) discovered that the average C:N:P ratio of oc
 
 The consumer-resource stoichiometric mismatch has a system-level consequence: it determines the nutrient ratio of recycled material. Herbivores consuming nitrogen-poor plants preferentially retain nitrogen and release phosphorus (or vice versa), altering the N:P ratio of available nutrients and potentially shifting which nutrient limits primary production. Elser et al. (2000) showed that consumer-driven nutrient recycling can qualitatively change nutrient limitation regimes in aquatic systems — the identity of the dominant herbivore determines which nutrient limits algal growth.
 
+## Decomposition kinetics
+
+**Decomposition is catalysed by the decomposer, so its rate depends on the decomposer as well as the litter.** Dead organic matter does not break down by itself. Extracellular enzymes that microbes and fungi produce break it down, so the catalyst's concentration belongs in the rate equation (Schimel & Weintraub 2003). Traditional soil models use first-order kinetics, `dC/dt = −kC`, which leaves the decomposer out. Depolymerisation by these enzymes is the rate-limiting step of the terrestrial nitrogen cycle (Schimel & Bennett 2004).
+
+**The rate saturates in the decomposer's enzymes.** Schimel and Weintraub show that a decomposer–substrate system is unstable when decomposition is first order in enzyme concentration: each extra unit of enzyme, and so of decomposer biomass, would add the same decomposition. "There must be a mechanism to produce non-linear kinetics." The likely mechanism is competition for binding sites on a solid substrate. As more enzyme is made, it must diffuse further from the cells, the products must diffuse further back, and enzymes compete for the same surface. Langmuir adsorption theory and aquatic measurements predict an asymptotic response (Vetter et al. 1998, as cited by Schimel & Weintraub). They model it with a "reverse Michaelis–Menten" form:
+
+```
+decomposition = K_d · Enz / (K_es + Enz)
+```
+
+Here `K_es` is a half-saturation constant for *enzyme on substrate*: a saturating level of enzyme on the substrate, not of substrate on the enzyme. With this form the system is stable. As the enzyme pool grows, activity per unit of enzyme falls, so total decomposition rises more slowly than biomass and maintenance. Biomass levels off where maintenance meets the saturating supply, and "regardless of the actual amount of C potentially available as SOM, the microbial population becomes C limited." Over the decomposer's own timescale, they treat the substrate stock as large and nearly unchanging, so the rate is effectively zero order in substrate.
+
+Later work treats both Michaelis–Menten (saturating in substrate) and reverse Michaelis–Menten (saturating in enzyme) as limiting cases of a single equilibrium-chemistry kinetics, which saturates in both (Wang & Post 2013; Tang 2015). The reverse form is used in later decomposer models, among them Moorhead & Sinsabaugh (2006).
+
+**Litter persists for months to years, and its decomposers persist on it.** Field decay is summarised by Olson's (1963) single-exponential constant `k` per year.
+- Across 110 sites, `k` falls with latitude and litter lignin and rises with temperature, precipitation and litter nutrient concentration. Litter quality is the strongest direct control at the global scale (Zhang et al. 2008).
+- One intersite experiment across China fitted `k` from 0.17 to 1.45 per year, a litter half-life of roughly half a year to four years.
+- On a single cohort of leaves, fungal biomass peaks within about one to four months, around the time of half the mass loss, and then declines as the community shifts toward bacteria. Examples are alder leaves in a stream, where the peak comes at about four weeks and 50 % mass loss, and oak litter, where it comes at months 2–4 of a two-year course.
+
+**Decay slows to a limit value, and the remnant becomes soil organic matter.** Late in decomposition, mass loss can slow until it virtually stops at a *limit value*. Limit values run from about 45 % to 100 % mass loss, so 0–55 % of a litter cohort remains as material close to stabilised soil organic matter, which goes on decomposing very slowly. Litter richer in nitrogen reaches a lower limit value, leaving more remnant. Limit values also differ between sites, and are higher at a nutrient-rich one (Berg et al. 2003; Berg's long-term litter studies).
+
+So a decomposer's generation is short against the life of the litter it lives on. It does not empty a piece of litter in a few of its own generations.
+
+*Evidence quality.*
+- The kinetic argument is theory, not measurement. Schimel and Weintraub call their `K_es` "the most completely arbitrary" parameter in the model. What the domain supports is the *form*: the rate saturates in the decomposer and depends on the decomposer's catalyst. It gives no magnitude.
+- The `k` ranges come from abstracts and one intersite study. The global distribution in Zhang et al. (2008) was not read.
+- The colonisation timings come from individual studies, read from abstracts.
+- The limit-value figures come from abstracts of Berg and colleagues' later work. The original limit-value paper (Berg & Ekbohm 1991) was not read.
+
 ## Feedback loops
 
 The nutrient cycles described above do not operate independently. They are coupled through organisms and soil chemistry, producing feedback loops that can stabilize, destabilize, or lock ecosystems into particular states.
@@ -194,6 +223,8 @@ Bar-On, Y. M., Phillips, R., & Milo, R. (2018). The biomass distribution on Eart
 
 Beer, C., et al. (2010). Terrestrial gross carbon dioxide uptake: Global distribution and covariation with climate. *Science*, 329(5993), 834-838.
 
+Berg, B., De Santo, A.V., Rutigliano, F.A., Fierro, A. & Ekbohm, G. (2003). Limit values for plant litter decomposing in two contrasting soils: influence of litter elemental composition. *Acta Oecologica*, 24, 295-302. (Authors, title and pages not verified; doi 10.1016/j.actao.2003.08.002.)
+
 Carpenter, S. R., Ludwig, D., & Brock, W. A. (1999). Management of eutrophication for lakes subject to potentially irreversible change. *Ecological Applications*, 9(3), 751-771.
 
 Cebrian, J. (1999). Patterns in the fate of production in plant communities. *American Naturalist*, 154(4), 449-468.
@@ -224,7 +255,11 @@ Lloyd, J., & Taylor, J. A. (1994). On the temperature dependence of soil respira
 
 Manzoni, S., et al. (2008). The global stoichiometry of litter nitrogen mineralization. *Science*, 321(5889), 684-686.
 
+Moorhead, D.L. & Sinsabaugh, R.L. (2006). A theoretical model of litter decay and microbial interaction. *Ecological Monographs*, 76, 151-174.
+
 Odum, E. P. (1969). The strategy of ecosystem development. *Science*, 164(3877), 262-270.
+
+Olson, J.S. (1963). Energy storage and the balance of producers and decomposers in ecological systems. *Ecology*, 44, 322-331.
 
 Parton, W. J., et al. (1987). Analysis of factors controlling soil organic matter levels in Great Plains grasslands. *Soil Science Society of America Journal*, 51(5), 1173-1179.
 
@@ -233,6 +268,10 @@ Redfield, A. C. (1958). The biological control of chemical factors in the enviro
 Running, S. W., & Hunt, E. R. (1993). Generalization of a forest ecosystem process model for other biomes, BIOME-BGC, and an application for global-scale models. In *Scaling Physiological Processes: Leaf to Globe* (pp. 141-158). Academic Press.
 
 Scharlemann, J. P., et al. (2014). Global soil carbon: understanding and managing the largest terrestrial carbon pool. *Carbon Management*, 5(1), 81-91.
+
+Schimel, J.P. & Bennett, J. (2004). Nitrogen mineralization: challenges of a changing paradigm. *Ecology*, 85, 591-602.
+
+Schimel, J.P. & Weintraub, M.N. (2003). The implications of exoenzyme activity on microbial carbon and nitrogen limitation in soil: a theoretical model. *Soil Biology & Biochemistry*, 35, 549-563.
 
 Schindler, D. W. (1977). Evolution of phosphorus limitation in lakes. *Science*, 195(4275), 260-262.
 
@@ -244,10 +283,16 @@ Smith, S. E., & Read, D. J. (2008). *Mycorrhizal Symbiosis* (3rd ed.). Academic 
 
 Sterner, R. W., & Elser, J. J. (2002). *Ecological Stoichiometry: The Biology of Elements from Molecules to the Biosphere*. Princeton University Press.
 
+Tang, J.Y. (2015). On the relationships between the Michaelis–Menten kinetics, reverse Michaelis–Menten kinetics, equilibrium chemistry approximation kinetics, and quadratic kinetics. *Geoscientific Model Development*, 8, 3823-3835.
+
 Vitousek, P. M., & Howarth, R. W. (1991). Nitrogen limitation on land and in the sea: How can it occur? *Biogeochemistry*, 13(2), 87-115.
 
 Vitousek, P. M., et al. (2010). Terrestrial phosphorus limitation: mechanisms, implications, and nitrogen-phosphorus interactions. *Ecological Applications*, 20(1), 5-15.
 
 Walker, T. W., & Syers, J. K. (1976). The fate of phosphorus during pedogenesis. *Geoderma*, 15(1), 1-19.
 
+Wang, G. & Post, W.M. (2013). A note on the reverse Michaelis–Menten kinetics. *Soil Biology & Biochemistry*, 57, 946-949.
+
 Wardle, D. A., et al. (2004). Ecosystem properties and forest decline in contrasting long-term chronosequences. *Science*, 305(5683), 509-513.
+
+Zhang, D., Hui, D., Luo, Y. & Zhou, G. (2008). Rates of litter decomposition in terrestrial ecosystems: global patterns and controlling factors. *Journal of Plant Ecology*, 1, 85-93.

@@ -19,6 +19,7 @@ The full `cargo test --workspace` runs 669 tests (664 with `--skip slow_`), and 
 - **Before committing:** `cargo test --workspace`, `slow_` sweeps included.
 - **`slow_` is the slow-test category.** Multi-seed sweeps stay in the default run (not `#[ignore]`d) but carry a `slow_` name prefix so the inner loop can skip them; the heaviest today are the `slow_pathway_*` tests in `explorers-sim`'s `tests/sim/headless_decomposer.rs` (~4 s for the suite). `--skip slow_` is a substring filter, so it also skips the app's `slow_down_*` tests; that is harmless. Give any new slow test the prefix.
 - **The first `-p` run of a crate rebuilds its dependencies** (features resolve per package, not per workspace), so it is slow once, then incremental.
+- **The ecology is led by the literature, not by the agent's own reading of it.** In a grill, every domain claim is grounded in sources first, written to `docs/ecology/` with citations and an *evidence quality* note, and only then carried into the design. Mark what was read from abstracts, what was recalled rather than read, and what the sources leave open, such as a form with no magnitude. Don't offer "my read" of how nature works as a reason for a design choice. Where the literature is silent, say so, and settle the gap by a pre-registered reading across the range the domain allows.
 - If test binaries take minutes to *start* rather than to run, see "macOS scans every freshly linked test binary" in `known-traps.md`.
 
 ## Durable knowledge lives in the repo
