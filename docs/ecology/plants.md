@@ -94,6 +94,17 @@ Sessile organisms cannot flee herbivores. Plants have evolved two broad response
 
 From a flows perspective, defense reduces outflow to herbivores at the cost of reduced growth rate. Tolerance maintains growth rate despite higher outflow. Both strategies modify the same flow — biomass to herbivores — but through different mechanisms.
 
+**Defence against microbes: living tissue is closed to decomposers.**
+- **Plants detect every fungus that colonises them.** Plant innate immunity recognises conserved microbial molecules (pattern-triggered immunity). A pathogen colonises living tissue only if it carries effectors that suppress that response. Plants answer those effectors with a second, receptor-based layer (effector-triggered immunity), whose localised cell death stops invasive growth (Jones & Dangl 2006). This "zigzag" model fits biotrophs best and necrotrophs less well, and it is contested as a general framework (Pritchard & Birch 2014).
+- **Most plants resist most microbes.** Nonhost resistance, a plant's resistance to the great majority of microbes that are not adapted to it, is believed to be the most common form of plant resistance in the wild, and the most broad-spectrum and durable (Heath 2000).
+- **Fungal lifestyles are defined by what they do to living tissue.** Biotrophs feed on living cells and keep the host alive. Necrotrophs kill host cells with cell-wall-degrading enzymes and toxins, then feed on the dead tissue. Hemibiotrophs do one and then the other. Saprotrophs feed on tissue that is already dead. The boundaries blur, and necrotrophs also secrete effectors.
+- **Some decomposers wait inside living plants.** Many common endophytes are closely related to saprotrophs and produce the same degrading enzymes. The hypothesis is that some are latent saprotrophs that switch lifestyle when the host tissue senesces or dies (Promputtha et al. 2007). The evidence is mostly sequence similarity, not an observed switch.
+- **Defence is paid for out of growth.** The growth–defence trade-off above applies to microbial defence as it does to herbivore defence (Herms & Mattson 1992).
+
+So, in the domain, a decomposer is kept off living tissue by the living plant's immunity, which death removes. Specific, adapted lineages with effectors or toxins get through.
+
+*Evidence quality.* The immune-system framework comes from a widely cited review and its critiques, read from summaries. The claim about nonhost resistance comes from reviews citing Heath (2000), not from the original. The latent-saprotroph idea is a hypothesis resting on phylogenetic similarity. The domain gives no fraction of a plant's budget spent on microbial defence.
+
 ### Pollination
 
 For a sessile organism, finding a mate is the same problem as dispersing offspring: it cannot travel to a partner, so it must move reproductive material through space instead. Pollen is the solution — gametes packaged for transport by wind (anemophily), water (hydrophily), or animal vectors (zoophily), carrying a gamete to a stationary partner that may be metres or kilometres away. Roughly 87% of flowering-plant species rely on animal pollinators (Ollerton et al. 2011); the rest broadcast pollen into wind or water. The mate-finding problem that mobile organisms solve with locomotion, plants solve by investing in the spatial flow of gametes.
@@ -216,8 +227,8 @@ This is the fundamental reason primary producers are non-negotiable. They are th
 - Clark, J.S., Silman, M., Kern, R., Macklin, E. & HilleRisLambers, J. (1999) Seed dispersal near and far. *Ecology*, 80, 1475-1494.
 - Coffin, D.P. & Lauenroth, W.K. (1990) A gap dynamics simulation model of succession in a semiarid grassland. *Ecological Modelling*, 49, 229-266.
 - Coley, P.D., Bryant, J.P. & Chapin, F.S. (1985) Resource availability and plant antiherbivore defense. *Science*, 230, 895-899.
-- Connell, J.H. (1971) On the role of natural enemies in preventing competitive exclusion in some marine animals and in rain forest trees. *Dynamics of Populations* (eds P.J. den Boer & G.R. Gradwell), pp. 298-312. PUDOC, Wageningen.
 - Connell, J.H. & Slatyer, R.O. (1977) Mechanisms of succession in natural communities. *American Naturalist*, 111, 1119-1144.
+- Connell, J.H. (1971) On the role of natural enemies in preventing competitive exclusion in some marine animals and in rain forest trees. *Dynamics of Populations* (eds P.J. den Boer & G.R. Gradwell), pp. 298-312. PUDOC, Wageningen.
 - Crawley, M.J. (1983) *Herbivory: The Dynamics of Animal-Plant Interactions*. Blackwell.
 - Cyr, H. & Pace, M.L. (1993) Magnitude and patterns of herbivory in aquatic and terrestrial ecosystems. *Nature*, 361, 148-150.
 - DeAngelis, D.L. & Mooij, W.M. (2005) Individual-based modeling of ecological and evolutionary processes. *Annual Review of Ecology, Evolution, and Systematics*, 36, 147-168.
@@ -226,15 +237,17 @@ This is the fundamental reason primary producers are non-negotiable. They are th
 - Fischer, R., Bohn, F., Dantas de Paula, M. et al. (2016) Lessons learned from applying a forest gap model to understand ecosystem and carbon dynamics of complex tropical forests. *Ecological Modelling*, 326, 124-133.
 - Grime, J.P. (1977) Evidence for the existence of three primary strategies in plants. *American Naturalist*, 111, 1169-1194.
 - Grimm, V. & Railsback, S.F. (2005) *Individual-based Modeling and Ecology*. Princeton University Press.
+- Grimm, V., Ayllón, D. & Railsback, S.F. (1999) Individual-based modeling of beech forests. *Ecological Modelling*, 115, 65-89.
 - Grimm, V., Berger, U., Bastiansen, F. et al. (2006) A standard protocol for describing individual-based and agent-based models. *Ecological Modelling*, 198, 115-126.
 - Grimm, V., Berger, U., DeAngelis, D.L., Polhill, J.G., Giske, J. & Railsback, S.F. (2010) The ODD protocol: A review and first update. *Ecological Modelling*, 221, 2760-2768.
-- Grimm, V., Ayllón, D. & Railsback, S.F. (1999) Individual-based modeling of beech forests. *Ecological Modelling*, 115, 65-89.
+- Heath, M.C. (2000) Nonhost resistance and nonspecific plant defenses. *Current Opinion in Plant Biology*, 3, 315-319.
 - Herms, D.A. & Mattson, W.J. (1992) The dilemma of plants: to grow or defend. *Quarterly Review of Biology*, 67, 283-335.
 - Hobbie, S.E. (1992) Effects of plant species on nutrient cycling. *Trends in Ecology & Evolution*, 7, 336-339.
 - Huston, M.A. & DeAngelis, D.L. (1994) Competition and coexistence: the effects of resource transport and supply rates. *American Naturalist*, 144, 954-977.
 - Janzen, D.H. (1970) Herbivores and the number of tree species in tropical forests. *American Naturalist*, 104, 501-528.
 - Jeltsch, F., Milton, S.J., Dean, W.R.J. & van Rooyen, N. (1996) Tree spacing and coexistence in semiarid savannas. *Journal of Ecology*, 84, 583-595.
 - Jones, C.G., Lawton, J.H. & Shachak, M. (1994) Organisms as ecosystem engineers. *Oikos*, 69, 373-386.
+- Jones, J.D.G. & Dangl, J.L. (2006) The plant immune system. *Nature*, 444, 323-329.
 - Kohler, P. & Huth, A. (1998) The effects of tree species grouping in tropical rainforest modelling. *Ecological Modelling*, 109, 301-321.
 - Lambers, H., Chapin, F.S. & Pons, T.L. (2008) *Plant Physiological Ecology*, 2nd edn. Springer.
 - Lindeman, R.L. (1942) The trophic-dynamic aspect of ecology. *Ecology*, 23, 399-417.
@@ -245,6 +258,8 @@ This is the fundamental reason primary producers are non-negotiable. They are th
 - Pacala, S.W., Canham, C.D., Saponara, J., Silander, J.A., Kobe, R.K. & Ribbens, E. (1996) Forest models defined by field measurements: estimation, error analysis and dynamics. *Ecological Monographs*, 66, 1-43.
 - Pianka, E.R. (1970) On r- and K-selection. *American Naturalist*, 104, 592-597.
 - Poorter, H., Niklas, K.J., Reich, P.B., Oleksyn, J., Poot, P. & Mommer, L. (2012) Biomass allocation to leaves, stems and roots: meta-analyses of interspecific variation and environmental control. *New Phytologist*, 193, 30-50.
+- Pritchard, L. & Birch, P.R.J. (2014) The zigzag model of plant–microbe interactions: is it time to move on? *Molecular Plant Pathology*, 15, 865-870.
+- Promputtha, I. et al. (2007) A phylogenetic evaluation of whether endophytes become saprotrophs at host senescence. *Microbial Ecology*, 53, 579-590.
 - Salati, E. & Vose, P.B. (1984) Amazon basin: a system in equilibrium. *Science*, 225, 129-138.
 - Scanlon, T.M., Caylor, K.K., Levin, S.A. & Rodriguez-Iturbe, I. (2007) Positive feedbacks promote power-law clustering of Kalahari vegetation. *Nature*, 449, 209-212.
 - Schwinning, S. & Weiner, J. (1998) Mechanisms determining the degree of size asymmetry in competition among plants. *Oecologia*, 113, 447-455.

@@ -612,6 +612,30 @@ Why this shape:
 - **Hunger does not relax it, because there is no hunger to read.** In the domain starvation weakens kin discrimination without abolishing it (spadefoot tadpoles; the *hunger → less discrimination* loop). That relaxation is latent with regulated intake (above). The cost is that cannibalism of near-clones, with its population-level roles (density regulation, the life-boat mechanism, bistability), is left to kin beyond the recognition distance and to partial drains at moderate distance. If regulated intake returns, recognition's coupling to `E` is redesigned with it: at `r = 1`, `max(0, E − w)` spares an identical target fully even at `E = 1`, so hunger would have nothing to relax.
 - **Age and timing are not the cue,** because a newborn refuge from every consumer would remove predation on the young generally — the most common form of cannibalism and predation in the domain — rather than kin predation specifically.
 
+#### Living tissue resists drains
+
+A living target resists every consumer that drains it, and death removes the resistance. The resistance belongs to the target's being alive, not to any trait of the target or the consumer, and it acts alike on every heterotroph.
+
+**Why it has this shape.**
+- **In the domain, living tissue is closed to decomposers.** Plant immunity detects every fungus that colonises it, and a microbe gets into living tissue only with effectors that suppress that immunity. Resistance to unadapted microbes, nonhost resistance, is believed to be the most common, broad and durable form of plant resistance. Saprotrophs feed on tissue that is already dead. Death removes the barrier, and some decomposers wait inside living plants for it ([plants](../ecology/plants.md), *Defence against microbes*).
+- **Without it, reach turns decomposers into grazers.** Feeding reach is one predicate for living and dead targets, and a living producer is as easy to assimilate as its carcass. At body reach spanning 10 and 30 pieces of litter, decomposer founders killed most of the founding producer stand within 20 ticks (#796).
+- **It is a property of the target's state because that is the domain's default.** Resistance to unadapted consumers is near-universal, not a trait some plants carry. This also leaves the trait space as it is: one heterotrophy for predation and decomposition, and no new dimension that would move every trait distance and every trophic efficiency.
+
+**Why the tempting alternatives fail, for now.**
+- **Defence as a paid trait of the target** follows the growth–defence trade-off, under which defence is paid for out of growth and varies with a plant's strategy (Coley et al. 1985; Herms & Mattson 1992). It is more faithful to how plants differ. But it is a new trait dimension, and it does nothing about the consumer side. It is a refinement for later.
+- **Access to living tissue as its own consumer capability** is closest to the domain. What admits a consumer to living tissue is a specific adaptation: a pathogen's effectors and toxins, or a herbivore's own adaptations. It would overturn the single heterotrophy trait (`CONTEXT.md`, *heterotrophy*).
+
+**The known tension.** A uniform resistance also slows grazers, which in the domain are adapted lineages taking 5–15 % of terrestrial net primary production ([trophic roles](../ecology/trophic-roles.md), *Grazing*). Mode 1 has no consumers, so the tension first matters when consumers enter. It is settled then, against the consumer-side alternative.
+
+**The form.** Every drain on a living target is multiplied by `(1 − ρ)`, where `ρ` in `[0, 1]` is a world parameter. It applies after expression and recognition and before the proportional split among co-feeders. Carcasses carry no `ρ`. `ρ = 0` is the world without resistance.
+- **Why one factor.** The domain's resistance to unadapted consumers is a broad, near-universal barrier, and the domain gives it no functional form. A single multiplicative factor is the smallest form that is smooth, acts alike on every consumer, and vanishes at death.
+- **Why not weakened by wear.** The latent-saprotroph hypothesis has decomposers exploit tissue modified as it senesces, and this world has somatic wear to carry that. But the hypothesis rests on phylogenetic similarity, not an observed switch ([plants](../ecology/plants.md), *Defence against microbes*). It stays an open refinement.
+- **Why not a hard barrier.** A binary predicate would break the smooth-landscape constraint (*Design constraints on mechanism choice*).
+
+**How large `ρ` is.** Against consumers not adapted to it, the domain's living tissue is closed: nonhost resistance is the norm, and saprotrophs feed only on what is already dead. What does consume living plants are adapted lineages, pathogens with effectors and herbivores taking 5–15 % of net primary production, and a uniform `ρ` cannot represent them. So where a world's heterotrophs are all decomposers and producer-line mixotrophs, as in mode 1, `ρ` is 1. That is the domain's value for those consumers, not a fitted one. A value below 1 would stand for partly adapted consumers, which the domain has only as specific lineages. It is settled with the consumer-side alternative when consumers enter.
+
+*Current state (2026-10-11): designed, not implemented. The world default will be `ρ = 0`, which is off; mode 1 sets `ρ = 1`.*
+
 ### Hard distance predicates are an accepted discontinuity in position
 
 Several surface interactions are decided by a **hard distance predicate**: a pair is either inside a radius or outside it, with no soft edge. The radii are smooth in parameters and traits; membership is a step function of position. Three such predicates run in every world:

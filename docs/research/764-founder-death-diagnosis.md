@@ -51,7 +51,7 @@ Seeds 1–5 were used for the litter test, seeds 1–3 elsewhere, and seed 1 for
 - At founding there are 1.1–1.2 carcasses within reach, holding about 2.5 energy. By tick 3 they hold 0.4.
 
 > **Correction (2026-10-10).** The second bullet below is wrong, and the first and fourth needed tightening:
-> - **Drained carcasses do not linger.** The bite that exhausts a carcass takes all of its remaining nutrient. What the drainer does not keep goes to the cell, and the carcass leaves the world that tick (`phase.rs`, the carcass pass). So a carcass loses energy and nutrient together.
+> - **Drained carcasses lose energy and nutrient together.** The bite that exhausts a carcass takes all of its remaining nutrient, and what the drainer does not keep goes to the cell. *Corrected again (2026-10-11, #803): the carcass does not leave the world. Under the default rules a spent carcass stands at structure 0 forever. Only the remnant floor of saturating decomposition removes carcasses, and only when that rule is on.*
 > - **Every sensed entity pulls with the same length, `chemotaxis × heterotrophy`, whatever its distance or contents.** The weight's `1 / dist` cancels the displacement's length. That holds for every carcass sensed, fresh or part-drained, and for every living agent.
 > - **What cancels is a ring of entities on all sides.** It is the fresh carcasses between reach (1.37) and sensing (2.07), and the living agents around the founder, not drained litter. Their pulls largely cancel, and the random walk dominates.
 >
