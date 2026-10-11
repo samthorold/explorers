@@ -295,22 +295,43 @@ fn retention_buffer(agent: &Agent, params: &WorldParameters) -> f32 {
 
 /// An agent's per-tick metabolic cost — its maintenance need: base rate, trait
 /// maintenance, structure maintenance and the autotrophy × heterotrophy
-/// cross-trait cost (what `metabolise` charges, before the cap at available
+/// cross-trait cost (with the size-scaled base rate on, the base and structure
+/// terms are one, `b · S`: [`base_and_structure_cost`]) (what `metabolise` charges, before the cap at available
 /// reserve). The yardstick the grow phase's retention buffer is measured in.
 pub fn metabolic_cost(agent: &Agent, params: &WorldParameters) -> f32 {
     let exp = params.maintenance_cost_exponent;
-    let per_trait = params.base_metabolic_rate
+    let (base, structure_term) = base_and_structure_cost(agent.structure, params);
+    let per_trait = base
         + agent.traits.photosynthetic_absorption.powf(exp) * params.photo_maintenance_cost
         + agent.traits.heterotrophy.powf(exp) * params.heterotrophy_maintenance_cost
         + agent.traits.mobility.powf(exp) * params.mobility_maintenance_cost
         + agent.traits.asexual_propensity.powf(exp) * params.asexual_propensity_maintenance_cost
-        + agent.structure * params.structure_maintenance_coefficient;
+        + structure_term;
     with_cross_trait_cost(
         per_trait,
         agent.traits.photosynthetic_absorption,
         agent.traits.heterotrophy,
         params,
     )
+}
+
+/// The base rate and the linear structure term of the metabolic cost of an
+/// agent of `structure`, as the pair `metabolic_cost` and its SoA twin add
+/// first and last (world-rules.md flow 8, *The base rate scales with
+/// structure*). Under the per-agent rule (`mass_specific_base_rate` 0) they
+/// are `base_metabolic_rate` and `structure_maintenance_coefficient · S`.
+/// With `mass_specific_base_rate` `b` positive the base is `b · S`, and the
+/// structure term, which `b` absorbs, is 0, so it is not charged twice.
+#[inline]
+pub(crate) fn base_and_structure_cost(structure: f32, params: &WorldParameters) -> (f32, f32) {
+    if params.mass_specific_base_rate > 0.0 {
+        (params.mass_specific_base_rate * structure, 0.0)
+    } else {
+        (
+            params.base_metabolic_rate,
+            structure * params.structure_maintenance_coefficient,
+        )
+    }
 }
 
 /// `cost` plus the autotrophy × heterotrophy cross-trait cost (world-rules.md,
@@ -2701,6 +2722,7 @@ mod tests {
             leaching_rate: 0.0,
             carcass_decay_constant: 0.0,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
+            mass_specific_base_rate: 0.0,
             hyphal_uptake: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
         }

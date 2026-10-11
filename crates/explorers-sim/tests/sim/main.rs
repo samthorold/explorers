@@ -24,6 +24,7 @@ mod prop_monotonicity;
 mod prop_symmetry;
 mod saturating_decomposition;
 mod seeded_consumer_liquidity;
+mod size_scaled_base_rate;
 mod soa_differential;
 mod support;
 mod trait_unit_anchors;
