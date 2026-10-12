@@ -262,6 +262,73 @@ fn size_scaled_base_rate_sets_and_records_b() {
     assert!(md.contains("## Size-scaled base rate"), "{md}");
 }
 
+/// `--established-producer-structure S_p` (#814) sets the `S_p` from which
+/// `--size-scaled-base-rate` derives `b`, and records it; at #804's 21.6 the
+/// run is the flag's default. It needs `--size-scaled-base-rate` and a
+/// finite `S_p` above 0.
+#[test]
+fn established_producer_structure_sets_s_p_for_the_size_scaled_rule() {
+    let dir = scratch("established-producer-structure");
+    let default = run_with(&dir.join("default.json"), &["--size-scaled-base-rate"]);
+    let same = run_with(
+        &dir.join("same.json"),
+        &[
+            "--size-scaled-base-rate",
+            "--established-producer-structure",
+            "21.6",
+        ],
+    );
+    let set = run_with(
+        &dir.join("set.json"),
+        &[
+            "--size-scaled-base-rate",
+            "--established-producer-structure",
+            "11.9",
+        ],
+    );
+    assert_eq!(default["report"], same["report"]);
+    assert_eq!(
+        default["size_scaled_base_rate"],
+        same["size_scaled_base_rate"]
+    );
+    let r = &set["size_scaled_base_rate"];
+    let s_p = r["established_producer_structure"].as_f64().unwrap();
+    assert!((s_p - 11.9).abs() < 1e-5, "{r}");
+    let b = r["mass_specific_base_rate"].as_f64().unwrap();
+    let expected = r["base_metabolic_rate"].as_f64().unwrap() / s_p
+        + r["structure_maintenance_coefficient"].as_f64().unwrap();
+    assert!((b - expected).abs() < 1e-6, "{r}");
+    assert_ne!(default["report"], set["report"]);
+    let md = std::fs::read_to_string(dir.join("set.md")).unwrap();
+    assert!(md.contains("/ 11.9 +"), "{md}");
+
+    for args in [
+        &["--established-producer-structure", "11.9"][..],
+        &[
+            "--size-scaled-base-rate",
+            "--established-producer-structure",
+            "0",
+        ][..],
+        &[
+            "--size-scaled-base-rate",
+            "--established-producer-structure",
+            "inf",
+        ][..],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+            .args(["--ticks", "1"])
+            .args(args)
+            .output()
+            .expect("the instrument runs");
+        assert!(!output.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--established-producer-structure"),
+            "{stderr}"
+        );
+    }
+}
+
 /// `--living-resistance` (#813) sets `ρ` = 1, the design's value for mode 1's
 /// consumers (world rules, *Living tissue resists drains*), and records it in
 /// the artifact and summary. With body reach exposing the producers, the

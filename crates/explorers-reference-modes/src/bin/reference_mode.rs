@@ -59,7 +59,10 @@
 //! producer of that size pays what it did. The summary and artifact record
 //! `b`, `S_p`, and the decomposer founder's and the median producer
 //! founder's upkeep at founding under both rules. Without the flag nothing is
-//! recorded and the world is unchanged.
+//! recorded and the world is unchanged. `--established-producer-structure
+//! S_p` (#814) gives `S_p` explicitly, for a reading that settles it under
+//! the rules it runs with; it needs `--size-scaled-base-rate`. Without it
+//! `S_p` is 21.6.
 //!
 //! `--living-resistance` (#813; world rules, *Consumption is incremental →
 //! Living tissue resists drains*) sets the living-tissue resistance `ρ` to 1,
@@ -81,7 +84,8 @@
 //!                [--sample-every K] [--clear-at T] [--no-decomposers]
 //!                [--litter-x N] [--body-reach-pieces K]
 //!                [--litter-half-life L] [--enzyme-half-saturation K]
-//!                [--size-scaled-base-rate] [--living-resistance] [--out PATH]
+//!                [--size-scaled-base-rate] [--established-producer-structure S_p]
+//!                [--living-resistance] [--out PATH]
 //! ```
 //!
 //! Defaults: the committed `crates/explorers-reference-modes/mode1.json`
@@ -98,10 +102,11 @@ use explorers_reference_modes::mesocosm::{
     carcass_decay_constant_for_half_life, decomposition_kinetics_section,
     living_resistance_section, mode1_mesocosm_with_litter, mode1_summary, paired_summary,
     run_mode1, run_paired, set_body_reach_pieces, set_decomposition_kinetics,
-    set_living_resistance, set_size_scaled_base_rate, size_scaled_base_rate_section,
+    set_living_resistance, set_size_scaled_base_rate, set_size_scaled_base_rate_at,
+    size_scaled_base_rate_section,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--living-resistance] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -127,6 +132,8 @@ struct Cli {
     enzyme_half_saturation: Option<f32>,
     /// Whether the base metabolic rate scales with structure (#807).
     size_scaled_base_rate: bool,
+    /// `S_p` for the size-scaled base rate (#814); `None` keeps #804's 21.6.
+    established_producer_structure: Option<f32>,
     /// Whether living tissue resists drains, at mode 1's `ρ` = 1 (#813).
     living_resistance: bool,
     out: Option<PathBuf>,
@@ -147,6 +154,7 @@ impl Cli {
             litter_half_life: None,
             enzyme_half_saturation: None,
             size_scaled_base_rate: false,
+            established_producer_structure: None,
             living_resistance: false,
             out: None,
         };
@@ -196,6 +204,15 @@ impl Cli {
                     }
                     cli.enzyme_half_saturation = Some(k);
                 }
+                "--established-producer-structure" => {
+                    let s_p: f32 = value.parse().map_err(|e| bad(&e))?;
+                    if !(s_p > 0.0 && s_p.is_finite()) {
+                        return Err(
+                            "--established-producer-structure must be a finite S_p > 0".into()
+                        );
+                    }
+                    cli.established_producer_structure = Some(s_p);
+                }
                 "--clear-at" => cli.clear_at = Some(value.parse().map_err(|e| bad(&e))?),
                 "--out" => cli.out = Some(PathBuf::from(&value)),
                 _ => return Err(format!("unknown flag {flag}")),
@@ -225,6 +242,12 @@ impl Cli {
                     "--litter-half-life {l} gives k_d {k_d} per tick, above 1"
                 ));
             }
+        }
+        if cli.established_producer_structure.is_some() && !cli.size_scaled_base_rate {
+            return Err(
+                "--established-producer-structure needs --size-scaled-base-rate: S_p only sets b"
+                    .into(),
+            );
         }
         if cli.sample_every == 0 {
             return Err("--sample-every must be at least 1".into());
@@ -267,7 +290,10 @@ fn main() {
     });
     let size_scaled = cli
         .size_scaled_base_rate
-        .then(|| set_size_scaled_base_rate(&mut world));
+        .then(|| match cli.established_producer_structure {
+            Some(s_p) => set_size_scaled_base_rate_at(&mut world, s_p),
+            None => set_size_scaled_base_rate(&mut world),
+        });
     let living_resistance = cli
         .living_resistance
         .then(|| set_living_resistance(&mut world));
