@@ -93,6 +93,8 @@ pub fn viable_baseline() -> WorldParameters {
         carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
         mass_specific_base_rate: 0.0,
         living_resistance: 0.0,
+        starvation_draws_earmark: false,
+        starvation_shrinks: false,
         hyphal_uptake: false,
         contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
     }
@@ -369,4 +371,26 @@ pub fn proptest_config(cases: u32) -> ProptestConfig {
         )),
         ..ProptestConfig::with_cases(cases)
     }
+}
+
+/// A stepper case with both steps of the starvation cascade on (#821): the
+/// wear case, so agents starve, draw down their earmark, shrink and die by
+/// the structural rule within the run, with saturating carcass decomposition
+/// on in half the cases. The nutrient pool is drawn small (50 to 500, against
+/// the baseline's 50000), so the closure tolerance, relative to the total, is
+/// fine enough to catch the bound nutrient a burn frees going astray. A
+/// separate strategy, so `world_case()` draws exactly the inputs it always has.
+pub fn world_case_with_starvation_cascade() -> impl Strategy<Value = WorldCase> {
+    (
+        world_case_with_wear(),
+        prop_oneof![Just(0.0f32), 0.01f32..=1.0],
+        50.0f32..=500.0,
+    )
+        .prop_map(|(mut case, k_d, pool)| {
+            case.params.starvation_draws_earmark = true;
+            case.params.starvation_shrinks = true;
+            case.params.carcass_decay_constant = k_d;
+            case.params.initial_nutrient_pool = pool;
+            case
+        })
 }

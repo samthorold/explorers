@@ -28,5 +28,6 @@ mod saturating_decomposition;
 mod seeded_consumer_liquidity;
 mod size_scaled_base_rate;
 mod soa_differential;
+mod starvation_cascade;
 mod support;
 mod trait_unit_anchors;

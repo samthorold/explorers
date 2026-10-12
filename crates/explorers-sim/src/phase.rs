@@ -254,8 +254,12 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
         // its cost), so a starving agent lands at exactly zero and only the
         // energy it actually held is booked as dissipated — never the
         // overdraft it could not fund.
-        let cost = cost.min(agent.reserve.max(0.0));
-        agent.reserve -= cost;
+        let paid = cost.min(agent.reserve.max(0.0));
+        agent.reserve -= paid;
+        // What reserve could not pay falls to the starvation cascade (flow
+        // 8): the earmark, then structure, each behind its own switch. With
+        // both off nothing more is paid and the agent starves.
+        let cost = paid + starvation_cascade(agent, cost - paid, params);
         total_dissipated += cost;
         events.push(Event {
             tick: 0,
@@ -273,15 +277,53 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
     (events, total_dissipated)
 }
 
-/// The agents `metabolise` left with no reserve: their charge was capped at what
-/// they held, so they could not pay this tick's metabolism and have starved.
-/// Read straight after `metabolise` (the cap lands the reserve at exactly zero)
-/// and handed to `check_death_thresholds`, so a later credit to the reserve — a
-/// heterotroph's own feeding in the drain pass — cannot revive them (#540).
-pub fn starved_ids(agents: &[Agent]) -> HashSet<u64> {
+/// Pay `shortfall`, the upkeep unallocated reserve could not, from the
+/// starvation cascade's stores in DEBkiss's order (world-rules.md flow 8,
+/// *When reserve cannot pay: the starvation cascade*): first the energy
+/// earmark, with `starvation_draws_earmark` on, then structure, with
+/// `starvation_shrinks` on. A unit of burned structure yields its embodied
+/// energy in full, and the nutrient bound in it (`burned × demand`) returns
+/// to the free store; the peak structure is left alone, so the structural
+/// death rule measures the shrunk body against it. Returns the energy paid,
+/// at most `shortfall`. With both switches off it pays nothing.
+fn starvation_cascade(agent: &mut Agent, shortfall: f32, params: &WorldParameters) -> f32 {
+    let mut unpaid = shortfall;
+    if unpaid > 0.0 && params.starvation_draws_earmark {
+        let drawn = unpaid.min(agent.repro_reserve.max(0.0));
+        agent.repro_reserve -= drawn;
+        unpaid -= drawn;
+    }
+    if unpaid > 0.0 && params.starvation_shrinks {
+        let burned = unpaid.min(agent.structure.max(0.0));
+        agent.structure -= burned;
+        agent.nutrient += crate::stoichiometric_demand(&agent.traits, burned, params);
+        unpaid -= burned;
+    }
+    shortfall - unpaid
+}
+
+/// Whether either step of the starvation cascade is on. With it on, a
+/// reserve at zero is not by itself death: the agent lives on its earmark
+/// or its structure until the cascade cannot pay.
+pub fn starvation_cascade_on(params: &WorldParameters) -> bool {
+    params.starvation_draws_earmark || params.starvation_shrinks
+}
+
+/// The agents `metabolise` left unable to pay this tick's metabolism, who
+/// have starved. Their charge was capped at what they held, so their reserve
+/// is exactly zero, and so is every store the starvation cascade (flow 8)
+/// draws on with its switch on: the earmark and structure. Read straight
+/// after `metabolise` and handed to `check_death_thresholds`, so a later
+/// credit to the reserve — a heterotroph's own feeding in the drain pass —
+/// cannot revive them (#540).
+pub fn starved_ids(agents: &[Agent], params: &WorldParameters) -> HashSet<u64> {
     agents
         .iter()
-        .filter(|a| a.reserve <= 0.0)
+        .filter(|a| {
+            a.reserve <= 0.0
+                && (!params.starvation_draws_earmark || a.repro_reserve <= 0.0)
+                && (!params.starvation_shrinks || a.structure <= 0.0)
+        })
         .map(|a| a.id)
         .collect()
 }
@@ -1315,7 +1357,7 @@ pub fn resolve_drains_routed(
     for drain in &living_drains {
         let agent = &agents[drain.target_idx];
         let threshold = crate::death_threshold(&agent.traits, agent.peak_structure);
-        let dies = agent.reserve <= 0.0
+        let dies = (agent.reserve <= 0.0 && !starvation_cascade_on(params))
             || (agent.structure > 0.0 && agent.structure < threshold)
             || agent.structure <= 0.0;
 
@@ -1622,7 +1664,9 @@ pub fn check_death_thresholds(
 
     for agent in agents.iter_mut() {
         let threshold = crate::death_threshold(&agent.traits, agent.peak_structure);
-        let dies = agent.reserve <= 0.0
+        // Under the starvation cascade a reserve at zero is not death: the
+        // agent lives on its earmark or structure until `starved` says not.
+        let dies = (agent.reserve <= 0.0 && !starvation_cascade_on(params))
             || starved.contains(&agent.id)
             || (agent.structure > 0.0 && agent.structure < threshold);
         let senesces = !dies && senesces(agent, params, run_seed, tick);
@@ -2734,6 +2778,8 @@ mod tests {
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             mass_specific_base_rate: 0.0,
             living_resistance: 0.0,
+            starvation_draws_earmark: false,
+            starvation_shrinks: false,
             hyphal_uptake: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
         }
@@ -5184,7 +5230,7 @@ mod tests {
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 0.25, zero_traits())];
         metabolise(&mut agents, &params);
-        let starved = starved_ids(&agents);
+        let starved = starved_ids(&agents, &params);
         // A later phase credits sub-epsilon residue.
         agents[0].reserve += 1.6e-10;
 
@@ -5212,7 +5258,7 @@ mod tests {
         ];
         metabolise(&mut agents, &params);
 
-        let starved = starved_ids(&agents);
+        let starved = starved_ids(&agents, &params);
 
         assert!(starved.contains(&1));
         assert!(!starved.contains(&2));

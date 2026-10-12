@@ -351,3 +351,88 @@ fn living_resistance_sets_rho_to_one_and_closes_living_targets() {
     let md = std::fs::read_to_string(dir.join("resisted.md")).unwrap();
     assert!(md.contains("## Living-tissue resistance"), "{md}");
 }
+
+/// `--starvation-draws-earmark` and `--starvation-shrinks` (#821) turn the
+/// starvation cascade's two steps on and record both in the artifact and
+/// summary; either writes the founder starvation readout, which
+/// `--starvation-readout` writes alone, for a control with both off. Without
+/// any of them nothing is recorded.
+#[test]
+fn the_starvation_cascade_options_set_both_switches_and_write_the_founder_readout() {
+    let dir = scratch("starvation-cascade");
+    let plain = run_with(&dir.join("plain.json"), &[]);
+    assert!(plain.get("starvation_cascade").is_none());
+    assert!(plain.get("founder_starvation").is_none());
+
+    let both = run_with(
+        &dir.join("both.json"),
+        &[
+            "--ticks",
+            "40",
+            "--starvation-draws-earmark",
+            "--starvation-shrinks",
+        ],
+    );
+    assert_eq!(
+        both["starvation_cascade"],
+        serde_json::json!({"draws_earmark": true, "shrinks": true})
+    );
+    let founders = both["founder_starvation"]["founders"].as_array().unwrap();
+    assert_eq!(founders.len(), 81, "one entry per decomposer founder");
+    assert!(
+        founders
+            .iter()
+            .any(|f| f["ticks_on_earmark"].as_u64().unwrap() > 0),
+        "some founder lives on its earmark within 40 ticks"
+    );
+    let md = std::fs::read_to_string(dir.join("both.md")).unwrap();
+    assert!(md.contains("## Starvation cascade"), "{md}");
+    assert!(md.contains("earmark: on"), "{md}");
+    assert!(md.contains("(shrinking): on"), "{md}");
+    assert!(md.contains("## Founder starvation readout"), "{md}");
+
+    let earmark = run_with(&dir.join("earmark.json"), &["--starvation-draws-earmark"]);
+    assert_eq!(
+        earmark["starvation_cascade"],
+        serde_json::json!({"draws_earmark": true, "shrinks": false})
+    );
+    let shrinks = run_with(&dir.join("shrinks.json"), &["--starvation-shrinks"]);
+    assert_eq!(
+        shrinks["starvation_cascade"],
+        serde_json::json!({"draws_earmark": false, "shrinks": true})
+    );
+
+    let control = run_with(&dir.join("control.json"), &["--starvation-readout"]);
+    assert!(control.get("starvation_cascade").is_none());
+    let founders = control["founder_starvation"]["founders"]
+        .as_array()
+        .unwrap();
+    assert!(
+        founders
+            .iter()
+            .all(|f| f["ticks_on_earmark"] == 0 && f["ticks_on_structure"] == 0),
+        "with both off no founder lives on the cascade"
+    );
+    // The readout leaves the report itself as it was.
+    assert_eq!(control["report"], plain["report"]);
+
+    let paired = run_with(
+        &dir.join("paired.json"),
+        &["--clear-at", "5", "--starvation-shrinks"],
+    );
+    for arm in ["perturbed", "control"] {
+        assert_eq!(
+            paired["founder_starvation"][arm]["founders"]
+                .as_array()
+                .unwrap()
+                .len(),
+            81,
+            "{arm}"
+        );
+    }
+    let md = std::fs::read_to_string(dir.join("paired.md")).unwrap();
+    assert!(
+        md.contains("| perturbed |") && md.contains("| control |"),
+        "{md}"
+    );
+}

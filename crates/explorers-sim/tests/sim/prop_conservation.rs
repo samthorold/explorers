@@ -9,7 +9,7 @@ use proptest::prelude::*;
 use support::{
     WorldCase, world_case, world_case_with_hyphal_uptake, world_case_with_living_resistance,
     world_case_with_network, world_case_with_saturating_decomposition,
-    world_case_with_size_scaled_uptake, world_case_with_wear,
+    world_case_with_size_scaled_uptake, world_case_with_starvation_cascade, world_case_with_wear,
 };
 
 /// Relative f32 tolerance for the energy identity: f32 carries ~7 significant
@@ -133,6 +133,19 @@ proptest! {
     #[test]
     fn conservation_holds_with_living_resistance(
         case in world_case_with_living_resistance()
+    ) {
+        check_energy_ledger_identity(&case)?;
+        check_nutrient_closure(&case)?;
+        check_stores_non_negative(&case)?;
+    }
+
+    /// The three conservation invariants with the starvation cascade on
+    /// (#821): drawing upkeep from the earmark and burning structure move
+    /// energy to heat and bound nutrient to the free store, never create or
+    /// destroy either.
+    #[test]
+    fn conservation_holds_with_the_starvation_cascade(
+        case in world_case_with_starvation_cascade()
     ) {
         check_energy_ledger_identity(&case)?;
         check_nutrient_closure(&case)?;
