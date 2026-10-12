@@ -131,14 +131,19 @@ In mixotrophs, consumption is expressed conditionally, and the condition is usua
 
 **What mixotrophs eat is the limiting nutrient in concentrated form.** Carnivorous plants catch animals, mostly arthropods, whose tissue is far richer in nitrogen and phosphorus than plant tissue. Algal mixotrophs graze bacteria and other cells smaller than themselves. Bacteria are rich in nitrogen and phosphorus relative to their carbon (Sterner & Elser 2002). In neither case is the prey the mixotroph's own kind: carnivorous plants do not catch plants. The plants that do draw on living plants are parasites, such as dodder and mistletoes, which tap a host through haustoria, and that host is usually another species (citation needed).
 
+**Green plants do not feed on litter carbon.** Plants take up amino acids, and some take up protein, as a nitrogen source (Näsholm et al. 1998; Paungfoo-Lonhienne et al. 2008).
+- **The carbon that comes with it is small.** It is a "carbon bonus" that lowers the cost of assimilating nitrogen (Franklin et al. 2016). It is about 0.1–0.3 % of tissue carbon in a grass study. The one higher figure, 7–8 %, is *Arabidopsis* fed glutamine on sterile agar.
+- **The only plants found taking carbon from litter do so through a fungus, and they are achlorophyllous.** These are orchids that parasitise litter-decaying *Mycena* and *Gymnopus* (Ogura-Tsujita et al. 2009; Martos et al. 2009). The route runs from the litter, through the saprotroph, to the plant. The plant drains the decomposer, not the litter.
+- *Evidence quality:* Franklin et al. was read in full text; the others from abstracts. The grass and *Arabidopsis* figures are from secondary summaries. No source was found for a green plant taking a meaningful share of its carbon directly from litter.
+
 **Carrying both machineries costs.** A carnivorous plant's traps are leaves that photosynthesise less, and they cost construction and digestive enzymes. That is the cost side of Givnish et al.'s model, and it is why carnivory pays only in a narrow band of habitats. For plankton mixotrophs, the usual expectation is that a cell carrying both apparatuses does less well at each mode than a specialist in it, and wins where neither mode alone suffices (citation needed).
 
 The roles are emergent properties of the flow network, not innate properties of the organisms. An organism's trophic role is determined by what it does — which flows it participates in — not by what it is. And those flows are constrained, ultimately, by the two physics: energy flows one way, matter cycles, and any self-sustaining biotic system must have functional positions that together maintain both flows.
 
 ## References
 
-- Allison, S.D. (2005). Cheaters, diffusion and nutrients constrain decomposition by microbial enzymes in spatially structured environments. *Ecology Letters* 8(6): 626–635.
 - Allison, S.D. & Vitousek, P.M. (2005). Responses of extracellular enzymes to simple and complex nutrient inputs. *Soil Biology and Biochemistry* 37(5): 937–944.
+- Allison, S.D. (2005). Cheaters, diffusion and nutrients constrain decomposition by microbial enzymes in spatially structured environments. *Ecology Letters* 8(6): 626–635.
 - Bach, W. et al. (2006). Energy in the dark: fuel for life in the deep ocean and beyond. *Eos, Transactions AGU* 87(7): 73–78.
 - Bar-On, Y.M., Phillips, R. & Milo, R. (2018). The biomass distribution on Earth. *Proceedings of the National Academy of Sciences* 115(25): 6506–6511.
 - Beer, C. et al. (2010). Terrestrial gross carbon dioxide uptake: global distribution and covariation with climate. *Science* 329(5993): 834–838.
@@ -147,23 +152,27 @@ The roles are emergent properties of the flow network, not innate properties of 
 - Cyr, H. & Pace, M.L. (1993). Magnitude and patterns of herbivory in aquatic and terrestrial ecosystems. *Nature* 361: 148–150.
 - de Boer, W. et al. (2005). Living in a fungal world: impact of fungi on soil bacterial niche development. *FEMS Microbiology Reviews* 29(4): 795–811.
 - DeVault, T.L., Rhodes, O.E. & Shivik, J.A. (2003). Scavenging by vertebrates: behavioral, ecological, and evolutionary perspectives on an important energy transfer pathway in terrestrial ecosystems. *Oikos* 102(2): 225–234.
-- Ellison, A.M. & Gotelli, N.J. (2002). Nitrogen availability alters the expression of carnivory in the northern pitcher plant, *Sarracenia purpurea*. *Proceedings of the National Academy of Sciences* 99(7): 4409–4412.
 - Ellison, A.M. & Gotelli, N.J. (2001). Evolutionary ecology of carnivorous plants. *Trends in Ecology & Evolution* 16(11): 623–629.
+- Ellison, A.M. & Gotelli, N.J. (2002). Nitrogen availability alters the expression of carnivory in the northern pitcher plant, *Sarracenia purpurea*. *Proceedings of the National Academy of Sciences* 99(7): 4409–4412.
 - Estes, J.A. et al. (2011). Trophic downgrading of planet Earth. *Science* 333(6040): 301–306.
 - Field, C.B. et al. (1998). Primary production of the biosphere: integrating terrestrial and oceanic components. *Science* 281(5374): 237–240.
+- Franklin, O. et al. (2016). The carbon bonus of organic nitrogen enhances nitrogen use efficiency of plants. *Plant, Cell & Environment*, 40, 25-35.
 - Givnish, T.J., Burkhardt, E.L., Happel, R.E. & Weintraub, J.D. (1984). Carnivory in the bromeliad *Brocchinia reducta*, with a cost/benefit model for the general restriction of carnivorous plants to sunny, moist, nutrient-poor habitats. *American Naturalist* 124(4): 479–497.
 - Gorham, E. (1991). Northern peatlands: role in the carbon cycle and probable responses to climatic warming. *Ecological Applications* 1(2): 182–195.
 - Hobbie, S.E. (1992). Effects of plant species on nutrient cycling. *Trends in Ecology and Evolution* 7(10): 336–339.
 - Hu, J. et al. Microbial carbon use efficiency and growth rates in soil: global patterns and drivers (VU Amsterdam research record; journal, year and pages not verified).
 - Manzoni, S. (2017). Flexible carbon-use efficiency across litter types and during decomposition partly compensates nutrient imbalances — results from analytical stoichiometric models. *Frontiers in Microbiology* 8: 661.
 - Manzoni, S., Chakrawal, A., Spohn, M. & Lindahl, B.D. (2021). Modeling microbial adaptations to nutrient limitation during litter decomposition. *Frontiers in Forests and Global Change* 4: 686945.
+- Martos, F. et al. (2009). Independent recruitment of saprotrophic fungi as mycorrhizal partners by tropical achlorophyllous orchids. *New Phytologist*, 184, 668-681.
 - Näsholm, T., Ekblad, A., Nordin, A., Giesler, R., Högberg, M. & Högberg, P. (1998). Boreal forest plants take up organic nitrogen. *Nature* 392: 914–916.
 - Nygaard, K. & Tobiesen, A. (1993). Bacterivory in algae: a survival strategy during nutrient limitation. *Limnology and Oceanography* 38(2): 273–279.
+- Ogura-Tsujita, Y. et al. (2009). Evidence for novel and specialized mycorrhizal parasitism: the orchid *Gastrodia confusa* gains carbon from saprotrophic *Mycena*. *Proceedings of the Royal Society B*, 276, 761-767.
 - Paine, R.T. (1966). Food web complexity and species diversity. *American Naturalist* 100(910): 65–75.
+- Paungfoo-Lonhienne, C. et al. (2008). Plants can use protein as a nitrogen source without assistance from other organisms. *PNAS*, 105, 4524-4529.
 - Schimel, J.P. & Bennett, J. (2004). Nitrogen mineralization: challenges of a changing paradigm. *Ecology* 85(3): 591–602.
 - Schimel, J.P. & Weintraub, M.N. (2003). The implications of exoenzyme activity on microbial carbon and nitrogen limitation in soil: a theoretical model. *Soil Biology and Biochemistry* 35(4): 549–563.
-- Schmitz, O.J., Krivan, V. & Ovadia, O. (2004). Trophic cascades: the primacy of trait-mediated indirect effects. *Ecology Letters* 7(2): 153–163.
 - Schmitz, O.J. et al. (2010). Predator control of ecosystem nutrient dynamics. *Ecology Letters* 13(10): 1199–1209.
+- Schmitz, O.J., Krivan, V. & Ovadia, O. (2004). Trophic cascades: the primacy of trait-mediated indirect effects. *Ecology Letters* 7(2): 153–163.
 - Sinsabaugh, R.L., Manzoni, S., Moorhead, D.L. & Richter, A. (2013). Carbon use efficiency of microbial communities: stoichiometry, methodology and modelling. *Ecology Letters* 16(7): 930–939.
 - Smith, S.E. & Read, D.J. (2008). *Mycorrhizal Symbiosis*. 3rd ed. Academic Press.
 - Sterner, R.W. & Elser, J.J. (2002). *Ecological Stoichiometry: The Biology of Elements from Molecules to the Biosphere*. Princeton University Press.

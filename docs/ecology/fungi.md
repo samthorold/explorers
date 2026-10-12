@@ -75,6 +75,51 @@ Key system-level distinctions among saprotrophs:
 
 *Evidence quality.* The cord-system picture rests on one research group's microcosm and field work, read here from abstracts, reviews and reference lists, not from the papers' full texts. The fractal measurements come from two-dimensional microcosms. The domain gives the **form** of the scaling: sublinear, with an exponent between 0.5 and 0.6. It gives the **magnitude** only as an order: a non-unit-restricted saprotroph's network spans many pieces of litter, and a unit-restricted one spans one. It gives no figure for reach per unit of biomass that would carry over to another world's units. The *Armillaria* figures come from encyclopedic and popular summaries, whose mass estimates conflict. That defence, not reach, separates a saprotroph from a pathogen is now sourced in [plants](plants.md), *Defence against microbes*.
 
+### How much litter one saprotroph commands, and what it costs to keep
+
+**Catchment.** A non-unit-restricted saprotroph's genet commands litter from many plants, and many genets share each plant's litter.
+- **Large genets.**
+  - Cord systems of *Phanerochaete velutina* in woodland are "commonly over 20 m" long (Thompson 1982).
+  - Isolates of one *Tricholomopsis platyphylla* genet were found up to 150 m apart in a 20.8 ha wood, with other genets between them (Thompson & Rayner 1982).
+  - Cord systems join litter over "many square metres or even hectares" and persist for years (Boddy et al. 2009).
+  - Fairy-ring litter decomposers advance 7–75 cm a year. A *Clitocybe geotropa* ring 800 m across is estimated at about 700 years old (Zotti et al. 2025).
+- **Small genets are common too.** Litter genets of *Marasmius rotula*, *Mycetinis alliaceus* and *Gymnopus androsaceus* with two or more sporocarps span 0.3–4 m, and one reaches about 15 m (Bošković et al. 2017, 2019).
+- **Unit-restricted saprotrophs and bacteria** command less than one plant's litter.
+- **No source counts plants per genet.** The literature gives genet spans, not catchments in plant individuals.
+
+**Decomposer biomass against its supply.**
+- **Global stocks.** Fungi hold about 12 Gt C (uncertain threefold) against about 450 Gt C of plants: about 2.7 % of plant biomass, or about 8 % of non-woody plant biomass (Bar-On et al. 2018).
+- **Soil microbes.** Soil microbial biomass is 1.2 % of soil organic C, about 23 Pg C to 1 m depth (Xu et al. 2013). That is about half a year of global soil heterotrophic respiration, about 50 Pg C a year (Hashimoto et al. 2015).
+- **Turnover.** Fungal biomass in soil turns over in 130–150 days (Rousk & Bååth 2007). Litter has a half-life of 0.5–4 years ([nutrient cycling](nutrient-cycling.md), *Decomposition kinetics*). So a decomposer lives many of its own generations on one cohort of litter.
+
+**Maintenance.**
+- **Plant tissue** spends about 1–4 % of its dry mass a day on maintenance. That is "low compared to animals and micro-organisms" (Penning de Vries 1974).
+- **Fungi in pure culture** spend 12–70 % a day (Carter et al. 1971).
+- **Active soil communities in situ** spend about 1–2.2 % of microbial C a day, counting turnover with maintenance (Schimel & Weintraub 2003).
+- **So per unit of living, active tissue,** a saprotroph pays the same order as plant tissue, or more.
+- **Per unit of standing biomass,** both pay far less, for different reasons.
+  - About 70 % of plant biomass is metabolically inert wood (Bar-On et al. 2018).
+  - Most decomposer biomass is dormant or empty:
+    - the active share of soil microbial biomass is about 4–49 %, typically about 20 % (compiled by Wang et al. 2014);
+    - in one pine-forest soil only 2–4 % of fungal biomass was active (Söderström 1979);
+    - dormant biomass pays two to three orders of magnitude less maintenance than active biomass (Anderson & Domsch 1985).
+
+**Throughput.**
+- *Gymnopus androsaceus*, alone on pine needles at 20 °C, decomposed about 5 g of litter C for each g of mycelial C it built over 10 months, roughly 1–2 % a day (Boberg et al. 2014).
+- The domain gives no general rate per unit of decomposer biomass. In the field, fungal biomass predicts decay rate poorly.
+
+**Pooling.** A basidiomycete mycelium translocates carbohydrate and nutrient through the whole network, so it works as one physiological unit (Lindahl & Olsson 2004).
+- **Rich resources feed the search across poor ground.** Connecting old litter to fresh moves nitrogen and growth into the fresh litter, and raises the fungus's carbon-use efficiency (Boberg et al. 2014).
+- **How far a mycelium reaches.** In Davidson and Olsson's model, a mycelium growing from a food base reaches a maximum distance. That distance is set by the size of the food base against the maintenance of the connecting mycelium (via Lindahl & Olsson 2004).
+
+*Evidence quality.* Read in full text: Bar-On et al., Xu et al., Penning de Vries, Schimel & Weintraub, Boberg et al., Lindahl & Olsson, Wang et al. and the Zotti et al. review.
+- **Read from abstracts:** Thompson, Thompson & Rayner, the Bošković studies, Rousk & Bååth, Söderström, Anderson & Domsch and Hashimoto et al.
+- **From a secondary summary:** Boddy et al. 2009.
+- **Taken from the review, not read:** the primary fairy-ring studies behind Zotti et al.
+- **Not verified:** some titles and journal details for Thompson & Rayner and the Bošković studies.
+- **What the domain gives:** a *form* for catchment (one genet spans many plants' litter, and reach is limited by food base against the maintenance of the connecting mycelium); *orders* for biomass ratios and active-tissue maintenance.
+- **What it leaves open:** a reach per unit of biomass that carries to another world's units, the living fraction of a field cord system, and a general decomposition rate per unit of decomposer biomass.
+
 ### Mycorrhizal strategy
 
 **Flow position:** Producer carbon stock --> fungal biomass; soil nutrient stock --> producer nutrient uptake (mediated by fungi).
@@ -156,27 +201,44 @@ The overall pattern: removing fungi doesn't eliminate energy from the system —
 
 ## References
 
+- Anderson, T.-H. & Domsch, K.H. (1985). Determination of ecophysiological maintenance carbon requirements of soil microorganisms in a dormant state. *Biology and Fertility of Soils*, 1, 81-89.
 - Bagchi, R. et al. (2014). Pathogens and insect herbivores drive rainforest plant diversity and composition. *Nature*, 506, 85-88.
+- Bar-On, Y.M., Phillips, R. & Milo, R. (2018). The biomass distribution on Earth. *PNAS*, 115, 6506-6511.
 - Bebber, D.P. et al. (2007). Biological solutions to transport network design. *Proceedings of the Royal Society B*, 274, 2307-2315.
+- Boberg, J.B. et al. (2014). Nitrogen and carbon reallocation in fungal mycelia during decomposition of boreal forest litter. *PLoS ONE*, 9, e92897.
 - Boddy, L. (1999). Saprotrophic cord-forming fungi: meeting the challenge of heterogeneous environments. *Mycologia*, 91, 13-32.
+- Boddy, L. et al. (2009). Saprotrophic cord systems: dispersal mechanisms in space and time. *Mycoscience*, 50, 9-19.
 - Bolton, R.G. & Boddy, L. (1993). Characterisation of the spatial aspects of foraging mycelial cord systems using fractal geometry. *Mycological Research*, 97, 762-768.
+- Bošković, E. et al. (2017, 2019). Genet structure of litter-decomposing *Marasmius*, *Mycetinis* and *Gymnopus* populations (titles not verified).
 - Boswell, G.P. et al. (2007). Functional consequences of nutrient translocation in mycelial fungi. *Journal of Theoretical Biology*, 245, 28-41.
 - Brabcova, V. et al. (2024). Variation of carbon, nitrogen and phosphorus content in fungi reflects their ecology and phylogeny. *bioRxiv* / in press.
 - Bretherton, S., Tordoff, G.M., Jones, T.H. & Boddy, L. (2006). Compensatory growth of *Phanerochaete velutina* mycelial systems grazed by *Folsomia candida* (Collembola). *FEMS Microbiology Ecology*, 58, 33-40.
 - Burdon, J.J. & Laine, A.-L. (2019). *Evolutionary Dynamics of Plant-Pathogen Interactions*. Cambridge University Press.
+- Carter, B.L.A. et al. (1971). Relationship between energy substrate utilization and specific growth rate in *Aspergillus nidulans*. *Journal of Bacteriology*, 108, 309-313.
 - Donnelly, D.P. & Boddy, L. (1997). Resource acquisition by the mycelial-cord-former *Stropharia caerulea*: effect of resource quantity and quality. (Journal, volume and pages not verified.)
 - Falconer, R.E. et al. (2005). Biomass recycling and the origin of phenotype in fungal mycelia. *Proceedings of the Royal Society B*, 272, 1727-1734.
 - Fellbaum, C.R. et al. (2014). Fungal nutrient allocation in common mycorrhizal networks is regulated by the carbon source strength of individual host plants. *New Phytologist*, 203, 646-656.
 - Floudas, D. et al. (2012). The Paleozoic origin of enzymatic lignin decomposition reconstructed from 31 fungal genomes. *Science*, 336, 1715-1719.
+- Hashimoto, S. et al. (2015). Global spatiotemporal distribution of soil respiration modeled using a global database. *Biogeosciences*, 12, 4121-4132.
 - Heaton, L. et al. (2012). Analysis of fungal networks. *Fungal Biology Reviews*, 26, 12-29.
 - Karst, J. et al. (2023). Mother trees, altruistic fungi, and the perils of plant personification. *Trends in Plant Science*, 28, 1206-1216.
 - Kiers, E.T. et al. (2011). Reciprocal rewards stabilize cooperation in the mycorrhizal symbiosis. *Science*, 333, 880-882.
+- Lindahl, B.D. & Olsson, S. (2004). Fungal translocation – creating and responding to environmental heterogeneity. *Mycologist*, 18, 79-88.
 - Lindahl, B.D. et al. (2007). Spatial separation of litter decomposition and mycorrhizal nitrogen uptake in a boreal forest. *New Phytologist*, 173, 611-620.
 - Lindeman, R.L. (1942). The trophic-dynamic aspect of ecology. *Ecology*, 23, 399-417.
-- Moore, J.C. et al. (2004). Detritus, trophic dynamics and biodiversity. *Ecology Letters*, 7, 584-600.
 - Moore, J.A.M. et al. (2015). Decomposition by ectomycorrhizal fungi alters soil carbon storage in a simulation model. *Ecosphere*, 6, 1-16.
+- Moore, J.C. et al. (2004). Detritus, trophic dynamics and biodiversity. *Ecology Letters*, 7, 584-600.
 - Nelsen, M.P. et al. (2016). Delayed fungal evolution did not cause the Paleozoic peak in coal production. *PNAS*, 113, 2442-2447.
+- Penning de Vries, F.W.T. (1974). Substrate utilization and respiration in relation to growth and maintenance in higher plants. *Netherlands Journal of Agricultural Science*, 22, 40-44.
 - Read, D.J. & Perez-Moreno, J. (2003). Mycorrhizas and nutrient cycling in ecosystems – a journey towards relevance? *New Phytologist*, 157, 475-492.
+- Rousk, J. & Bååth, E. (2007). Fungal biomass production and turnover in soil estimated using the acetate-in-ergosterol technique. *Soil Biology and Biochemistry*, 39, 2173-2177.
+- Schimel, J.P. & Weintraub, M.N. (2003). The implications of exoenzyme activity on microbial carbon and nitrogen limitation in soil: a theoretical model. *Soil Biology and Biochemistry*, 35, 549-563.
+- Söderström, B.E. (1979). Seasonal fluctuations of active fungal biomass in horizons of a podzolized pine-forest soil in central Sweden. *Soil Biology and Biochemistry*, 11, 149-154.
 - Simard, S.W. (2018). Mycorrhizal networks facilitate tree communication, learning, and memory. In *Memory and Learning in Plants* (pp. 191-213). Springer.
 - Smith, S.E. & Read, D.J. (2008). *Mycorrhizal Symbiosis* (3rd ed.). Academic Press.
+- Thompson, W. & Rayner, A.D.M. (1982). Spatial structure of a population of *Tricholomopsis platyphylla* in a woodland site. *New Phytologist*, 92, 103-114.
+- Thompson, W. (1982). Biology and ecology of mycelial cord-forming basidiomycetes in deciduous woodlands. PhD thesis, University of Bath.
 - van der Heijden, M.G.A. et al. (1998). Mycorrhizal fungal diversity determines plant biodiversity, ecosystem variability and productivity. *Nature*, 396, 69-72.
+- Wang, G. et al. (2014). Representation of dormant and active microbial dynamics for ecosystem modeling. *PLoS ONE*, 9, e89252.
+- Xu, X., Thornton, P.E. & Post, W.M. (2013). A global analysis of soil microbial biomass carbon, nitrogen and phosphorus in terrestrial ecosystems. *Global Ecology and Biogeography*, 22, 737-749.
+- Zotti, M. et al. (2025). Fungal fairy rings: history, ecology, dynamics and engineering functions. *IMA Fungus*, 16.
