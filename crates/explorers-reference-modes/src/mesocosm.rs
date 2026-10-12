@@ -487,7 +487,8 @@ pub struct FoundingUpkeep {
 /// built.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct SizeScaledBaseRate {
-    /// `S_p` ([`ESTABLISHED_PRODUCER_STRUCTURE`]).
+    /// `S_p`: [`ESTABLISHED_PRODUCER_STRUCTURE`], or the value given to
+    /// [`set_size_scaled_base_rate_at`].
     pub established_producer_structure: f32,
     /// The per-agent base rate `b` replaces.
     pub base_metabolic_rate: f32,
@@ -526,11 +527,17 @@ fn upkeep(agent: &explorers_sim::Agent, params: &WorldParameters) -> Upkeep {
 /// record the founders' upkeep under both rules. Call it on a world at
 /// founding, with the switch off.
 pub fn set_size_scaled_base_rate(world: &mut World) -> SizeScaledBaseRate {
+    set_size_scaled_base_rate_at(world, ESTABLISHED_PRODUCER_STRUCTURE)
+}
+
+/// [`set_size_scaled_base_rate`] at an `S_p` given explicitly (#814), for a
+/// reading that settles `S_p` under the rules it runs with rather than
+/// #804's per-agent world. `s_p` is a structure, finite and above 0.
+pub fn set_size_scaled_base_rate_at(world: &mut World, s_p: f32) -> SizeScaledBaseRate {
     let per_agent = WorldParameters {
         mass_specific_base_rate: 0.0,
         ..world.params().clone()
     };
-    let s_p = ESTABLISHED_PRODUCER_STRUCTURE;
     let b = mass_specific_base_rate_for(&per_agent, s_p);
     let size_scaled = WorldParameters {
         mass_specific_base_rate: b,
@@ -3543,6 +3550,44 @@ mod tests {
                 .decomposer_founder
                 .is_none()
         );
+    }
+
+    /// `set_size_scaled_base_rate_at` (#814) sets `b` from an `S_p` given
+    /// explicitly, so a reading can settle `S_p` under the rules it runs
+    /// with, and records that `S_p`. At [`ESTABLISHED_PRODUCER_STRUCTURE`] it
+    /// is `set_size_scaled_base_rate`.
+    #[test]
+    fn set_size_scaled_base_rate_at_takes_s_p_explicitly() {
+        let spec = Mode1Spec::committed();
+        let build = || {
+            mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                1,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let mut world = build();
+        let before = world.params().clone();
+        let r = set_size_scaled_base_rate_at(&mut world, 11.9);
+        let b = before.base_metabolic_rate / 11.9 + before.structure_maintenance_coefficient;
+        assert_eq!(r.established_producer_structure, 11.9);
+        assert_eq!(r.mass_specific_base_rate, b);
+        assert_eq!(world.params().mass_specific_base_rate, b);
+        let founder = r.decomposer_founder.expect("decomposer founders");
+        // A smaller S_p raises b, so the founder pays more than at 21.6.
+        let mut default = build();
+        let d = set_size_scaled_base_rate(&mut default);
+        assert!(b > d.mass_specific_base_rate);
+        assert!(founder.size_scaled.total > d.decomposer_founder.unwrap().size_scaled.total);
+        assert_eq!(founder.per_agent, d.decomposer_founder.unwrap().per_agent);
+
+        let mut at_constant = build();
+        assert_eq!(
+            set_size_scaled_base_rate_at(&mut at_constant, ESTABLISHED_PRODUCER_STRUCTURE),
+            d
+        );
+        assert_eq!(at_constant.params(), default.params());
     }
 
     /// Ticks until a carcass drained every tick by one unit-heterotrophy
