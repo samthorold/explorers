@@ -642,6 +642,43 @@ pub fn living_resistance_section(rho: f32) -> String {
     )
 }
 
+/// The starvation cascade's switches a run set (#821; world rules, flow 8,
+/// *When reserve cannot pay: the starvation cascade*).
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct StarvationCascade {
+    /// Step 1: upkeep reserve cannot pay is drawn from the energy earmark.
+    pub draws_earmark: bool,
+    /// Step 2: what is left is paid by burning structure (shrinking).
+    pub shrinks: bool,
+}
+
+/// Set the starvation cascade's two switches in `world` and return them.
+pub fn set_starvation_cascade(
+    world: &mut World,
+    draws_earmark: bool,
+    shrinks: bool,
+) -> StarvationCascade {
+    let params = world.params_mut();
+    params.starvation_draws_earmark = draws_earmark;
+    params.starvation_shrinks = shrinks;
+    StarvationCascade {
+        draws_earmark,
+        shrinks,
+    }
+}
+
+/// The summary section recording the starvation cascade a run set.
+pub fn starvation_cascade_section(c: &StarvationCascade) -> String {
+    let on = |b: bool| if b { "on" } else { "off" };
+    format!(
+        "## Starvation cascade (--starvation-draws-earmark, --starvation-shrinks)\n\n\
+         upkeep reserve cannot pay is drawn from the energy earmark: {}; \
+         what is left is paid by burning structure (shrinking): {}",
+        on(c.draws_earmark),
+        on(c.shrinks)
+    )
+}
+
 /// The summary's account of the feeding reach `--body-reach-pieces` set.
 pub fn body_reach_section(r: &BodyReach) -> String {
     format!(
@@ -1018,6 +1055,11 @@ pub struct FounderReadout {
     /// Living agents at the end descended from a founder, founders included:
     /// the founders' line.
     pub line_alive_at_end: usize,
+    /// Each founder through the starvation cascade (#821). Not serialised
+    /// with the report, so a run's artifact is unchanged unless the
+    /// instrument writes it on its own.
+    #[serde(skip)]
+    pub starvation: StarvationReadout,
 }
 
 impl FounderReadout {
@@ -1048,6 +1090,138 @@ impl FounderReadout {
         let steps = (to + 1 - from) as f64;
         (self.founders > 0).then(|| self.window_gain(from, to) / (self.founders as f64 * steps))
     }
+}
+
+/// One decomposer founder through the starvation cascade (#821).
+///
+/// Its unallocated reserve *runs out* in the first step it begins with
+/// reserve no greater than that step's upkeep (`metabolic_cost`, what the
+/// stepper's metabolism charges): metabolism leaves the reserve at zero, and
+/// any rest of the upkeep falls to the cascade, or with both switches off the
+/// founder starves. Upkeep is paid in the third phase of a step, and a
+/// decomposer founder's reserve and structure do not change in the two
+/// before it, so its state as the step begins is the state metabolism reads.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct FounderStarvation {
+    pub id: u64,
+    /// The world's tick after the step in which it died (`None` alive at
+    /// the end).
+    pub death_tick: Option<u64>,
+    /// The world's tick after the step in which its unallocated reserve
+    /// first ran out (`None` if it never did).
+    pub ran_out_tick: Option<u64>,
+    /// Whether it had reproduced in a step before that one (before the end,
+    /// if its reserve never ran out).
+    pub reproduced_before_running_out: bool,
+    /// Its energy earmark as that step began.
+    pub earmark_at_running_out: Option<f32>,
+    /// Steps it lived through in which the earmark paid some of its upkeep.
+    pub ticks_on_earmark: u64,
+    /// Steps it lived through in which burned structure paid some of it.
+    pub ticks_on_structure: u64,
+}
+
+/// The decomposer founders through the starvation cascade (#821), by id.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct StarvationReadout {
+    pub founders: Vec<FounderStarvation>,
+}
+
+/// The nearest-rank median, as [`LifespanDistribution`] reads its quantiles
+/// (`None` when empty).
+fn nearest_rank_median<T: Copy + PartialOrd>(mut values: Vec<T>) -> Option<T> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).expect("no NaN"));
+    Some(values[values.len().div_ceil(2) - 1])
+}
+
+impl StarvationReadout {
+    /// Founders that died within the run.
+    pub fn died(&self) -> usize {
+        self.founders
+            .iter()
+            .filter(|f| f.death_tick.is_some())
+            .count()
+    }
+
+    /// Founders whose unallocated reserve ran out within the run.
+    pub fn ran_out(&self) -> usize {
+        self.founders
+            .iter()
+            .filter(|f| f.ran_out_tick.is_some())
+            .count()
+    }
+
+    /// Founders that reproduced before their reserve ran out.
+    pub fn reproduced_first(&self) -> usize {
+        (self.founders.iter())
+            .filter(|f| f.reproduced_before_running_out)
+            .count()
+    }
+
+    /// Median death tick over the founders that died.
+    pub fn median_death_tick(&self) -> Option<u64> {
+        nearest_rank_median(self.founders.iter().filter_map(|f| f.death_tick).collect())
+    }
+
+    /// Median earmark held as reserve ran out, over the founders whose did.
+    pub fn median_earmark_at_running_out(&self) -> Option<f32> {
+        nearest_rank_median(
+            (self.founders.iter())
+                .filter_map(|f| f.earmark_at_running_out)
+                .collect(),
+        )
+    }
+
+    fn median_over_ran_out(&self, ticks: impl Fn(&FounderStarvation) -> u64) -> Option<u64> {
+        nearest_rank_median(
+            (self.founders.iter())
+                .filter(|f| f.ran_out_tick.is_some())
+                .map(ticks)
+                .collect(),
+        )
+    }
+
+    /// Median ticks lived on the earmark, over the founders that ran out.
+    pub fn median_ticks_on_earmark(&self) -> Option<u64> {
+        self.median_over_ran_out(|f| f.ticks_on_earmark)
+    }
+
+    /// Median ticks lived on structure, over the founders that ran out.
+    pub fn median_ticks_on_structure(&self) -> Option<u64> {
+        self.median_over_ran_out(|f| f.ticks_on_structure)
+    }
+}
+
+/// The founder starvation readout's summary section (#821): one row per run
+/// or arm.
+pub fn founder_starvation_section(rows: &[(&str, &StarvationReadout)]) -> String {
+    let or_dash = |v: Option<String>| v.unwrap_or_else(|| "-".to_string());
+    let mut out = String::from(
+        "## Founder starvation readout (#821)\n\n\
+         A founder's unallocated reserve runs out in the first step it begins with reserve no \
+         greater than that step's upkeep. Medians are nearest-rank: the death tick over the \
+         founders that died, the rest over the founders whose reserve ran out.\n\n\
+         | run | founders | died | median death tick | reserve ran out | reproduced first | \
+         median earmark at running out | median ticks on earmark | median ticks on structure |\n\
+         |---|---|---|---|---|---|---|---|---|\n",
+    );
+    for (name, r) in rows {
+        out.push_str(&format!(
+            "| {name} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            r.founders.len(),
+            r.died(),
+            or_dash(r.median_death_tick().map(|t| t.to_string())),
+            r.ran_out(),
+            r.reproduced_first(),
+            or_dash(r.median_earmark_at_running_out().map(|e| format!("{e:.3}"))),
+            or_dash(r.median_ticks_on_earmark().map(|t| t.to_string())),
+            or_dash(r.median_ticks_on_structure().map(|t| t.to_string())),
+        ));
+    }
+    out
 }
 
 /// The establishment cut-off, in ticks: a producer that dies older than this
@@ -1398,6 +1572,9 @@ fn run_arm(
             line_alive_at_end: (world.agents().iter())
                 .filter(|a| observer.line.contains(&a.id))
                 .count(),
+            starvation: StarvationReadout {
+                founders: observer.starving.values().cloned().collect(),
+            },
             ..observer.founders.clone()
         },
         ledger: {
@@ -1520,6 +1697,11 @@ struct Observer {
     agent_traits: HashMap<u64, TraitVector>,
     carcass_traits: HashMap<u64, TraitVector>,
     founders: FounderReadout,
+    /// Each founder through the starvation cascade (#821), by id.
+    starving: std::collections::BTreeMap<u64, FounderStarvation>,
+    /// Each living founder's reserve, earmark and upkeep as the next step
+    /// begins: what that step's metabolism reads.
+    founder_stores: HashMap<u64, (f32, f32, f32)>,
     /// Litter inflow since the last litter sample, and that sample's tick.
     litter_inflow: LitterInflow,
     litter_sampled_at: u64,
@@ -1549,6 +1731,8 @@ impl Observer {
             agent_traits: HashMap::new(),
             carcass_traits: HashMap::new(),
             founders: FounderReadout::default(),
+            starving: std::collections::BTreeMap::new(),
+            founder_stores: HashMap::new(),
             litter_inflow: LitterInflow::default(),
             litter_sampled_at: world.tick(),
         }
@@ -1567,8 +1751,69 @@ impl Observer {
             start_tick: world.tick(),
             ..FounderReadout::default()
         };
+        self.starving = (self.living_founders.keys())
+            .map(|&id| {
+                (
+                    id,
+                    FounderStarvation {
+                        id,
+                        ..FounderStarvation::default()
+                    },
+                )
+            })
+            .collect();
         self.remember_targets(world);
+        self.remember_founder_stores(world);
         self
+    }
+
+    /// Remember each living founder's reserve, earmark and upkeep, as the
+    /// next step's metabolism will read them.
+    fn remember_founder_stores(&mut self, world: &World) {
+        self.founder_stores.clear();
+        for a in world.agents() {
+            if self.living_founders.contains_key(&a.id) {
+                let upkeep = explorers_sim::phase::metabolic_cost(a, world.params());
+                (self.founder_stores).insert(a.id, (a.reserve, a.repro_reserve, upkeep));
+            }
+        }
+    }
+
+    /// Mark the founders whose unallocated reserve runs out in the step just
+    /// taken: those that began it with reserve no greater than its upkeep.
+    fn read_running_out(&mut self, after: u64) {
+        for (id, &(reserve, earmark, upkeep)) in &self.founder_stores {
+            let f = self.starving.get_mut(id).expect("every founder is read");
+            if f.ran_out_tick.is_none() && reserve <= upkeep {
+                f.ran_out_tick = Some(after);
+                f.earmark_at_running_out = Some(earmark);
+            }
+        }
+    }
+
+    /// Count the step just taken against each founder that lived through it
+    /// on the cascade: on the earmark if the earmark paid some of its upkeep,
+    /// on structure if burned structure did.
+    fn read_cascade_ticks(&mut self, world: &World) {
+        let p = world.params();
+        for (id, &(reserve, earmark, upkeep)) in &self.founder_stores {
+            if reserve > upkeep || !self.living_founders.contains_key(id) {
+                continue;
+            }
+            let f = self.starving.get_mut(id).expect("every founder is read");
+            let shortfall = upkeep - reserve.max(0.0);
+            let from_earmark = if p.starvation_draws_earmark {
+                earmark.max(0.0)
+            } else {
+                0.0
+            };
+            if p.starvation_draws_earmark && earmark > 0.0 && shortfall > 0.0 {
+                f.ticks_on_earmark += 1;
+            }
+            if p.starvation_shrinks && shortfall > from_earmark {
+                f.ticks_on_structure += 1;
+            }
+        }
     }
 
     /// Remember the traits of what stands now, for the next step's founder
@@ -1593,6 +1838,7 @@ impl Observer {
         let mut senesced = std::collections::HashSet::new();
         let founders_began = !self.living_founders.is_empty();
         let (mut gained, mut drained) = (0.0_f64, 0.0_f64);
+        self.read_running_out(after);
         // Agents born in this step are on the roster now; those that died in
         // it are still in the map from the step before.
         (self.traits).extend(world.agents().iter().map(|a| (a.id, a.traits)));
@@ -1625,6 +1871,13 @@ impl Observer {
                     let parents = [event.target, event.second_parent];
                     if parents.iter().flatten().any(|p| self.line.contains(p)) {
                         self.line.insert(event.source);
+                    }
+                    for parent in parents.iter().flatten() {
+                        if let Some(f) = self.starving.get_mut(parent) {
+                            if f.ran_out_tick.is_none() {
+                                f.reproduced_before_running_out = true;
+                            }
+                        }
                     }
                     let parent = event.target.and_then(|id| self.income.role(id));
                     if in_centre && parent == Some(TrophicRole::Producer) {
@@ -1660,6 +1913,9 @@ impl Observer {
                     self.traits.remove(&event.source);
                     if self.living_founders.remove(&event.source).is_some() {
                         self.founders.death_ticks.push(after);
+                        if let Some(f) = self.starving.get_mut(&event.source) {
+                            f.death_tick = Some(after);
+                        }
                     }
                     self.line.remove(&event.source);
                     let born = self.birth_tick.remove(&event.source);
@@ -1681,6 +1937,8 @@ impl Observer {
             self.founders.gained.push(gained);
             self.founders.drained.push(drained);
         }
+        self.read_cascade_ticks(world);
+        self.remember_founder_stores(world);
         self.remember_targets(world);
         self.income.update(world.event_log());
         self.cursor = world.event_log().len();
@@ -3183,6 +3441,7 @@ mod tests {
             gained,
             drained,
             line_alive_at_end: 5,
+            starvation: StarvationReadout::default(),
         };
         // Ticks 5–20: alive at the start of each step 4 (steps 5–10) then 3.
         let mean = founders.mean_income(5, 20).unwrap();
@@ -3990,6 +4249,155 @@ mod tests {
                 "| perturbed | 0 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0 |"
             ),
             "{summary}"
+        );
+    }
+
+    /// #821's founder starvation readout, read independently off a full
+    /// event log and the founders' states before each step. A founder's
+    /// unallocated reserve *runs out* in the first step it begins with
+    /// reserve no greater than that step's upkeep: metabolism leaves it at
+    /// zero, and any rest falls to the cascade (or it starves). The earmark
+    /// at that moment is its earmark as that step began. A tick on the
+    /// earmark (on structure) is a step after which the founder lives and in
+    /// which the earmark (structure) paid some of its upkeep.
+    #[test]
+    fn the_founder_starvation_readout_follows_each_founder_through_the_cascade() {
+        let spec = Mode1Spec::committed();
+        let build = |earmark: bool, shrinks: bool| {
+            let mut world = mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                4,
+                Community::ProducersAndDecomposers,
+            );
+            let set = set_starvation_cascade(&mut world, earmark, shrinks);
+            assert_eq!((set.draws_earmark, set.shrinks), (earmark, shrinks));
+            world
+        };
+        for (earmark, shrinks) in [(false, false), (true, false), (false, true), (true, true)] {
+            let ticks = 80;
+            let report = run_mode1(&mut build(earmark, shrinks), ticks, 10);
+
+            let mut world = build(earmark, shrinks);
+            let mut expected: std::collections::BTreeMap<u64, FounderStarvation> = (world
+                .agents()
+                .iter())
+            .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
+            .map(|a| {
+                (
+                    a.id,
+                    FounderStarvation {
+                        id: a.id,
+                        ..FounderStarvation::default()
+                    },
+                )
+            })
+            .collect();
+            for _ in 0..ticks {
+                let before: HashMap<u64, (f32, f32, f32, f32)> = (world.agents().iter())
+                    .filter(|a| expected.contains_key(&a.id))
+                    .map(|a| {
+                        let upkeep = explorers_sim::phase::metabolic_cost(a, world.params());
+                        (a.id, (a.reserve, a.repro_reserve, a.structure, upkeep))
+                    })
+                    .collect();
+                let cursor = world.event_log().len();
+                world.step();
+                let after = world.tick();
+                for (id, &(reserve, earmark_held, _, upkeep)) in &before {
+                    let f = expected.get_mut(id).unwrap();
+                    if f.ran_out_tick.is_none() && reserve <= upkeep {
+                        f.ran_out_tick = Some(after);
+                        f.earmark_at_running_out = Some(earmark_held);
+                    }
+                }
+                for e in world.event_log().since(cursor) {
+                    if e.kind != EventKind::Born {
+                        continue;
+                    }
+                    for parent in [e.target, e.second_parent].into_iter().flatten() {
+                        if let Some(f) = expected.get_mut(&parent) {
+                            if f.ran_out_tick.is_none() {
+                                f.reproduced_before_running_out = true;
+                            }
+                        }
+                    }
+                }
+                for (id, &(reserve, earmark_held, structure, upkeep)) in &before {
+                    let f = expected.get_mut(id).unwrap();
+                    let Some(now) = world.agents().iter().find(|a| a.id == *id) else {
+                        f.death_tick = Some(after);
+                        continue;
+                    };
+                    if reserve > upkeep {
+                        continue;
+                    }
+                    let shortfall = upkeep - reserve.max(0.0);
+                    let from_earmark = if earmark { earmark_held.max(0.0) } else { 0.0 };
+                    if earmark && earmark_held > 0.0 && shortfall > 0.0 {
+                        f.ticks_on_earmark += 1;
+                    }
+                    if shrinks && shortfall > from_earmark {
+                        f.ticks_on_structure += 1;
+                        assert!(
+                            now.structure < structure,
+                            "a structure tick burns structure"
+                        );
+                    }
+                }
+            }
+            let expected: Vec<FounderStarvation> = expected.into_values().collect();
+            let readout = &report.founders.starvation;
+            assert_eq!(readout.founders, expected, "arm ({earmark}, {shrinks})");
+            assert!(readout.ran_out() > 0, "some founder runs out of reserve");
+            let lived_on = |f: &FounderStarvation| (f.ticks_on_earmark, f.ticks_on_structure);
+            let total: (u64, u64) = expected
+                .iter()
+                .map(lived_on)
+                .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+            assert_eq!(total.0 > 0, earmark, "earmark ticks iff the switch is on");
+            assert_eq!(total.1 > 0, shrinks, "structure ticks iff the switch is on");
+        }
+    }
+
+    /// The readout's summary: nearest-rank medians, the death tick over the
+    /// founders that died and the rest over those whose reserve ran out, and
+    /// the count that reproduced first.
+    #[test]
+    fn the_starvation_readout_summarises_as_medians_and_counts() {
+        let f = |id, death, ran_out, first, earmark, on_e, on_s| FounderStarvation {
+            id,
+            death_tick: death,
+            ran_out_tick: ran_out,
+            reproduced_before_running_out: first,
+            earmark_at_running_out: earmark,
+            ticks_on_earmark: on_e,
+            ticks_on_structure: on_s,
+        };
+        let r = StarvationReadout {
+            founders: vec![
+                f(1, Some(30), Some(5), true, Some(2.0), 20, 4),
+                f(2, Some(10), Some(6), false, Some(16.0), 3, 1),
+                f(3, None, Some(7), false, Some(9.0), 8, 0),
+                f(4, None, None, true, None, 0, 0),
+            ],
+        };
+        assert_eq!(r.died(), 2);
+        assert_eq!(r.ran_out(), 3);
+        assert_eq!(r.reproduced_first(), 2);
+        assert_eq!(r.median_death_tick(), Some(10));
+        assert_eq!(r.median_earmark_at_running_out(), Some(9.0));
+        assert_eq!(r.median_ticks_on_earmark(), Some(8));
+        assert_eq!(r.median_ticks_on_structure(), Some(1));
+        let section = founder_starvation_section(&[("run", &r)]);
+        assert!(
+            section.contains("| run | 4 | 2 | 10 | 3 | 2 | 9.000 | 8 | 1 |"),
+            "{section}"
+        );
+        let empty = founder_starvation_section(&[("run", &StarvationReadout::default())]);
+        assert!(
+            empty.contains("| run | 0 | 0 | - | 0 | 0 | - | - | - |"),
+            "{empty}"
         );
     }
 }

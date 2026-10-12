@@ -71,6 +71,18 @@
 //! `ρ`, and the guild readout's living-versus-carcass split is the check.
 //! Without the flag `ρ` stays 0 and nothing is recorded.
 //!
+//! `--starvation-draws-earmark` and `--starvation-shrinks` (#821; world
+//! rules, flow 8, *When reserve cannot pay: the starvation cascade*) turn on
+//! the cascade's two steps: upkeep reserve cannot pay is drawn from the
+//! energy earmark, then paid by burning structure. Each works alone. The
+//! summary and artifact record both switches. Either option, or
+//! `--starvation-readout` alone (for a control with both off), also writes
+//! the founder starvation readout per run or arm: for each decomposer
+//! founder, the tick it died, whether it reproduced before its unallocated
+//! reserve first ran out, the earmark it held then, and the ticks it lived
+//! on the earmark and on structure, summarised as medians and counts.
+//! Without any of them nothing is recorded and the world is unchanged.
+//!
 //! With `--clear-at T` (#752) it reads the perturbation against its paired
 //! control: it settles the mesocosm to tick `T`, clones it, clears every agent
 //! and carcass from one copy's centre patch (an outflow, booked in each arm's
@@ -85,7 +97,8 @@
 //!                [--litter-x N] [--body-reach-pieces K]
 //!                [--litter-half-life L] [--enzyme-half-saturation K]
 //!                [--size-scaled-base-rate] [--established-producer-structure S_p]
-//!                [--living-resistance] [--out PATH]
+//!                [--living-resistance] [--starvation-draws-earmark]
+//!                [--starvation-shrinks] [--starvation-readout] [--out PATH]
 //! ```
 //!
 //! Defaults: the committed `crates/explorers-reference-modes/mode1.json`
@@ -100,13 +113,14 @@ use std::path::PathBuf;
 use explorers_reference_modes::mesocosm::{
     Community, ESTABLISHED_PRODUCER_LIFESPAN_TICKS, Mode1Spec, body_reach_section,
     carcass_decay_constant_for_half_life, decomposition_kinetics_section,
-    living_resistance_section, mode1_mesocosm_with_litter, mode1_summary, paired_summary,
-    run_mode1, run_paired, set_body_reach_pieces, set_decomposition_kinetics,
-    set_living_resistance, set_size_scaled_base_rate, set_size_scaled_base_rate_at,
-    size_scaled_base_rate_section,
+    founder_starvation_section, living_resistance_section, mode1_mesocosm_with_litter,
+    mode1_summary, paired_summary, run_mode1, run_paired, set_body_reach_pieces,
+    set_decomposition_kinetics, set_living_resistance, set_size_scaled_base_rate,
+    set_size_scaled_base_rate_at, set_starvation_cascade, size_scaled_base_rate_section,
+    starvation_cascade_section,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -136,6 +150,12 @@ struct Cli {
     established_producer_structure: Option<f32>,
     /// Whether living tissue resists drains, at mode 1's `ρ` = 1 (#813).
     living_resistance: bool,
+    /// The starvation cascade's steps (#821): the earmark pays, then
+    /// structure.
+    starvation_draws_earmark: bool,
+    starvation_shrinks: bool,
+    /// Whether to write the founder starvation readout with both steps off.
+    starvation_readout: bool,
     out: Option<PathBuf>,
 }
 
@@ -156,6 +176,9 @@ impl Cli {
             size_scaled_base_rate: false,
             established_producer_structure: None,
             living_resistance: false,
+            starvation_draws_earmark: false,
+            starvation_shrinks: false,
+            starvation_readout: false,
             out: None,
         };
         while let Some(flag) = args.next() {
@@ -169,6 +192,18 @@ impl Cli {
             }
             if flag == "--living-resistance" {
                 cli.living_resistance = true;
+                continue;
+            }
+            if flag == "--starvation-draws-earmark" {
+                cli.starvation_draws_earmark = true;
+                continue;
+            }
+            if flag == "--starvation-shrinks" {
+                cli.starvation_shrinks = true;
+                continue;
+            }
+            if flag == "--starvation-readout" {
+                cli.starvation_readout = true;
                 continue;
             }
             let value = args.next().ok_or(format!("{flag} needs a value"))?;
@@ -297,6 +332,14 @@ fn main() {
     let living_resistance = cli
         .living_resistance
         .then(|| set_living_resistance(&mut world));
+    let cascade = (cli.starvation_draws_earmark || cli.starvation_shrinks).then(|| {
+        set_starvation_cascade(
+            &mut world,
+            cli.starvation_draws_earmark,
+            cli.starvation_shrinks,
+        )
+    });
+    let starvation_readout = cli.starvation_readout || cascade.is_some();
     let community = match cli.community {
         Community::ProducersAndDecomposers => "producers and decomposers",
         Community::ProducersOnly => "producers only",
@@ -328,22 +371,57 @@ fn main() {
             Some(r) => format!("{header}\n\n{}", size_scaled_base_rate_section(r)),
             None => header,
         };
-        match living_resistance {
+        let header = match living_resistance {
             Some(rho) => format!("{header}\n\n{}", living_resistance_section(rho)),
+            None => header,
+        };
+        match &cascade {
+            Some(c) => format!("{header}\n\n{}", starvation_cascade_section(c)),
             None => header,
         }
     };
-    let (summary, report, default_out) = match cli.clear_at {
+    // The founder starvation readout (#821), when asked for: its summary
+    // section and its artifact entry.
+    let (summary, report, starvation, default_out) = match cli.clear_at {
         None => {
             let report = run_mode1(&mut world, cli.ticks, cli.sample_every);
-            let summary = mode1_summary(&with_reach(header), &report);
-            (summary, serde_json::to_value(report), "mode1.json")
+            let mut summary = mode1_summary(&with_reach(header), &report);
+            let readout = &report.founders.starvation;
+            let starvation = starvation_readout.then(|| {
+                summary.push_str(&format!(
+                    "\n{}",
+                    founder_starvation_section(&[("run", readout)])
+                ));
+                serde_json::to_value(readout).expect("the starvation readout serialises")
+            });
+            (
+                summary,
+                serde_json::to_value(report),
+                starvation,
+                "mode1.json",
+            )
         }
         Some(settle) => {
             let report = run_paired(world, settle, cli.ticks, cli.sample_every);
             let header = with_reach(format!("{header}, settled to tick {settle} then cleared"));
-            let summary = paired_summary(&header, &report);
-            (summary, serde_json::to_value(report), "mode1-paired.json")
+            let mut summary = paired_summary(&header, &report);
+            let (perturbed, control) = (
+                &report.perturbed.founders.starvation,
+                &report.control.founders.starvation,
+            );
+            let starvation = starvation_readout.then(|| {
+                summary.push_str(&format!(
+                    "\n{}",
+                    founder_starvation_section(&[("perturbed", perturbed), ("control", control)])
+                ));
+                serde_json::json!({ "perturbed": perturbed, "control": control })
+            });
+            (
+                summary,
+                serde_json::to_value(report),
+                starvation,
+                "mode1-paired.json",
+            )
         }
     };
     print!("{summary}");
@@ -378,6 +456,13 @@ fn main() {
     }
     if let Some(rho) = living_resistance {
         artifact["living_resistance"] = serde_json::json!(rho);
+    }
+    if let Some(c) = cascade {
+        artifact["starvation_cascade"] =
+            serde_json::to_value(c).expect("the starvation cascade serialises");
+    }
+    if let Some(readout) = starvation {
+        artifact["founder_starvation"] = readout;
     }
     std::fs::write(&out, serde_json::to_string(&artifact).unwrap()).expect("write the artifact");
     std::fs::write(out.with_extension("md"), &summary).expect("write the summary");
