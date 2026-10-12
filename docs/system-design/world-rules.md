@@ -300,7 +300,15 @@ Grounded in Lindeman's (1942) trophic-dynamic concept. Real trophic transfer eff
 
 **Why the kernel's form stays.** The domain says a decomposer's efficiency on dead plant tissue is far higher than a gut digester's on the same food. It does not say that efficiency is independent of how dissimilar the substrate is. So the distance kernel is kept, and only its range is bounded.
 
-A kernel whose distance penalty shrinks with the consumer's heterotrophic investment, standing in for matched enzymes, is the alternative. It is held in reserve, not adopted. What would bring it out is a pre-registered mesocosm reading in which, at decay within the bound, mixotrophs take most of the decomposer income from specialists at the vertex. *Current state (2026-10-10): the bound is specified; the mode 1 mesocosm follows it (#772), and so does the genesis search box (#773), though the committed atlas and recipe predate it.*
+A kernel whose distance penalty shrinks with the consumer's heterotrophic investment, standing in for matched enzymes, is the alternative. It is held in reserve, not adopted. What would bring it out is a pre-registered mesocosm reading in which, at decay within the bound, mixotrophs take most of the decomposer income from specialists at the vertex, and in which the specialists would pay their upkeep at zero-distance efficiency.
+
+**Why mode 1's failure does not bring it out.** In mode 1 the specialist starves for want of throughput, not efficiency.
+- **The kernel's whole span is a factor of about 2.5.** It runs from the vertex's 0.31 to the base, 0.78.
+- **The founders are 3 to 40 times short.** #814's and #822's founders drain 0.007 structure a tick at body reach 0, 0.042 at 10 and 0.091 at 30. Their upkeep is 0.20 a tick. At the base efficiency they would earn 0.005 to 0.071 of it.
+- **What binds is the carcass's yield.** A carcass yields at most `k_d · S` a tick: about 0.025 at the mode's `k_d` on a carcass of the settled run's mean size. A founder taking half of that from each must draw on about 50 such carcasses at once to pay its upkeep, or about 135 of the founding stand's smaller ones.
+- **The mixotrophs win because they are alive, not because they out-compete.** On a shared carcass the specialist's catalyst is five to ten times a mixotroph's, so it takes the larger share. The mixotrophs end up with all the drain because photosynthesis pays their upkeep while the specialists starve.
+
+So the specialist's advantage on litter has to come from throughput: how much litter one decomposer commands against what it costs to keep. That is a question about how much litter one decomposer's reach spans, not about the kernel. The domain gives it as a ratio: litter in reach per unit of the decomposer's own biomass (reference modes, mode 1, *Feeding reach*). *Current state (2026-10-10): the bound is specified; the mode 1 mesocosm follows it (#772), and so does the genesis search box (#773), though the committed atlas and recipe predate it.*
 
 **8. Metabolism.** Living agent (reserve) → Heat. Every living agent pays a continuous energy cost from reserve simply to exist. This cost has three components:
 - A base rate — the minimum cost of being alive, independent of traits or activity.
