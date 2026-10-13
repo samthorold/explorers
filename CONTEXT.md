@@ -262,8 +262,12 @@ The weight on the structure-derived body-extent term of **feeding reach**: `cons
 _Avoid_: mycelium coefficient (too literal — the mechanism is general to all consumers, not decomposer-only)
 
 **Catchment**:
-The litter a decomposer's **feeding reach** spans, measured against the decomposer's own body: the litter in reach per unit of its own **structure**. It is a ratio, not a distance, because a body that grows into its litter reaches more litter as it grows. A specialist's catchment is far larger than a mixotroph's, because reach scales with effective heterotrophy.
+The litter a decomposer's **feeding reach** spans, measured against the decomposer's own body: the litter in reach per unit of its own **structure**. It is a ratio, not a distance, because a body that grows into its litter reaches more litter as it grows. A specialist's catchment is far larger than a mixotroph's, because reach scales with effective heterotrophy. It belongs to one individual, and neighbours' catchments overlap, so the litter in a catchment is shared and is not the individual's to eat alone. What the domain measures is the stand's **litter ratio**, not catchment.
 _Avoid_: territory (implies defence and exclusion, and catchments overlap), range (a distance)
+
+**Litter ratio**:
+A stand's standing litter per unit of the standing biomass of all its decomposers together, read over the whole stand and never per individual. It is the inverse of what the domain reports as decomposer biomass, a percentage of the litter it stands in. It rises as a stand settles, because founding decomposers are few and grow into their litter. Many individuals' overlapping **catchments** share every stand's litter, so the litter ratio, not a catchment, sets how much litter each unit of decomposer has to live on.
+_Avoid_: stock ratio, biomass fraction (both leave the direction unclear)
 
 **Uptake structure exponent**:
 The exponent `b` by which **nutrient uptake** grows with body size: demand `= effective_autotrophy × u_A × (structure / uptake_reference_structure)^b`, the root-mass counterpart of structure's weight in **light competition**. A world parameter (dimensionless). Default 0.0 disables it — uptake is size-blind; at `b > 0` a body with no structure takes up nothing. Genesis searches it linearly over `[0, 1]` (#653), so each cell of the committed atlas (#687) and the committed recipe carries its own `b`; every world of an atlas searched before #653, and every `sample:i` instrument world, has `b = 0`.
