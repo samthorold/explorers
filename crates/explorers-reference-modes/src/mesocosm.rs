@@ -165,7 +165,39 @@ pub fn mode1_mesocosm_with_litter(
     community: Community,
     litter_x: usize,
 ) -> World {
+    mode1_mesocosm_with_founders(spec, wear, seed, community, litter_x, None)
+}
+
+/// [`mode1_mesocosm_with_litter`] with `decomposer_founders` decomposer
+/// founders in place of one a cell (#829; reference-modes.md, mode 1,
+/// *Decomposer founders*, *Founder density*): an instrument setting, not a
+/// new default. `None` is one a cell, the committed mesocosm, state for
+/// state. Set, the community with decomposers seeds that many, placed
+/// uniformly over the torus like every founder; the producers-only
+/// community has none at any count.
+///
+/// The founding litter is placed before the founders and the producers come
+/// first in the roster, so the producers and the 1× litter stand where they
+/// do at the default whatever the count. A litter multiplier's extra litter
+/// is placed after the founders, so at `litter_x` above 1 its positions
+/// follow the count.
+///
+/// Panics if `decomposer_founders` is `Some(0)`, or as
+/// [`mode1_mesocosm_with_litter`].
+pub fn mode1_mesocosm_with_founders(
+    spec: &Mode1Spec,
+    wear: Wear,
+    seed: u64,
+    community: Community,
+    litter_x: usize,
+    decomposer_founders: Option<usize>,
+) -> World {
     assert!(litter_x >= 1, "the litter multiplier is at least 1");
+    assert_ne!(
+        decomposer_founders,
+        Some(0),
+        "a decomposer founder count is at least 1"
+    );
     let mut params = spec.parameters.clone();
     let extent = SIDE_CELLS as f32 * params.nutrient_grid_cell_size;
     assert_eq!(
@@ -180,7 +212,9 @@ pub fn mode1_mesocosm_with_litter(
     let (producer, decomposer) = (spec.producer, spec.decomposer);
     let cells = SIDE_CELLS * SIDE_CELLS;
     let decomposers = match community {
-        Community::ProducersAndDecomposers => DECOMPOSERS_PER_CELL * cells,
+        Community::ProducersAndDecomposers => {
+            decomposer_founders.unwrap_or(DECOMPOSERS_PER_CELL * cells)
+        }
         Community::ProducersOnly => 0,
     };
     let roster = std::iter::repeat_n(producer, PRODUCERS_PER_CELL * cells)
@@ -2628,6 +2662,213 @@ mod tests {
             assert_eq!(agents(&one), agents(&base));
             assert_eq!(one.nutrient_grid().cells(), base.nutrient_grid().cells());
         }
+    }
+
+    /// The agents at the pure heterotroph vertex at founding: the decomposer
+    /// founders.
+    fn decomposer_founder_count(world: &World) -> usize {
+        (world.agents().iter())
+            .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
+            .count()
+    }
+
+    /// The decomposer founders' count (#829) seeds that many decomposer
+    /// founders, below and above one a cell, beside the same producers.
+    #[test]
+    fn a_decomposer_founder_count_seeds_that_many_decomposer_founders() {
+        let spec = Mode1Spec::committed();
+        for n in [1, 5, 10, 20, 81, 200] {
+            let world = mode1_mesocosm_with_founders(
+                &spec,
+                mesocosm_wear(),
+                7,
+                Community::ProducersAndDecomposers,
+                1,
+                Some(n),
+            );
+            assert_eq!(decomposer_founder_count(&world), n, "n {n}");
+            assert_eq!(
+                world.agents().len(),
+                PRODUCERS_PER_CELL * SIDE_CELLS * SIDE_CELLS + n
+            );
+        }
+    }
+
+    fn carcass_state(w: &World) -> Vec<(u64, (f32, f32), f32, f32, TraitVector)> {
+        (w.carcasses().iter())
+            .map(|c| (c.id, c.position, c.energy, c.nutrient, c.traits))
+            .collect()
+    }
+
+    fn agent_state(w: &World) -> Vec<(u64, (f32, f32), f32, f32, TraitVector)> {
+        (w.agents().iter())
+            .map(|a| (a.id, a.position, a.reserve, a.structure, a.traits))
+            .collect()
+    }
+
+    /// Unset, the decomposer founders' count (#829) is one a cell: the world
+    /// is the committed mesocosm's, state for state, for the same seed, in
+    /// both communities and at any litter multiplier. A count given to the
+    /// producers-only community seeds no decomposers.
+    #[test]
+    fn an_unset_decomposer_founder_count_is_the_committed_mesocosm() {
+        let spec = Mode1Spec::committed();
+        for community in [Community::ProducersAndDecomposers, Community::ProducersOnly] {
+            for x in [1, 3] {
+                let base = mode1_mesocosm_with_litter(&spec, mesocosm_wear(), 7, community, x);
+                let unset =
+                    mode1_mesocosm_with_founders(&spec, mesocosm_wear(), 7, community, x, None);
+                let one_a_cell = mode1_mesocosm_with_founders(
+                    &spec,
+                    mesocosm_wear(),
+                    7,
+                    community,
+                    x,
+                    Some(DECOMPOSERS_PER_CELL * SIDE_CELLS * SIDE_CELLS),
+                );
+                for w in [&unset, &one_a_cell] {
+                    assert_eq!(carcass_state(w), carcass_state(&base));
+                    assert_eq!(agent_state(w), agent_state(&base));
+                    assert_eq!(w.nutrient_grid().cells(), base.nutrient_grid().cells());
+                    assert_eq!(w.params(), base.params());
+                }
+            }
+        }
+        let bare = mode1_mesocosm_with_founders(
+            &spec,
+            mesocosm_wear(),
+            7,
+            Community::ProducersOnly,
+            1,
+            Some(10),
+        );
+        assert_eq!(decomposer_founder_count(&bare), 0);
+    }
+
+    /// The decomposer founders' count (#829) moves neither the producers nor
+    /// the founding litter: the litter is placed before the founders and the
+    /// producers come first in the roster, so both stand as at one a cell,
+    /// state for state. Total nutrient at founding is still the pool.
+    #[test]
+    fn the_decomposer_founder_count_moves_neither_producers_nor_litter() {
+        let spec = Mode1Spec::committed();
+        let base = mode1_mesocosm(
+            &spec,
+            mesocosm_wear(),
+            7,
+            Community::ProducersAndDecomposers,
+        );
+        let producers = |w: &World| -> Vec<_> {
+            let mut p = agent_state(w);
+            p.retain(|a| a.4.photosynthetic_absorption > 0.0);
+            p
+        };
+        assert_eq!(
+            producers(&base).len(),
+            PRODUCERS_PER_CELL * SIDE_CELLS * SIDE_CELLS
+        );
+        for n in [5, 10, 20, 200] {
+            let world = mode1_mesocosm_with_founders(
+                &spec,
+                mesocosm_wear(),
+                7,
+                Community::ProducersAndDecomposers,
+                1,
+                Some(n),
+            );
+            assert_eq!(producers(&world), producers(&base), "n {n}");
+            assert_eq!(carcass_state(&world), carcass_state(&base), "n {n}");
+            let params = world.params().clone();
+            let total = world.nutrient_pool()
+                + (world.agents().iter())
+                    .map(|a| a.nutrient_total(&params))
+                    .sum::<f32>()
+                + world.carcasses().iter().map(|c| c.nutrient).sum::<f32>();
+            let pool = params.initial_nutrient_pool;
+            assert!(
+                (total - pool).abs() <= 1e-4 * pool,
+                "n {n}: {total} vs {pool}"
+            );
+        }
+    }
+
+    /// `--body-reach-pieces` (#795) reads h and S as the decomposer founders'
+    /// means and ρ from the litter, none of which the founders' count (#829)
+    /// changes: identical founders give their own h and S back at any count,
+    /// and the founding litter is unmoved. So `k` converts to the same
+    /// coefficient and founder reach at every count.
+    #[test]
+    fn the_body_reach_conversion_does_not_depend_on_the_founder_count() {
+        let spec = Mode1Spec::committed();
+        let build = |n: Option<usize>| {
+            mode1_mesocosm_with_founders(
+                &spec,
+                mesocosm_wear(),
+                1,
+                Community::ProducersAndDecomposers,
+                1,
+                n,
+            )
+        };
+        let base = set_body_reach_pieces(&mut build(None), 137.7).unwrap();
+        for n in [5, 10, 20] {
+            let mut world = build(Some(n));
+            let reach = set_body_reach_pieces(&mut world, 1_377.0 / n as f32).unwrap();
+            assert_eq!(
+                reach.founder_heterotrophy, base.founder_heterotrophy,
+                "n {n}"
+            );
+            assert_eq!(reach.founder_structure, base.founder_structure, "n {n}");
+            assert_eq!(reach.litter_density, base.litter_density, "n {n}");
+            if n == 10 {
+                assert_eq!(reach, base);
+            }
+        }
+    }
+
+    /// The founder readout (#781) takes the founders the world was built
+    /// with, at any count (#829): it counts and reads income over those, not
+    /// one a cell.
+    #[test]
+    fn the_founder_readout_counts_the_founders_the_count_seeded() {
+        let spec = Mode1Spec::committed();
+        let n = 10;
+        let mut world = mode1_mesocosm_with_founders(
+            &spec,
+            mesocosm_wear(),
+            4,
+            Community::ProducersAndDecomposers,
+            1,
+            Some(n),
+        );
+        let report = run_mode1(&mut world, 20, 10);
+        let f = &report.founders;
+        assert_eq!(f.founders, n);
+        assert_eq!(f.alive_at(0), n);
+        assert_eq!(f.starvation.founders.len(), n);
+        let (from, to) = FOUNDER_INCOME_WINDOW;
+        let per_founder = f.mean_income_per_founder(from, to).unwrap();
+        // `gained` stops once every founder is dead.
+        let gained: f64 = (from - 1..to)
+            .filter_map(|i| f.gained.get(i as usize))
+            .sum();
+        let steps = (to + 1 - from) as f64;
+        assert!((per_founder - gained / (n as f64 * steps)).abs() < 1e-12);
+        let summary = mode1_summary("n founders", &report);
+        assert!(summary.contains(&format!("| {n} | ")), "{summary}");
+    }
+
+    #[test]
+    #[should_panic(expected = "a decomposer founder count is at least 1")]
+    fn a_decomposer_founder_count_of_zero_is_refused() {
+        mode1_mesocosm_with_founders(
+            &Mode1Spec::committed(),
+            mesocosm_wear(),
+            7,
+            Community::ProducersAndDecomposers,
+            1,
+            Some(0),
+        );
     }
 
     /// The founders are the agents at the pure heterotroph vertex at
