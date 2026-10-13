@@ -90,6 +90,12 @@ Key system-level distinctions among saprotrophs:
 **Decomposer biomass against its supply.**
 - **Global stocks.** Fungi hold about 12 Gt C (uncertain threefold) against about 450 Gt C of plants: about 2.7 % of plant biomass, or about 8 % of non-woody plant biomass (Bar-On et al. 2018).
 - **Soil microbes.** Soil microbial biomass is 1.2 % of soil organic C, about 23 Pg C to 1 m depth (Xu et al. 2013). That is about half a year of global soil heterotrophic respiration, about 50 Pg C a year (Hashimoto et al. 2015).
+- **In litter.** Fungal biomass is about 0.07–0.6 % of forest litter's dry mass, from biomarkers calibrated on the dominant basidiomycetes' fruit bodies (Baldrian et al. 2013). Part of that tenfold range is disagreement between biomarkers, not between stands.
+  - **It is a stand-level stock, not a catchment.** A biomarker extracted from a bulk sample measures every fungus in it at once, and one gram of litter holds many taxa that turn over within months (Voříšková & Baldrian 2013). The ratio is the whole decomposer community's standing biomass against the litter it stands in. It says nothing about how much litter one individual reaches.
+  - **Fungi are not all of it.** They are a mean 35–76 % of microbial biomass, litter layers included (Joergensen & Wichern 2008), so all the microbes stand at roughly 1.3–3 times the fungal figure.
+  - **Other litters carry more.** On oak litter the fungal stock peaks near 5 % and settles near 2.6 % (Šnajdr et al. 2011, below). On leaves decomposing in streams it peaks at 10–13 % (Suberkropp 2001). Baldrian's range is the low end of what decomposing litter carries.
+- **The ratio rises as litter is colonised.** In oak litterbags, ergosterol goes from 3.2 µg/g in green leaves to 24 in fresh litter, peaks at 202 at month 2, and holds near 100 from month 4 to 24 (Šnajdr et al. 2011). At Baldrian's conversion that is about 0.08 %, 0.6 %, 5 % and 2.6 % of the litter's mass. The rise is mostly one opportunist, *Mycosphaerella*, multiplying sevenfold (Voříšková & Baldrian 2013).
+- **The founders are already in the leaf, and small.** Phyllosphere fungi, endophytes and surface fungi from 41 genera, are 2–100 % of the early decomposer community and mostly vanish early in decay (Osono 2006). So a stand's founding decomposers are a small fraction of the settled stock and grow into the litter. Later arrivals take litter by primary capture of uncolonised resource, then by combat for colonised resource, ending in deadlock or replacement (Boddy 2000). No source gives a founder count per unit of litter.
 - **Turnover.** Fungal biomass in soil turns over in 130–150 days (Rousk & Bååth 2007). Litter has a half-life of 0.5–4 years ([nutrient cycling](nutrient-cycling.md), *Decomposition kinetics*). So a decomposer lives many of its own generations on one cohort of litter.
 
 **Maintenance.**
@@ -112,13 +118,14 @@ Key system-level distinctions among saprotrophs:
 - **Rich resources feed the search across poor ground.** Connecting old litter to fresh moves nitrogen and growth into the fresh litter, and raises the fungus's carbon-use efficiency (Boberg et al. 2014).
 - **How far a mycelium reaches.** In Davidson and Olsson's model, a mycelium growing from a food base reaches a maximum distance. That distance is set by the size of the food base against the maintenance of the connecting mycelium (via Lindahl & Olsson 2004).
 
-*Evidence quality.* Read in full text: Bar-On et al., Xu et al., Penning de Vries, Schimel & Weintraub, Boberg et al., Lindahl & Olsson, Wang et al. and the Zotti et al. review.
-- **Read from abstracts:** Thompson, Thompson & Rayner, the Bošković studies, Rousk & Bååth, Söderström, Anderson & Domsch and Hashimoto et al.
+*Evidence quality.* Read in full text: Bar-On et al., Xu et al., Penning de Vries, Schimel & Weintraub, Boberg et al., Lindahl & Olsson, Wang et al., the Zotti et al. review, Šnajdr et al. and Voříšková & Baldrian.
+- **Read from abstracts:** Thompson, Thompson & Rayner, the Bošković studies, Rousk & Bååth, Söderström, Anderson & Domsch, Hashimoto et al., Baldrian et al. (its methods were not read), Joergensen & Wichern, Suberkropp, Osono and Boddy 2000.
+- **Converted here, not by the sources:** the oak series' percentages, from Šnajdr's ergosterol at Baldrian's 3.8 mg per g of fungal biomass.
 - **From a secondary summary:** Boddy et al. 2009.
 - **Taken from the review, not read:** the primary fairy-ring studies behind Zotti et al.
 - **Not verified:** some titles and journal details for Thompson & Rayner and the Bošković studies.
-- **What the domain gives:** a *form* for catchment (one genet spans many plants' litter, and reach is limited by food base against the maintenance of the connecting mycelium); *orders* for biomass ratios and active-tissue maintenance.
-- **What it leaves open:** a reach per unit of biomass that carries to another world's units, the living fraction of a field cord system, and a general decomposition rate per unit of decomposer biomass.
+- **What the domain gives:** a *form* for catchment (one genet spans many plants' litter, and reach is limited by food base against the maintenance of the connecting mycelium); *orders* for the stand's decomposer biomass against its litter, and how it rises from founding to settled, and for active-tissue maintenance.
+- **What it leaves open:** a reach per unit of biomass that carries to another world's units, the litter one individual commands, the number of founders per unit of litter, the living fraction of a field cord system, and a general decomposition rate per unit of decomposer biomass.
 
 ### Mycorrhizal strategy
 
@@ -203,10 +210,12 @@ The overall pattern: removing fungi doesn't eliminate energy from the system —
 
 - Anderson, T.-H. & Domsch, K.H. (1985). Determination of ecophysiological maintenance carbon requirements of soil microorganisms in a dormant state. *Biology and Fertility of Soils*, 1, 81-89.
 - Bagchi, R. et al. (2014). Pathogens and insect herbivores drive rainforest plant diversity and composition. *Nature*, 506, 85-88.
+- Baldrian, P. et al. (2013). Estimation of fungal biomass in forest litter and soil. *Fungal Ecology*, 6, 1-11.
 - Bar-On, Y.M., Phillips, R. & Milo, R. (2018). The biomass distribution on Earth. *PNAS*, 115, 6506-6511.
 - Bebber, D.P. et al. (2007). Biological solutions to transport network design. *Proceedings of the Royal Society B*, 274, 2307-2315.
 - Boberg, J.B. et al. (2014). Nitrogen and carbon reallocation in fungal mycelia during decomposition of boreal forest litter. *PLoS ONE*, 9, e92897.
 - Boddy, L. (1999). Saprotrophic cord-forming fungi: meeting the challenge of heterogeneous environments. *Mycologia*, 91, 13-32.
+- Boddy, L. (2000). Interspecific combative interactions between wood-decaying basidiomycetes. *FEMS Microbiology Ecology*, 31, 185-194.
 - Boddy, L. et al. (2009). Saprotrophic cord systems: dispersal mechanisms in space and time. *Mycoscience*, 50, 9-19.
 - Bolton, R.G. & Boddy, L. (1993). Characterisation of the spatial aspects of foraging mycelial cord systems using fractal geometry. *Mycological Research*, 97, 762-768.
 - Bošković, E. et al. (2017, 2019). Genet structure of litter-decomposing *Marasmius*, *Mycetinis* and *Gymnopus* populations (titles not verified).
@@ -221,6 +230,7 @@ The overall pattern: removing fungi doesn't eliminate energy from the system —
 - Floudas, D. et al. (2012). The Paleozoic origin of enzymatic lignin decomposition reconstructed from 31 fungal genomes. *Science*, 336, 1715-1719.
 - Hashimoto, S. et al. (2015). Global spatiotemporal distribution of soil respiration modeled using a global database. *Biogeosciences*, 12, 4121-4132.
 - Heaton, L. et al. (2012). Analysis of fungal networks. *Fungal Biology Reviews*, 26, 12-29.
+- Joergensen, R.G. & Wichern, F. (2008). Quantitative assessment of the fungal contribution to microbial tissue in soil. *Soil Biology and Biochemistry*, 40, 2977-2991.
 - Karst, J. et al. (2023). Mother trees, altruistic fungi, and the perils of plant personification. *Trends in Plant Science*, 28, 1206-1216.
 - Kiers, E.T. et al. (2011). Reciprocal rewards stabilize cooperation in the mycorrhizal symbiosis. *Science*, 333, 880-882.
 - Lindahl, B.D. & Olsson, S. (2004). Fungal translocation – creating and responding to environmental heterogeneity. *Mycologist*, 18, 79-88.
@@ -229,6 +239,7 @@ The overall pattern: removing fungi doesn't eliminate energy from the system —
 - Moore, J.A.M. et al. (2015). Decomposition by ectomycorrhizal fungi alters soil carbon storage in a simulation model. *Ecosphere*, 6, 1-16.
 - Moore, J.C. et al. (2004). Detritus, trophic dynamics and biodiversity. *Ecology Letters*, 7, 584-600.
 - Nelsen, M.P. et al. (2016). Delayed fungal evolution did not cause the Paleozoic peak in coal production. *PNAS*, 113, 2442-2447.
+- Osono, T. (2006). Role of phyllosphere fungi of forest trees in the development of decomposer fungal communities and decomposition processes of leaf litter. *Canadian Journal of Microbiology*, 52, 701-716.
 - Penning de Vries, F.W.T. (1974). Substrate utilization and respiration in relation to growth and maintenance in higher plants. *Netherlands Journal of Agricultural Science*, 22, 40-44.
 - Read, D.J. & Perez-Moreno, J. (2003). Mycorrhizas and nutrient cycling in ecosystems – a journey towards relevance? *New Phytologist*, 157, 475-492.
 - Rousk, J. & Bååth, E. (2007). Fungal biomass production and turnover in soil estimated using the acetate-in-ergosterol technique. *Soil Biology and Biochemistry*, 39, 2173-2177.
@@ -236,9 +247,12 @@ The overall pattern: removing fungi doesn't eliminate energy from the system —
 - Söderström, B.E. (1979). Seasonal fluctuations of active fungal biomass in horizons of a podzolized pine-forest soil in central Sweden. *Soil Biology and Biochemistry*, 11, 149-154.
 - Simard, S.W. (2018). Mycorrhizal networks facilitate tree communication, learning, and memory. In *Memory and Learning in Plants* (pp. 191-213). Springer.
 - Smith, S.E. & Read, D.J. (2008). *Mycorrhizal Symbiosis* (3rd ed.). Academic Press.
+- Šnajdr, J. et al. (2011). Transformation of *Quercus petraea* litter: successive changes in litter chemistry are reflected in differential enzyme activity and changes in the microbial community composition. *FEMS Microbiology Ecology*, 75, 291-303.
+- Suberkropp, K. (2001). Fungal growth, production, and sporulation during leaf decomposition in two streams. *Applied and Environmental Microbiology*, 67, 5063-5068.
 - Thompson, W. & Rayner, A.D.M. (1982). Spatial structure of a population of *Tricholomopsis platyphylla* in a woodland site. *New Phytologist*, 92, 103-114.
 - Thompson, W. (1982). Biology and ecology of mycelial cord-forming basidiomycetes in deciduous woodlands. PhD thesis, University of Bath.
 - van der Heijden, M.G.A. et al. (1998). Mycorrhizal fungal diversity determines plant biodiversity, ecosystem variability and productivity. *Nature*, 396, 69-72.
+- Voříšková, J. & Baldrian, P. (2013). Fungal community on decomposing leaf litter undergoes rapid successional changes. *The ISME Journal*, 7, 477-486.
 - Wang, G. et al. (2014). Representation of dormant and active microbial dynamics for ecosystem modeling. *PLoS ONE*, 9, e89252.
 - Xu, X., Thornton, P.E. & Post, W.M. (2013). A global analysis of soil microbial biomass carbon, nitrogen and phosphorus in terrestrial ecosystems. *Global Ecology and Biogeography*, 22, 737-749.
 - Zotti, M. et al. (2025). Fungal fairy rings: history, ecology, dynamics and engineering functions. *IMA Fungus*, 16.
