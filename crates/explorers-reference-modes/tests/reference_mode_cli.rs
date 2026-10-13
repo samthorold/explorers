@@ -135,6 +135,49 @@ fn litter_x_refuses_zero() {
     assert!(stderr.contains("--litter-x"), "{stderr}");
 }
 
+/// `--decomposer-founders N` (#829) seeds N decomposer founders, and records
+/// N in the artifact and the summary; without it the run is the committed
+/// mesocosm's, byte for byte, and at one a cell (81) its report is.
+#[test]
+fn decomposer_founders_seeds_and_records_the_count_and_the_default_is_unchanged() {
+    let dir = scratch("decomposer-founders");
+    let default = run_with(&dir.join("default.json"), &[]);
+    let ten = run_with(&dir.join("ten.json"), &["--decomposer-founders", "10"]);
+    let all = run_with(&dir.join("all.json"), &["--decomposer-founders", "81"]);
+
+    assert!(default.get("decomposer_founders").is_none());
+    assert_eq!(default["report"]["founders"]["founders"], 81);
+    assert_eq!(ten["decomposer_founders"], 10);
+    assert_eq!(ten["report"]["founders"]["founders"], 10);
+    assert_eq!(all["report"], default["report"]);
+    let md = std::fs::read_to_string(dir.join("ten.md")).unwrap();
+    assert!(md.contains("10 decomposer founders"), "{md}");
+    let md = std::fs::read_to_string(dir.join("default.md")).unwrap();
+    assert!(!md.contains("decomposer founders,"), "{md}");
+}
+
+#[test]
+fn decomposer_founders_refuses_zero_and_needs_decomposers() {
+    for (args, why) in [
+        (&["--decomposer-founders", "0"][..], "at least 1"),
+        (
+            &["--no-decomposers", "--decomposer-founders", "10"][..],
+            "needs decomposer founders",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+            .args(["--ticks", "1"])
+            .args(args)
+            .output()
+            .expect("the instrument runs");
+        assert!(!output.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("--decomposer-founders"), "{stderr}");
+        assert!(stderr.contains(why), "{stderr}");
+        assert!(stderr.contains("usage:"), "{stderr}");
+    }
+}
+
 /// `--body-reach-pieces k` (#795) sets the body-reach coefficient from k and
 /// records k, the coefficient, the founders' reach and the clamp in the
 /// artifact and summary; without it, or at 0, the run is the committed

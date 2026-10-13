@@ -29,6 +29,14 @@
 //! times the carcasses per cell, so N times their energy and nutrient. It is
 //! a diagnostic instrument setting; the committed mesocosm is 1×.
 //!
+//! `--decomposer-founders N` (#829; `reference-modes.md`, mode 1,
+//! *Decomposer founders*, *Founder density*) seeds N decomposer founders, at
+//! least 1, at uniform random positions like every founder, in place of one
+//! a cell (81). The producers and the founding litter stand where they do
+//! without it. It needs decomposer founders, so it refuses
+//! `--no-decomposers`. The summary's header and the artifact record N;
+//! without the flag nothing is recorded and the world is unchanged.
+//!
 //! `--body-reach-pieces k` (#795; `reference-modes.md`, mode 1, *Feeding
 //! reach*) sets the body-reach coefficient so that a decomposer founder's
 //! feeding reach at founding spans k litter pieces, from the founders' effective
@@ -94,7 +102,7 @@
 //! reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W]
 //!                [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H]
 //!                [--sample-every K] [--clear-at T] [--no-decomposers]
-//!                [--litter-x N] [--body-reach-pieces K]
+//!                [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K]
 //!                [--litter-half-life L] [--enzyme-half-saturation K]
 //!                [--size-scaled-base-rate] [--established-producer-structure S_p]
 //!                [--living-resistance] [--starvation-draws-earmark]
@@ -104,7 +112,7 @@
 //! Defaults: the committed `crates/explorers-reference-modes/mode1.json`
 //! (found from any working directory), 3000 ticks, seed 1, the spec's wear
 //! (the four wear flags override its parameters), a sample every 25 ticks, no clearance, with
-//! decomposers, 1× litter, artifact `target/reference-mode/mode1.json` (or
+//! decomposers, one decomposer founder a cell, 1× litter, artifact `target/reference-mode/mode1.json` (or
 //! `mode1-paired.json` with `--clear-at`) with the human-readable summary
 //! beside it as `.md` (also printed). Deterministic per seed and arguments.
 
@@ -113,14 +121,14 @@ use std::path::PathBuf;
 use explorers_reference_modes::mesocosm::{
     Community, ESTABLISHED_PRODUCER_LIFESPAN_TICKS, Mode1Spec, body_reach_section,
     carcass_decay_constant_for_half_life, decomposition_kinetics_section,
-    founder_starvation_section, living_resistance_section, mode1_mesocosm_with_litter,
+    founder_starvation_section, living_resistance_section, mode1_mesocosm_with_founders,
     mode1_summary, paired_summary, run_mode1, run_paired, set_body_reach_pieces,
     set_decomposition_kinetics, set_living_resistance, set_size_scaled_base_rate,
     set_size_scaled_base_rate_at, set_starvation_cascade, size_scaled_base_rate_section,
     starvation_cascade_section,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -135,6 +143,8 @@ struct Cli {
     /// The diagnostic litter multiplier (#781): N times the settled litter
     /// stock at founding. 1 is the committed mesocosm.
     litter_x: usize,
+    /// The decomposer founders' count (#829); `None` is one a cell.
+    decomposer_founders: Option<usize>,
     /// The litter pieces a decomposer founder's reach spans at founding
     /// (#795); `None`, as at 0, keeps the spec's coefficient.
     body_reach_pieces: Option<f32>,
@@ -170,6 +180,7 @@ impl Cli {
             clear_at: None,
             community: Community::ProducersAndDecomposers,
             litter_x: 1,
+            decomposer_founders: None,
             body_reach_pieces: None,
             litter_half_life: None,
             enzyme_half_saturation: None,
@@ -218,6 +229,13 @@ impl Cli {
                 "--senescence-hazard" => cli.wear[3] = Some(value.parse().map_err(|e| bad(&e))?),
                 "--sample-every" => cli.sample_every = value.parse().map_err(|e| bad(&e))?,
                 "--litter-x" => cli.litter_x = value.parse().map_err(|e| bad(&e))?,
+                "--decomposer-founders" => {
+                    let n: usize = value.parse().map_err(|e| bad(&e))?;
+                    if n == 0 {
+                        return Err("--decomposer-founders must be at least 1".into());
+                    }
+                    cli.decomposer_founders = Some(n);
+                }
                 "--body-reach-pieces" => {
                     let k: f32 = value.parse().map_err(|e| bad(&e))?;
                     if !(k >= 0.0 && k.is_finite()) {
@@ -255,6 +273,9 @@ impl Cli {
         }
         if cli.litter_x == 0 {
             return Err("--litter-x must be at least 1".into());
+        }
+        if cli.decomposer_founders.is_some() && cli.community == Community::ProducersOnly {
+            return Err("--decomposer-founders needs decomposer founders".into());
         }
         if cli.body_reach_pieces.is_some() && cli.community == Community::ProducersOnly {
             return Err("--body-reach-pieces needs decomposer founders".into());
@@ -315,7 +336,14 @@ fn main() {
         }
     }
 
-    let mut world = mode1_mesocosm_with_litter(&spec, wear, cli.seed, cli.community, cli.litter_x);
+    let mut world = mode1_mesocosm_with_founders(
+        &spec,
+        wear,
+        cli.seed,
+        cli.community,
+        cli.litter_x,
+        cli.decomposer_founders,
+    );
     let body_reach = cli.body_reach_pieces.map(|k| {
         set_body_reach_pieces(&mut world, k).expect("the mesocosm has decomposer founders")
     });
@@ -356,6 +384,12 @@ fn main() {
         cli.sample_every,
         cli.litter_x
     );
+    // A founder count is recorded only when given, so a default run's
+    // summary is unchanged.
+    let header = match cli.decomposer_founders {
+        Some(n) => format!("{header}, {n} decomposer founders"),
+        None => header,
+    };
     // The feeding reach, kinetics, base rate and resistance set are run
     // settings, so they follow the header.
     let with_reach = |header: String| {
@@ -443,6 +477,9 @@ fn main() {
         "litter_x": cli.litter_x,
         "report": report.expect("the report serialises"),
     });
+    if let Some(n) = cli.decomposer_founders {
+        artifact["decomposer_founders"] = serde_json::json!(n);
+    }
     if let Some(r) = body_reach {
         artifact["body_reach"] = serde_json::to_value(r).expect("the body reach serialises");
     }
