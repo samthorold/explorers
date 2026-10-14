@@ -140,6 +140,40 @@ In mixotrophs, consumption is expressed conditionally, and the condition is usua
 
 The roles are emergent properties of the flow network, not innate properties of the organisms. An organism's trophic role is determined by what it does — which flows it participates in — not by what it is. And those flows are constrained, ultimately, by the two physics: energy flows one way, matter cycles, and any self-sustaining biotic system must have functional positions that together maintain both flows.
 
+### A decomposer lineage stays a decomposer
+
+A saprotrophic fungus's lineage cannot cross with plants, and it has no short route to photosynthesis of its own. The saprotroph's own life history (ageing, upkeep, reproduction) is in [fungi](fungi.md), *The saprotroph's life history*.
+
+**Isolation from plants is categorical.**
+- **Fungi and plants are about as far apart as two eukaryotes can be.** Fungi are opisthokonts, closer to animals than to plants. One estimate puts the plant–opisthokont split at the last common ancestor of living eukaryotes, about 1.0–1.3 billion years ago (Chernikova et al. 2011). Other estimates run older.
+- **No cross is known.** The only genetic exchange found between plants and fungi is horizontal transfer of single genes. It is "exceedingly rare, particularly among the angiosperms", a few cases over their whole history (Richards et al. 2009).
+
+**Among close relatives, isolation grows with divergence.**
+- **In yeasts it rises smoothly.** In *Saccharomyces*, hybrid sterility rises with sequence divergence in "a smooth monotonic relationship", with no sharp step from fertile to sterile (Liti, Barton & Louis 2006). The cause is the cell's mismatch repair acting on divergent sequences, not a few major genes.
+- **In mushroom-forming fungi it tracks divergence too.** Among allopatric species of Homobasidiomycota, isolation correlates with genetic divergence. Sympatric sibling species have stronger premating isolation than allopatric ones, the pattern expected from reinforcement. In Ascomycota neither pattern holds (Le Gac & Giraud 2008).
+- **The same holds in animals.** In *Drosophila*, isolation rises gradually with genetic distance (Coyne & Orr 1989, 1997).
+
+**Whether trait distance stands in for isolation.** The domain ties isolation to ancestry: time and sequence divergence, not shared traits. Isolation is graded among close relatives and complete long before the distance between a fungus and a plant. A distance in trait space follows isolation only where traits diverge with ancestry. Where unrelated lineages converge on a similar way of life, the domain shows no gene flow. A lichen fungus builds a photosynthesising body with an alga, and it does not cross with plants. That trait distance is a fair stand-in only within a clade is an inference from these sources, not a finding of any of them.
+
+**No fungus photosynthesises. It reaches photosynthate only through a partner.**
+- **Eukaryotes gained photosynthesis by taking in a photosynthetic cell, and rarely.** Primary plastids arose twice in the history of eukaryotes: in the ancestor of plants and algae about 1.6 billion years ago, and in the amoeba *Paulinella* 90–140 million years ago (Gabr, Grossman & Bhattacharya 2020).
+- **Lichenisation is the fungal route, and it has arisen often.** It was first shown to have arisen at least five times (Gargas et al. 1995). The 2016 classification counts 20–30 independent origins: 14–23 in Ascomycota and 6–7 in Basidiomycota (Lücking, Hodkinson & Leavitt 2016).
+- **It is lost more often than gained.** In Ascomycota, losses of lichenisation outnumber gains, and in 90.6 % of sampled trees the loss rate exceeds the gain rate (Lutzoni, Pagel & Reeb 2001). Some lost lineages became decomposers or plant parasites.
+- **It is slow.** Lichens arose after vascular plants (Nelsen et al. 2020). The main lineages of lichen-forming Ascomycota go back at least to the Carboniferous (Prieto & Wedin 2013). 20–30 origins over a few hundred million years is roughly one origin per ten million years across all fungi. That rate is arithmetic on these sources, not a figure from them.
+- **A lichenised fungus is still a heterotroph.** The photobiont exports fixed carbon to the fungus. The fungus makes up most of the lichen's biomass and appears to regulate the size of the photobiont population (Palmqvist 2000). So lichenisation makes a fungus a consumer of a living, photosynthesising partner. It does not make the fungus an autotroph.
+- **The partnership can form at once; the lineage does not change.** A yeast and the alga *Chlamydomonas* formed an obligate mutualism as soon as their environment required them to swap carbon and nitrogen. The capacity extended to other fungi and other *Chlamydomonas* species (Hom & Murray 2014). This is an ecological pairing of two lineages that stay distinct, each in its own mode.
+- **Heterotrophic fungi do switch among heterotrophic modes.** The ectomycorrhizal habit is found in 82–86 separate fungal lineages (Tedersoo & Smith 2017). That is movement among ways of being a heterotroph, not toward autotrophy.
+
+**At a stand's scale, constraint holds the lineage, not selection.** Over a few hundred generations, the domain gives a saprotroph no route to autotrophy. It has no photosynthetic machinery, no cross with plants, and lichenisation takes millions of years and still leaves it a heterotroph. Whether selection on the litter would also hold it there is not tested by any source found. On the domain's evidence, constraint alone is enough.
+
+*Evidence quality.*
+- **Read in part from the full text:** Chernikova et al. (for the divergence date).
+- **Read from abstracts and summaries:** Richards et al., Liti et al., Le Gac & Giraud, Gabr et al., Gargas et al., Lücking et al., Lutzoni et al., Nelsen et al., Prieto & Wedin, Palmqvist, Hom & Murray and Tedersoo & Smith. The count of lichen origins comes from a summary of Lücking et al.'s abstract. The 90.6 % comes from a summary of Lutzoni et al. That some lineages that lost lichenisation became decomposers or parasites comes from press coverage of Nelsen et al.'s 2020 *PNAS* study, not the paper.
+- **Recalled, not read:** Coyne & Orr (1989, 1997), cited for the general pattern only.
+- **Not verified:** Palmqvist's and Prieto & Wedin's authorship and details, and Lutzoni et al.'s co-authors and pages, all recalled; the full title of Tedersoo & Smith's chapter; the issue and page numbers of Liti et al., Gargas et al. and Coyne & Orr.
+- **What the domain gives:** *categorical* isolation between fungi and plants; *graded* isolation among close relatives, tied to ancestry; autotrophy reached by fungi only through a partner, on a timescale of millions of years, and leaving the fungus a heterotroph.
+- **What it leaves open:** a test of trait distance against isolation across distant lineages, and any measure of selection holding a saprotroph at the heterotroph end within a stand.
+
 ## References
 
 - Allison, S.D. & Vitousek, P.M. (2005). Responses of extracellular enzymes to simple and complex nutrient inputs. *Soil Biology and Biochemistry* 37(5): 937–944.
@@ -148,7 +182,10 @@ The roles are emergent properties of the flow network, not innate properties of 
 - Bar-On, Y.M., Phillips, R. & Milo, R. (2018). The biomass distribution on Earth. *Proceedings of the National Academy of Sciences* 115(25): 6506–6511.
 - Beer, C. et al. (2010). Terrestrial gross carbon dioxide uptake: global distribution and covariation with climate. *Science* 329(5993): 834–838.
 - Chapin, F.S., Matson, P.A. & Vitousek, P.M. (2011). *Principles of Terrestrial Ecosystem Ecology*. 2nd ed. Springer.
+- Chernikova, D., Motamedi, S., Csürös, M., Koonin, E.V. & Rogozin, I.B. (2011). A late origin of the extant eukaryotic diversity: divergence time estimates using rare genomic changes. *Biology Direct* 6: 26.
 - Clymo, R.S. (1984). The limits to peat bog growth. *Philosophical Transactions of the Royal Society B* 303(1117): 605–654.
+- Coyne, J.A. & Orr, H.A. (1989). Patterns of speciation in *Drosophila*. *Evolution* 43(2): 362–381.
+- Coyne, J.A. & Orr, H.A. (1997). "Patterns of speciation in *Drosophila*" revisited. *Evolution* 51(1): 295–303.
 - Cyr, H. & Pace, M.L. (1993). Magnitude and patterns of herbivory in aquatic and terrestrial ecosystems. *Nature* 361: 148–150.
 - de Boer, W. et al. (2005). Living in a fungal world: impact of fungi on soil bacterial niche development. *FEMS Microbiology Reviews* 29(4): 795–811.
 - DeVault, T.L., Rhodes, O.E. & Shivik, J.A. (2003). Scavenging by vertebrates: behavioral, ecological, and evolutionary perspectives on an important energy transfer pathway in terrestrial ecosystems. *Oikos* 102(2): 225–234.
@@ -157,18 +194,29 @@ The roles are emergent properties of the flow network, not innate properties of 
 - Estes, J.A. et al. (2011). Trophic downgrading of planet Earth. *Science* 333(6040): 301–306.
 - Field, C.B. et al. (1998). Primary production of the biosphere: integrating terrestrial and oceanic components. *Science* 281(5374): 237–240.
 - Franklin, O. et al. (2016). The carbon bonus of organic nitrogen enhances nitrogen use efficiency of plants. *Plant, Cell & Environment*, 40, 25-35.
+- Gabr, A., Grossman, A.R. & Bhattacharya, D. (2020). *Paulinella*, a model for understanding plastid primary endosymbiosis. *Journal of Phycology* 56(4): 837–843.
+- Gargas, A., DePriest, P.T., Grube, M. & Tehler, A. (1995). Multiple origins of lichen symbioses in fungi suggested by SSU rDNA phylogeny. *Science* 268(5216): 1492–1495.
 - Givnish, T.J., Burkhardt, E.L., Happel, R.E. & Weintraub, J.D. (1984). Carnivory in the bromeliad *Brocchinia reducta*, with a cost/benefit model for the general restriction of carnivorous plants to sunny, moist, nutrient-poor habitats. *American Naturalist* 124(4): 479–497.
 - Gorham, E. (1991). Northern peatlands: role in the carbon cycle and probable responses to climatic warming. *Ecological Applications* 1(2): 182–195.
 - Hobbie, S.E. (1992). Effects of plant species on nutrient cycling. *Trends in Ecology and Evolution* 7(10): 336–339.
+- Hom, E.F.Y. & Murray, A.W. (2014). Niche engineering demonstrates a latent capacity for fungal-algal mutualism. *Science* 345(6192): 94–98.
 - Hu, J. et al. Microbial carbon use efficiency and growth rates in soil: global patterns and drivers (VU Amsterdam research record; journal, year and pages not verified).
+- Le Gac, M. & Giraud, T. (2008). Existence of a pattern of reproductive character displacement in Homobasidiomycota but not in Ascomycota. *Journal of Evolutionary Biology* 21(3): 761–772.
+- Liti, G., Barton, D.B.H. & Louis, E.J. (2006). Sequence diversity, reproductive isolation and species concepts in *Saccharomyces*. *Genetics* 174(2): 839–850.
+- Lücking, R., Hodkinson, B.P. & Leavitt, S.D. (2016). The 2016 classification of lichenized fungi in the Ascomycota and Basidiomycota – approaching one thousand genera. *The Bryologist* 119(4): 361–416.
+- Lutzoni, F., Pagel, M. & Reeb, V. (2001). Major fungal lineages are derived from lichen symbiotic ancestors. *Nature* 411: 937–940.
 - Manzoni, S. (2017). Flexible carbon-use efficiency across litter types and during decomposition partly compensates nutrient imbalances — results from analytical stoichiometric models. *Frontiers in Microbiology* 8: 661.
 - Manzoni, S., Chakrawal, A., Spohn, M. & Lindahl, B.D. (2021). Modeling microbial adaptations to nutrient limitation during litter decomposition. *Frontiers in Forests and Global Change* 4: 686945.
 - Martos, F. et al. (2009). Independent recruitment of saprotrophic fungi as mycorrhizal partners by tropical achlorophyllous orchids. *New Phytologist*, 184, 668-681.
 - Näsholm, T., Ekblad, A., Nordin, A., Giesler, R., Högberg, M. & Högberg, P. (1998). Boreal forest plants take up organic nitrogen. *Nature* 392: 914–916.
+- Nelsen, M.P., Lücking, R., Boyce, C.K., Lumbsch, H.T. & Ree, R.H. (2020). No support for the emergence of lichens prior to the evolution of vascular plants. *Geobiology* 18(1): 3–13.
 - Nygaard, K. & Tobiesen, A. (1993). Bacterivory in algae: a survival strategy during nutrient limitation. *Limnology and Oceanography* 38(2): 273–279.
 - Ogura-Tsujita, Y. et al. (2009). Evidence for novel and specialized mycorrhizal parasitism: the orchid *Gastrodia confusa* gains carbon from saprotrophic *Mycena*. *Proceedings of the Royal Society B*, 276, 761-767.
 - Paine, R.T. (1966). Food web complexity and species diversity. *American Naturalist* 100(910): 65–75.
+- Palmqvist, K. (2000). Carbon economy in lichens (Tansley Review No. 117). *New Phytologist* 148: 11–36.
 - Paungfoo-Lonhienne, C. et al. (2008). Plants can use protein as a nitrogen source without assistance from other organisms. *PNAS*, 105, 4524-4529.
+- Prieto, M. & Wedin, M. (2013). Dating the diversification of the major lineages of Ascomycota (Fungi). *PLoS ONE* 8(6): e65576.
+- Richards, T.A., Soanes, D.M., Foster, P.G., Leonard, G., Thornton, C.R. & Talbot, N.J. (2009). Phylogenomic analysis demonstrates a pattern of rare and ancient horizontal gene transfer between plants and fungi. *The Plant Cell* 21(7): 1897–1911.
 - Schimel, J.P. & Bennett, J. (2004). Nitrogen mineralization: challenges of a changing paradigm. *Ecology* 85(3): 591–602.
 - Schimel, J.P. & Weintraub, M.N. (2003). The implications of exoenzyme activity on microbial carbon and nitrogen limitation in soil: a theoretical model. *Soil Biology and Biochemistry* 35(4): 549–563.
 - Schmitz, O.J. et al. (2010). Predator control of ecosystem nutrient dynamics. *Ecology Letters* 13(10): 1199–1209.
@@ -177,4 +225,5 @@ The roles are emergent properties of the flow network, not innate properties of 
 - Smith, S.E. & Read, D.J. (2008). *Mycorrhizal Symbiosis*. 3rd ed. Academic Press.
 - Sterner, R.W. & Elser, J.J. (2002). *Ecological Stoichiometry: The Biology of Elements from Molecules to the Biosphere*. Princeton University Press.
 - Stoecker, D.K. (1998). Conceptual models of mixotrophy. *Journal of Eukaryotic Microbiology* 45(3): 255–261.
+- Tedersoo, L. & Smith, M.E. (2017). Ectomycorrhizal fungal lineages: detection of four new groups and notes on consistent recognition of ectomycorrhizal taxa in high-throughput sequencing studies. In Tedersoo, L. (ed.), *Biogeography of Mycorrhizal Symbiosis*. Springer.
 - Zubkov, M.V. & Tarran, G.A. (2008). High bacterivory by the smallest phytoplankton in the North Atlantic Ocean. *Nature* 455: 224–226.
