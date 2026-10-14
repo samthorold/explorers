@@ -1258,6 +1258,149 @@ pub fn founder_starvation_section(rows: &[(&str, &StarvationReadout)]) -> String
     out
 }
 
+/// Why a member of the founder line died (#833; reference-modes.md, mode 1,
+/// *Recruitment diagnostic*).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeathCause {
+    /// By age: the stepper marked the death `Senesced` before its `Died`.
+    Senesced,
+    /// Not by age, having entered the step with unallocated reserve at or
+    /// below that step's upkeep (`metabolic_cost`, as [`FounderStarvation`]
+    /// reads running out).
+    Reserve,
+    /// Neither: it entered the step with reserve above upkeep, so its body
+    /// failed (structure below its death threshold) or it was drained to
+    /// death. A member born in the step it died in has no entering state and
+    /// is counted here.
+    Structural,
+}
+
+impl DeathCause {
+    /// The cause of a death, from whether the stepper marked it senescent and
+    /// the member's unallocated reserve and upkeep as the step began (`None`
+    /// if it was born in that step).
+    pub fn of(senesced: bool, entering: Option<(f32, f32)>) -> Self {
+        match entering {
+            _ if senesced => DeathCause::Senesced,
+            Some((reserve, upkeep)) if reserve <= upkeep => DeathCause::Reserve,
+            _ => DeathCause::Structural,
+        }
+    }
+}
+
+/// One decomposer founder's life, tick by tick (#833). Entry `i` of each
+/// series is the step ending at tick `first_tick + i + 1`: the state is the
+/// founder's as that step began, the upkeep is what that step's metabolism
+/// charges (`metabolic_cost`), and the gain and drain are its own in that
+/// step (gain after trophic efficiency, drain before it, as
+/// [`FounderReadout`] books them).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct FounderLife {
+    pub id: u64,
+    /// The world's tick as its first recorded step began: the founding.
+    pub first_tick: u64,
+    /// Unallocated reserve.
+    pub reserve: Vec<f32>,
+    /// The energy earmark.
+    pub repro_reserve: Vec<f32>,
+    /// The nutrient earmark.
+    pub repro_nutrient: Vec<f32>,
+    /// Free nutrient.
+    pub nutrient: Vec<f32>,
+    pub structure: Vec<f32>,
+    pub peak_structure: Vec<f32>,
+    /// Mean wear over the functional traits.
+    pub wear: Vec<f32>,
+    pub upkeep: Vec<f32>,
+    pub gained: Vec<f64>,
+    pub drained: Vec<f64>,
+    /// The world's tick after the step in which it died (`None` alive at the
+    /// end, or cleared with the centre patch).
+    pub death_tick: Option<u64>,
+    pub death_cause: Option<DeathCause>,
+}
+
+/// A parent of a line birth (#833).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct LineParent {
+    pub id: u64,
+    /// Whether it was in the founder line when it reproduced.
+    pub in_line: bool,
+    /// Its nominal autotrophy and heterotrophy (`None` only if the observer
+    /// never saw it standing).
+    pub autotrophy: Option<f32>,
+    pub heterotrophy: Option<f32>,
+}
+
+/// A birth with a parent in the founder line (#833): the offspring joins the
+/// line.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct LineBirth {
+    /// The world's tick after the step it was born in.
+    pub tick: u64,
+    pub offspring: u64,
+    /// Two parents rather than one.
+    pub sexual: bool,
+    /// The parent the stepper names first, then the second parent if sexual.
+    pub parents: Vec<LineParent>,
+    /// The offspring's nominal autotrophy and heterotrophy, and the nutrient
+    /// it holds at the end of its birth step (free, earmarked and bound: its
+    /// share of the parents' donated earmark). `None` if it died in that
+    /// step.
+    pub autotrophy: Option<f32>,
+    pub heterotrophy: Option<f32>,
+    pub nutrient_endowment: Option<f32>,
+}
+
+/// A death in the founder line (#833).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct LineDeath {
+    pub id: u64,
+    /// The world's tick after the step it died in.
+    pub tick: u64,
+    /// Ticks from its birth, or from the observer's start for a founder.
+    pub age: u64,
+    pub cause: DeathCause,
+    /// Its nominal autotrophy and heterotrophy (`None` only for a member
+    /// that died in its birth step, which the observer never saw standing).
+    pub autotrophy: Option<f32>,
+    pub heterotrophy: Option<f32>,
+    /// Its births while in the line.
+    pub offspring: u32,
+}
+
+/// Carcass drain over one sample interval by lineage (#833): each side
+/// split by the drainer's autotrophy as [`DrainSplit`] splits it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct LineageDrain {
+    /// The world's tick at the sample closing the interval.
+    pub tick: u64,
+    /// Drained by members of the founder line.
+    pub founder_line: DrainSplit,
+    /// Drained by every other agent.
+    pub other: DrainSplit,
+}
+
+/// The founder line read for recruitment (#833; reference-modes.md, mode 1,
+/// *Recruitment diagnostic*), from the world's founding: a paired arm's
+/// carries the settle's history. Autotrophy and heterotrophy are nominal
+/// traits (`photosynthetic_absorption` and `heterotrophy`), as
+/// [`DrainSplit`] and the heterotroph-dominant count read them.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct RecruitmentReadout {
+    /// Each founder's life history, by id.
+    pub founders: Vec<FounderLife>,
+    /// Every birth with a parent in the line, in order.
+    pub births: Vec<LineBirth>,
+    /// Every death in the line, in order.
+    pub deaths: Vec<LineDeath>,
+    /// The carcass drain by lineage at each of this run's or arm's centre
+    /// samples, over the interval since the sample before it (the first
+    /// sample's, since the settle's last sample in a paired arm).
+    pub carcass_drain: Vec<LineageDrain>,
+}
+
 /// The establishment cut-off, in ticks: a producer that dies older than this
 /// had established, so lifespans read over those are not swamped by seedling
 /// deaths. #753 read its past-seedling median at the same cut-off.
@@ -1359,6 +1502,10 @@ pub struct Mode1Report {
     /// The whole world's litter, sampled with the centre patch, and its
     /// second half's reading (#804).
     pub litter: LitterReadout,
+    /// The founder line read for recruitment (#833): `None`, and absent from
+    /// the artifact, without founders.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recruitment: Option<RecruitmentReadout>,
 }
 
 impl Mode1Report {
@@ -1485,8 +1632,21 @@ pub struct PairedReport {
 /// the settle's history, so roles and ages read the same in both. An arm's
 /// lifespans are the producer deaths after the fork; its first sample's
 /// births and deaths are those since the settle's last sample.
-pub fn run_paired(mut world: World, settle: u64, ticks: u64, sample_every: u64) -> PairedReport {
+pub fn run_paired(world: World, settle: u64, ticks: u64, sample_every: u64) -> PairedReport {
+    run_paired_recording(world, settle, ticks, sample_every, true)
+}
+
+/// [`run_paired`], with the recruitment readout (#833) recorded or not: off
+/// only to test that it leaves the rest of the report alone.
+fn run_paired_recording(
+    mut world: World,
+    settle: u64,
+    ticks: u64,
+    sample_every: u64,
+    record_recruitment: bool,
+) -> PairedReport {
     let mut observer = Observer::new(&mut world);
+    observer.record_recruitment = record_recruitment;
     let start = world.tick();
     for _ in 0..settle {
         world.step();
@@ -1500,6 +1660,7 @@ pub fn run_paired(mut world: World, settle: u64, ticks: u64, sample_every: u64) 
             // likewise.
             observer.sample_centre(&world);
             observer.sample_litter(&world);
+            observer.sample_lineage_drain(&world);
         }
     }
     observer.lifespans.clear();
@@ -1554,6 +1715,7 @@ fn run_arm(
     let mut guild_samples: Vec<RoleSnapshot> = vec![(0, observer.guild_members(world))];
     let mut samples = vec![observer.sample_centre(world)];
     let mut litter_samples = vec![observer.sample_litter(world)];
+    let mut lineage_drain = vec![observer.sample_lineage_drain(world)];
     for _ in 0..ticks {
         world.step();
         observer.observe(world);
@@ -1564,6 +1726,7 @@ fn run_arm(
         if elapsed % sample_every == 0 {
             samples.push(observer.sample_centre(world));
             litter_samples.push(observer.sample_litter(world));
+            lineage_drain.push(observer.sample_lineage_drain(world));
             guild_samples.push((elapsed, observer.guild_members(world)));
         }
     }
@@ -1626,6 +1789,7 @@ fn run_arm(
         },
         guild: GuildReadout::default(),
         litter: LitterReadout::default(),
+        recruitment: observer.recruitment(lineage_drain),
     };
     report.litter = LitterReadout {
         second_half: LitterWindow::read(&litter_samples, &report.producer_lifespans),
@@ -1697,6 +1861,35 @@ const OBSERVED_KINDS: [EventKind; 5] = [
     EventKind::Died,
 ];
 
+/// A living line member as a step begins: what its metabolism reads, and the
+/// stores and body the recruitment readout (#833) records.
+#[derive(Clone, Copy)]
+struct Stores {
+    reserve: f32,
+    earmark: f32,
+    repro_nutrient: f32,
+    nutrient: f32,
+    structure: f32,
+    peak_structure: f32,
+    wear: f32,
+    upkeep: f32,
+}
+
+impl Stores {
+    fn of(a: &explorers_sim::Agent, params: &WorldParameters) -> Self {
+        Self {
+            reserve: a.reserve,
+            earmark: a.repro_reserve,
+            repro_nutrient: a.repro_nutrient,
+            nutrient: a.nutrient,
+            structure: a.structure,
+            peak_structure: a.peak_structure,
+            wear: a.wear.iter().sum::<f32>() / a.wear.len() as f32,
+            upkeep: explorers_sim::phase::metabolic_cost(a, params),
+        }
+    }
+}
+
 /// Observer-side state walked along the run's event log. It keeps no history
 /// in the world: the log is cut back to what it reads and compacted after
 /// every step.
@@ -1733,9 +1926,22 @@ struct Observer {
     founders: FounderReadout,
     /// Each founder through the starvation cascade (#821), by id.
     starving: std::collections::BTreeMap<u64, FounderStarvation>,
-    /// Each living founder's reserve, earmark and upkeep as the next step
-    /// begins: what that step's metabolism reads.
-    founder_stores: HashMap<u64, (f32, f32, f32)>,
+    /// Each living member of the founder line as the next step begins: its
+    /// stores and body, and the upkeep that step's metabolism reads.
+    stores: HashMap<u64, Stores>,
+    /// Whether the recruitment readout (#833) is recorded: always, with
+    /// founders, but for the test that it leaves the world alone.
+    record_recruitment: bool,
+    /// Each founder's life history (#833), by id.
+    lives: std::collections::BTreeMap<u64, FounderLife>,
+    /// The line's births (#833), in order.
+    line_births: Vec<LineBirth>,
+    /// Births to each living line member so far (#833).
+    line_offspring: HashMap<u64, u32>,
+    /// The line's deaths (#833), in order.
+    line_deaths: Vec<LineDeath>,
+    /// Carcass drain by lineage since the last sample (#833).
+    lineage_drain: LineageDrain,
     /// Litter inflow since the last litter sample, and that sample's tick.
     litter_inflow: LitterInflow,
     litter_sampled_at: u64,
@@ -1766,7 +1972,13 @@ impl Observer {
             carcass_traits: HashMap::new(),
             founders: FounderReadout::default(),
             starving: std::collections::BTreeMap::new(),
-            founder_stores: HashMap::new(),
+            stores: HashMap::new(),
+            record_recruitment: true,
+            lives: std::collections::BTreeMap::new(),
+            line_births: Vec::new(),
+            line_offspring: HashMap::new(),
+            line_deaths: Vec::new(),
+            lineage_drain: LineageDrain::default(),
             litter_inflow: LitterInflow::default(),
             litter_sampled_at: world.tick(),
         }
@@ -1796,19 +2008,30 @@ impl Observer {
                 )
             })
             .collect();
+        self.lives = (self.living_founders.keys())
+            .map(|&id| {
+                (
+                    id,
+                    FounderLife {
+                        id,
+                        first_tick: world.tick(),
+                        ..FounderLife::default()
+                    },
+                )
+            })
+            .collect();
         self.remember_targets(world);
-        self.remember_founder_stores(world);
+        self.remember_stores(world);
         self
     }
 
-    /// Remember each living founder's reserve, earmark and upkeep, as the
+    /// Remember each living line member's stores, body and upkeep, as the
     /// next step's metabolism will read them.
-    fn remember_founder_stores(&mut self, world: &World) {
-        self.founder_stores.clear();
+    fn remember_stores(&mut self, world: &World) {
+        self.stores.clear();
         for a in world.agents() {
-            if self.living_founders.contains_key(&a.id) {
-                let upkeep = explorers_sim::phase::metabolic_cost(a, world.params());
-                (self.founder_stores).insert(a.id, (a.reserve, a.repro_reserve, upkeep));
+            if self.line.contains(&a.id) {
+                (self.stores).insert(a.id, Stores::of(a, world.params()));
             }
         }
     }
@@ -1816,11 +2039,13 @@ impl Observer {
     /// Mark the founders whose unallocated reserve runs out in the step just
     /// taken: those that began it with reserve no greater than its upkeep.
     fn read_running_out(&mut self, after: u64) {
-        for (id, &(reserve, earmark, upkeep)) in &self.founder_stores {
-            let f = self.starving.get_mut(id).expect("every founder is read");
-            if f.ran_out_tick.is_none() && reserve <= upkeep {
+        for (id, s) in &self.stores {
+            let Some(f) = self.starving.get_mut(id) else {
+                continue;
+            };
+            if f.ran_out_tick.is_none() && s.reserve <= s.upkeep {
                 f.ran_out_tick = Some(after);
-                f.earmark_at_running_out = Some(earmark);
+                f.earmark_at_running_out = Some(s.earmark);
             }
         }
     }
@@ -1830,7 +2055,8 @@ impl Observer {
     /// on structure if burned structure did.
     fn read_cascade_ticks(&mut self, world: &World) {
         let p = world.params();
-        for (id, &(reserve, earmark, upkeep)) in &self.founder_stores {
+        for (id, s) in &self.stores {
+            let (reserve, earmark, upkeep) = (s.reserve, s.earmark, s.upkeep);
             if reserve > upkeep || !self.living_founders.contains_key(id) {
                 continue;
             }
@@ -1872,6 +2098,8 @@ impl Observer {
         let mut senesced = std::collections::HashSet::new();
         let founders_began = !self.living_founders.is_empty();
         let (mut gained, mut drained) = (0.0_f64, 0.0_f64);
+        // Each founder's own gain and drain in this step (#833).
+        let mut income: HashMap<u64, (f64, f64)> = HashMap::new();
         self.read_running_out(after);
         // Agents born in this step are on the roster now; those that died in
         // it are still in the map from the step before.
@@ -1904,6 +2132,9 @@ impl Observer {
                     self.birth_tick.insert(event.source, after);
                     let parents = [event.target, event.second_parent];
                     if parents.iter().flatten().any(|p| self.line.contains(p)) {
+                        if self.record_recruitment {
+                            self.record_line_birth(world, event, after);
+                        }
                         self.line.insert(event.source);
                     }
                     for parent in parents.iter().flatten() {
@@ -1936,6 +2167,9 @@ impl Observer {
                     );
                     gained += (event.energy_delta * efficiency) as f64;
                     drained += event.energy_delta as f64;
+                    let own = income.entry(event.source).or_default();
+                    own.0 += (event.energy_delta * efficiency) as f64;
+                    own.1 += event.energy_delta as f64;
                     if event.target_was_carcass {
                         self.book_carcass_drain(event.source, event.energy_delta);
                     }
@@ -1944,11 +2178,31 @@ impl Observer {
                     self.book_carcass_drain(event.source, event.energy_delta);
                 }
                 EventKind::Died => {
-                    self.traits.remove(&event.source);
+                    let traits = self.traits.remove(&event.source);
+                    let cause = DeathCause::of(
+                        senesced.contains(&event.source),
+                        (self.stores.get(&event.source)).map(|s| (s.reserve, s.upkeep)),
+                    );
+                    if self.record_recruitment && self.line.contains(&event.source) {
+                        let born = self.birth_tick[&event.source];
+                        self.line_deaths.push(LineDeath {
+                            id: event.source,
+                            tick: after,
+                            age: after - born,
+                            cause,
+                            autotrophy: traits.map(|t| t.photosynthetic_absorption),
+                            heterotrophy: traits.map(|t| t.heterotrophy),
+                            offspring: self.line_offspring.remove(&event.source).unwrap_or(0),
+                        });
+                    }
                     if self.living_founders.remove(&event.source).is_some() {
                         self.founders.death_ticks.push(after);
                         if let Some(f) = self.starving.get_mut(&event.source) {
                             f.death_tick = Some(after);
+                        }
+                        if let Some(life) = self.lives.get_mut(&event.source) {
+                            life.death_tick = Some(after);
+                            life.death_cause = Some(cause);
                         }
                     }
                     self.line.remove(&event.source);
@@ -1971,21 +2225,121 @@ impl Observer {
             self.founders.gained.push(gained);
             self.founders.drained.push(drained);
         }
+        if self.record_recruitment {
+            self.record_lives(world, &died, &income);
+        }
         self.read_cascade_ticks(world);
-        self.remember_founder_stores(world);
+        self.remember_stores(world);
         self.remember_targets(world);
         self.income.update(world.event_log());
         self.cursor = world.event_log().len();
         world.compact_event_log_before(self.cursor);
     }
 
+    /// Add the step just taken to each founder's life history: every founder
+    /// that began it standing and is still standing or died in it (a founder
+    /// cleared with the centre patch leaves no `Died`, and its history ends).
+    fn record_lives(
+        &mut self,
+        world: &World,
+        died: &std::collections::HashSet<u64>,
+        income: &HashMap<u64, (f64, f64)>,
+    ) {
+        let standing: std::collections::HashSet<u64> = (world.agents().iter())
+            .filter(|a| self.lives.contains_key(&a.id))
+            .map(|a| a.id)
+            .collect();
+        for (id, life) in &mut self.lives {
+            let Some(s) = self.stores.get(id) else {
+                continue;
+            };
+            if !standing.contains(id) && !died.contains(id) {
+                continue;
+            }
+            life.reserve.push(s.reserve);
+            life.repro_reserve.push(s.earmark);
+            life.repro_nutrient.push(s.repro_nutrient);
+            life.nutrient.push(s.nutrient);
+            life.structure.push(s.structure);
+            life.peak_structure.push(s.peak_structure);
+            life.wear.push(s.wear);
+            life.upkeep.push(s.upkeep);
+            let (g, d) = income.get(id).copied().unwrap_or_default();
+            life.gained.push(g);
+            life.drained.push(d);
+        }
+    }
+
+    /// Record a birth with a parent in the line, before the offspring joins
+    /// it, and count it against each parent in the line.
+    fn record_line_birth(&mut self, world: &World, event: &Event, after: u64) {
+        let parents: Vec<LineParent> = [event.target, event.second_parent]
+            .into_iter()
+            .flatten()
+            .map(|id| {
+                let traits = self.traits.get(&id);
+                LineParent {
+                    id,
+                    in_line: self.line.contains(&id),
+                    autotrophy: traits.map(|t| t.photosynthetic_absorption),
+                    heterotrophy: traits.map(|t| t.heterotrophy),
+                }
+            })
+            .collect();
+        for p in parents.iter().filter(|p| p.in_line) {
+            *self.line_offspring.entry(p.id).or_default() += 1;
+        }
+        let child = (world.agents().iter()).find(|a| a.id == event.source);
+        self.line_births.push(LineBirth {
+            tick: after,
+            offspring: event.source,
+            sexual: event.second_parent.is_some(),
+            parents,
+            autotrophy: child.map(|a| a.traits.photosynthetic_absorption),
+            heterotrophy: child.map(|a| a.traits.heterotrophy),
+            nutrient_endowment: child.map(|a| a.nutrient_total(world.params())),
+        });
+    }
+
+    /// Take the carcass drain by lineage since the last sample, closed at
+    /// the world's tick now.
+    fn sample_lineage_drain(&mut self, world: &World) -> LineageDrain {
+        LineageDrain {
+            tick: world.tick(),
+            ..std::mem::take(&mut self.lineage_drain)
+        }
+    }
+
+    /// The recruitment readout so far (#833), with the run's or arm's
+    /// lineage drain samples: `None` without founders.
+    fn recruitment(&self, carcass_drain: Vec<LineageDrain>) -> Option<RecruitmentReadout> {
+        (self.record_recruitment && self.founders.founders > 0).then(|| RecruitmentReadout {
+            founders: self.lives.values().cloned().collect(),
+            births: self.line_births.clone(),
+            deaths: self.line_deaths.clone(),
+            carcass_drain,
+        })
+    }
+
     /// Book a carcass drain to the drainer's side of [`MIXOTROPH_AUTOTROPHY`].
+    /// With the recruitment readout, book it by lineage too (#833).
     fn book_carcass_drain(&mut self, drainer: u64, drained: f32) {
         let drained = drained as f64;
+        let lineage = if self.line.contains(&drainer) {
+            &mut self.lineage_drain.founder_line
+        } else {
+            &mut self.lineage_drain.other
+        };
         if self.traits[&drainer].photosynthetic_absorption < MIXOTROPH_AUTOTROPHY {
             self.carcass_drain.pure_vertex += drained;
+            if self.record_recruitment {
+                lineage.pure_vertex += drained;
+            }
         } else {
             self.carcass_drain.mixotroph += drained;
+            if self.record_recruitment {
+                lineage.mixotroph += drained;
+            }
         }
     }
 
@@ -3170,6 +3524,7 @@ mod tests {
             litter: LitterReadout::default(),
             founders: FounderReadout::default(),
             guild: GuildReadout::default(),
+            recruitment: None,
         };
         let summary = mode1_summary("h", &report);
         assert_eq!(ESTABLISHMENT_AGE, 50);
@@ -3637,6 +3992,7 @@ mod tests {
             litter: LitterReadout::default(),
             founders: FounderReadout::default(),
             guild: GuildReadout::default(),
+            recruitment: None,
         };
         let line = "| yes | 2 | 3 | 30.0 / 10.0 (0.250) | 1.0 / 3.0 (0.750) |";
         let summary = mode1_summary("h", &report);
@@ -3699,6 +4055,7 @@ mod tests {
             litter: LitterReadout::default(),
             founders,
             guild: GuildReadout::default(),
+            recruitment: None,
         };
         let line = "| 4 | 3 | 3 | 2 | 2 | 5 | 0.100 (0.300) | 0.084 |";
         let summary = mode1_summary("h", &report);
@@ -3880,6 +4237,7 @@ mod tests {
                 producers_persist: true,
                 passes: true,
             },
+            recruitment: None,
         };
         let line = "| yes | 6 | 0.250 | 1.0 / 3.0 (0.250) | yes | yes |";
         let summary = mode1_summary("h", &report);
@@ -4439,6 +4797,7 @@ mod tests {
             ledger: Ledger::default(),
             founders: FounderReadout::default(),
             guild: GuildReadout::default(),
+            recruitment: None,
             litter: LitterReadout {
                 samples: vec![],
                 second_half: LitterWindow {
@@ -4640,5 +4999,390 @@ mod tests {
             empty.contains("| run | 0 | 0 | - | 0 | 0 | - | - | - |"),
             "{empty}"
         );
+    }
+
+    /// Mean wear over an agent's functional traits.
+    fn mean_wear(a: &explorers_sim::Agent) -> f32 {
+        a.wear.iter().sum::<f32>() / a.wear.len() as f32
+    }
+
+    /// Each founder's life history, read independently off a full event log
+    /// of `world` stepped `ticks` times: its state as every step it lives
+    /// through begins, the upkeep that step charges, its own gain and drain
+    /// in it, and the tick and cause of its death.
+    fn replay_founder_lives(mut world: World, ticks: u64) -> Vec<FounderLife> {
+        let founders: HashMap<u64, TraitVector> = (world.agents().iter())
+            .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
+            .map(|a| (a.id, a.traits))
+            .collect();
+        let mut expected: std::collections::BTreeMap<u64, FounderLife> = (founders.keys())
+            .map(|&id| {
+                (
+                    id,
+                    FounderLife {
+                        id,
+                        first_tick: 0,
+                        ..FounderLife::default()
+                    },
+                )
+            })
+            .collect();
+        for _ in 0..ticks {
+            let agents: HashMap<u64, TraitVector> =
+                world.agents().iter().map(|a| (a.id, a.traits)).collect();
+            let carcasses: HashMap<u64, TraitVector> =
+                world.carcasses().iter().map(|c| (c.id, c.traits)).collect();
+            let before: HashMap<u64, explorers_sim::Agent> = (world.agents().iter())
+                .filter(|a| founders.contains_key(&a.id))
+                .map(|a| (a.id, a.clone()))
+                .collect();
+            let cursor = world.event_log().len();
+            world.step();
+            let after = world.tick();
+            let mut income: HashMap<u64, (f64, f64)> = HashMap::new();
+            let mut senesced = std::collections::HashSet::new();
+            for e in world.event_log().since(cursor) {
+                if e.kind == EventKind::Senesced {
+                    senesced.insert(e.source);
+                }
+                let Some(consumer) = founders.get(&e.source) else {
+                    continue;
+                };
+                if e.kind != EventKind::Consumed {
+                    continue;
+                }
+                let target = e.target.unwrap();
+                let target = if e.target_was_carcass {
+                    carcasses[&target]
+                } else {
+                    agents[&target]
+                };
+                let eff =
+                    explorers_sim::trophic_transfer_efficiency(consumer, &target, world.params());
+                let entry = income.entry(e.source).or_default();
+                entry.0 += (e.energy_delta * eff) as f64;
+                entry.1 += e.energy_delta as f64;
+            }
+            for (id, a) in &before {
+                let life = expected.get_mut(id).unwrap();
+                let upkeep = explorers_sim::phase::metabolic_cost(a, world.params());
+                life.reserve.push(a.reserve);
+                life.repro_reserve.push(a.repro_reserve);
+                life.repro_nutrient.push(a.repro_nutrient);
+                life.nutrient.push(a.nutrient);
+                life.structure.push(a.structure);
+                life.peak_structure.push(a.peak_structure);
+                life.wear.push(mean_wear(a));
+                life.upkeep.push(upkeep);
+                let (g, d) = income.get(id).copied().unwrap_or_default();
+                life.gained.push(g);
+                life.drained.push(d);
+                if !world.agents().iter().any(|now| now.id == *id) {
+                    life.death_tick = Some(after);
+                    life.death_cause = Some(if senesced.contains(id) {
+                        DeathCause::Senesced
+                    } else if a.reserve <= upkeep {
+                        DeathCause::Reserve
+                    } else {
+                        DeathCause::Structural
+                    });
+                }
+            }
+        }
+        expected.into_values().collect()
+    }
+
+    /// The readout follows each founder tick by tick, as the replay reads it.
+    #[test]
+    fn the_recruitment_readout_follows_each_founder_tick_by_tick() {
+        let spec = Mode1Spec::committed();
+        let build = || {
+            mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                4,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let ticks = 40;
+        let report = run_mode1(&mut build(), ticks, 10);
+        let expected = replay_founder_lives(build(), ticks);
+        let readout = report.recruitment.as_ref().expect("founders are followed");
+        assert_eq!(readout.founders, expected);
+        assert!(expected.iter().any(|f| f.death_tick.is_some()));
+        assert!(expected.iter().any(|f| f.gained.iter().sum::<f64>() > 0.0));
+        assert_eq!(
+            (run_mode1(
+                &mut mode1_mesocosm(&spec, mesocosm_wear(), 4, Community::ProducersOnly),
+                5,
+                5,
+            ))
+            .recruitment,
+            None,
+            "no founders, no readout"
+        );
+    }
+
+    /// A death is `senesced` when the stepper marked it so, else `reserve`
+    /// when the member entered the step with unallocated reserve at or below
+    /// its upkeep, else `structural`.
+    #[test]
+    fn the_cause_of_death_is_senesced_then_reserve_then_structural() {
+        assert_eq!(DeathCause::of(true, Some((0.0, 1.0))), DeathCause::Senesced);
+        assert_eq!(DeathCause::of(true, Some((5.0, 1.0))), DeathCause::Senesced);
+        assert_eq!(DeathCause::of(false, Some((1.0, 1.0))), DeathCause::Reserve);
+        assert_eq!(DeathCause::of(false, Some((0.5, 1.0))), DeathCause::Reserve);
+        assert_eq!(
+            DeathCause::of(false, Some((1.5, 1.0))),
+            DeathCause::Structural
+        );
+        assert_eq!(DeathCause::of(false, None), DeathCause::Structural);
+
+        // A senescence hazard well above the mesocosm's: founders die of
+        // all three causes, each read as the replay reads it.
+        let spec = Mode1Spec::committed();
+        let build = || {
+            let wear = Wear {
+                senescence_hazard: 0.3,
+                ..mesocosm_wear()
+            };
+            mode1_mesocosm(&spec, wear, 4, Community::ProducersAndDecomposers)
+        };
+        let ticks = 150;
+        let report = run_mode1(&mut build(), ticks, 10);
+        let expected = replay_founder_lives(build(), ticks);
+        let founders = report.recruitment.expect("founders are followed").founders;
+        assert_eq!(founders, expected);
+        for cause in [
+            DeathCause::Senesced,
+            DeathCause::Reserve,
+            DeathCause::Structural,
+        ] {
+            assert!(
+                founders.iter().any(|f| f.death_cause == Some(cause)),
+                "some founder dies {cause:?}"
+            );
+        }
+        let json = serde_json::to_value(&founders[0]).unwrap();
+        assert!(json["death_cause"].is_string(), "{json}");
+    }
+
+    /// The founder line's births and deaths, read independently off a full
+    /// event log of `world` stepped `ticks` times. The line is the founders
+    /// and every agent born to a living member; traits are nominal.
+    fn replay_line(mut world: World, ticks: u64) -> (Vec<LineBirth>, Vec<LineDeath>) {
+        let mut line: std::collections::HashSet<u64> = (world.agents().iter())
+            .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
+            .map(|a| a.id)
+            .collect();
+        let mut born_at: HashMap<u64, u64> = line.iter().map(|&id| (id, 0)).collect();
+        let mut offspring: HashMap<u64, u32> = HashMap::new();
+        let mut traits: HashMap<u64, TraitVector> = HashMap::new();
+        let (mut births, mut deaths) = (vec![], vec![]);
+        for _ in 0..ticks {
+            traits.extend(world.agents().iter().map(|a| (a.id, a.traits)));
+            let entering: HashMap<u64, (f32, f32)> = (world.agents().iter())
+                .filter(|a| line.contains(&a.id))
+                .map(|a| {
+                    let upkeep = explorers_sim::phase::metabolic_cost(a, world.params());
+                    (a.id, (a.reserve, upkeep))
+                })
+                .collect();
+            let cursor = world.event_log().len();
+            world.step();
+            let after = world.tick();
+            traits.extend(world.agents().iter().map(|a| (a.id, a.traits)));
+            let mut senesced = std::collections::HashSet::new();
+            for e in world.event_log().since(cursor) {
+                match e.kind {
+                    EventKind::Senesced => {
+                        senesced.insert(e.source);
+                    }
+                    EventKind::Born => {
+                        let parents: Vec<u64> =
+                            [e.target, e.second_parent].into_iter().flatten().collect();
+                        if !parents.iter().any(|p| line.contains(p)) {
+                            continue;
+                        }
+                        let child = world.agents().iter().find(|a| a.id == e.source);
+                        births.push(LineBirth {
+                            tick: after,
+                            offspring: e.source,
+                            sexual: e.second_parent.is_some(),
+                            parents: (parents.iter())
+                                .map(|&p| LineParent {
+                                    id: p,
+                                    in_line: line.contains(&p),
+                                    autotrophy: traits.get(&p).map(|t| t.photosynthetic_absorption),
+                                    heterotrophy: traits.get(&p).map(|t| t.heterotrophy),
+                                })
+                                .collect(),
+                            autotrophy: child.map(|a| a.traits.photosynthetic_absorption),
+                            heterotrophy: child.map(|a| a.traits.heterotrophy),
+                            nutrient_endowment: child.map(|a| a.nutrient_total(world.params())),
+                        });
+                        for p in &parents {
+                            if line.contains(p) {
+                                *offspring.entry(*p).or_default() += 1;
+                            }
+                        }
+                        line.insert(e.source);
+                        born_at.insert(e.source, after);
+                    }
+                    EventKind::Died if line.remove(&e.source) => {
+                        let t = traits.get(&e.source);
+                        deaths.push(LineDeath {
+                            id: e.source,
+                            tick: after,
+                            age: after - born_at[&e.source],
+                            cause: DeathCause::of(
+                                senesced.contains(&e.source),
+                                entering.get(&e.source).copied(),
+                            ),
+                            autotrophy: t.map(|t| t.photosynthetic_absorption),
+                            heterotrophy: t.map(|t| t.heterotrophy),
+                            offspring: offspring.get(&e.source).copied().unwrap_or(0),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (births, deaths)
+    }
+
+    /// Every birth with a parent in the founder line records its tick, its
+    /// offspring, whether it was sexual, each parent's id, membership of the
+    /// line and traits, and the offspring's traits and nutrient endowment.
+    #[test]
+    fn a_line_birth_records_each_parents_membership_of_the_line() {
+        let spec = Mode1Spec::committed();
+        let build = || {
+            mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                4,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let ticks = 150;
+        let report = run_mode1(&mut build(), ticks, 10);
+        let (births, _) = replay_line(build(), ticks);
+        let readout = report.recruitment.expect("founders are followed");
+        assert_eq!(readout.births, births);
+        assert!(!births.is_empty(), "the founders reproduce");
+        for b in &births {
+            assert_eq!(b.parents.len(), 1 + b.sexual as usize);
+            assert!(b.parents.iter().any(|p| p.in_line));
+        }
+        // Crossing with a parent outside the line, and mating within it.
+        let sexual = |both_in: bool| {
+            (births.iter())
+                .filter(|b| b.sexual)
+                .any(|b| b.parents.iter().all(|p| p.in_line) == both_in)
+        };
+        assert!(
+            sexual(false),
+            "a sexual birth with a parent outside the line"
+        );
+        assert!(sexual(true), "a sexual birth within the line");
+    }
+
+    /// Each line member that dies records its tick, age, cause, traits and
+    /// offspring count; a founder's death in the line agrees with its life
+    /// history.
+    #[test]
+    fn a_line_death_records_its_age_cause_traits_and_offspring() {
+        let spec = Mode1Spec::committed();
+        let build = || {
+            mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                4,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let ticks = 150;
+        let report = run_mode1(&mut build(), ticks, 10);
+        let (_, deaths) = replay_line(build(), ticks);
+        let readout = report.recruitment.expect("founders are followed");
+        assert_eq!(readout.deaths, deaths);
+        assert!(deaths.iter().any(|d| d.offspring > 0), "a parent dies");
+        let founder_ids: std::collections::HashSet<u64> =
+            readout.founders.iter().map(|f| f.id).collect();
+        assert!(
+            deaths.iter().any(|d| !founder_ids.contains(&d.id)),
+            "a descendant dies"
+        );
+        for f in &readout.founders {
+            let death = deaths.iter().find(|d| d.id == f.id);
+            assert_eq!(death.map(|d| d.tick), f.death_tick);
+            assert_eq!(death.map(|d| d.cause), f.death_cause);
+        }
+    }
+
+    /// The carcass drain is split per sample interval by lineage, founder
+    /// line or not, and by the drainer's autotrophy, as [`DrainSplit`]
+    /// splits it: over the samples the four parts sum to the run's drain.
+    #[test]
+    fn the_lineage_drain_split_sums_to_the_carcass_drain() {
+        let spec = Mode1Spec::committed();
+        let mut world = mode1_mesocosm(
+            &spec,
+            mesocosm_wear(),
+            4,
+            Community::ProducersAndDecomposers,
+        );
+        let report = run_mode1(&mut world, 150, 10);
+        let drain = report
+            .recruitment
+            .expect("founders are followed")
+            .carcass_drain;
+        assert_eq!(
+            drain.iter().map(|d| d.tick).collect::<Vec<_>>(),
+            report.samples.iter().map(|s| s.tick).collect::<Vec<_>>(),
+            "sampled with the centre patch"
+        );
+        assert_eq!(drain[0].founder_line.total() + drain[0].other.total(), 0.0);
+        let sum = |side: fn(&DrainSplit) -> f64| -> f64 {
+            drain
+                .iter()
+                .map(|d| side(&d.founder_line) + side(&d.other))
+                .sum()
+        };
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-9 * b.abs().max(1.0);
+        let whole = report.carcass_drain;
+        assert!(close(sum(|d| d.pure_vertex), whole.pure_vertex));
+        assert!(close(sum(|d| d.mixotroph), whole.mixotroph));
+        let line: f64 = drain.iter().map(|d| d.founder_line.total()).sum();
+        let other: f64 = drain.iter().map(|d| d.other.total()).sum();
+        assert!(line > 0.0 && other > 0.0, "{line} {other}");
+    }
+
+    /// The recruitment readout only reads: a paired run with it records
+    /// every other field of its report exactly as the same run without it.
+    #[test]
+    fn the_recruitment_readout_leaves_every_other_field_of_the_report_alone() {
+        let spec = Mode1Spec::committed();
+        let run = |record| {
+            let world = mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                4,
+                Community::ProducersAndDecomposers,
+            );
+            serde_json::to_value(run_paired_recording(world, 60, 60, 10, record)).unwrap()
+        };
+        let (mut with, without) = (run(true), run(false));
+        for arm in ["perturbed", "control"] {
+            assert!(without[arm].get("recruitment").is_none());
+            let readout = with[arm]
+                .as_object_mut()
+                .unwrap()
+                .remove("recruitment")
+                .expect("the readout is recorded");
+            assert!(!readout["births"].as_array().unwrap().is_empty());
+        }
+        assert_eq!(with, without);
     }
 }
