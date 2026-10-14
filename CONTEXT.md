@@ -191,7 +191,7 @@ Two agents whose trait vectors are within the **reproductive compatibility dista
 _Avoid_: mating, breeding (too specific to animal analogues)
 
 **Mate selectivity**:
-Not an explicit trait dimension. Reproductive isolation emerges from trait-space divergence evaluated against the **reproductive compatibility distance** — a world parameter, not a per-agent trait. Agents whose trait vectors are within the compatibility distance can mate; those further apart cannot. Speciation pressure comes from the physics of the compatibility threshold interacting with trait-space clustering, not from individual choosiness.
+Not an explicit trait dimension. Reproductive isolation emerges from trait-space divergence evaluated against the **reproductive compatibility distance** — a world parameter, not a per-agent trait. Agents whose trait vectors are within the compatibility distance can mate; those further apart cannot. Speciation pressure comes from the physics of the compatibility threshold interacting with trait-space clustering, not from individual choosiness. Under **marker isolation** the same holds with **neutral marker** distance and the **compatibility scale** in place of trait distance and the threshold.
 _Avoid_: choosiness, pickiness, compatibility trait
 
 **Reproductive investment**:
@@ -219,8 +219,23 @@ The spatial distance over which a consumer can drain a target's body (a living a
 _Avoid_: contact radius (a uniform world value — feeding reach is a per-agent derived property), grazing range (overloaded)
 
 **Speciation**:
-The divergence of agent populations into distinct clusters in trait space that no longer interbreed due to trait distance exceeding the **reproductive compatibility distance**. Not designed — emerges from selection and reproductive dynamics.
+The divergence of agent populations into distinct clusters in trait space that no longer interbreed due to trait distance exceeding the **reproductive compatibility distance** — or, under **marker isolation**, due to their **neutral markers** having drifted apart. Not designed — emerges from selection and reproductive dynamics.
 _Avoid_: species (as a designed concept — there are no species definitions, only emergent clusters)
+
+**Neutral marker**:
+A heritable record of an agent's ancestry, inherited and mutated like a trait but under no selection and outside the trait vector. Two agents' marker distance stands for the time since their lineages shared an ancestor, as sequence divergence does in the domain.
+_Avoid_: genome, genotype (the marker carries no function), tag, label (it is not assigned; it drifts)
+
+**Marker isolation**:
+Reproductive isolation read from **neutral marker** distance rather than trait distance: agents' compatibility falls smoothly with how far their markers have drifted apart, so isolation follows ancestry, not way of life.
+_Avoid_: genetic incompatibility (implies a mechanism the marker does not model)
+
+**Compatibility scale**:
+The world parameter setting how quickly compatibility falls with **neutral marker** distance under **marker isolation**. The ancestry counterpart of the **reproductive compatibility distance**.
+
+**Founding cluster**:
+A group of founders seeded together at world creation as one population (see **initial cluster count**). Under **marker isolation** a founding cluster shares one ancestry, and different founding clusters are unrelated.
+_Avoid_: founding patch (that is a cluster's seeding footprint in space; see **founder aggregation**)
 
 ### World parameters
 

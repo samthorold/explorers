@@ -8,7 +8,7 @@ This document is built on the ecological ground truths in [docs/ecology/](../eco
 
 Not every agent property needs its own dimension. Three categories determine where a property belongs:
 
-**Physics.** Universal rules, same for all agents, not evolvable. World parameters. These are knobs for genesis search, not part of the agent's heritable identity. Example: reproductive compatibility distance (the trait-space distance threshold below which two agents can mate). All agents face the same threshold — it is a property of the world, not the organism.
+**Physics.** Universal rules, same for all agents, not evolvable. World parameters. These are knobs for genesis search, not part of the agent's heritable identity. Example: reproductive compatibility distance (the trait-space distance threshold below which two agents can mate), or, under marker isolation, the compatibility scale (the marker distance over which compatibility falls; [world rules](world-rules.md), flow 4). All agents face the same threshold or scale — it is a property of the world, not the organism. The **neutral marker** that the compatibility scale is read against is heritable but not a trait: nothing selects on it, no cost or flow reads it, and it lies outside the trait vector. It records ancestry, not a way of living.
 
 **Trait.** An explicit dimension in the trait vector. Heritable, mutable, heterogeneous across the population. Each trait is independently evolvable — selection can adjust one without mechanically forcing changes in another. Example: fecundity, asexual propensity.
 
