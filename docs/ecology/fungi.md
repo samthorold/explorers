@@ -25,7 +25,7 @@ Fungi are the dominant decomposers of plant-derived organic matter because they 
 Key flow parameters:
 - **Substrate quality controls decomposition rate.** The lignin:nitrogen ratio of organic matter is the best single predictor of decomposition rate. High lignin:N material (wood) decomposes slowly; low lignin:N material (leaf litter) decomposes quickly.
 - **Carbon use efficiency.** Fungi convert roughly 40-55% of consumed carbon into biomass, with the remainder respired as CO2. This is substantially higher than bacterial carbon use efficiency (~20-30%), meaning fungi sequester more carbon per unit consumed into the microbial biomass stock.
-- **Nutrient stoichiometry.** Fungal biomass has an average C:N ratio of ~11:1 (Brabcova et al. 2024), but wood-decay fungi can reach C:N ratios above 40:1. Fungi must acquire nitrogen from their substrate or soil environment, creating a coupling between decomposition rate and nitrogen availability.
+- **Nutrient stoichiometry.** Fungal biomass has an average C:N ratio of ~11:1 (11.2 ± 6.4 across 271 samples; Pánek et al. 2024), but wood-decay fungi can reach C:N ratios above 40:1. Fungi must acquire nitrogen from their substrate or soil environment, creating a coupling between decomposition rate and nitrogen availability.
 
 **The mycorrhizal pathway.** Mycorrhizal fungi create a bidirectional flow: they receive 10-30% of a host plant's photosynthetically fixed carbon, and in return supply the plant with soil-derived phosphorus, nitrogen, and water. This is not charity — it is a market-like exchange governed by local supply-demand ratios (Kiers et al. 2011, "Reciprocal rewards stabilize cooperation in the mycorrhizal symbiosis"). Plants allocate more carbon to fungal partners that deliver more phosphorus, and fungi allocate more phosphorus to plant partners that deliver more carbon.
 
@@ -169,7 +169,6 @@ Key system-level distinctions among saprotrophs:
 - **Read from abstracts and summaries:** van Diepeningen et al., Virzo De Santo et al., Fukasawa et al., Herman et al., Gilchrist et al. and Van Etten et al. Shoji et al. and Harris & Boddy are as read for [energy flow](energy-flow.md).
 - **From a secondary summary:** Bertrand et al.
 - **Not verified:** the pages of Van Etten et al., Bertrand et al. and Herman et al., and the title of Virzo De Santo et al.
-- **A citation to check:** the 214-species fruit-body survey is Pánek et al. (2024) in *Frontiers in Microbiology*. The C:N of about 11 attributed above to "Brabcova et al. 2024" may be the same dataset under another name; that was not checked here.
 - **Taken from Maas, not read:** Rizet (1953), Hamilton (1966), and the other dung-fungus cases.
 - **What the domain gives:** a *form* for ageing (a modular genet with no general age-tied hazard, and senescence in a minority on short-lived substrates), and a *form* for upkeep (cost tracks the living part, which falls as a share of the mycelium). For reproduction it gives *mechanisms*: translocation from stores, spores built from existing mycelium, depletion as one trigger among several, and sporulation alongside growth in leaf microfungi. One *magnitude* carries: about half of an aquatic hyphomycete's production goes to spores.
 - **What it leaves open:** an exponent for upkeep against size, the age at which field genets die, the share of a terrestrial litter saprotroph's production that goes to fruit bodies, and the element that limits fruiting in the field.
@@ -271,7 +270,6 @@ The overall pattern: removing fungi doesn't eliminate energy from the system —
 - Bolton, R.G. & Boddy, L. (1993). Characterisation of the spatial aspects of foraging mycelial cord systems using fractal geometry. *Mycological Research*, 97, 762-768.
 - Bošković, E. et al. (2017, 2019). Genet structure of litter-decomposing *Marasmius*, *Mycetinis* and *Gymnopus* populations (titles not verified).
 - Boswell, G.P. et al. (2007). Functional consequences of nutrient translocation in mycelial fungi. *Journal of Theoretical Biology*, 245, 28-41.
-- Brabcova, V. et al. (2024). Variation of carbon, nitrogen and phosphorus content in fungi reflects their ecology and phylogeny. *bioRxiv* / in press.
 - Bretherton, S., Tordoff, G.M., Jones, T.H. & Boddy, L. (2006). Compensatory growth of *Phanerochaete velutina* mycelial systems grazed by *Folsomia candida* (Collembola). *FEMS Microbiology Ecology*, 58, 33-40.
 - Burdon, J.J. & Laine, A.-L. (2019). *Evolutionary Dynamics of Plant-Pathogen Interactions*. Cambridge University Press.
 - Carter, B.L.A. et al. (1971). Relationship between energy substrate utilization and specific growth rate in *Aspergillus nidulans*. *Journal of Bacteriology*, 108, 309-313.
