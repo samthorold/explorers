@@ -97,6 +97,8 @@ pub fn viable_baseline() -> WorldParameters {
         starvation_shrinks: false,
         hyphal_uptake: false,
         contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
+        marker_isolation: false,
+        compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
     }
 }
 
@@ -393,4 +395,18 @@ pub fn world_case_with_starvation_cascade() -> impl Strategy<Value = WorldCase> 
             case.params.initial_nutrient_pool = pool;
             case
         })
+}
+
+/// A stepper case with marker isolation on (#837): the C1 domain, its
+/// founding clusters at origins `10 s` apart, with the compatibility scale
+/// drawn from a fraction of one marker step, where kin soon stop mating, to
+/// far beyond the drift a short run makes, where every kin pair passes. A
+/// separate strategy, so `world_case()` draws exactly the inputs it always
+/// has.
+pub fn world_case_with_marker_isolation() -> impl Strategy<Value = WorldCase> {
+    (world_case(), prop_oneof![0.3f32..=3.0, 10.0f32..=1000.0]).prop_map(|(mut case, s)| {
+        case.params.marker_isolation = true;
+        case.params.compatibility_scale = s;
+        case
+    })
 }

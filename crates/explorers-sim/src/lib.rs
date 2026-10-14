@@ -747,6 +747,86 @@ pub struct WorldParameters {
     /// it. Default [`DEFAULT_CONTACT_DISTANCE`].
     #[serde(default = "default_contact_distance")]
     pub contact_distance: f32,
+    /// Marker isolation switch (#837; world-rules.md flow 4, *Reproductive
+    /// isolation follows ancestry, through a neutral marker*): when on, every
+    /// birth steps each agent's neutral [`Agent::marker`], and a candidate
+    /// pair within reproductive reach can mate only if it passes one keyed
+    /// draw against its compatibility `c = exp(−d² / (2s²))`, `d` the marker
+    /// distance and `s` [`Self::compatibility_scale`]. A seeker takes the
+    /// passing candidate nearest in the marker, and trait distance and
+    /// `reproductive_compatibility_distance` play no part in mating. World
+    /// creation puts each founding cluster's founders at its own marker
+    /// origin ([`marker_origin`]). Default `false` is off: no marker is drawn,
+    /// no RNG is consumed, mating is the trait-distance rule, and every
+    /// existing recipe, pin and fixture is bit-unchanged.
+    #[serde(default)]
+    pub marker_isolation: bool,
+    /// Compatibility scale `s` (#837): the marker distance over which
+    /// compatibility falls, `c = exp(−d² / (2s²))`. Marker units (the marker
+    /// steps by one unit per dimension per birth). Read only while
+    /// `marker_isolation` is on. Default [`DEFAULT_COMPATIBILITY_SCALE`].
+    #[serde(default = "default_compatibility_scale")]
+    pub compatibility_scale: f32,
+}
+
+/// Dimensions of the neutral marker (#837; world-rules.md flow 4, *Eight
+/// dimensions*).
+pub const MARKER_DIMS: usize = 8;
+
+/// A neutral marker: ancestry, carried outside the trait vector (#837).
+pub type Marker = [f32; MARKER_DIMS];
+
+/// Default compatibility scale `s`: one marker step. Inert while
+/// `marker_isolation` is off; instruments set their own (mode 1 reads
+/// `s = 100`).
+pub const DEFAULT_COMPATIBILITY_SCALE: f32 = 1.0;
+
+fn default_compatibility_scale() -> f32 {
+    DEFAULT_COMPATIBILITY_SCALE
+}
+
+/// Squared Euclidean distance between two markers.
+pub fn marker_distance_squared(a: &Marker, b: &Marker) -> f32 {
+    a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum()
+}
+
+/// A founder's marker (#837): its founding cluster's [`marker_origin`] with
+/// `marker_isolation` on; all zero, the field unread, with it off.
+fn founder_marker(params: &WorldParameters, cluster: u32) -> Marker {
+    if params.marker_isolation {
+        marker_origin(cluster, params.compatibility_scale)
+    } else {
+        [0.0; MARKER_DIMS]
+    }
+}
+
+/// A pair's compatibility under marker isolation (#837):
+/// `c = exp(−d² / (2s²))`, `d` their marker distance and `s` the
+/// compatibility scale. In `f64`, so the `e⁻⁵⁰` between unrelated founding
+/// clusters is not lost below a draw's resolution.
+pub fn marker_compatibility(a: &Marker, b: &Marker, scale: f32) -> f64 {
+    let d2 = marker_distance_squared(a, b) as f64;
+    let s = scale as f64;
+    (-d2 / (2.0 * s * s)).exp()
+}
+
+/// The marker origin of founding cluster `cluster` at compatibility scale
+/// `scale` (#837; world-rules.md flow 4, *Founders*): any two origins sit
+/// exactly `10 s` apart, so unrelated founding clusters start at
+/// `c = e⁻⁵⁰`. Clusters 0–7 sit `10 s / √2` along distinct axes; cluster 8
+/// at `5 s / √2` on every axis, the ninth vertex of the regular simplex.
+///
+/// Panics for a cluster beyond 8: eight dimensions hold nine mutually
+/// equidistant points.
+pub fn marker_origin(cluster: u32, scale: f32) -> Marker {
+    let a = 10.0 * scale / std::f32::consts::SQRT_2;
+    let mut origin = [0.0; MARKER_DIMS];
+    match cluster as usize {
+        k if k < MARKER_DIMS => origin[k] = a,
+        MARKER_DIMS => origin = [a / 2.0; MARKER_DIMS],
+        k => panic!("marker isolation founds at most 9 clusters, got cluster {k}"),
+    }
+    origin
 }
 
 /// Design default contact distance `d_c = 0.1 u_M` (world-rules.md, *Unit
@@ -835,6 +915,16 @@ pub struct AgentSpec {
     pub traits: TraitVector,
     #[serde(default)]
     pub nutrient: f32,
+    /// The founding cluster this agent belongs to (#837; world-rules.md flow
+    /// 4, *Founders*). With `marker_isolation` on, world creation puts it at
+    /// its cluster's [`marker_origin`]; off, it is not read. Omitted in a
+    /// recipe, and not written when 0, so recipes are unchanged.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub founding_cluster: u32,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 /// A standing carcass seeded directly into the world from a `WorldRecipe`
@@ -929,6 +1019,11 @@ pub struct Agent {
     /// tick's nutrient uptake. Off-limits to growth. Reproduction gates on and
     /// donates from this, mirroring `repro_reserve` for energy.
     pub repro_nutrient: f32,
+    /// The neutral marker (#837; world-rules.md flow 4): ancestry, outside
+    /// the trait vector, read by no cost, flow or channel, only by mating's
+    /// compatibility under `marker_isolation`. All zero, and never stepped,
+    /// with the switch off.
+    pub marker: Marker,
 }
 
 /// Maps a functional trait index (0–2) to its position in the TraitVector.
@@ -960,6 +1055,7 @@ impl Agent {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: [0.0; MARKER_DIMS],
         }
     }
 
@@ -1252,6 +1348,7 @@ impl World {
                     founder_position((x, y), patch_centres[id % n_clusters], aggregation, extent);
                 let centroid = &cluster_centroids[id % n_clusters];
                 Agent {
+                    marker: founder_marker(&params, (id % n_clusters) as u32),
                     id: id as u64,
                     position,
                     reserve: seed_reserve,
@@ -1352,6 +1449,7 @@ impl World {
                         provision_initial_reserve_structure(spec.reserve, &params);
                     initial_dissipation += heat;
                     Agent {
+                        marker: founder_marker(&params, spec.founding_cluster),
                         id: i as u64,
                         position: spec.position,
                         reserve,
@@ -2284,6 +2382,8 @@ mod tests {
             offspring_structure_fraction: 0.2,
             hyphal_uptake: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
+            marker_isolation: false,
+            compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
         }
     }
 
@@ -2604,6 +2704,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         };
         assert_eq!(agent.nutrient, 5.0);
         let carcass = Carcass {
@@ -2785,6 +2886,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 7.0,
+            marker: Default::default(),
         };
         assert_eq!(agent.repro_nutrient, 7.0);
     }
@@ -2806,6 +2908,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 7.0,
+            marker: Default::default(),
         };
         // zero traits -> ratio = base_nutrient_ratio = 0.1; bound = 4.0 * 0.1 = 0.4
         let bound = stoichiometric_demand(&agent.traits, agent.structure, &params);
@@ -3104,6 +3207,45 @@ mod tests {
     }
 
     #[test]
+    fn marker_isolation_parameters_round_trip_and_default_off() {
+        // #837: a recipe or checkpoint that predates marker isolation loads
+        // with it off and the scale at its default; a recipe's founders load
+        // in cluster 0, and cluster 0 is not written, so recipes are
+        // unchanged.
+        let mut params = test_params();
+        params.marker_isolation = true;
+        params.compatibility_scale = 100.0;
+        let json = serde_json::to_string(&params).unwrap();
+        let back: WorldParameters = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, params);
+
+        let mut value = serde_json::to_value(test_params()).unwrap();
+        let fields = value.as_object_mut().unwrap();
+        fields.remove("marker_isolation");
+        fields.remove("compatibility_scale");
+        let without: WorldParameters = serde_json::from_value(value).unwrap();
+        assert!(!without.marker_isolation);
+        assert_eq!(without.compatibility_scale, DEFAULT_COMPATIBILITY_SCALE);
+
+        let spec = AgentSpec {
+            position: (1.0, 2.0),
+            reserve: 3.0,
+            traits: zero_traits(),
+            nutrient: 0.0,
+            founding_cluster: 0,
+        };
+        let json = serde_json::to_value(&spec).unwrap();
+        assert!(json.get("founding_cluster").is_none());
+        let clustered = AgentSpec {
+            founding_cluster: 2,
+            ..spec
+        };
+        let back: AgentSpec =
+            serde_json::from_value(serde_json::to_value(&clustered).unwrap()).unwrap();
+        assert_eq!(back, clustered);
+    }
+
+    #[test]
     fn saturating_decomposition_parameters_round_trip_and_default_off() {
         // #803: a recipe or checkpoint that predates saturating carcass
         // decomposition loads with it off (k_d = 0) and K at its default.
@@ -3399,6 +3541,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 0.0,
                 repro_nutrient: 0.0,
+                marker: Default::default(),
             });
         }
 
@@ -3467,6 +3610,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         });
 
         world.step();
@@ -3536,6 +3680,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         });
         // Target with structure to drain
         world.add_agent(Agent {
@@ -3552,6 +3697,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         });
 
         world.step();
@@ -3660,6 +3806,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         };
         let nominal = agent.effective_trait_with_steepness(0, 1.0);
         assert!((nominal - 1.0).abs() < 1e-6);
@@ -3775,6 +3922,7 @@ mod tests {
                 reserve: 50.0,
                 traits: zero_traits(),
                 nutrient: 0.0,
+                founding_cluster: 0,
             }]),
             carcasses: None,
             max_ticks: 100,
@@ -3800,6 +3948,7 @@ mod tests {
                 reserve: 50.0,
                 traits,
                 nutrient: 0.0,
+                founding_cluster: 0,
             }]),
             carcasses: None,
             max_ticks: 100,
@@ -3826,12 +3975,14 @@ mod tests {
                     reserve: 50.0,
                     traits: zero_traits(),
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
                 AgentSpec {
                     position: (1.0, 0.0),
                     reserve: 10.0,
                     traits: zero_traits(),
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
             ]),
             carcasses: None,
@@ -3865,12 +4016,14 @@ mod tests {
             initial_distribution: None,
             agents: Some(vec![
                 AgentSpec {
+                    founding_cluster: 0,
                     position: (0.0, 0.0),
                     reserve: 30.0,
                     traits: zero_traits(),
                     nutrient: 0.0, // nutrient-poor
                 },
                 AgentSpec {
+                    founding_cluster: 0,
                     position: (1.0, 0.0),
                     reserve: 30.0,
                     traits: zero_traits(),
@@ -3927,12 +4080,14 @@ mod tests {
             initial_distribution: None,
             agents: Some(vec![
                 AgentSpec {
+                    founding_cluster: 0,
                     position: (0.0, 0.0),
                     reserve: 50.0, // energy-rich
                     traits: zero_traits(),
                     nutrient: 0.0, // nutrient-poor
                 },
                 AgentSpec {
+                    founding_cluster: 0,
                     position: (1.0, 0.0),
                     reserve: 10.0, // energy-poor
                     traits: zero_traits(),
@@ -4006,12 +4161,14 @@ mod tests {
                     reserve: 100.0,
                     traits: zero_traits(),
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
                 AgentSpec {
                     position: (1.0, 0.0),
                     reserve: 100.0,
                     traits: zero_traits(),
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
             ]),
             carcasses: None,
@@ -4051,12 +4208,14 @@ mod tests {
                     reserve: 100.0,
                     traits: zero_traits(),
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
                 AgentSpec {
                     position: (1.0, 0.0),
                     reserve: 0.05, // below one tick's metabolism → starves this step
                     traits: zero_traits(),
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
             ]),
             carcasses: None,
@@ -4140,12 +4299,14 @@ mod tests {
             initial_distribution: None,
             agents: Some(vec![
                 AgentSpec {
+                    founding_cluster: 0,
                     position: (0.0, 0.0),
                     reserve: 100.0, // producer: energy-rich
                     traits: zero_traits(),
                     nutrient: 0.0, // ...nutrient-poor
                 },
                 AgentSpec {
+                    founding_cluster: 0,
                     position: (1.0, 0.0),
                     reserve: 10.0, // decomposer: energy-poor
                     traits: zero_traits(),
@@ -4222,6 +4383,7 @@ mod tests {
                         ..zero_traits()
                     },
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
                 AgentSpec {
                     position: (1.0, 0.0),
@@ -4231,6 +4393,7 @@ mod tests {
                         ..zero_traits()
                     },
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
             ]),
             carcasses: Some(vec![CarcassSpec {
@@ -4328,12 +4491,14 @@ mod tests {
                     reserve: 12.0, // builder: modest reserve
                     traits: zero_traits(),
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
                 AgentSpec {
                     position: (1.0, 0.0),
                     reserve: 0.0, // free-rider: poor in both, nothing to give back
                     traits: zero_traits(),
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
             ]),
             carcasses: None,
@@ -4370,6 +4535,7 @@ mod tests {
                 reserve: 50.0,
                 traits: zero_traits(),
                 nutrient: 0.0,
+                founding_cluster: 0,
             }]),
             carcasses: Some(vec![CarcassSpec {
                 position: (1.0, 2.0),
@@ -4406,12 +4572,14 @@ mod tests {
                     reserve: 50.0,
                     traits: zero_traits(),
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
                 AgentSpec {
                     position: (1.0, 1.0),
                     reserve: 50.0,
                     traits: zero_traits(),
                     nutrient: 0.0,
+                    founding_cluster: 0,
                 },
             ]),
             carcasses: Some(vec![
@@ -4612,6 +4780,7 @@ mod tests {
                 reserve: 1.0, // small budget -> tiny seeded structure
                 traits: generalist,
                 nutrient: 100.0,
+                founding_cluster: 0,
             }]),
             carcasses: None,
             max_ticks: 10,
@@ -4698,6 +4867,8 @@ mod tests {
             offspring_structure_fraction: 0.2,
             hyphal_uptake: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
+            marker_isolation: false,
+            compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
         }
     }
 
@@ -4721,6 +4892,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 5.0,
                 repro_nutrient: 0.0,
+                marker: Default::default(),
             });
         }
         // Heterotrophs (mobile, consume living and dead)
@@ -4742,6 +4914,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 5.0,
                 repro_nutrient: 0.0,
+                marker: Default::default(),
             });
         }
     }
@@ -4781,6 +4954,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         });
 
         world.step();
@@ -4975,6 +5149,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         });
 
         world.step();
@@ -5012,6 +5187,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         });
         // Nutrient-rich target.
         world.add_agent(Agent {
@@ -5029,6 +5205,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         });
 
         world.step();
@@ -5068,6 +5245,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         });
 
         world.step();
@@ -5098,6 +5276,7 @@ mod tests {
         };
         let mut world = World::new(params, dist, 42);
         world.add_agent(Agent {
+            marker: Default::default(),
             id: 0,
             position: (0.0, 0.0),
             reserve: 60.0,
@@ -5164,6 +5343,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 350.0,
             repro_nutrient: 10.0,
+            marker: Default::default(),
         });
         let parent_id = world.agents()[0].id;
 
@@ -5228,6 +5408,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 350.0,
                 repro_nutrient: 10.0,
+                marker: Default::default(),
             });
         }
         let parents: std::collections::HashSet<u64> = world.agents().iter().map(|a| a.id).collect();
@@ -5295,6 +5476,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         });
 
         let mut total_births = 0;

@@ -479,3 +479,69 @@ fn the_starvation_cascade_options_set_both_switches_and_write_the_founder_readou
         "{md}"
     );
 }
+
+/// `--marker-isolation --compatibility-scale S` (#837) turns marker
+/// isolation on at scale S and records it in the artifact and summary, and
+/// each run or arm writes the marker readout; without the flags nothing is
+/// recorded. The two flags go together.
+#[test]
+fn marker_isolation_records_the_scale_and_writes_the_marker_readout() {
+    let dir = scratch("marker-isolation");
+    let plain = run_with(&dir.join("plain.json"), &["--decomposer-founders", "10"]);
+    assert!(plain.get("marker_isolation").is_none());
+    assert!(plain["report"].get("marker").is_none());
+    let md = std::fs::read_to_string(dir.join("plain.md")).unwrap();
+    assert!(!md.contains("Marker"), "{md}");
+
+    let on = run_with(
+        &dir.join("on.json"),
+        &[
+            "--decomposer-founders",
+            "10",
+            "--marker-isolation",
+            "--compatibility-scale",
+            "100",
+        ],
+    );
+    assert_eq!(
+        on["marker_isolation"]["compatibility_scale"].as_f64(),
+        Some(100.0)
+    );
+    let marker = &on["report"]["marker"];
+    assert_eq!(marker["samples"][0]["line_living"], 10);
+    assert_eq!(marker["samples"].as_array().unwrap().len(), 3);
+    assert!(marker["producers"]["mean"].as_f64().is_some(), "{marker}");
+    let md = std::fs::read_to_string(dir.join("on.md")).unwrap();
+    assert!(md.contains("## Marker isolation"), "{md}");
+    assert!(md.contains("## Marker readout"), "{md}");
+
+    let paired = run_with(
+        &dir.join("paired.json"),
+        &[
+            "--decomposer-founders",
+            "10",
+            "--clear-at",
+            "5",
+            "--marker-isolation",
+            "--compatibility-scale",
+            "100",
+        ],
+    );
+    for arm in ["perturbed", "control"] {
+        assert!(paired["report"][arm]["marker"]["line"].is_object(), "{arm}");
+    }
+
+    for args in [
+        &["--marker-isolation"][..],
+        &["--compatibility-scale", "100"][..],
+        &["--marker-isolation", "--compatibility-scale", "0"][..],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+            .args(args)
+            .output()
+            .expect("the instrument runs");
+        assert!(!output.status.success(), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("--compatibility-scale"), "{stderr}");
+    }
+}

@@ -447,6 +447,8 @@ mod tests {
             starvation_shrinks: false,
             hyphal_uptake: false,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
+            marker_isolation: false,
+            compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
         }
     }
 

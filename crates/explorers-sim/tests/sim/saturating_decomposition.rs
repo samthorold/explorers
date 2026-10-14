@@ -54,6 +54,7 @@ fn drainer(id: u64, heterotrophy: f32) -> Agent {
         wear: Default::default(),
         repro_reserve: 0.0,
         repro_nutrient: 0.0,
+        marker: Default::default(),
     }
 }
 

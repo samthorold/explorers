@@ -15,7 +15,7 @@
 
 use crate::event::{Event, EventKind};
 use crate::{
-    Agent, FUNCTIONAL_TRAIT_COUNT, FUNCTIONAL_TRAIT_INDICES, TraitVector, WorldParameters,
+    Agent, FUNCTIONAL_TRAIT_COUNT, FUNCTIONAL_TRAIT_INDICES, Marker, TraitVector, WorldParameters,
     stoichiometric_demand,
 };
 
@@ -44,6 +44,9 @@ pub struct AgentSoA {
     pub t_dispersal: Vec<f32>,
     // Per-functional-trait wear, one column per functional trait.
     pub wear: [Vec<f32>; FUNCTIONAL_TRAIT_COUNT],
+    /// The neutral marker (#837), carried so rows round-trip; no SoA phase
+    /// reads it.
+    pub marker: Vec<Marker>,
 }
 
 impl AgentSoA {
@@ -80,6 +83,7 @@ impl AgentSoA {
                 Vec::with_capacity(n),
                 Vec::with_capacity(n),
             ],
+            marker: Vec::with_capacity(n),
         };
         for a in agents {
             s.push_agent(a);
@@ -108,6 +112,7 @@ impl AgentSoA {
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
             self.wear[ft].push(a.wear[ft]);
         }
+        self.marker.push(a.marker);
     }
 
     /// Remove row `i` by swapping the last row into its place. Mirrors
@@ -132,6 +137,7 @@ impl AgentSoA {
         for ft in 0..FUNCTIONAL_TRAIT_COUNT {
             self.wear[ft].swap_remove(i);
         }
+        self.marker.swap_remove(i);
     }
 
     /// Reconstruct the `TraitVector` for row `i`.
@@ -150,6 +156,7 @@ impl AgentSoA {
     /// Reconstruct a full `Agent` from row `i`. Round-trips `from_agents`.
     pub fn agent_at(&self, i: usize) -> Agent {
         Agent {
+            marker: self.marker[i],
             id: self.id[i],
             position: (self.pos_x[i], self.pos_y[i]),
             reserve: self.reserve[i],

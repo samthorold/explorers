@@ -76,6 +76,17 @@ pub enum PhaseTag {
     /// Senescent death (#763): the per-tick draw against the hazard `η · w`.
     /// Single-agent. Skipped, not drawn, where the hazard is zero.
     Senescence = 5,
+    /// Marker compatibility (#837): one draw per candidate pair per tick
+    /// against `c`, before mating. Keyed on the ordered pair, so the pair's
+    /// draw is the same from either side. Drawn only with
+    /// `marker_isolation` on.
+    MarkerCompatibility = 6,
+    /// Marker inheritance (#837): per offspring, the crossover coin of each
+    /// marker dimension (sexual) and its unit Gaussian step. Keyed on the
+    /// parent (asexual) or the ordered pair (sexual), apart from the
+    /// reproduction streams so the marker leaves every other draw alone.
+    /// Drawn only with `marker_isolation` on.
+    MarkerInheritance = 7,
 }
 
 /// Sentinel occupying the high id slot for single-agent (non-pair) sites, so a
