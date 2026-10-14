@@ -127,6 +127,55 @@ Key system-level distinctions among saprotrophs:
 - **What the domain gives:** a *form* for catchment (one genet spans many plants' litter, and reach is limited by food base against the maintenance of the connecting mycelium); *orders* for the stand's decomposer biomass against its litter, and how it rises from founding to settled, and for active-tissue maintenance.
 - **What it leaves open:** a reach per unit of biomass that carries to another world's units, the litter one individual commands, the number of founders per unit of litter, the living fraction of a field cord system, and a general decomposition rate per unit of decomposer biomass.
 
+### The saprotroph's life history: ageing, upkeep, and when and how it reproduces
+
+**Ageing.** A saprotroph's mycelium is modular and grows without a set end. The genet as a whole is not expected to age, and most do not.
+- **The theory.** A fungus has no separate germ line. It grows radially, so its size, and roughly its fecundity, rise with age. Selection then opposes senescence, as Hamilton (1966, via Maas) argued for organisms that keep growing. "Systemic senescence is expected to be absent or greatly delayed in fungi" (Maas 2005).
+- **Long-lived genets.**
+  - One *Armillaria gallica* genet covers about 75 ha of forest floor and is at least 2,500 years old, from measured rhizomorph growth rates. Its genome barely changed across samples more than 100 m apart (Anderson et al. 2018).
+  - A *Clitocybe geotropa* fairy ring is estimated at about 700 years old (Zotti et al. 2025; *Catchment*, above).
+- **The exceptions live on short-lived substrates.** Every natural isolate of the dung fungus *Podospora anserina* ages and dies within weeks (Rizet 1953, via Maas 2005), two to three weeks in culture (van Diepeningen et al. 2014). Senescence is also reported in other dung fungi (*Podospora curvicolla*, *Ascobolus*, *Sordaria*) and in some *Neurospora* isolates. In those *Neurospora* isolates it is caused by a mitochondrial plasmid (Bertrand, Chan & Griffiths 1985). Maas (2005) reads the pattern ecologically. A fungus on a substrate that is limited in both space and time, and that reproduces early and copiously, can evolve to age. One that is not so limited, like *Armillaria* in soil, is expected to live very long. Fungal senescence is "almost invariably" an accumulation of defective mitochondrial DNA, not a shortening of telomeres.
+- **What age means at each scale.**
+  - *The genet* is everything grown from one mating. Its age is the time since then, and it has no age-tied hazard in most species.
+  - *Hyphae and compartments* turn over. Fungal biomass in soil turns over in 130–150 days (Rousk & Bååth 2007). Old compartments are emptied and their contents moved to the growing front (*Upkeep as it grows*, below).
+  - *Fruit bodies* are short-lived modules. In *Coprinopsis cinerea* the cap autolyses once its spores are shed (Kües 2000).
+- **What kills a genet is ecological.** Its resource runs out. A rival replaces it in combat (Boddy 2000). It is grazed. "Individuals of *Armillaria* cannot exist in stasis over the long term" (Anderson et al. 2018). The authors suggest, untested, that most genets die soon after they start.
+- **So a resource-unit-restricted genet lives about as long as its piece of litter.** This is an inference from the above, not a measurement. Leaf litter has a half-life of 0.5–4 years ([nutrient cycling](nutrient-cycling.md), *Decomposition kinetics*), and a leaf's fungal community turns over within months (Voříšková & Baldrian 2013). A cord-former that moves between pieces is not bounded this way.
+
+**Upkeep as it grows.** A mycelium's upkeep tracks its living, active part, not its whole biomass. As a mycelium grows into its litter, the share that is old, emptied or abandoned rises.
+- **Old mycelium is emptied and its contents moved forward.** Cytoplasm in the mature region is broken down by autophagy and carried to the tips (Shoji, Arioka & Kitamoto 2006). Cord systems withdraw from unproductive regions and redeploy that biomass (Harris & Boddy 2005). Both are covered in [energy flow](energy-flow.md), *Lean times*.
+- **Older mycelium respires less.** Whole-culture respiration of *Rhizoctonia solani* and *Sclerotium bataticola* fell with age (Van Etten, Molitoris & Gottlieb 1966). In *Cryphonectria parasitica* colonies "the metabolic rate steadily declines with age and differentiation of the mycelium" (Dawe et al. 2009). That study measured CO₂ per unit of colony area, not per unit of biomass.
+- **In decomposing litter, most of the mycelium ends up dead.** In needle litter of three conifer forests, respiration fell with litter age, and "in far-decomposed litter only a minor fraction of the total mycelium is alive" (Virzo De Santo et al. 2002).
+- **A mycelium abandons an exhausted food base.** *Phanerochaete velutina* grew from a wood block to a new one. The original block was then moved to fresh soil, and only 67 % of them regrew. Whether the mycelium left depended on the new resource reaching a threshold size (Fukasawa, Savoury & Boddy 2020).
+- **The order of the saving.** Only 2–4 % of fungal biomass in a pine-forest soil was active. Dormant biomass pays two to three orders of magnitude less maintenance than active biomass (*Maintenance*, above).
+- **The domain gives no exponent.** No source found gives how a mycelium's maintenance scales with its size, nor the living fraction of a field genet as it ages. The form is clear: the cost of keeping a mycelium grows more slowly than the mycelium, because old parts are emptied, recycled or left behind.
+
+**Provisioning reproduction.** A mycelium provisions its fruit bodies from stores and from material moved through the network, not only from what it is drawing at the time.
+- **Stored carbon moves into the fruit body.** In *Coprinopsis cinerea*, "degradation of glycogen and translocation from the mycelium to the developing fruiting-bodies have been demonstrated" early in fruiting. Young fruit bodies draw a flow of nutrients toward themselves. Transport through the vegetative mycelium is slow, so early fruiting likely relies on carbon "stored in place" (Kües 2000).
+- **The network redirects to the fruit bodies.** In *Agaricus bisporus*, a tracer amino acid moves toward the colony edge while the mycelium grows. When mushrooms start to form, its flow switches to them, through the mycelium and its cords (Herman et al. 2020).
+- **Spores can be built from existing mycelium.** Aquatic hyphomycetes on leaves in streams put about half of their new production into conidia. Without added nitrogen and phosphorus, their ergosterol fell while sporulation "continued at the initial level". That points to existing mycelium being turned into spores (Sridhar & Bärlocher 2000).
+- **Fruit bodies are rich in nitrogen and phosphorus.** Across 214 species, fruit bodies of litter and soil saprotrophs average 6.4 % N by dry mass, at C:N about 7. Those of wood saprotrophs average 3.5 % N, at C:N about 16 (Pánek et al. 2024). Plant tissue runs at C:N 20–80 ([nutrient cycling](nutrient-cycling.md), *Stoichiometric constraints*). So a litter saprotroph's fruit body holds nitrogen several times more concentrated than the litter it grew on. That much is arithmetic, not a finding of these sources.
+- **Which element limits fruiting is open.** In *Coprinopsis*, more carbon or more nitrogen in the medium each act against fruiting, and fruiting is "particularly sensitive to balanced C/N ratios" (Kües 2000). No field study found shows nitrogen or phosphorus as the element that limits a litter saprotroph's fruiting.
+
+**When it reproduces.** Two patterns run side by side. Mushroom-forming fungi fruit when their nutrients run out, given the right weather. Leaf-litter microfungi sporulate while they grow.
+- **Depletion triggers fruiting.** *Coprinopsis cinerea* "initiates fruiting when nutrients are depleted", but "only the youngest mycelium maintains fruiting competence". Glucose inhibits fruiting (Kües 2000). The full set of triggers is light, temperature, humidity and nutrients. Starvation alone is not enough. [Energy flow](energy-flow.md), *Lean times*, has more examples: *Bacillus* sporulation, myxobacterial fruiting, and spores built by autophagy in *Aspergillus*.
+- **Theory puts the switch before exhaustion.** In an optimal-allocation model of a saprotroph on one patch, the fungus grows first, then switches all at once to spores. It switches before the patch is used up (Gilchrist, Sulsky & Pringle 2006).
+- **Sporulation alongside growth.** Aquatic hyphomycetes on stream leaves put about half of their production into conidia from early in decay. In one stream, ergosterol and spore production peaked together, at five weeks (Sridhar & Bärlocher 2000, data not shown in the paper).
+- **What is open.** No field study found follows one litter basidiomycete's genet on a known cohort of litter, to say whether it fruits as that litter is exhausted or while it is still growing into it.
+
+*Evidence quality.*
+- **Read in full text:** Maas's thesis introduction.
+- **Read in part from the full text:** Kües (2000), about two-fifths of it; Anderson et al. (2018); Sridhar & Bärlocher; Dawe et al.; and Pánek et al. (its Table 1).
+- **Read from abstracts and summaries:** van Diepeningen et al., Virzo De Santo et al., Fukasawa et al., Herman et al., Gilchrist et al. and Van Etten et al. Shoji et al. and Harris & Boddy are as read for [energy flow](energy-flow.md).
+- **From a secondary summary:** Bertrand et al.
+- **Not verified:** the pages of Van Etten et al., Bertrand et al. and Herman et al., and the title of Virzo De Santo et al.
+- **A citation to check:** the 214-species fruit-body survey is Pánek et al. (2024) in *Frontiers in Microbiology*. The C:N of about 11 attributed above to "Brabcova et al. 2024" may be the same dataset under another name; that was not checked here.
+- **Taken from Maas, not read:** Rizet (1953), Hamilton (1966), and the other dung-fungus cases.
+- **What the domain gives:** a *form* for ageing (a modular genet with no general age-tied hazard, and senescence in a minority on short-lived substrates), and a *form* for upkeep (cost tracks the living part, which falls as a share of the mycelium). For reproduction it gives *mechanisms*: translocation from stores, spores built from existing mycelium, depletion as one trigger among several, and sporulation alongside growth in leaf microfungi. One *magnitude* carries: about half of an aquatic hyphomycete's production goes to spores.
+- **What it leaves open:** an exponent for upkeep against size, the age at which field genets die, the share of a terrestrial litter saprotroph's production that goes to fruit bodies, and the element that limits fruiting in the field.
+
+How a saprotroph is kept from crossing with plants, and what holds its lineage at the heterotroph end, are in [trophic roles](trophic-roles.md), *A decomposer lineage stays a decomposer*.
+
 ### Mycorrhizal strategy
 
 **Flow position:** Producer carbon stock --> fungal biomass; soil nutrient stock --> producer nutrient uptake (mediated by fungi).
@@ -208,11 +257,13 @@ The overall pattern: removing fungi doesn't eliminate energy from the system —
 
 ## References
 
+- Anderson, J.B., Bruhn, J.N., Kasimer, D., Wang, H., Rodrigue, N. & Smith, M.L. (2018). Clonal evolution and genome stability in a 2500-year-old fungal individual. *Proceedings of the Royal Society B*, 285, 20182233.
 - Anderson, T.-H. & Domsch, K.H. (1985). Determination of ecophysiological maintenance carbon requirements of soil microorganisms in a dormant state. *Biology and Fertility of Soils*, 1, 81-89.
 - Bagchi, R. et al. (2014). Pathogens and insect herbivores drive rainforest plant diversity and composition. *Nature*, 506, 85-88.
 - Baldrian, P. et al. (2013). Estimation of fungal biomass in forest litter and soil. *Fungal Ecology*, 6, 1-11.
 - Bar-On, Y.M., Phillips, R. & Milo, R. (2018). The biomass distribution on Earth. *PNAS*, 115, 6506-6511.
 - Bebber, D.P. et al. (2007). Biological solutions to transport network design. *Proceedings of the Royal Society B*, 274, 2307-2315.
+- Bertrand, H., Chan, B.S.-S. & Griffiths, A.J.F. (1985). Insertion of a foreign nucleotide sequence into mitochondrial DNA causes senescence in *Neurospora intermedia*. *Cell*, 41, 877-884. (Pages not verified.)
 - Boberg, J.B. et al. (2014). Nitrogen and carbon reallocation in fungal mycelia during decomposition of boreal forest litter. *PLoS ONE*, 9, e92897.
 - Boddy, L. (1999). Saprotrophic cord-forming fungi: meeting the challenge of heterogeneous environments. *Mycologia*, 91, 13-32.
 - Boddy, L. (2000). Interspecific combative interactions between wood-decaying basidiomycetes. *FEMS Microbiology Ecology*, 31, 185-194.
@@ -224,34 +275,48 @@ The overall pattern: removing fungi doesn't eliminate energy from the system —
 - Bretherton, S., Tordoff, G.M., Jones, T.H. & Boddy, L. (2006). Compensatory growth of *Phanerochaete velutina* mycelial systems grazed by *Folsomia candida* (Collembola). *FEMS Microbiology Ecology*, 58, 33-40.
 - Burdon, J.J. & Laine, A.-L. (2019). *Evolutionary Dynamics of Plant-Pathogen Interactions*. Cambridge University Press.
 - Carter, B.L.A. et al. (1971). Relationship between energy substrate utilization and specific growth rate in *Aspergillus nidulans*. *Journal of Bacteriology*, 108, 309-313.
+- Dawe, A.L., Van Voorhies, W.A., Lau, T.A., Ulanov, A.V. & Li, Z. (2009). Major impacts on the primary metabolism of the plant pathogen *Cryphonectria parasitica* by the virulence-attenuating virus CHV1-EP713. *Microbiology*, 155, 3913-3921.
 - Donnelly, D.P. & Boddy, L. (1997). Resource acquisition by the mycelial-cord-former *Stropharia caerulea*: effect of resource quantity and quality. (Journal, volume and pages not verified.)
 - Falconer, R.E. et al. (2005). Biomass recycling and the origin of phenotype in fungal mycelia. *Proceedings of the Royal Society B*, 272, 1727-1734.
 - Fellbaum, C.R. et al. (2014). Fungal nutrient allocation in common mycorrhizal networks is regulated by the carbon source strength of individual host plants. *New Phytologist*, 203, 646-656.
 - Floudas, D. et al. (2012). The Paleozoic origin of enzymatic lignin decomposition reconstructed from 31 fungal genomes. *Science*, 336, 1715-1719.
+- Fukasawa, Y., Savoury, M. & Boddy, L. (2020). Ecological memory and relocation decisions in fungal mycelial networks: responses to quantity and location of new resources. *The ISME Journal*, 14, 380-388.
+- Gilchrist, M.A., Sulsky, D.L. & Pringle, A. (2006). Identifying fitness and optimal life-history strategies for an asexual filamentous fungus. *Evolution*, 60, 970-979.
+- Harris, M.J. & Boddy, L. (2005). Nutrient movement and mycelial reorganization in established systems of *Phanerochaete velutina*, following arrival of colonized wood resources. *Microbial Ecology*, 50, 141-151.
 - Hashimoto, S. et al. (2015). Global spatiotemporal distribution of soil respiration modeled using a global database. *Biogeosciences*, 12, 4121-4132.
 - Heaton, L. et al. (2012). Analysis of fungal networks. *Fungal Biology Reviews*, 26, 12-29.
+- Herman, K.C., Wösten, H.A.B., Fricker, M.D. & Bleichrodt, R.-J. (2020). Growth induced translocation effectively directs an amino acid analogue to developing zones in *Agaricus bisporus*. *Fungal Biology*, 124. (Pages not verified.)
 - Joergensen, R.G. & Wichern, F. (2008). Quantitative assessment of the fungal contribution to microbial tissue in soil. *Soil Biology and Biochemistry*, 40, 2977-2991.
 - Karst, J. et al. (2023). Mother trees, altruistic fungi, and the perils of plant personification. *Trends in Plant Science*, 28, 1206-1216.
 - Kiers, E.T. et al. (2011). Reciprocal rewards stabilize cooperation in the mycorrhizal symbiosis. *Science*, 333, 880-882.
+- Kües, U. (2000). Life history and developmental processes in the basidiomycete *Coprinus cinereus*. *Microbiology and Molecular Biology Reviews*, 64, 316-353.
 - Lindahl, B.D. & Olsson, S. (2004). Fungal translocation – creating and responding to environmental heterogeneity. *Mycologist*, 18, 79-88.
 - Lindahl, B.D. et al. (2007). Spatial separation of litter decomposition and mycorrhizal nitrogen uptake in a boreal forest. *New Phytologist*, 173, 611-620.
 - Lindeman, R.L. (1942). The trophic-dynamic aspect of ecology. *Ecology*, 23, 399-417.
+- Maas, M.F.P.M. (2005). *On the ecology and evolution of fungal senescence*. PhD thesis, Wageningen University.
 - Moore, J.A.M. et al. (2015). Decomposition by ectomycorrhizal fungi alters soil carbon storage in a simulation model. *Ecosphere*, 6, 1-16.
 - Moore, J.C. et al. (2004). Detritus, trophic dynamics and biodiversity. *Ecology Letters*, 7, 584-600.
 - Nelsen, M.P. et al. (2016). Delayed fungal evolution did not cause the Paleozoic peak in coal production. *PNAS*, 113, 2442-2447.
 - Osono, T. (2006). Role of phyllosphere fungi of forest trees in the development of decomposer fungal communities and decomposition processes of leaf litter. *Canadian Journal of Microbiology*, 52, 701-716.
+- Pánek, M., Vlková, T., Michalová, T., Borovička, J., Tedersoo, L., Adamczyk, B., Baldrian, P. & López-Mondéjar, R. (2024). Variation of carbon, nitrogen and phosphorus content in fungi reflects their ecology and phylogeny. *Frontiers in Microbiology*, 15, 1379825.
 - Penning de Vries, F.W.T. (1974). Substrate utilization and respiration in relation to growth and maintenance in higher plants. *Netherlands Journal of Agricultural Science*, 22, 40-44.
 - Read, D.J. & Perez-Moreno, J. (2003). Mycorrhizas and nutrient cycling in ecosystems – a journey towards relevance? *New Phytologist*, 157, 475-492.
+- Rizet, G. (1953). Cited via Maas (2005); not read, title not verified.
 - Rousk, J. & Bååth, E. (2007). Fungal biomass production and turnover in soil estimated using the acetate-in-ergosterol technique. *Soil Biology and Biochemistry*, 39, 2173-2177.
 - Schimel, J.P. & Weintraub, M.N. (2003). The implications of exoenzyme activity on microbial carbon and nitrogen limitation in soil: a theoretical model. *Soil Biology and Biochemistry*, 35, 549-563.
+- Shoji, J., Arioka, M. & Kitamoto, K. (2006). Possible involvement of pleiomorphic vacuolar networks in nutrient recycling in filamentous fungi. *Autophagy*, 2, 226-227.
 - Söderström, B.E. (1979). Seasonal fluctuations of active fungal biomass in horizons of a podzolized pine-forest soil in central Sweden. *Soil Biology and Biochemistry*, 11, 149-154.
 - Simard, S.W. (2018). Mycorrhizal networks facilitate tree communication, learning, and memory. In *Memory and Learning in Plants* (pp. 191-213). Springer.
 - Smith, S.E. & Read, D.J. (2008). *Mycorrhizal Symbiosis* (3rd ed.). Academic Press.
 - Šnajdr, J. et al. (2011). Transformation of *Quercus petraea* litter: successive changes in litter chemistry are reflected in differential enzyme activity and changes in the microbial community composition. *FEMS Microbiology Ecology*, 75, 291-303.
+- Sridhar, K.R. & Bärlocher, F. (2000). Initial colonization, nutrient supply, and fungal activity on leaves decaying in streams. *Applied and Environmental Microbiology*, 66, 1114-1119.
 - Suberkropp, K. (2001). Fungal growth, production, and sporulation during leaf decomposition in two streams. *Applied and Environmental Microbiology*, 67, 5063-5068.
 - Thompson, W. & Rayner, A.D.M. (1982). Spatial structure of a population of *Tricholomopsis platyphylla* in a woodland site. *New Phytologist*, 92, 103-114.
 - Thompson, W. (1982). Biology and ecology of mycelial cord-forming basidiomycetes in deciduous woodlands. PhD thesis, University of Bath.
 - van der Heijden, M.G.A. et al. (1998). Mycorrhizal fungal diversity determines plant biodiversity, ecosystem variability and productivity. *Nature*, 396, 69-72.
+- van Diepeningen, A.D. et al. (2014). Does autophagy mediate age-dependent effect of dietary restriction responses in the filamentous fungus *Podospora anserina*? *Philosophical Transactions of the Royal Society B*, 369, 20130447.
+- Van Etten, J.L., Molitoris, H.P. & Gottlieb, D. (1966). Changes in fungi with age. II. Respiration and respiratory enzymes of *Rhizoctonia solani* and *Sclerotium bataticola*. *Journal of Bacteriology*, 91. (Pages not verified.)
+- Virzo De Santo, A., Rutigliano, F.A. et al. (2002). Fungal mycelium and decomposition of needle litter in three contrasting coniferous forests. *Acta Oecologica*, 23, 247-259. (Title not verified.)
 - Voříšková, J. & Baldrian, P. (2013). Fungal community on decomposing leaf litter undergoes rapid successional changes. *The ISME Journal*, 7, 477-486.
 - Wang, G. et al. (2014). Representation of dormant and active microbial dynamics for ecosystem modeling. *PLoS ONE*, 9, e89252.
 - Xu, X., Thornton, P.E. & Post, W.M. (2013). A global analysis of soil microbial biomass carbon, nitrogen and phosphorus in terrestrial ecosystems. *Global Ecology and Biogeography*, 22, 737-749.
