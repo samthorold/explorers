@@ -767,6 +767,15 @@ pub struct WorldParameters {
     /// `marker_isolation` is on. Default [`DEFAULT_COMPATIBILITY_SCALE`].
     #[serde(default = "default_compatibility_scale")]
     pub compatibility_scale: f32,
+    /// Growth dilutes wear switch (#840; world-rules.md *Somatic wear*,
+    /// *Growth dilutes wear*): when on, a tick of growth that takes structure
+    /// from `S` to `S + ΔS` (`S > 0`, `ΔS > 0`) scales the wear on every
+    /// functional trait by `S / (S + ΔS)`. Loss of structure leaves wear
+    /// unchanged. Applies to every agent, producers included. Default `false`
+    /// is off: wear is untouched by growth, and every existing recipe, pin
+    /// and fixture is bit-unchanged.
+    #[serde(default)]
+    pub growth_dilutes_wear: bool,
 }
 
 /// Dimensions of the neutral marker (#837; world-rules.md flow 4, *Eight
@@ -2384,6 +2393,7 @@ mod tests {
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
+            growth_dilutes_wear: false,
         }
     }
 
@@ -3204,6 +3214,22 @@ mod tests {
         let without: WorldParameters = serde_json::from_value(value).unwrap();
         assert!(!without.starvation_draws_earmark);
         assert!(!without.starvation_shrinks);
+    }
+
+    #[test]
+    fn growth_dilutes_wear_round_trips_and_defaults_off() {
+        // #840: a recipe or checkpoint that predates growth dilution loads
+        // with it off.
+        let mut params = test_params();
+        params.growth_dilutes_wear = true;
+        let json = serde_json::to_string(&params).unwrap();
+        let back: WorldParameters = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, params);
+
+        let mut value = serde_json::to_value(test_params()).unwrap();
+        value.as_object_mut().unwrap().remove("growth_dilutes_wear");
+        let without: WorldParameters = serde_json::from_value(value).unwrap();
+        assert!(!without.growth_dilutes_wear);
     }
 
     #[test]
@@ -4869,6 +4895,7 @@ mod tests {
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
+            growth_dilutes_wear: false,
         }
     }
 

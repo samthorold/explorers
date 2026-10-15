@@ -1232,6 +1232,7 @@ mod tests {
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
+            growth_dilutes_wear: false,
         }
     }
 
@@ -2857,6 +2858,7 @@ mod tests {
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
+            growth_dilutes_wear: false,
         };
         let dist = explorers_sim::InitialDistribution {
             mean_traits: explorers_sim::TraitVector {

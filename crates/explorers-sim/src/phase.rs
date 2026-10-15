@@ -734,7 +734,11 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
             // matched by nutrient, so it stays in reserve rather than burning.
             let energy_spent = to_structure / efficiency;
             let dissipated = energy_spent - to_structure;
+            let structure_before = agent.structure;
             agent.structure += to_structure;
+            if params.growth_dilutes_wear {
+                dilute_wear(&mut agent.wear, structure_before, agent.structure);
+            }
             // Growth is the only flow that increases structure: advance the
             // peak high-water mark the death threshold is measured against.
             agent.record_peak_structure();
@@ -775,6 +779,28 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
         agent.repro_reserve += repro_fraction;
     }
     (events, total_dissipated)
+}
+
+/// Growth dilutes wear (#840; world rules, *Somatic wear*, *Growth dilutes
+/// wear*): new structure is built unworn, so growth that takes structure from
+/// `before` to `after` scales the wear on every functional trait by
+/// `before / after`. Only growth dilutes: when structure did not rise, or
+/// there was none to begin with (`before <= 0`, nothing worn to spread), the
+/// wear is left as it is.
+///
+/// Where it sits in the tick: inside [`grow`] (and its SoA mirror), at the
+/// moment growth adds the structure, so after that tick's repair (which
+/// [`grow`] funds first from the soma budget) and before the tick's wear
+/// accumulation ([`apply_wear`], later in the step). Over a tick of growth
+/// with repair, wear therefore moves by `a − ρκw − (ΔS/S)w` to first order.
+pub fn dilute_wear(wear: &mut [f32; crate::FUNCTIONAL_TRAIT_COUNT], before: f32, after: f32) {
+    if before <= 0.0 || after <= before {
+        return;
+    }
+    let factor = before / after;
+    for w in wear.iter_mut() {
+        *w *= factor;
+    }
 }
 
 /// First-order wear repair (world rules, *Somatic wear*): wear on every
@@ -2866,6 +2892,7 @@ mod tests {
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
+            growth_dilutes_wear: false,
         }
     }
 

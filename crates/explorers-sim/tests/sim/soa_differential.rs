@@ -259,3 +259,28 @@ fn elementwise_phases_bit_identical_with_size_scaled_base_rate() {
         "the size-scaled base rate must change some agent's cost in this set"
     );
 }
+
+/// Growth dilutes wear (#840) runs inside `grow`, so its SoA mirror must
+/// dilute bit for bit too. The warmed agents are given wear, so there is
+/// something to dilute.
+#[test]
+fn grow_soa_is_bit_identical_with_growth_diluting_wear() {
+    let recipe = load_recipe("example4.json");
+    let (mut agents, mut params) = warmed_agents(&recipe, 1, 50);
+    assert!(!agents.is_empty());
+    params.growth_dilutes_wear = true;
+    for (k, a) in agents.iter_mut().enumerate() {
+        let f = 0.05 + (k as f32) * 0.011;
+        a.wear = [f, f * 0.5, f * 0.25];
+    }
+    let mut grown = agents.clone();
+    phase::grow(&mut grown, &params);
+    assert!(
+        grown
+            .iter()
+            .zip(&agents)
+            .any(|(g, a)| g.structure > a.structure && g.wear[0] < a.wear[0]),
+        "some agent grows and is diluted"
+    );
+    assert_grow_identical(&agents, &params, "example4 grow, growth dilutes wear");
+}

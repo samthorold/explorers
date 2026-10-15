@@ -103,6 +103,13 @@
 //! producers. Without the flags nothing is recorded and the world is
 //! unchanged.
 //!
+//! `--growth-dilutes-wear` (#840; world rules, *Somatic wear*, *Growth
+//! dilutes wear*) turns growth dilution on: a tick of growth from S to S + ΔS
+//! scales every functional trait's wear by S / (S + ΔS), for mode 1's
+//! *Ageing* reading. The summary and artifact (`growth_dilutes_wear`) record
+//! it; it adds no readout. Without it nothing is recorded and the world is
+//! unchanged.
+//!
 //! With `--clear-at T` (#752) it reads the perturbation against its paired
 //! control: it settles the mesocosm to tick `T`, clones it, clears every agent
 //! and carcass from one copy's centre patch (an outflow, booked in each arm's
@@ -119,7 +126,8 @@
 //!                [--size-scaled-base-rate] [--established-producer-structure S_p]
 //!                [--living-resistance] [--starvation-draws-earmark]
 //!                [--starvation-shrinks] [--starvation-readout]
-//!                [--marker-isolation --compatibility-scale S] [--out PATH]
+//!                [--marker-isolation --compatibility-scale S]
+//!                [--growth-dilutes-wear] [--out PATH]
 //! ```
 //!
 //! Defaults: the committed `crates/explorers-reference-modes/mode1.json`
@@ -134,14 +142,15 @@ use std::path::PathBuf;
 use explorers_reference_modes::mesocosm::{
     Community, ESTABLISHED_PRODUCER_LIFESPAN_TICKS, Mode1Spec, body_reach_section,
     carcass_decay_constant_for_half_life, decomposition_kinetics_section,
-    founder_starvation_section, living_resistance_section, marker_isolation_section,
-    marker_readout_section, mode1_mesocosm_with_founders, mode1_summary, paired_summary, run_mode1,
-    run_paired, set_body_reach_pieces, set_decomposition_kinetics, set_living_resistance,
-    set_marker_isolation, set_size_scaled_base_rate, set_size_scaled_base_rate_at,
-    set_starvation_cascade, size_scaled_base_rate_section, starvation_cascade_section,
+    founder_starvation_section, growth_dilutes_wear_section, living_resistance_section,
+    marker_isolation_section, marker_readout_section, mode1_mesocosm_with_founders, mode1_summary,
+    paired_summary, run_mode1, run_paired, set_body_reach_pieces, set_decomposition_kinetics,
+    set_growth_dilutes_wear, set_living_resistance, set_marker_isolation,
+    set_size_scaled_base_rate, set_size_scaled_base_rate_at, set_starvation_cascade,
+    size_scaled_base_rate_section, starvation_cascade_section,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--marker-isolation --compatibility-scale S] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--marker-isolation --compatibility-scale S] [--growth-dilutes-wear] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -183,6 +192,8 @@ struct Cli {
     marker_isolation: bool,
     /// Its compatibility scale `s` (#837).
     compatibility_scale: Option<f32>,
+    /// Whether growth dilutes wear (#840).
+    growth_dilutes_wear: bool,
     out: Option<PathBuf>,
 }
 
@@ -209,6 +220,7 @@ impl Cli {
             starvation_readout: false,
             marker_isolation: false,
             compatibility_scale: None,
+            growth_dilutes_wear: false,
             out: None,
         };
         while let Some(flag) = args.next() {
@@ -238,6 +250,10 @@ impl Cli {
             }
             if flag == "--marker-isolation" {
                 cli.marker_isolation = true;
+                continue;
+            }
+            if flag == "--growth-dilutes-wear" {
+                cli.growth_dilutes_wear = true;
                 continue;
             }
             let value = args.next().ok_or(format!("{flag} needs a value"))?;
@@ -407,6 +423,10 @@ fn main() {
             cli.starvation_shrinks,
         )
     });
+    let growth_dilutes_wear = cli.growth_dilutes_wear;
+    if growth_dilutes_wear {
+        set_growth_dilutes_wear(&mut world);
+    }
     let starvation_readout = cli.starvation_readout || cascade.is_some();
     let community = match cli.community {
         Community::ProducersAndDecomposers => "producers and decomposers",
@@ -453,9 +473,14 @@ fn main() {
             Some(c) => format!("{header}\n\n{}", starvation_cascade_section(c)),
             None => header,
         };
-        match &marker_isolation {
+        let header = match &marker_isolation {
             Some(m) => format!("{header}\n\n{}", marker_isolation_section(m)),
             None => header,
+        };
+        if growth_dilutes_wear {
+            format!("{header}\n\n{}", growth_dilutes_wear_section())
+        } else {
+            header
         }
     };
     // The founder starvation readout (#821), when asked for: its summary
@@ -554,6 +579,9 @@ fn main() {
     if let Some(m) = marker_isolation {
         artifact["marker_isolation"] =
             serde_json::to_value(m).expect("the marker isolation serialises");
+    }
+    if growth_dilutes_wear {
+        artifact["growth_dilutes_wear"] = serde_json::json!(true);
     }
     if let Some(readout) = starvation {
         artifact["founder_starvation"] = readout;
