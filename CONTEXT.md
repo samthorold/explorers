@@ -167,6 +167,10 @@ _Avoid_: healing, regeneration (these imply discrete repair events, not continuo
 Death by age: each tick a living agent dies with a probability proportional to its total **wear**, scaled by the **senescence hazard**. It runs beside death by loss of function, where worn traits no longer cover an agent's costs. Because wear levels off at its equilibrium, the hazard rises with age and then plateaus.
 _Avoid_: old age (suggests a fixed lifespan), natural death (every death in the world is natural)
 
+**Growth dilution**:
+The fall in an agent's **wear** as it grows: new structure arrives unworn, so a body that adds to itself carries its wear over more of itself. A body that keeps growing barely ages, and one that has stopped ages as before. Losing structure leaves wear unchanged.
+_Avoid_: rejuvenation (implies wear is repaired, not spread), immortality (dilution does not remove death)
+
 ### Movement and sensing
 
 **Chemotaxis**:

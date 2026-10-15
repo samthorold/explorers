@@ -160,6 +160,23 @@ Identity-determining thresholds use an agent's nominal (unworn) traits. An agent
 
 **Offspring are born with zero wear.** This is the evolutionary rationale for reproduction: it resets the soma. The germline is maintained at higher fidelity than the soma. A parent's worn-out body produces a brand-new body. The information (heritable traits) persists in pristine hardware (the offspring). This asymmetry between germline and soma is what makes the disposable soma trade-off coherent — repair your body, or build a new one.
 
+**Growth dilutes wear.** New structure is built unworn, just as an offspring is born unworn. Wear is a property of the whole body, so a body that grows spreads its wear over more of itself. A tick of growth that takes structure from `S` to `S + ΔS` scales the wear on every functional trait by
+> w ← w · S / (S + ΔS)
+
+Loss of structure, by starvation or structural decline, leaves wear unchanged: removing parts worn as the whole is leaves the whole's wear where it was. With repair, wear then changes each tick by `a − ρ · κ · w − (ΔS / S) · w` while the body grows. That is still first order and damping everywhere, and it adds no parameter.
+
+This is how ageing follows the domain's split between organisms that age and those that do not. A saprotroph's genet grows without a set end. It has no age-tied hazard in most species, because it has no separate germ line and its fecundity rises with its size, so selection opposes senescence ([fungi](../ecology/fungi.md), *The saprotroph's life history*). Its living part is mostly recent growth. A plant that has stopped growing ages. Under dilution the same law gives both. A body that keeps growing keeps diluting its wear and barely ages. A body that has stopped, held by shading, crowding or its food, ages as before. Death stays certain: a genet that stops growing ages, and one whose food runs out starves, which is how the domain's genets die ("individuals of *Armillaria* cannot exist in stasis over the long term", Anderson et al. 2018).
+
+Several tempting forms fail:
+- **A kind that does not age, by trait threshold.** For example, no hazard below autotrophy 0.1. That is a cliff in trait space, which the smooth-landscape constraint forbids, and it reads kind from traits, the error marker isolation corrects for mating (flow 4).
+- **A kind that does not age, by inherited flag.** Nothing in the world would explain it, and evolution could never move it.
+- **Higher kappa for decomposers.** That moves an agent along the existing gradient, not off it. Its hazard still rises with its own throughput, so the biggest, best-fed genet ages fastest, the reverse of the domain.
+- **A heritable modularity trait.** That is a new trait-space dimension, with a trade-off of its own needed to stop every lineage evolving to be ageless. Growth is already heritable through kappa and the agent's income.
+
+Shedding, the loss of the oldest structure and its regrowth in a body of steady size, is the domain's other route ("in far-decomposed litter only a minor fraction of the total mycelium is alive"). It is not part of this rule. It is also why a genet's upkeep follows its living part, and so it belongs with upkeep that grows with the body, where it would be designed once for both ([reference modes](reference-modes.md), mode 1, *Ageing*).
+
+- *Current state (2026-10-15): designed, not implemented. It will sit behind a switch, off by default, so that every world is unchanged until a reading recommends it. It applies to every agent, producers included, because a world rule does not branch on kind. Mode 1 reads it in its* Ageing *reading ([reference modes](reference-modes.md)).*
+
 Grounded in the disposable soma theory (Kirkwood 1977) and antagonistic pleiotropy (Williams 1957). Real organisms senesce — decline in physiological function with age — because energy invested in somatic repair competes with reproduction. The rate of senescence is calibrated to the extrinsic mortality rate: organisms in high-mortality environments evolve faster senescence because investing in longevity beyond the expected lifespan is wasteful (Reznick et al. 2004, Austad 1993). This produces the survivorship curve continuum: Type I (low early mortality, concentrated late-life death — K-strategists with high somatic investment), Type II (constant mortality across age classes), and Type III (high juvenile mortality, low adult mortality — r-strategists with low somatic investment). In the world physics, the position on this continuum emerges from the agent's kappa — the heritable soma-vs-reproduction allocation fraction. The wear/repair mechanic must produce a continuous gradient of lifespans, not a binary outcome.
 
 ## Flows
