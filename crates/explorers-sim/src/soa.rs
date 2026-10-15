@@ -282,7 +282,15 @@ pub fn grow_soa(s: &mut AgentSoA, params: &WorldParameters) -> (Vec<Event>, f32)
             let to_structure = energy_limited.min(nutrient_limited);
             let energy_spent = to_structure / efficiency;
             let dissipated = energy_spent - to_structure;
+            let structure_before = s.structure[i];
             s.structure[i] += to_structure;
+            if params.growth_dilutes_wear {
+                let mut wear = [s.wear[0][i], s.wear[1][i], s.wear[2][i]];
+                crate::phase::dilute_wear(&mut wear, structure_before, s.structure[i]);
+                for (ft, w) in wear.into_iter().enumerate() {
+                    s.wear[ft][i] = w;
+                }
+            }
             // record_peak_structure
             if s.structure[i] > s.peak_structure[i] {
                 s.peak_structure[i] = s.structure[i];

@@ -99,6 +99,7 @@ pub fn viable_baseline() -> WorldParameters {
         contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
         marker_isolation: false,
         compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
+        growth_dilutes_wear: false,
     }
 }
 
@@ -407,6 +408,17 @@ pub fn world_case_with_marker_isolation() -> impl Strategy<Value = WorldCase> {
     (world_case(), prop_oneof![0.3f32..=3.0, 10.0f32..=1000.0]).prop_map(|(mut case, s)| {
         case.params.marker_isolation = true;
         case.params.compatibility_scale = s;
+        case
+    })
+}
+
+/// A stepper case with growth diluting wear (#840): the wear case, so there
+/// is wear for growth to dilute and senescent deaths for it to postpone. A
+/// separate strategy, so `world_case()` draws exactly the inputs it always
+/// has.
+pub fn world_case_with_growth_dilution() -> impl Strategy<Value = WorldCase> {
+    world_case_with_wear().prop_map(|mut case| {
+        case.params.growth_dilutes_wear = true;
         case
     })
 }

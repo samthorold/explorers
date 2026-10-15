@@ -13,6 +13,7 @@
 
 mod founder_nutrient_binding;
 mod founder_placement;
+mod growth_dilutes_wear;
 mod headless_decomposer;
 mod headless_example4;
 mod hyphal_uptake;

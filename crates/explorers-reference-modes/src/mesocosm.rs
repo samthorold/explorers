@@ -685,6 +685,20 @@ pub fn living_resistance_section(rho: f32) -> String {
     )
 }
 
+/// Turn growth dilution of wear on (#840; world rules, *Somatic wear*,
+/// *Growth dilutes wear*), for mode 1's *Ageing* reading.
+pub fn set_growth_dilutes_wear(world: &mut World) {
+    world.params_mut().growth_dilutes_wear = true;
+}
+
+/// The summary section recording that a run diluted wear by growth.
+pub fn growth_dilutes_wear_section() -> String {
+    "## Growth dilutes wear (--growth-dilutes-wear)\n\n\
+     on: a tick of growth from S to S + ΔS scales every functional trait's wear by S / (S + ΔS); \
+     loss of structure leaves wear unchanged"
+        .to_string()
+}
+
 /// Mode 1's producers' founding cluster under marker isolation (#837).
 pub const MODE1_PRODUCER_CLUSTER: u32 = 0;
 /// Mode 1's decomposer founders' founding cluster under marker isolation
