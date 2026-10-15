@@ -537,6 +537,8 @@ fn default_recipe() -> WorldRecipe {
             starvation_shrinks: false,
             hyphal_uptake: false,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
+            marker_isolation: false,
+            compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
         },
         initial_distribution: Some(InitialDistribution {
             mean_traits: TraitVector {
@@ -2208,6 +2210,7 @@ mod tests {
         heterotrophy: f32,
     ) -> Agent {
         Agent {
+            marker: Default::default(),
             id,
             position: (0.0, 0.0),
             reserve: 0.0,
@@ -2349,6 +2352,7 @@ mod tests {
             wear: [0.0; explorers_sim::FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         }
     }
 

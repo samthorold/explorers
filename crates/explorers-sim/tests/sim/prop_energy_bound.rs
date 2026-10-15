@@ -127,6 +127,7 @@ fn lone_producer_hoards_reproductive_allocation_without_bound() {
                 dispersal: 0.0,
             },
             nutrient: 1.0,
+            founding_cluster: 0,
         }]),
         carcasses: None,
         max_ticks: 0,

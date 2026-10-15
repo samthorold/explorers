@@ -2058,6 +2058,30 @@ pub struct ReproductionResult {
     pub parents: Vec<(u64, Option<u64>)>,
 }
 
+/// An offspring's neutral marker (#837; world-rules.md flow 4, *The
+/// marker*): each dimension from one parent at random, then an independent
+/// unit Gaussian step. An asexual birth passes its parent as both, so the
+/// coin is drawn and the marker copied. Without a stream (marker isolation
+/// off) nothing is drawn and the marker is zero.
+fn inherit_marker(
+    rng: Option<&mut crate::keyed_rng::KeyedRng>,
+    lo: &crate::Marker,
+    hi: &crate::Marker,
+) -> crate::Marker {
+    let Some(rng) = rng else {
+        return [0.0; crate::MARKER_DIMS];
+    };
+    let step = Normal::new(0.0_f32, 1.0).unwrap();
+    std::array::from_fn(|dim| {
+        let inherited = if rng.random::<bool>() {
+            lo[dim]
+        } else {
+            hi[dim]
+        };
+        inherited + step.sample(rng)
+    })
+}
+
 /// Resolve reproduction: coordinated pass 2.
 ///
 /// Each eligible agent first rolls against its `asexual_propensity`. On success
@@ -2234,6 +2258,18 @@ pub fn resolve_reproduction(
         // Kernel σ in length: the dispersal anchor u_D (#459).
         let dispersal_radius = parent_traits.dispersal * crate::units::DISPERSAL_KERNEL_SIGMA;
 
+        // The marker (#837): copied from the parent and stepped, on its own
+        // keyed stream, only under marker isolation.
+        let parent_marker = agents[i].marker;
+        let mut marker_rng = params.marker_isolation.then(|| {
+            crate::keyed_rng::agent_rng(
+                run_seed,
+                parent_id,
+                tick,
+                crate::keyed_rng::PhaseTag::MarkerInheritance,
+            )
+        });
+
         for birth_slot in 0..offspring_count {
             // Asexual offspring: parent traits + mutation only (no crossover)
             let mut child_traits = parent_traits;
@@ -2272,6 +2308,7 @@ pub fn resolve_reproduction(
             dissipated += prov.heat;
 
             let child = Agent {
+                marker: inherit_marker(marker_rng.as_mut(), &parent_marker, &parent_marker),
                 // Placeholder id; the canonical id is assigned after all
                 // offspring are sorted by their world-state key below.
                 id: 0,
@@ -2359,7 +2396,8 @@ pub fn resolve_reproduction(
         let reach = eff_mobility * sensing_coeff + agent_i.traits.dispersal * dispersal_reach_coeff;
 
         let nearby = grid.query_radius(agent_i.position, reach);
-        // Best mate: closest in trait space, tiebroken on the candidate's stable
+        // Best mate: closest in trait space (in the marker, under marker
+        // isolation), tiebroken on the candidate's stable
         // id (not slice index), so co-located clonal mates at equal trait
         // distance resolve to the same choice regardless of iteration order.
         let mut best: Option<(usize, f32, u64)> = None;
@@ -2379,20 +2417,46 @@ pub fn resolve_reproduction(
             if dist_spatial > reach {
                 continue;
             }
-            let trait_dist = agent_i.traits.distance(&agents[j].traits);
-            // Check reproductive compatibility: trait distance must be within world param threshold
-            if compatibility_distance > 0.0 && trait_dist > compatibility_distance {
-                continue;
-            }
             let j_id = agents[j].id;
+            // The mating distance: marker distance under marker isolation
+            // (#837), trait distance otherwise.
+            let mate_dist = if params.marker_isolation {
+                // One keyed draw per candidate pair per tick against its
+                // compatibility, before mating. Pair-keyed, so the draw is
+                // the pair's whichever side seeks. Trait distance and the
+                // trait threshold play no part.
+                let c = crate::marker_compatibility(
+                    &agent_i.marker,
+                    &agents[j].marker,
+                    params.compatibility_scale,
+                );
+                let mut rng = crate::keyed_rng::pair_rng(
+                    run_seed,
+                    agent_i.id,
+                    j_id,
+                    tick,
+                    crate::keyed_rng::PhaseTag::MarkerCompatibility,
+                );
+                if rng.random::<f64>() >= c {
+                    continue;
+                }
+                crate::marker_distance_squared(&agent_i.marker, &agents[j].marker).sqrt()
+            } else {
+                let trait_dist = agent_i.traits.distance(&agents[j].traits);
+                // Check reproductive compatibility: trait distance must be within world param threshold
+                if compatibility_distance > 0.0 && trait_dist > compatibility_distance {
+                    continue;
+                }
+                trait_dist
+            };
             let better = match best {
                 None => true,
                 Some((_, best_dist, best_id)) => {
-                    trait_dist < best_dist || (trait_dist == best_dist && j_id < best_id)
+                    mate_dist < best_dist || (mate_dist == best_dist && j_id < best_id)
                 }
             };
             if better {
-                best = Some((j, trait_dist, j_id));
+                best = Some((j, mate_dist, j_id));
             }
         }
 
@@ -2404,7 +2468,8 @@ pub fn resolve_reproduction(
         }
     }
 
-    // Sort by trait distance (closest pairs first), tiebroken on the (low, high)
+    // Sort by mating distance, trait or marker (closest pairs first),
+    // tiebroken on the (low, high)
     // agent **ids**. Clonal producers share traits, so many candidate pairs tie
     // on trait distance; keying the tiebreak on stable ids (not slice indices)
     // makes the greedy assignment below a pure function of world state, invariant
@@ -2579,6 +2644,22 @@ pub fn resolve_reproduction(
         } else {
             (b_traits, a_traits)
         };
+        // The marker (#837), likewise bound to the low-id parent, on its own
+        // pair-keyed stream, only under marker isolation.
+        let (lo_marker, hi_marker) = if a_id < b_id {
+            (agents[*a_idx].marker, agents[*b_idx].marker)
+        } else {
+            (agents[*b_idx].marker, agents[*a_idx].marker)
+        };
+        let mut marker_rng = params.marker_isolation.then(|| {
+            crate::keyed_rng::pair_rng(
+                run_seed,
+                a_id,
+                b_id,
+                tick,
+                crate::keyed_rng::PhaseTag::MarkerInheritance,
+            )
+        });
 
         for birth_slot in 0..offspring_count {
             // Trait crossover: each dimension from one parent (uniform crossover)
@@ -2633,6 +2714,7 @@ pub fn resolve_reproduction(
             dissipated += prov.heat;
 
             let child = Agent {
+                marker: inherit_marker(marker_rng.as_mut(), &lo_marker, &hi_marker),
                 // Placeholder id; the canonical id is assigned after all
                 // offspring are sorted by their world-state key below.
                 id: 0,
@@ -2782,6 +2864,8 @@ mod tests {
             starvation_shrinks: false,
             hyphal_uptake: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
+            marker_isolation: false,
+            compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
         }
     }
 
@@ -8473,6 +8557,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -9060,6 +9145,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -9119,6 +9205,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -9171,6 +9258,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: 20.0,
+                marker: Default::default(),
             },
             Agent {
                 id: 2,
@@ -9183,6 +9271,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: 20.0,
+                marker: Default::default(),
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -9234,6 +9323,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: initial_repro,
             repro_nutrient: 10.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -9296,6 +9386,7 @@ mod tests {
             // propagule-cost comparison stays valid.
             repro_reserve: 400.0,
             repro_nutrient: 40.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -9363,6 +9454,7 @@ mod tests {
             // values so the propagule-cost comparison stays valid.
             repro_reserve: 400.0,
             repro_nutrient: 40.0,
+            marker: Default::default(),
         };
         let mut agents = vec![mk(1, (0.0, 0.0)), mk(2, (1.0, 0.0))];
         let dead_ids = std::collections::HashSet::new();
@@ -9480,6 +9572,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -9525,6 +9618,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -9584,6 +9678,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: 20.0,
+                marker: Default::default(),
             },
             Agent {
                 id: 2,
@@ -9596,6 +9691,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: 20.0,
+                marker: Default::default(),
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -9659,6 +9755,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: initial_earmark,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -9743,6 +9840,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: earmark_a,
+                marker: Default::default(),
             },
             Agent {
                 id: 2,
@@ -9755,6 +9853,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 20.0,
                 repro_nutrient: earmark_b,
+                marker: Default::default(),
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -9831,6 +9930,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 50.0,
                 repro_nutrient: 50.0,
+                marker: Default::default(),
             }];
             let dead_ids = std::collections::HashSet::new();
             let grid = SpatialGrid::new(100.0, 10.0);
@@ -9883,6 +9983,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -9952,6 +10053,7 @@ mod tests {
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                     repro_reserve: 30.0,
                     repro_nutrient: 30.0,
+                    marker: Default::default(),
                 },
                 Agent {
                     id: 2,
@@ -9964,6 +10066,7 @@ mod tests {
                     wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                     repro_reserve: 30.0,
                     repro_nutrient: 30.0,
+                    marker: Default::default(),
                 },
             ];
             let dead_ids = std::collections::HashSet::new();
@@ -10046,6 +10149,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 30.0,
                 repro_nutrient: 30.0,
+                marker: Default::default(),
             },
             Agent {
                 id: 2,
@@ -10058,6 +10162,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 30.0,
                 repro_nutrient: 30.0,
+                marker: Default::default(),
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -10122,6 +10227,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 30.0,
                 repro_nutrient: 30.0,
+                marker: Default::default(),
             },
             Agent {
                 id: 2,
@@ -10134,6 +10240,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 30.0,
                 repro_nutrient: 30.0,
+                marker: Default::default(),
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -10186,6 +10293,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 50.0,
             repro_nutrient: 50.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -10235,6 +10343,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: 20.0,
             repro_nutrient: 20.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -10656,6 +10765,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: initial_repro_reserve,
             repro_nutrient: 10.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -10729,6 +10839,7 @@ mod tests {
             wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
             repro_reserve: initial_repro_reserve,
             repro_nutrient: 10.0,
+            marker: Default::default(),
         }];
         let dead_ids = std::collections::HashSet::new();
         let grid = SpatialGrid::new(100.0, 10.0);
@@ -10797,6 +10908,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: invest_a,
                 repro_nutrient: 10.0,
+                marker: Default::default(),
             },
             Agent {
                 id: 2,
@@ -10809,6 +10921,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: invest_b,
                 repro_nutrient: 10.0,
+                marker: Default::default(),
             },
         ];
         let dead_ids = std::collections::HashSet::new();
@@ -10873,6 +10986,7 @@ mod tests {
                 wear: [0.0; FUNCTIONAL_TRAIT_COUNT],
                 repro_reserve: 600.0,
                 repro_nutrient: 100.0,
+                marker: Default::default(),
             }];
             let dead_ids = std::collections::HashSet::new();
             let grid = SpatialGrid::new(100.0, 10.0);

@@ -96,6 +96,7 @@ fn decomposer_drains_carcass_after_a_death_reindexes_agents() {
         wear: Default::default(),
         repro_reserve: 0.0,
         repro_nutrient: 0.0,
+        marker: Default::default(),
     });
     // The decomposer, co-located with a carcass it should drain.
     world.add_agent(Agent {
@@ -117,6 +118,7 @@ fn decomposer_drains_carcass_after_a_death_reindexes_agents() {
         wear: Default::default(),
         repro_reserve: 0.0,
         repro_nutrient: 0.0,
+        marker: Default::default(),
     });
     world.add_carcass(Carcass {
         id: 999,

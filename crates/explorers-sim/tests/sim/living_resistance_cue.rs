@@ -54,6 +54,7 @@ fn agent(id: u64, position: (f32, f32), structure: f32, traits: TraitVector) -> 
         wear: Default::default(),
         repro_reserve: 0.0,
         repro_nutrient: 0.0,
+        marker: Default::default(),
     }
 }
 

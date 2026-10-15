@@ -11,7 +11,8 @@ use explorers_sim::{
 };
 use proptest::prelude::*;
 use support::{
-    WorldCase, world_case, world_case_with_living_resistance, world_case_with_size_scaled_uptake,
+    WorldCase, world_case, world_case_with_living_resistance, world_case_with_marker_isolation,
+    world_case_with_size_scaled_uptake,
 };
 
 /// Relative tolerance for *summed* world totals under a permutation. The
@@ -40,6 +41,8 @@ struct AgentExactBits {
     position: (u32, u32),
     traits: [u32; 7],
     wear: [u32; 3],
+    /// The neutral marker (#837): all zero unless marker isolation is on.
+    marker: [u32; 8],
 }
 
 impl AgentExactBits {
@@ -49,6 +52,7 @@ impl AgentExactBits {
             position: (a.position.0.to_bits(), a.position.1.to_bits()),
             traits: std::array::from_fn(|d| a.traits.get(d).to_bits()),
             wear: std::array::from_fn(|f| a.wear[f].to_bits()),
+            marker: std::array::from_fn(|d| a.marker[d].to_bits()),
         }
     }
 }
@@ -236,6 +240,17 @@ proptest! {
     ) {
         check_order_permutation_invariance(&case)?;
     }
+
+    /// Order-permutation invariance under marker isolation (#837): the
+    /// compatibility draw and the marker's inheritance are keyed on stable
+    /// identity, and mates sort by marker distance with id tiebreaks, so the
+    /// pair set and every marker are a pure function of world state.
+    #[test]
+    fn trajectory_is_invariant_under_agent_order_permutation_with_marker_isolation(
+        case in world_case_with_marker_isolation()
+    ) {
+        check_order_permutation_invariance(&case)?;
+    }
 }
 
 fn check_order_permutation_invariance(case: &WorldCase) -> Result<(), TestCaseError> {
@@ -354,6 +369,7 @@ fn founder_roster(case: &WorldCase) -> Vec<AgentSpec> {
             reserve: case.dist.initial_energy_per_agent,
             traits: a.traits,
             nutrient: 0.0,
+            founding_cluster: 0,
         })
         .collect()
 }

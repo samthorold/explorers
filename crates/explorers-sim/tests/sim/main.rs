@@ -19,6 +19,7 @@ mod hyphal_uptake;
 mod kin_blind_recognition_limit;
 mod living_resistance;
 mod living_resistance_cue;
+mod marker_isolation;
 mod mobile_consumer_feeds;
 mod prop_conservation;
 mod prop_energy_bound;

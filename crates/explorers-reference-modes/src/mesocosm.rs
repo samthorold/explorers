@@ -217,8 +217,16 @@ pub fn mode1_mesocosm_with_founders(
         }
         Community::ProducersOnly => 0,
     };
-    let roster = std::iter::repeat_n(producer, PRODUCERS_PER_CELL * cells)
-        .chain(std::iter::repeat_n(decomposer, decomposers));
+    // Producers found cluster 0 and decomposer founders cluster 1, the
+    // marker's unrelated clades (#837); read only under marker isolation.
+    let roster = std::iter::repeat_n(
+        (producer, MODE1_PRODUCER_CLUSTER),
+        PRODUCERS_PER_CELL * cells,
+    )
+    .chain(std::iter::repeat_n(
+        (decomposer, MODE1_DECOMPOSER_CLUSTER),
+        decomposers,
+    ));
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let half = extent / 2.0;
     let size = params.nutrient_grid_cell_size;
@@ -244,11 +252,12 @@ pub fn mode1_mesocosm_with_founders(
     // same carcasses and the same producers.
     let mut carcasses = litter(&mut rng, CARCASSES_PER_CELL);
     let agents: Vec<AgentSpec> = roster
-        .map(|traits| AgentSpec {
+        .map(|(traits, founding_cluster)| AgentSpec {
             position: (rng.random_range(-half..half), rng.random_range(-half..half)),
             reserve: spec.founder_reserve,
             traits,
             nutrient: 0.0,
+            founding_cluster,
         })
         .collect();
     // A multiplier's extra litter comes after the founders, so they stand
@@ -674,6 +683,140 @@ pub fn living_resistance_section(rho: f32) -> String {
          carcass drains are unchanged",
         1.0 - rho
     )
+}
+
+/// Mode 1's producers' founding cluster under marker isolation (#837).
+pub const MODE1_PRODUCER_CLUSTER: u32 = 0;
+/// Mode 1's decomposer founders' founding cluster under marker isolation
+/// (#837): a separately arriving clade, unrelated to the producers.
+pub const MODE1_DECOMPOSER_CLUSTER: u32 = 1;
+
+/// The marker isolation a run set (#837; world rules, flow 4,
+/// *Reproductive isolation follows ancestry, through a neutral marker*).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct MarkerIsolation {
+    /// `s`: compatibility is `exp(−d² / (2s²))` at marker distance `d`.
+    pub compatibility_scale: f32,
+}
+
+/// Turn marker isolation on in `spec` at compatibility scale `s`, and return
+/// it. It acts at world creation, where each founding cluster's founders
+/// take its marker origin, so it is set on the spec the mesocosm is built
+/// from, not on a built world.
+pub fn set_marker_isolation(spec: &mut Mode1Spec, s: f32) -> MarkerIsolation {
+    spec.parameters.marker_isolation = true;
+    spec.parameters.compatibility_scale = s;
+    MarkerIsolation {
+        compatibility_scale: s,
+    }
+}
+
+/// The summary section recording the marker isolation a run set.
+pub fn marker_isolation_section(m: &MarkerIsolation) -> String {
+    format!(
+        "## Marker isolation (--marker-isolation, --compatibility-scale)\n\n\
+         compatibility scale s = {}: a pair mates only past one draw against \
+         c = exp(−d² / (2s²)) at marker distance d; producers found cluster {}, \
+         decomposer founders cluster {}, 10 s apart (c = e⁻⁵⁰)",
+        m.compatibility_scale, MODE1_PRODUCER_CLUSTER, MODE1_DECOMPOSER_CLUSTER
+    )
+}
+
+/// The founder line at one sample under marker isolation (#837).
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct LineSample {
+    /// The world's tick at the sample.
+    pub tick: u64,
+    /// Living members of the founder line.
+    pub line_living: usize,
+    /// Those with nominal autotrophy below [`MIXOTROPH_AUTOTROPHY`], as
+    /// [`DrainSplit`] reads it.
+    pub below_autotrophy: usize,
+    /// Their share of the line (`None` with the line extinct).
+    pub share_below_autotrophy: Option<f64>,
+}
+
+/// Pairwise marker compatibility within a set of living agents (#837).
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct PairwiseCompatibility {
+    pub members: usize,
+    pub pairs: usize,
+    /// Mean `c` over every pair (`None` with fewer than two members).
+    pub mean: Option<f64>,
+    /// The lowest `c` of any pair.
+    pub lowest: Option<f64>,
+}
+
+impl PairwiseCompatibility {
+    /// Over every pair of `agents` at compatibility scale `s`.
+    pub fn of(agents: &[&explorers_sim::Agent], s: f32) -> Self {
+        let mut out = Self {
+            members: agents.len(),
+            ..Self::default()
+        };
+        let (mut sum, mut lowest) = (0.0_f64, f64::INFINITY);
+        for (i, a) in agents.iter().enumerate() {
+            for b in &agents[i + 1..] {
+                let c = explorers_sim::marker_compatibility(&a.marker, &b.marker, s);
+                sum += c;
+                lowest = lowest.min(c);
+                out.pairs += 1;
+            }
+        }
+        if out.pairs > 0 {
+            out.mean = Some(sum / out.pairs as f64);
+            out.lowest = Some(lowest);
+        }
+        out
+    }
+}
+
+/// The marker readout of a run or arm under marker isolation (#837;
+/// reference-modes.md, mode 1, *Crossing*).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct MarkerReadout {
+    /// The founder line at each of the run's or arm's centre samples.
+    pub samples: Vec<LineSample>,
+    /// Pairwise compatibility within the founder line at the end.
+    pub line: PairwiseCompatibility,
+    /// Pairwise compatibility within the producers at the end: the living
+    /// agents the income read calls producers.
+    pub producers: PairwiseCompatibility,
+}
+
+/// The summary section of the marker readout, one row per run or arm.
+pub fn marker_readout_section(rows: &[(&str, &MarkerReadout)]) -> String {
+    let or_dash = |v: Option<f64>| v.map_or_else(|| "-".to_string(), |v| format!("{v:.4}"));
+    let mut out = String::from(
+        "## Marker readout (#837)\n\n\
+         The founder line's living members at each sample, with the share below autotrophy 0.1, \
+         then pairwise marker compatibility c at the end within the line and within the \
+         producers.\n\n\
+         | run | line living by sample (share below autotrophy 0.1) | line members | line mean c | \
+         line lowest c | producers | producer mean c | producer lowest c |\n\
+         |---|---|---|---|---|---|---|---|\n",
+    );
+    for (name, r) in rows {
+        let series: Vec<String> = (r.samples.iter())
+            .map(|s| {
+                let share = s
+                    .share_below_autotrophy
+                    .map_or("-".into(), |v| format!("{v:.2}"));
+                format!("{}: {} ({share})", s.tick, s.line_living)
+            })
+            .collect();
+        out.push_str(&format!(
+            "| {name} | {} | {} | {} | {} | {} | {} | {} |\n",
+            series.join(", "),
+            r.line.members,
+            or_dash(r.line.mean),
+            or_dash(r.line.lowest),
+            r.producers.members,
+            or_dash(r.producers.mean),
+            or_dash(r.producers.lowest),
+        ));
+    }
+    out
 }
 
 /// The starvation cascade's switches a run set (#821; world rules, flow 8,
@@ -1506,6 +1649,10 @@ pub struct Mode1Report {
     /// the artifact, without founders.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recruitment: Option<RecruitmentReadout>,
+    /// The marker readout (#837): `None`, and absent from the artifact,
+    /// without marker isolation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marker: Option<MarkerReadout>,
 }
 
 impl Mode1Report {
@@ -1716,6 +1863,11 @@ fn run_arm(
     let mut samples = vec![observer.sample_centre(world)];
     let mut litter_samples = vec![observer.sample_litter(world)];
     let mut lineage_drain = vec![observer.sample_lineage_drain(world)];
+    let marker_isolation = world.params().marker_isolation;
+    let mut line_samples = Vec::new();
+    if marker_isolation {
+        line_samples.push(observer.sample_line(world));
+    }
     for _ in 0..ticks {
         world.step();
         observer.observe(world);
@@ -1728,6 +1880,9 @@ fn run_arm(
             litter_samples.push(observer.sample_litter(world));
             lineage_drain.push(observer.sample_lineage_drain(world));
             guild_samples.push((elapsed, observer.guild_members(world)));
+            if marker_isolation {
+                line_samples.push(observer.sample_line(world));
+            }
         }
     }
     let births: Vec<Birth> = std::mem::take(&mut observer.births_log)
@@ -1790,6 +1945,7 @@ fn run_arm(
         guild: GuildReadout::default(),
         litter: LitterReadout::default(),
         recruitment: observer.recruitment(lineage_drain),
+        marker: marker_isolation.then(|| observer.marker_readout(world, line_samples)),
     };
     report.litter = LitterReadout {
         second_half: LitterWindow::read(&litter_samples, &report.producer_lifespans),
@@ -2340,6 +2496,40 @@ impl Observer {
             if self.record_recruitment {
                 lineage.mixotroph += drained;
             }
+        }
+    }
+
+    /// The founder line's living members now (#837), and those below
+    /// autotrophy 0.1.
+    fn sample_line(&self, world: &World) -> LineSample {
+        let line: Vec<_> = (world.agents().iter())
+            .filter(|a| self.line.contains(&a.id))
+            .collect();
+        let below = (line.iter())
+            .filter(|a| a.traits.photosynthetic_absorption < MIXOTROPH_AUTOTROPHY)
+            .count();
+        LineSample {
+            tick: world.tick(),
+            line_living: line.len(),
+            below_autotrophy: below,
+            share_below_autotrophy: (!line.is_empty()).then(|| below as f64 / line.len() as f64),
+        }
+    }
+
+    /// The marker readout (#837) at the end of a run or arm, with its line
+    /// samples.
+    fn marker_readout(&self, world: &World, samples: Vec<LineSample>) -> MarkerReadout {
+        let s = world.params().compatibility_scale;
+        let line: Vec<_> = (world.agents().iter())
+            .filter(|a| self.line.contains(&a.id))
+            .collect();
+        let producers: Vec<_> = (world.agents().iter())
+            .filter(|a| self.income.role(a.id) == Some(TrophicRole::Producer))
+            .collect();
+        MarkerReadout {
+            samples,
+            line: PairwiseCompatibility::of(&line, s),
+            producers: PairwiseCompatibility::of(&producers, s),
         }
     }
 
@@ -3525,6 +3715,7 @@ mod tests {
             founders: FounderReadout::default(),
             guild: GuildReadout::default(),
             recruitment: None,
+            marker: None,
         };
         let summary = mode1_summary("h", &report);
         assert_eq!(ESTABLISHMENT_AGE, 50);
@@ -3993,6 +4184,7 @@ mod tests {
             founders: FounderReadout::default(),
             guild: GuildReadout::default(),
             recruitment: None,
+            marker: None,
         };
         let line = "| yes | 2 | 3 | 30.0 / 10.0 (0.250) | 1.0 / 3.0 (0.750) |";
         let summary = mode1_summary("h", &report);
@@ -4056,6 +4248,7 @@ mod tests {
             founders,
             guild: GuildReadout::default(),
             recruitment: None,
+            marker: None,
         };
         let line = "| 4 | 3 | 3 | 2 | 2 | 5 | 0.100 (0.300) | 0.084 |";
         let summary = mode1_summary("h", &report);
@@ -4238,6 +4431,7 @@ mod tests {
                 passes: true,
             },
             recruitment: None,
+            marker: None,
         };
         let line = "| yes | 6 | 0.250 | 1.0 / 3.0 (0.250) | yes | yes |";
         let summary = mode1_summary("h", &report);
@@ -4475,6 +4669,7 @@ mod tests {
             wear: Default::default(),
             repro_reserve: 0.0,
             repro_nutrient: 0.0,
+            marker: Default::default(),
         }];
         let structure = 1000.0;
         let mut carcasses = vec![explorers_sim::Carcass {
@@ -4798,6 +4993,7 @@ mod tests {
             founders: FounderReadout::default(),
             guild: GuildReadout::default(),
             recruitment: None,
+            marker: None,
             litter: LitterReadout {
                 samples: vec![],
                 second_half: LitterWindow {
@@ -5384,5 +5580,91 @@ mod tests {
             assert!(!readout["births"].as_array().unwrap().is_empty());
         }
         assert_eq!(with, without);
+    }
+
+    /// Under marker isolation (#837) mode 1's producers found cluster 0 and
+    /// its decomposer founders cluster 1: unrelated clades, 10 s apart in
+    /// the marker.
+    #[test]
+    fn marker_isolation_founds_producers_and_decomposer_founders_as_two_clusters() {
+        let mut spec = Mode1Spec::committed();
+        let set = set_marker_isolation(&mut spec, 100.0);
+        assert_eq!(set.compatibility_scale, 100.0);
+        let world = mode1_mesocosm_with_founders(
+            &spec,
+            mesocosm_wear(),
+            3,
+            Community::ProducersAndDecomposers,
+            1,
+            Some(10),
+        );
+        assert!(world.params().marker_isolation);
+        assert_eq!(world.params().compatibility_scale, 100.0);
+        let (mut producers, mut decomposers) = (0, 0);
+        for a in world.agents() {
+            if a.traits.photosynthetic_absorption > 0.0 {
+                producers += 1;
+                assert_eq!(a.marker, explorers_sim::marker_origin(0, 100.0));
+            } else {
+                decomposers += 1;
+                assert_eq!(a.marker, explorers_sim::marker_origin(1, 100.0));
+            }
+        }
+        assert_eq!((producers, decomposers), (PRODUCERS_PER_CELL * 81, 10));
+    }
+
+    /// The marker readout (#837) is written only under marker isolation, so
+    /// a default report is unchanged. Under it, each sample counts the
+    /// founder line and its share below autotrophy 0.1, and the end reads
+    /// pairwise compatibility within the line and within the producers.
+    #[test]
+    fn the_marker_readout_is_recorded_only_under_marker_isolation() {
+        let build = |on: bool| {
+            let mut spec = Mode1Spec::committed();
+            if on {
+                set_marker_isolation(&mut spec, 100.0);
+            }
+            mode1_mesocosm_with_founders(
+                &spec,
+                mesocosm_wear(),
+                2,
+                Community::ProducersAndDecomposers,
+                1,
+                Some(10),
+            )
+        };
+        let plain = run_mode1(&mut build(false), 60, 20);
+        assert!(plain.marker.is_none());
+        assert!(
+            serde_json::to_value(&plain)
+                .unwrap()
+                .get("marker")
+                .is_none()
+        );
+
+        let report = run_mode1(&mut build(true), 60, 20);
+        let marker = report.marker.as_ref().expect("the readout is recorded");
+        assert_eq!(marker.samples.len(), report.samples.len());
+        let first = &marker.samples[0];
+        assert_eq!((first.tick, first.line_living), (0, 10));
+        assert_eq!(first.below_autotrophy, 10);
+        assert_eq!(first.share_below_autotrophy, Some(1.0));
+        for c in [&marker.line, &marker.producers] {
+            if c.members >= 2 {
+                assert_eq!(c.pairs, c.members * (c.members - 1) / 2);
+                let (mean, lowest) = (c.mean.unwrap(), c.lowest.unwrap());
+                assert!(lowest <= mean && mean <= 1.0 && lowest > 0.0, "{c:?}");
+            }
+        }
+        assert!(marker.producers.members > 100);
+        // Unrelated clades do not cross: every line birth's parents are in
+        // the line.
+        let recruitment = report.recruitment.as_ref().unwrap();
+        assert!(
+            recruitment
+                .births
+                .iter()
+                .all(|b| b.parents.iter().all(|p| p.in_line))
+        );
     }
 }

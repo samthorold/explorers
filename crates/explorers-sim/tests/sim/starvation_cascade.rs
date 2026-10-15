@@ -61,6 +61,7 @@ fn starving(reserve: f32, earmark: f32, structure: f32) -> Agent {
         wear: Default::default(),
         repro_reserve: earmark,
         repro_nutrient: 2.0,
+        marker: Default::default(),
     }
 }
 
