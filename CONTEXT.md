@@ -171,6 +171,22 @@ _Avoid_: old age (suggests a fixed lifespan), natural death (every death in the 
 The fall in an agent's **wear** as it grows: new structure arrives unworn, so a body that adds to itself carries its wear over more of itself. A body that keeps growing barely ages, and one that has stopped ages as before. Losing structure leaves wear unchanged.
 _Avoid_: rejuvenation (implies wear is repaired, not spread), immortality (dilution does not remove death)
 
+**Tissue turnover**:
+The steady shedding and regrowth of a living body's structure. Every agent sheds a share of its structure each tick at the **turnover rate**. Part of what is shed comes back to it (the **recycled fraction**), and the rest leaves as **necromass**. A body that keeps regrowing what it sheds holds its size and renews its tissue. A body that stops regrowing shrinks.
+_Avoid_: shedding alone (names the loss, not the regrowth), moulting (a discrete event)
+
+**Recycled fraction**:
+The share of shed tissue, in energy and nutrient alike, that returns to the shedding agent's reserve and free store, rather than leaving as necromass.
+_Avoid_: resorption (the domain's word for nutrient alone)
+
+**Necromass**:
+Dead structure shed by a living agent. It joins the dead stock at the agent's cell, as a carcass does.
+_Avoid_: litter (the whole dead stock, carcasses included), waste
+
+**Tissue lifetime**:
+The mean time a unit of an agent's structure lives before it is shed: the inverse of the turnover rate. It is stated in litter half-lives.
+_Avoid_: lifespan (the whole agent's)
+
 ### Movement and sensing
 
 **Chemotaxis**:
