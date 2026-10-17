@@ -18,6 +18,7 @@ In stocks-and-flows terms:
 - **Inflows**: photosynthetic carbon fixation (gross primary productivity), nutrient uptake from soil.
 - **Outflows**: respiration (roughly 50% of GPP), herbivory, litterfall, mortality, root exudates.
 - **Turnover**: leaf turnover (annual in deciduous systems), fine root turnover (months to years), wood turnover (decades to centuries).
+- **Resorption before shedding**: a plant withdraws nutrient from a senescing leaf before it falls. Perennials resorb about half of leaf nitrogen and phosphorus (Aerts 1996). A global synthesis gives means of about 62 % for N and 65 % for P (Vergutz et al. 2012). Much less of the leaf's carbon is recovered, because cell walls go to the litter. So leaf litter is poorer in nutrient than live leaves.
 
 ## Energy and nutrient flows
 
@@ -218,6 +219,7 @@ This is the fundamental reason primary producers are non-negotiable. They are th
 
 ## References
 
+- Aerts, R. (1996) Nutrient resorption from senescing leaves of perennials: are there general patterns? *Journal of Ecology*, 84, 597-608.
 - Bais, H.P., Weir, T.L., Perry, L.G., Gilroy, S. & Vivanco, J.M. (2006) The role of root exudates in rhizosphere interactions. *Annual Review of Plant Biology*, 57, 233-266.
 - Bar-On, Y.M., Phillips, R. & Milo, R. (2018) The biomass distribution on Earth. *Proceedings of the National Academy of Sciences*, 115, 6506-6511.
 - Berger, U. & Hildenbrandt, H. (2000) A new approach to spatially explicit modelling of forest dynamics. *Ecological Modelling*, 132, 109-120.
@@ -267,6 +269,7 @@ This is the fundamental reason primary producers are non-negotiable. They are th
 - Shugart, H.H. (1984) *A Theory of Forest Dynamics*. Springer.
 - Staver, A.C., Archibald, S. & Levin, S.A. (2011) The global extent and determinants of savanna and forest as alternative biome states. *Science*, 334, 230-232.
 - Tilman, D. (1994) Competition and biodiversity in spatially structured habitats. *Ecology*, 75, 2-16.
+- Vergutz, L., Manzoni, S., Porporato, A., Novais, R.F. & Jackson, R.B. (2012) Global resorption efficiencies and concentrations of carbon and nutrients in leaves of terrestrial plants. *Ecological Monographs*, 82, 205-220.
 - Wardle, D.A., Bardgett, R.D., Klironomos, J.N., Setala, H., van der Putten, W.H. & Wall, D.H. (2004) Ecological linkages between aboveground and belowground biota. *Science*, 304, 1629-1633.
 - Weiner, J. (1990) Asymmetric competition in plant populations. *Trends in Ecology & Evolution*, 5, 360-364.
 - West, G.B., Brown, J.H. & Enquist, B.J. (1999) A general model for the structure and allometry of plant vascular systems. *Nature*, 400, 664-667.
