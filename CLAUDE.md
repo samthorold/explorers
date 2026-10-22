@@ -1,12 +1,8 @@
 ## Agent skills
 
-### Issue tracker
+### Issues
 
-Issues are tracked in GitHub Issues for this repo. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Default label vocabulary (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
+GitHub Issues for this repo, through `gh`, with the states `ready` and `needs-design` (no label = backlog), as in the Global Guide's *Issues* section.
 
 ### Domain docs
 
