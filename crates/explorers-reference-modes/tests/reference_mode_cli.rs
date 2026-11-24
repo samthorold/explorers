@@ -259,6 +259,67 @@ fn kinetics_options_set_and_record_the_decomposition_parameters() {
     assert!(md.contains("## Decomposition kinetics"), "{md}");
 }
 
+/// `--decomposer-mesocosm` (#884) runs the decomposer mesocosm: its four
+/// rules at the values the mesocosm crate declares, the run the explicit
+/// flags at `S_p` 6.937, L 1 and K 1 give, state for state, and it records
+/// the declaration.
+#[test]
+fn decomposer_mesocosm_runs_the_declared_rules() {
+    let dir = scratch("decomposer-mesocosm");
+    let explicit = run_with(
+        &dir.join("explicit.json"),
+        &[
+            "--size-scaled-base-rate",
+            "--established-producer-structure",
+            "6.937",
+            "--living-resistance",
+            "--litter-half-life",
+            "1",
+            "--enzyme-half-saturation",
+            "1",
+        ],
+    );
+    let declared = run_with(&dir.join("declared.json"), &["--decomposer-mesocosm"]);
+    for key in [
+        "report",
+        "decomposition_kinetics",
+        "size_scaled_base_rate",
+        "living_resistance",
+    ] {
+        assert!(explicit.get(key).is_some(), "{key}");
+        assert_eq!(declared[key], explicit[key], "{key}");
+    }
+    assert!(explicit.get("decomposer_mesocosm").is_none());
+    let d = &declared["decomposer_mesocosm"];
+    assert!((d["established_producer_structure"].as_f64().unwrap() - 6.937).abs() < 1e-6);
+    assert_eq!(d["litter_half_life"], 1.0);
+    assert_eq!(d["enzyme_half_saturation"], 1.0);
+    assert_eq!(d["founding_litter_ratio"], 170.0);
+    let md = std::fs::read_to_string(dir.join("declared.md")).unwrap();
+    assert!(md.contains("## Decomposition kinetics"), "{md}");
+}
+
+/// `--decomposer-mesocosm` sets the four rules itself, so it refuses a flag
+/// that would set one of them again, and it needs decomposer founders.
+#[test]
+fn decomposer_mesocosm_refuses_its_rules_flags_and_no_decomposers() {
+    for extra in [
+        &["--size-scaled-base-rate"][..],
+        &["--living-resistance"][..],
+        &["--litter-half-life", "2"][..],
+        &["--no-decomposers"][..],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+            .args(["--ticks", "1", "--decomposer-mesocosm"])
+            .args(extra)
+            .output()
+            .expect("the instrument runs");
+        assert!(!output.status.success(), "{extra:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("--decomposer-mesocosm"), "{stderr}");
+    }
+}
+
 /// K has no effect while `k_d` is 0, so `--enzyme-half-saturation` without
 /// `--litter-half-life` is refused.
 #[test]
