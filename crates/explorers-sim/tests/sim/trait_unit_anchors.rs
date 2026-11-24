@@ -23,7 +23,22 @@ fn load_recipe(name: &str) -> WorldRecipe {
 /// plus the nutrient grid, folded through a `DefaultHasher` after each tick so
 /// the whole trajectory — not just the end state — is pinned.
 fn trajectory_hash(name: &str, seed: u64, ticks: u64) -> u64 {
-    recipe_trajectory_hash(name, &load_recipe(name), seed, ticks)
+    recipe_trajectory_hash(name, &golden_recipe(name), seed, ticks)
+}
+
+/// The recipe a golden run steps. `example4.json+wear` is example4 with the
+/// wear law on (`wear_rate` 0.1, `use_wear_rate` 0.01), the rates example8
+/// ran at, so kappa → repair stays live now that example8 is gone (#855).
+fn golden_recipe(name: &str) -> WorldRecipe {
+    match name.strip_suffix("+wear") {
+        Some(file) => {
+            let mut recipe = load_recipe(file);
+            recipe.parameters.wear_rate = 0.1;
+            recipe.parameters.use_wear_rate = 0.01;
+            recipe
+        }
+        None => load_recipe(name),
+    }
 }
 
 fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u64) -> u64 {
@@ -91,15 +106,13 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// releases (example8 is moved by the summing order alone: its four
 /// heterotrophs start ~9 from the producer ring, beyond their sensing range
 /// of 3–3.5, and the movement rule leaves its trajectory bit-identical).
-const GOLDEN: [(&str, u64, u64, u64); 3] = [
+/// example8 and example10 were deleted with the stale scenarios (#855).
+/// example4 already runs sexual and asexual placement kernels; the wear
+/// anchor moved to `example4.json+wear` (see [`golden_recipe`]), pinned at
+/// the commit that deleted them.
+const GOLDEN: [(&str, u64, u64, u64); 2] = [
     ("example4.json", 7, 300, 0x62ea225e32de936b),
-    ("example8.json", 11, 300, 0xfccbfcec81f91f38),
-    (
-        "example10_predator_prey_hopf.json",
-        3,
-        300,
-        0x16c8e39cb9189023,
-    ),
+    ("example4.json+wear", 11, 300, 0x6d81249183cdaa77),
 ];
 
 #[test]
@@ -120,7 +133,7 @@ fn naming_the_unit_anchors_leaves_every_trajectory_byte_identical() {
 #[test]
 fn a_zero_leaching_rate_leaves_every_golden_trajectory_byte_identical() {
     for (name, seed, ticks, expected) in GOLDEN {
-        let mut recipe = load_recipe(name);
+        let mut recipe = golden_recipe(name);
         assert_eq!(recipe.parameters.leaching_rate, 0.0, "{name} loads λ = 0");
         recipe.parameters.leaching_rate = 0.0;
         let got = recipe_trajectory_hash(name, &recipe, seed, ticks);

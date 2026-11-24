@@ -4648,7 +4648,7 @@ mod tests {
         let recipe: WorldRecipe = serde_json::from_str(
             &std::fs::read_to_string(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../scenarios/example10_predator_prey_hopf.json"
+                "/../../scenarios/example4.json"
             ))
             .unwrap(),
         )
@@ -4680,7 +4680,7 @@ mod tests {
         let recipe: WorldRecipe = serde_json::from_str(
             &std::fs::read_to_string(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../scenarios/example10_predator_prey_hopf.json"
+                "/../../scenarios/example4.json"
             ))
             .unwrap(),
         )
@@ -4717,7 +4717,7 @@ mod tests {
         let recipe: WorldRecipe = serde_json::from_str(
             &std::fs::read_to_string(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../scenarios/example10_predator_prey_hopf.json"
+                "/../../scenarios/example4.json"
             ))
             .unwrap(),
         )

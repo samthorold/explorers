@@ -150,18 +150,9 @@ fn pinned_worlds() -> Vec<(String, World)> {
 /// Creation fingerprints of [`pinned_worlds`], taken from the in-place binding
 /// before #612 (main at c6fe53a). None of these worlds drove a cell negative,
 /// so the floor must leave every one of them bit-identical.
-const PINNED: [u64; 18] = [
-    0x5bf80459e62185c7, // example1.json
-    0xe5346176bd0f8c22, // example10_predator_prey_hopf.json
-    0x01d5704faf8eb1ab, // example11_branching_coexistence.json
+const PINNED: [u64; 9] = [
     0xd0c4e55ba33bed1f, // example12_generalist_dominance.json
-    0xab24701ec724817d, // example13_closed_web.json
-    0x1653a01de64c3472, // example2.json
-    0xfa22bef0890d172d, // example3.json
     0xe7319027725e1962, // example4.json
-    0xe668c96ece83d23c, // example5.json
-    0x65bef6b1ad321cae, // example7.json
-    0x8af86598faf12048, // example8.json
     0x41a124a5cef704e3, // example9_detrital_pathway.json
     0x9587ded5b3dc151a, // a=0 k=1
     0xe1d3e3254a2ee77e, // a=0 k=3
