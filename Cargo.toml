@@ -2,6 +2,17 @@
 members = ["crates/explorers-sim", "crates/explorers-app", "crates/explorers-genesis-eval", "crates/explorers-genesis", "crates/explorers-reference-modes"]
 resolver = "3"
 
+# Versions shared by more than one crate; crates take them with `workspace = true`.
+[workspace.dependencies]
+rand = "0.9"
+rand_chacha = "0.9"
+rand_distr = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+explorers-sim = { path = "crates/explorers-sim" }
+explorers-genesis-eval = { path = "crates/explorers-genesis-eval" }
+explorers-genesis = { path = "crates/explorers-genesis" }
+
 # Dependencies are always optimised — they rarely change and compile once.
 [profile.dev.package."*"]
 opt-level = 3

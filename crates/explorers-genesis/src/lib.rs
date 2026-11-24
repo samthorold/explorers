@@ -248,20 +248,19 @@ pub fn rollout_within(
         )
         .or_else(bloom_stopped)
         {
-            None => {}
             Some(FailureMode::Extinction) | Some(FailureMode::PopulationExplosion) => break,
-            Some(failure) => {
-                if stopped.is_none() {
-                    stopped = Some(EarlyStop {
-                        failure,
-                        tick: world.tick(),
-                        horizon: None,
-                    });
-                    if !carry {
-                        break;
-                    }
+            // The first non-terminal failure is recorded; later ones are not.
+            Some(failure) if stopped.is_none() => {
+                stopped = Some(EarlyStop {
+                    failure,
+                    tick: world.tick(),
+                    horizon: None,
+                });
+                if !carry {
+                    break;
                 }
             }
+            None | Some(_) => {}
         }
     }
 
@@ -373,7 +372,7 @@ fn median(values: &[f32]) -> f32 {
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mid = sorted.len() / 2;
-    if sorted.len() % 2 == 0 {
+    if sorted.len().is_multiple_of(2) {
         (sorted[mid - 1] + sorted[mid]) / 2.0
     } else {
         sorted[mid]

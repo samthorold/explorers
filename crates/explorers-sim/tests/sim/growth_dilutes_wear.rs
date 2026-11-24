@@ -190,8 +190,11 @@ fn world(growth_dilutes_wear: bool, wear_rate: f32) -> World {
     World::new(p, dist, 11)
 }
 
+/// One agent's state as bits: id, position, scalar stores, wear.
+type AgentBits = (u64, [u32; 2], [u32; 6], [u32; 3]);
+
 /// Every agent's state, bit for bit, sorted by id.
-fn state(world: &World) -> Vec<(u64, [u32; 2], [u32; 6], [u32; 3])> {
+fn state(world: &World) -> Vec<AgentBits> {
     let mut v: Vec<_> = (world.agents().iter())
         .map(|a| {
             (

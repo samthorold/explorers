@@ -154,11 +154,10 @@ impl RngCore for KeyedRng {
 
     #[inline]
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        let mut chunks = dest.chunks_exact_mut(8);
-        for chunk in &mut chunks {
-            chunk.copy_from_slice(&self.next_u64_impl().to_le_bytes());
+        let (chunks, rem) = dest.as_chunks_mut::<8>();
+        for chunk in chunks {
+            *chunk = self.next_u64_impl().to_le_bytes();
         }
-        let rem = chunks.into_remainder();
         if !rem.is_empty() {
             let bytes = self.next_u64_impl().to_le_bytes();
             rem.copy_from_slice(&bytes[..rem.len()]);

@@ -202,6 +202,12 @@ impl EnergyLedger {
     }
 }
 
+impl Default for EnergyLedger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// The value an `f32` sum over no items starts at (and returns).
 fn empty_sum() -> f32 {
     std::iter::empty::<f32>().sum()

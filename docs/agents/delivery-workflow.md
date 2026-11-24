@@ -9,7 +9,7 @@ For an epic: `grill-with-docs` (settle the design against `CONTEXT.md`, `docs/ec
 - **One branch and one PR per slice.** Squash-merge with `--delete-branch`, and close the issue referencing the PR. The repo's gitignored `.claude/settings.local.json` allows the git/gh commands, so the flow runs without prompts.
 - **TDD strictly red → green,** one behaviour per cycle. Surface design ambiguity the moment it appears rather than guessing.
 - **Checkpoint at natural boundaries** (for example halfway through an epic) with a concise status and a default to continue, not a stop-and-ask. The owner delegates heavily and wants momentum with visibility, not permission-seeking at every step.
-- **Keep new code `cargo fmt` clean** (fmt is not enforced in CI). Clippy is not enforced either; don't churn working code over style nits.
+- **The pre-commit hooks are the checks** (fmt, clippy with `-D warnings`, the workspace tests), and CI runs exactly them; see `CLAUDE.md`, *Checks and CI*.
 
 ## The test loop
 

@@ -36,6 +36,7 @@
 //!   * `cargo test slow_` — run ONLY the slow sweeps.
 //!   * `cargo test -- --skip slow_` — the tight inner loop: everything EXCEPT the
 //!     sweeps (sub-second; leaves only the fast correctness regression).
+//!
 //! Any future slow sweep should adopt the `slow_` prefix to join the category for
 //! free. The cheap correctness regressions stay unprefixed.
 
@@ -223,7 +224,10 @@ fn example9_demographics_are_invariant_under_agent_order_shuffle() {
     /// they stay RNG-free, guarded by the SoA differential tests), not an
     /// RNG-order leak. The property under test is that *identity, demographics,
     /// and every RNG-derived quantity* are order-invariant — which they are.
-    fn run(seed: u64, shuffle: bool) -> (Vec<u64>, Vec<usize>, Vec<(u64, (u32, u32))>) {
+    /// Births per tick, population per tick, and each final agent's id and position bits.
+    type RunTrace = (Vec<u64>, Vec<usize>, Vec<(u64, (u32, u32))>);
+
+    fn run(seed: u64, shuffle: bool) -> RunTrace {
         let recipe = load_pathway();
         let mut world = World::from_recipe(&recipe, seed);
         let mut births_per_tick = Vec::new();

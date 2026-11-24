@@ -515,7 +515,7 @@ pub fn form_connections(
 
     for i in 0..agents.len() {
         let builder_id = agents[i].id;
-        let mut built = connections
+        let built = connections
             .iter()
             .filter(|c| c.builder == builder_id)
             .count();
@@ -549,10 +549,8 @@ pub fn form_connections(
             .collect();
         ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
 
-        for (_, partner_id) in ranked {
-            if built >= cap {
-                break;
-            }
+        // At most the builder's remaining room under the cap.
+        for (_, partner_id) in ranked.into_iter().take(cap - built) {
             // Surplus gate: pay creation without dipping below the retention buffer.
             if agents[i].reserve < retention_buffer(&agents[i], params) + creation {
                 break;
@@ -563,7 +561,6 @@ pub fn form_connections(
                 builder: builder_id,
                 partner: partner_id,
             });
-            built += 1;
         }
     }
     dissipated
@@ -1006,10 +1003,11 @@ impl PartnerPayments {
     pub fn from_events(events: &[Event]) -> Self {
         let mut payments = Self::default();
         for e in events {
-            if e.kind == EventKind::Redistributed && e.energy_delta > 0.0 {
-                if let Some(recipient) = e.target {
-                    payments.record(e.source, recipient, e.energy_delta);
-                }
+            if e.kind == EventKind::Redistributed
+                && e.energy_delta > 0.0
+                && let Some(recipient) = e.target
+            {
+                payments.record(e.source, recipient, e.energy_delta);
             }
         }
         payments
@@ -2791,7 +2789,7 @@ pub fn resolve_reproduction(
     // phases only if an asexual parent shares a `(parent_id, SENTINEL)` with a
     // sexual pair's `(min, max)` — impossible, since SENTINEL = u64::MAX is not
     // a reachable id, so the asexual/sexual orderings never interleave on a tie.
-    keyed_offspring.sort_by(|a, b| a.0.cmp(&b.0));
+    keyed_offspring.sort_by_key(|a| a.0);
     let mut next_id = next_id;
     let parents: Vec<(u64, Option<u64>)> = keyed_offspring.iter().map(|(_, _, p)| *p).collect();
     let offspring: Vec<Agent> = keyed_offspring
@@ -4891,11 +4889,10 @@ mod tests {
             "asexual parents should reproduce"
         );
         for child in &result.offspring {
-            for ft in 0..FUNCTIONAL_TRAIT_COUNT {
+            for (ft, &wear) in child.wear.iter().enumerate() {
                 assert_eq!(
-                    child.wear[ft], 0.0,
-                    "asexual offspring must be born with zero wear on trait {ft}, got {}",
-                    child.wear[ft]
+                    wear, 0.0,
+                    "asexual offspring must be born with zero wear on trait {ft}, got {wear}"
                 );
             }
         }
@@ -4950,11 +4947,10 @@ mod tests {
             "sexual pair should produce offspring"
         );
         for child in &result.offspring {
-            for ft in 0..FUNCTIONAL_TRAIT_COUNT {
+            for (ft, &wear) in child.wear.iter().enumerate() {
                 assert_eq!(
-                    child.wear[ft], 0.0,
-                    "sexual offspring must be born with zero wear on trait {ft}, got {}",
-                    child.wear[ft]
+                    wear, 0.0,
+                    "sexual offspring must be born with zero wear on trait {ft}, got {wear}"
                 );
             }
         }

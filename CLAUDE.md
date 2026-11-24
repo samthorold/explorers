@@ -1,3 +1,7 @@
+## Commons Guides
+
+@~/.claude/commons/guides/rust.md
+
 ## Agent skills
 
 ### Issues
@@ -28,6 +32,8 @@ Wall-clock for the reference-mode runs (the archived search bins' figures live a
 
 Diagnoses that have cost time before (e.g. translation proptest failures). See `docs/agents/known-traps.md`.
 
-## Code style
+## Checks and CI
 
-The committed code is rustfmt-clean (`cargo fmt --check` passes on HEAD). Run `cargo fmt` freely and keep it clean; on a clean tree it touches only what you changed, so a focused diff stays focused. fmt is not enforced in CI, so it's on you to run it before committing.
+- The toolchain is pinned in `rust-toolchain.toml`; rustup installs it on first use. Run cargo from the repo root, where rustup finds the pin.
+- The checks are the pre-commit hooks in `.pre-commit-config.yaml`: file hygiene, actionlint, shellcheck, `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings` and `cargo test --workspace`. Install once per clone: `uv tool install pre-commit==4.7.0`, then `pre-commit install`. The pre-commit version is pinned here and in `ci.yml`; change them together.
+- CI (`.github/workflows/ci.yml`) is one job, **`pre-commit`**, which runs every hook on every file. **The required status check is `pre-commit`.** Renaming the job breaks merging under the `main` ruleset.

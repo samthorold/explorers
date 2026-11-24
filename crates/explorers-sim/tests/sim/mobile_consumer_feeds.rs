@@ -100,10 +100,11 @@ fn mobile_consumer_co_located_with_prey_feeds_and_survives_past_tick_two() {
     // sum was exactly zero.
     let mut predation_income = 0.0f32;
     for ev in world.event_log().since(0) {
-        if let explorers_sim::event::EventKind::Consumed = ev.kind {
-            if ev.source == consumer_id && !ev.target_was_carcass {
-                predation_income += ev.energy_delta;
-            }
+        if let explorers_sim::event::EventKind::Consumed = ev.kind
+            && ev.source == consumer_id
+            && !ev.target_was_carcass
+        {
+            predation_income += ev.energy_delta;
         }
     }
 

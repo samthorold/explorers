@@ -35,10 +35,12 @@ fn a_recipe_omitting_founder_aggregation_reads_back_at_the_aggregated_default() 
     let recipe: WorldRecipe = serde_json::from_str(&json).unwrap();
     let dist: InitialDistribution = recipe.initial_distribution.unwrap();
     assert_eq!(dist.founder_aggregation, DEFAULT_FOUNDER_AGGREGATION);
-    assert!(
-        DEFAULT_FOUNDER_AGGREGATION > 0.0,
-        "the design default is aggregated, not well-mixed"
-    );
+    const {
+        assert!(
+            DEFAULT_FOUNDER_AGGREGATION > 0.0,
+            "the design default is aggregated, not well-mixed"
+        )
+    };
 }
 
 fn founding_world(aggregation: f32, clusters: u32, seed: u64) -> World {

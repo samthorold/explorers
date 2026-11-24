@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-explorers-sim = { path = "../explorers-sim" }
-explorers-genesis-eval = { path = "../explorers-genesis-eval" }
+explorers-sim.workspace = true
+explorers-genesis-eval.workspace = true
 rayon = "1"
 
 [dev-dependencies]
-serde_json = "1"
+serde_json.workspace = true

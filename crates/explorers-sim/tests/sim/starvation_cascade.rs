@@ -213,7 +213,7 @@ fn the_earmark_alone_dies_of_reserve_depletion_once_the_earmark_is_spent() {
     let cost = metabolic_cost(&agent, &p);
     let mut world = world_with(p, &agent);
     let mut ticks_alive = 0;
-    while world.agents().first().is_some() && ticks_alive < 10_000 {
+    while !world.agents().is_empty() && ticks_alive < 10_000 {
         world.step();
         if let Some(a) = world.agents().first() {
             assert_eq!(a.structure, 5.0, "structure is never burned");

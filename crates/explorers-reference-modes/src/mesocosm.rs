@@ -1813,7 +1813,7 @@ fn run_paired_recording(
         world.step();
         observer.observe(&mut world);
         let elapsed = world.tick() - start;
-        if elapsed < settle && elapsed % sample_every == 0 {
+        if elapsed < settle && elapsed.is_multiple_of(sample_every) {
             // The settle's samples before the fork are not reported, but
             // taking them resets the birth and death counts, so the fork's
             // sample counts only those since the settle's last sample, as a
@@ -1889,7 +1889,7 @@ fn run_arm(
         if elapsed + 1 == window_start {
             guild_drain_at_window = observer.guild_drain;
         }
-        if elapsed % sample_every == 0 {
+        if elapsed.is_multiple_of(sample_every) {
             samples.push(observer.sample_centre(world));
             litter_samples.push(observer.sample_litter(world));
             lineage_drain.push(observer.sample_lineage_drain(world));
@@ -2308,10 +2308,10 @@ impl Observer {
                         self.line.insert(event.source);
                     }
                     for parent in parents.iter().flatten() {
-                        if let Some(f) = self.starving.get_mut(parent) {
-                            if f.ran_out_tick.is_none() {
-                                f.reproduced_before_running_out = true;
-                            }
+                        if let Some(f) = self.starving.get_mut(parent)
+                            && f.ran_out_tick.is_none()
+                        {
+                            f.reproduced_before_running_out = true;
                         }
                     }
                     let parent = event.target.and_then(|id| self.income.role(id));
@@ -3252,13 +3252,16 @@ mod tests {
         }
     }
 
-    fn carcass_state(w: &World) -> Vec<(u64, (f32, f32), f32, f32, TraitVector)> {
+    /// An agent's or carcass's id, position, two stores and traits.
+    type BodyState = (u64, (f32, f32), f32, f32, TraitVector);
+
+    fn carcass_state(w: &World) -> Vec<BodyState> {
         (w.carcasses().iter())
             .map(|c| (c.id, c.position, c.energy, c.nutrient, c.traits))
             .collect()
     }
 
-    fn agent_state(w: &World) -> Vec<(u64, (f32, f32), f32, f32, TraitVector)> {
+    fn agent_state(w: &World) -> Vec<BodyState> {
         (w.agents().iter())
             .map(|a| (a.id, a.position, a.reserve, a.structure, a.traits))
             .collect()
@@ -5126,10 +5129,10 @@ mod tests {
                         continue;
                     }
                     for parent in [e.target, e.second_parent].into_iter().flatten() {
-                        if let Some(f) = expected.get_mut(&parent) {
-                            if f.ran_out_tick.is_none() {
-                                f.reproduced_before_running_out = true;
-                            }
+                        if let Some(f) = expected.get_mut(&parent)
+                            && f.ran_out_tick.is_none()
+                        {
+                            f.reproduced_before_running_out = true;
                         }
                     }
                 }

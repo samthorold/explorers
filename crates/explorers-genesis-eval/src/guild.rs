@@ -421,7 +421,7 @@ mod tests {
         assert!(guilds.producer);
         assert!(!guilds.consumer);
         assert!(!guilds.decomposer);
-        assert_eq!(guilds.get(TrophicRole::Producer), true);
+        assert!(guilds.get(TrophicRole::Producer));
         // The heterotroph view of the same log ignores the producers.
         let h = heterotroph_guilds(&recruiting, &constant_roster(&roster), MAX_TICKS);
         assert_eq!(h, HeterotrophGuilds::default());

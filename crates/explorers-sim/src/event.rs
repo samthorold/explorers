@@ -113,10 +113,10 @@ impl EventLog {
     }
 
     pub fn append(&mut self, event: Event) -> Result<(), &'static str> {
-        if let Some(last) = self.last_seq {
-            if event.seq <= last {
-                return Err("sequence number must be monotonically increasing");
-            }
+        if let Some(last) = self.last_seq
+            && event.seq <= last
+        {
+            return Err("sequence number must be monotonically increasing");
         }
         self.last_seq = Some(event.seq);
         if self
@@ -189,6 +189,12 @@ impl EventLog {
         } else {
             &self.events[rel..]
         }
+    }
+}
+
+impl Default for EventLog {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

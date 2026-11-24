@@ -134,8 +134,8 @@ impl AgentSoA {
         self.t_fecundity.swap_remove(i);
         self.t_asexual.swap_remove(i);
         self.t_dispersal.swap_remove(i);
-        for ft in 0..FUNCTIONAL_TRAIT_COUNT {
-            self.wear[ft].swap_remove(i);
+        for wear in &mut self.wear {
+            wear.swap_remove(i);
         }
         self.marker.swap_remove(i);
     }

@@ -304,8 +304,11 @@ fn with_the_switch_off_no_marker_is_drawn() {
     }
 }
 
+/// One agent's state as bits: id, position, scalar stores, traits, marker.
+type AgentBits = (u64, [u32; 2], [u32; 6], [u32; 7], Marker);
+
 /// Every agent's state, exactly, for comparing two worlds.
-fn state(world: &World) -> Vec<(u64, [u32; 2], [u32; 6], [u32; 7], Marker)> {
+fn state(world: &World) -> Vec<AgentBits> {
     let mut v: Vec<_> = (world.agents().iter())
         .map(|a| {
             (

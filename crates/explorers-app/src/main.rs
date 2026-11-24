@@ -929,7 +929,7 @@ impl eframe::App for ExplorersApp {
                 painter.rect_stroke(
                     view.world_bounds(),
                     0.0,
-                    Stroke::new(1.0, Color32::from_gray(80)),
+                    Stroke::new(1.0_f32, Color32::from_gray(80)),
                     egui::StrokeKind::Inside,
                 );
 
@@ -998,7 +998,7 @@ impl eframe::App for ExplorersApp {
                     painter.circle_stroke(
                         center,
                         view.scale * AGENT_RADIUS + 3.0,
-                        Stroke::new(2.0, Color32::WHITE),
+                        Stroke::new(2.0_f32, Color32::WHITE),
                     );
                 }
             });
@@ -1650,7 +1650,10 @@ mod tests {
             // Every reader has consumed the step's events, so none are held.
             assert_eq!(app.world.event_log().retained(), 0);
         }
-        assert!(app.world.event_log().len() > 0, "the world did log events");
+        assert!(
+            !app.world.event_log().is_empty(),
+            "the world did log events"
+        );
         // The evaluator's series stop at the horizon, as the rollout's do.
         assert_eq!(app.verdict.observed_ticks(), recipe.max_ticks);
     }

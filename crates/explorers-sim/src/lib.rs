@@ -577,8 +577,9 @@ pub struct WorldParameters {
     #[serde(default = "default_dispersal_reach_coefficient")]
     pub dispersal_reach_coefficient: f32,
     /// Coefficient on the **structure** contribution to consumption (feeding)
-    /// reach. Consumption reach = `eff_heterotrophy * (contact_range_coefficient
-    /// + body_reach_coefficient * sqrt(structure))`. Feeding reach, like
+    /// reach. Consumption reach =
+    /// `eff_heterotrophy * (contact_range_coefficient + body_reach_coefficient * sqrt(structure))`.
+    /// Feeding reach, like
     /// reproductive reach, has two physical solutions — move the organism
     /// (mobility/locomotion, folded into the contact-range term) or extend the
     /// body through the substrate. A sessile heterotroph (a mycelium) forages by
@@ -1130,9 +1131,9 @@ impl Agent {
     /// Behavioural traits (kappa, fecundity, asexual_propensity, dispersal) are passed through unchanged.
     pub fn effective_traits(&self, k: f32) -> TraitVector {
         let mut t = self.traits;
-        for ft in 0..FUNCTIONAL_TRAIT_COUNT {
+        for (ft, &dim) in FUNCTIONAL_TRAIT_INDICES.iter().enumerate() {
             let effective = self.effective_trait_with_steepness(ft, k);
-            t.set(FUNCTIONAL_TRAIT_INDICES[ft], effective);
+            t.set(dim, effective);
         }
         t
     }
@@ -1170,9 +1171,9 @@ pub struct Carcass {
 pub fn structural_fragility(traits: &TraitVector) -> f32 {
     let mut values = [0.0_f32; TraitVector::NUM_DIMS];
     let mut sum = 0.0_f32;
-    for dim in 0..TraitVector::NUM_DIMS {
+    for (dim, value) in values.iter_mut().enumerate() {
         let v = traits.get(dim).max(0.0);
-        values[dim] = v;
+        *value = v;
         sum += v;
     }
     if sum < 1e-10 {
@@ -3419,11 +3420,11 @@ mod tests {
         let spec = structural_fragility(&specialist);
         let gen_f = structural_fragility(&generalist);
         assert!(
-            spec >= 0.0 && spec < 1.0,
+            (0.0..1.0).contains(&spec),
             "specialist fragility {spec} out of [0,1)"
         );
         assert!(
-            gen_f >= 0.0 && gen_f < 1.0,
+            (0.0..1.0).contains(&gen_f),
             "generalist fragility {gen_f} out of [0,1)"
         );
         assert!(
@@ -3582,7 +3583,7 @@ mod tests {
         }
 
         // Verify events were logged
-        assert!(world.event_log().len() > 0, "should have logged events");
+        assert!(!world.event_log().is_empty(), "should have logged events");
 
         // Verify photosynthesis events exist
         let photo_events = world
@@ -5905,7 +5906,6 @@ mod tests {
             fecundity: 0.3,
             asexual_propensity: 0.3,
             dispersal: 0.3,
-            ..zero_traits()
         };
         // Death threshold for this generalist is significant. The threshold is a
         // fraction of *peak* structure, so we model an agent that grew to a peak
