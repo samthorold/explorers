@@ -150,11 +150,7 @@ impl TopologyProjection {
         self.birth_tick
             .iter()
             .filter(|&(&agent, &born)| {
-                born <= tick
-                    && self
-                        .death_tick
-                        .get(&agent)
-                        .map_or(true, |&died| died > tick)
+                born <= tick && self.death_tick.get(&agent).is_none_or(|&died| died > tick)
             })
             .map(|(&agent, _)| agent)
             .collect()
@@ -222,6 +218,12 @@ impl TopologyProjection {
             result.insert(a, id);
         }
         result
+    }
+}
+
+impl Default for TopologyProjection {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

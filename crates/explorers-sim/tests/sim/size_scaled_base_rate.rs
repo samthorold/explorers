@@ -148,7 +148,7 @@ fn metabolise_charges_the_size_scaled_cost() {
     assert!(close(agents[0].reserve, 100.0 - dissipated));
 
     let off = params(0.0);
-    let (_, dissipated) = metabolise(&mut vec![a.clone()], &off);
+    let (_, dissipated) = metabolise(&mut [a.clone()], &off);
     let per_agent = off.base_metabolic_rate
         + trait_terms(&a, &off)
         + 10.0 * off.structure_maintenance_coefficient;

@@ -173,6 +173,12 @@ impl NutrientLedger {
     }
 }
 
+impl Default for NutrientLedger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

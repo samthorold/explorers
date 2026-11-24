@@ -423,7 +423,7 @@ The tempting alternatives each fail:
 
 Whether a cell is live or dead stays with its majority of seeds, so the dead frontier keeps its
 meaning: a cell is on a cliff when most of its seeds fall off it. The projection's coexistence floor
-and refinement stay, as a second, stricter guard on the one world the player is given. 
+and refinement stay, as a second, stricter guard on the one world the player is given.
 
 **A cell's recorded fitness rests on 10 seeds.** Seed-to-seed fitness sd is about 0.15 on
 #677's atlas, against a median cell fitness of 0.19, so the mean's standard error is about 0.067 at

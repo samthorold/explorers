@@ -20,7 +20,7 @@
 
 use explorers_sim::{Agent, World, WorldParameters, WorldRecipe};
 
-const SCENARIO: &str = "/Users/sam/Projects/explorers/scenarios/example4.json";
+const SCENARIO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scenarios/example4.json");
 
 fn load() -> WorldRecipe {
     let contents = std::fs::read_to_string(SCENARIO).expect("read scenario");
@@ -125,10 +125,11 @@ fn seeded_consumers_survive_to_establish_a_feeding_income() {
 
     let mut predation_income = 0.0f32;
     for ev in world.event_log().since(0) {
-        if let explorers_sim::event::EventKind::Consumed = ev.kind {
-            if consumer_ids.contains(&ev.source) && !ev.target_was_carcass {
-                predation_income += ev.energy_delta;
-            }
+        if let explorers_sim::event::EventKind::Consumed = ev.kind
+            && consumer_ids.contains(&ev.source)
+            && !ev.target_was_carcass
+        {
+            predation_income += ev.energy_delta;
         }
     }
 

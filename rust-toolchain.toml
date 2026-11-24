@@ -1,0 +1,8 @@
+# The Rust toolchain, pinned exactly (Commons Rust Guide, *Tooling*). rustup
+# installs it on first use, locally and in CI. Upgrade it deliberately in its
+# own PR, fixing whatever new clippy lints it brings: stable adds lints every
+# six weeks, and clippy runs with -D warnings.
+[toolchain]
+channel = "1.100.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

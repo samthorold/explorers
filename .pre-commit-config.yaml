@@ -1,0 +1,54 @@
+# The repo's checks (Commons Global Guide, *Checks and CI*; Rust Guide,
+# *pre-commit and CI*). CI runs exactly these: see .github/workflows/ci.yml.
+# pre-commit itself is a uv tool pinned to the version CI uses:
+#   uv tool install pre-commit==4.7.0 && pre-commit install
+minimum_pre_commit_version: "4.5.0"
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+
+  # actionlint shellchecks workflow run: steps only with a shellcheck on its
+  # PATH; shellcheck-py installs one into the hook's own environment.
+  - repo: https://github.com/Mateusz-Grzelinski/actionlint-py
+    rev: v1.7.12.25
+    hooks:
+      - id: actionlint
+        additional_dependencies: [shellcheck-py==0.11.0.1]
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  # The cargo hooks run with the toolchain rust-toolchain.toml pins. Tests read
+  # the scenario and spec JSON too, so they run on those as well.
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --check
+        language: system
+        files: (\.rs|Cargo\.toml|Cargo\.lock|rust-toolchain\.toml)$
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        language: system
+        files: (\.rs|Cargo\.toml|Cargo\.lock|rust-toolchain\.toml)$
+        pass_filenames: false
+
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --workspace
+        language: system
+        files: (\.rs|Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|\.json|proptest-regressions)$
+        pass_filenames: false

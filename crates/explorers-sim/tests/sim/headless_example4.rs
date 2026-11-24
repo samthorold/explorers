@@ -4,7 +4,7 @@
 
 use explorers_sim::{Agent, World, WorldRecipe};
 
-const SCENARIO: &str = "/Users/sam/Projects/explorers/scenarios/example4.json";
+const SCENARIO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scenarios/example4.json");
 
 fn is_producer(a: &Agent) -> bool {
     a.traits.photosynthetic_absorption >= a.traits.heterotrophy
