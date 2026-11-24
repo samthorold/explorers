@@ -2,4 +2,5 @@
 //! (`docs/system-design/reference-modes.md`, *How a reference mode is read*).
 //! Today that means designed mesocosms.
 
+pub mod ladder;
 pub mod mesocosm;

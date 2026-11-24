@@ -24,6 +24,16 @@ Measured cost of the reference-mode runs and the other bins still in the workspa
 | #829's command at `n` = 10 / 5 with `--marker-isolation --compatibility-scale 100` | 1,319–1,636 s / 1,413–1,799 s | `docs/research/837-mode1-crossing.md` |
 | #837's command plus `--growth-dilutes-wear`, `n` = 10 / 5 | 1,404–1,620 s / 1,563–1,925 s | `docs/research/840-mode1-ageing.md` |
 
+**Reading by the ladder** (#857; `end-state.md`, *The decomposer guild*, *Its ladder*). Three options make the expensive rungs fail fast. None has its own measured figure yet; the costs below are derived from the rows above.
+
+| Option | What it costs | Note |
+|---|---|---|
+| `--early-window C` with `--ticks 100` (rung 2: `C` = 50) | One run of 100 ticks: about the pilots' 2.7 s per 200 ticks at the defaults, more under the four rules and body reach, whose early ticks run on the founding pile | Reads one run, not paired; refuses `--clear-at` |
+| `--abort-on-line-extinction` | Nothing measurable: one roster scan per tick while the line lives. It saves the rest of a run whose line dies, which at the four rules is most of a 1,500–3,000 s run | Also stops a paired settle (both arms abort at once) or one arm |
+| `--seeds N --passes-needed K` | Between K and N runs, one at a time: rung 3 (3 of 5) costs 3 to 5 runs, not 5. Add `--failures-undecided` where the rule's failure bound declares no refuted line (mode 1) | Writes `mode1-sequence.json`; a run of the sequence is byte for byte its seed's single run |
+
+The sequence runs its seeds one after another in one process, so it is a long foreground job at rung 3: drive it as below, in the background, and let the abort shorten the failures.
+
 What sets the cost: the carcass pile and the producer stand, not the living roster. Body reach can collapse the stand and make a run cheaper (#796) or draw the litter down and keep the founder line alive, making it far dearer (#814 at `k` = 30). CPU tracks reach, not the founder count (#829). Readouts cost nothing measurable. A `report.json` is 0.3–2.3 MB.
 
 Memory is not the constraint (RSS < 100–600 MB); time is.

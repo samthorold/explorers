@@ -546,6 +546,168 @@ fn marker_isolation_records_the_scale_and_writes_the_marker_readout() {
     }
 }
 
+fn refused(args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+        .args(args)
+        .output()
+        .expect("the instrument runs");
+    assert!(!output.status.success(), "{args:?}");
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// `--early-window C` (#857) reads G's rung 2 over the run (`--ticks` is the
+/// window): the decomposer founders alive at tick C and the founders' line's
+/// births, and whether both conditions hold. It is recorded in the artifact
+/// and summary; without it nothing is. It reads one run with founders, at a
+/// tick within it.
+#[test]
+fn early_window_reports_rung_2s_conditions() {
+    let dir = scratch("early-window");
+    let plain = run_with(&dir.join("plain.json"), &[]);
+    assert!(plain.get("early_window").is_none());
+
+    let window = run_with(
+        &dir.join("window.json"),
+        &["--ticks", "30", "--early-window", "5"],
+    );
+    let w = &window["early_window"];
+    assert_eq!(w["founder_tick"], 5);
+    assert_eq!(w["window_end"], 30);
+    let alive = w["founders_alive"].as_u64().unwrap();
+    let births = window["report"]["recruitment"]["births"]
+        .as_array()
+        .unwrap()
+        .len() as u64;
+    assert!(alive > 0, "{w}");
+    assert_eq!(w["line_births"].as_u64(), Some(births));
+    assert_eq!(w["holds"].as_bool(), Some(alive > 0 && births > 0));
+    let md = std::fs::read_to_string(dir.join("window.md")).unwrap();
+    assert!(md.contains("## Early window"), "{md}");
+
+    for (args, why) in [
+        (&["--ticks", "10", "--early-window", "11"][..], "within"),
+        (
+            &["--ticks", "10", "--early-window", "5", "--clear-at", "5"][..],
+            "--clear-at",
+        ),
+        (
+            &["--ticks", "10", "--early-window", "5", "--no-decomposers"][..],
+            "decomposer founders",
+        ),
+    ] {
+        let stderr = refused(args);
+        assert!(stderr.contains("--early-window"), "{stderr}");
+        assert!(stderr.contains(why), "{stderr}");
+    }
+}
+
+/// `--seeds N --passes-needed K` (#857) runs seeds from `--seed` on, one at
+/// a time, under "at least K of N", and stops as soon as the outcome is
+/// decided: it records the outcome, the seeds run and each run's artifact,
+/// which is the single run of its seed. A seed passes by the early window
+/// when one is asked for. `--failures-undecided` makes the failure bound
+/// leave the reading undecided rather than failed.
+#[test]
+fn seeds_in_sequence_stop_once_the_rule_is_decided() {
+    let dir = scratch("sequence");
+    let window = ["--ticks", "10", "--early-window", "5"];
+    let rule = ["--seeds", "3", "--passes-needed", "2"];
+    let seq = run_with(&dir.join("seq.json"), &[&window[..], &rule[..]].concat());
+    let reading = &seq["sequence"];
+    let runs = seq["runs"].as_array().unwrap();
+    let seeds = reading["seeds"].as_array().unwrap();
+    assert_eq!(seeds.len(), runs.len());
+    for (i, run) in runs.iter().enumerate() {
+        let seed = i as u64 + 1;
+        assert_eq!(run["seed"].as_u64(), Some(seed));
+        let holds = run["early_window"]["holds"].as_bool().unwrap();
+        assert_eq!(seeds[i], serde_json::json!([seed, holds]));
+    }
+    let passes = reading["passes"].as_u64().unwrap();
+    let failures = reading["failures"].as_u64().unwrap();
+    let outcome = reading["outcome"].as_str().unwrap();
+    match outcome {
+        "passed" => assert_eq!(passes, 2),
+        "failed" => assert_eq!(failures, 2),
+        _ => panic!("{reading}"),
+    }
+    assert_eq!(passes + failures, runs.len() as u64);
+    let md = std::fs::read_to_string(dir.join("seq.md")).unwrap();
+    assert!(md.contains("## Seeds in sequence"), "{md}");
+
+    let single = run_with(
+        &dir.join("one.json"),
+        &[&window[..], &["--seed", "1"]].concat(),
+    );
+    assert_eq!(
+        runs[0], single,
+        "a run in the sequence is its seed's single run"
+    );
+
+    let open = run_with(
+        &dir.join("open.json"),
+        &[&window[..], &rule[..], &["--failures-undecided"]].concat(),
+    );
+    let expected = if outcome == "failed" {
+        "undecided"
+    } else {
+        outcome
+    };
+    assert_eq!(open["sequence"]["outcome"].as_str(), Some(expected));
+    assert_eq!(open["sequence"]["seeds"], reading["seeds"]);
+
+    for args in [
+        &["--seeds", "3", "--passes-needed", "4"][..],
+        &["--seeds", "3", "--passes-needed", "0"][..],
+        &["--passes-needed", "2"][..],
+        &["--seeds", "3"][..],
+        &["--failures-undecided"][..],
+    ] {
+        let stderr = refused(&[&["--ticks", "1"][..], args].concat());
+        assert!(stderr.contains("--passes-needed"), "{args:?}: {stderr}");
+    }
+}
+
+/// `--abort-on-line-extinction` (#857) stops a run in the step the
+/// decomposer founders' line has no living member, and records the tick in
+/// the report and the summary; a run whose line lives is unchanged. It needs
+/// decomposer founders.
+#[test]
+fn abort_on_line_extinction_stops_the_run_and_reports_the_tick() {
+    let dir = scratch("abort");
+    let plain = run_with(&dir.join("plain.json"), &[]);
+    let asked = run_with(&dir.join("asked.json"), &["--abort-on-line-extinction"]);
+    assert_eq!(asked["abort_on_line_extinction"].as_bool(), Some(true));
+    assert!(plain.get("abort_on_line_extinction").is_none());
+    assert_eq!(
+        asked["report"], plain["report"],
+        "the line lives to tick 10"
+    );
+
+    let lone = ["--decomposer-founders", "1", "--ticks", "300"];
+    let aborted = run_with(
+        &dir.join("aborted.json"),
+        &[&lone[..], &["--abort-on-line-extinction"]].concat(),
+    );
+    let at = aborted["report"]["aborted_at"]
+        .as_u64()
+        .expect("a lone founder's line dies within 300 ticks");
+    assert!(at < 300);
+    assert_eq!(aborted["report"]["founders"]["end_tick"].as_u64(), Some(at));
+    assert_eq!(aborted["report"]["guild"]["passes"].as_bool(), Some(false));
+    let md = std::fs::read_to_string(dir.join("aborted.md")).unwrap();
+    assert!(
+        md.contains(&format!(
+            "aborted at tick {at}: the founders' line is extinct"
+        )),
+        "{md}"
+    );
+
+    let stderr = refused(&["--no-decomposers", "--abort-on-line-extinction"]);
+    assert!(stderr.contains("--abort-on-line-extinction"), "{stderr}");
+    assert!(stderr.contains("decomposer founders"), "{stderr}");
+}
+
 /// `--growth-dilutes-wear` (#840) turns growth dilution on and records it in
 /// the artifact and summary; without the flag nothing is recorded. On, a
 /// founder that grows ends with less wear than in the same run with it off,
