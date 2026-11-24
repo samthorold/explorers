@@ -110,6 +110,25 @@
 //! it; it adds no readout. Without it nothing is recorded and the world is
 //! unchanged.
 //!
+//! It reads by the ladder (#857; `end-state.md`, *The decomposer guild*,
+//! *Its ladder*), so the expensive rungs fail fast:
+//!
+//! - `--early-window C` reads rung 2 over the run, whose length is
+//!   `--ticks` (about 100 for the guild): the decomposer founders alive at
+//!   tick C (50 for the guild) and the founders' line's births, and whether
+//!   both conditions hold. One run with founders, not paired.
+//! - `--abort-on-line-extinction` stops a run, or a paired settle or arm, in
+//!   the step the founders' line has no living member, and records the tick
+//!   (`aborted_at`): the run fails, since no later tick can rescue the guild.
+//! - `--seeds N --passes-needed K` runs seeds from `--seed` on, one at a
+//!   time, under "at least K of N", and stops as soon as the outcome is
+//!   decided either way, writing the outcome (passed, failed, or with
+//!   `--failures-undecided` undecided at the failure bound), the seeds run
+//!   and each run's artifact and summary. A seed passes by the early window
+//!   when asked for, else by the guild: the run's, or a paired run's control
+//!   arm's (`passes`: the guild holds and the producers persist). The
+//!   outcome is the one running all N would give.
+//!
 //! With `--clear-at T` (#752) it reads the perturbation against its paired
 //! control: it settles the mesocosm to tick `T`, clones it, clears every agent
 //! and carcass from one copy's centre patch (an outflow, booked in each arm's
@@ -127,30 +146,38 @@
 //!                [--living-resistance] [--starvation-draws-earmark]
 //!                [--starvation-shrinks] [--starvation-readout]
 //!                [--marker-isolation --compatibility-scale S]
-//!                [--growth-dilutes-wear] [--out PATH]
+//!                [--growth-dilutes-wear] [--early-window C]
+//!                [--abort-on-line-extinction]
+//!                [--seeds N --passes-needed K [--failures-undecided]]
+//!                [--out PATH]
 //! ```
 //!
 //! Defaults: the committed `crates/explorers-reference-modes/mode1.json`
 //! (found from any working directory), 3000 ticks, seed 1, the spec's wear
 //! (the four wear flags override its parameters), a sample every 25 ticks, no clearance, with
 //! decomposers, one decomposer founder a cell, 1× litter, artifact `target/reference-mode/mode1.json` (or
-//! `mode1-paired.json` with `--clear-at`) with the human-readable summary
+//! `mode1-paired.json` with `--clear-at`, `mode1-sequence.json` with
+//! `--seeds`) with the human-readable summary
 //! beside it as `.md` (also printed). Deterministic per seed and arguments.
 
 use std::path::PathBuf;
 
+use explorers_reference_modes::ladder::{
+    OnFailure, SeedRule, read_in_sequence, sequential_reading_section,
+};
 use explorers_reference_modes::mesocosm::{
-    Community, ESTABLISHED_PRODUCER_LIFESPAN_TICKS, Mode1Spec, body_reach_section,
-    carcass_decay_constant_for_half_life, decomposition_kinetics_section,
-    founder_starvation_section, growth_dilutes_wear_section, living_resistance_section,
+    Community, ESTABLISHED_PRODUCER_LIFESPAN_TICKS, EarlyWindow, MarkerIsolation, Mode1Spec,
+    RunOptions, Wear, body_reach_section, carcass_decay_constant_for_half_life,
+    decomposition_kinetics_section, early_window_section, founder_starvation_section,
+    growth_dilutes_wear_section, line_extinction_section, living_resistance_section,
     marker_isolation_section, marker_readout_section, mode1_mesocosm_with_founders, mode1_summary,
-    paired_summary, run_mode1, run_paired, set_body_reach_pieces, set_decomposition_kinetics,
-    set_growth_dilutes_wear, set_living_resistance, set_marker_isolation,
-    set_size_scaled_base_rate, set_size_scaled_base_rate_at, set_starvation_cascade,
-    size_scaled_base_rate_section, starvation_cascade_section,
+    paired_summary, run_mode1_with, run_paired_with, set_body_reach_pieces,
+    set_decomposition_kinetics, set_growth_dilutes_wear, set_living_resistance,
+    set_marker_isolation, set_size_scaled_base_rate, set_size_scaled_base_rate_at,
+    set_starvation_cascade, size_scaled_base_rate_section, starvation_cascade_section,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--marker-isolation --compatibility-scale S] [--growth-dilutes-wear] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--marker-isolation --compatibility-scale S] [--growth-dilutes-wear] [--early-window C] [--abort-on-line-extinction] [--seeds N --passes-needed K [--failures-undecided]] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -194,6 +221,13 @@ struct Cli {
     compatibility_scale: Option<f32>,
     /// Whether growth dilutes wear (#840).
     growth_dilutes_wear: bool,
+    /// The early window's founder tick (#857): read G's rung 2 over the run.
+    early_window: Option<u64>,
+    /// Whether a run stops, as a failure, once the founders' line is
+    /// extinct (#857).
+    abort_on_line_extinction: bool,
+    /// Seeds in sequence under "at least k of n" (#857).
+    sequence: Option<SeedRule>,
     out: Option<PathBuf>,
 }
 
@@ -221,8 +255,12 @@ impl Cli {
             marker_isolation: false,
             compatibility_scale: None,
             growth_dilutes_wear: false,
+            early_window: None,
+            abort_on_line_extinction: false,
+            sequence: None,
             out: None,
         };
+        let (mut seeds, mut passes_needed, mut failures_undecided) = (None, None, false);
         while let Some(flag) = args.next() {
             if flag == "--no-decomposers" {
                 cli.community = Community::ProducersOnly;
@@ -254,6 +292,14 @@ impl Cli {
             }
             if flag == "--growth-dilutes-wear" {
                 cli.growth_dilutes_wear = true;
+                continue;
+            }
+            if flag == "--abort-on-line-extinction" {
+                cli.abort_on_line_extinction = true;
+                continue;
+            }
+            if flag == "--failures-undecided" {
+                failures_undecided = true;
                 continue;
             }
             let value = args.next().ok_or(format!("{flag} needs a value"))?;
@@ -312,6 +358,11 @@ impl Cli {
                     }
                     cli.compatibility_scale = Some(s);
                 }
+                "--early-window" => cli.early_window = Some(value.parse().map_err(|e| bad(&e))?),
+                "--seeds" => seeds = Some(value.parse::<usize>().map_err(|e| bad(&e))?),
+                "--passes-needed" => {
+                    passes_needed = Some(value.parse::<usize>().map_err(|e| bad(&e))?)
+                }
                 "--clear-at" => cli.clear_at = Some(value.parse().map_err(|e| bad(&e))?),
                 "--out" => cli.out = Some(PathBuf::from(&value)),
                 _ => return Err(format!("unknown flag {flag}")),
@@ -357,6 +408,51 @@ impl Cli {
                     .into(),
             );
         }
+        if let Some(c) = cli.early_window {
+            if c > cli.ticks {
+                return Err(format!(
+                    "--early-window {c}: the founders are counted within the run's {} ticks",
+                    cli.ticks
+                ));
+            }
+            if cli.clear_at.is_some() {
+                return Err(
+                    "--early-window reads one run, not a paired one: drop --clear-at".into(),
+                );
+            }
+            if cli.community == Community::ProducersOnly {
+                return Err("--early-window needs decomposer founders".into());
+            }
+        }
+        cli.sequence = match (seeds, passes_needed) {
+            (Some(n), Some(k)) if (1..=n).contains(&k) => Some(SeedRule::at_least(
+                k,
+                n,
+                if failures_undecided {
+                    OnFailure::Undecided
+                } else {
+                    OnFailure::Fails
+                },
+            )),
+            (Some(n), Some(k)) => {
+                return Err(format!(
+                    "--passes-needed {k} of --seeds {n}: needs between 1 and {n}"
+                ));
+            }
+            (None, None) if !failures_undecided => None,
+            _ => {
+                return Err(
+                    "--seeds and --passes-needed go together, and --failures-undecided needs them"
+                        .into(),
+                );
+            }
+        };
+        if cli.abort_on_line_extinction && cli.community == Community::ProducersOnly {
+            return Err(
+                "--abort-on-line-extinction needs decomposer founders: without them there is no line"
+                    .into(),
+            );
+        }
         if cli.sample_every == 0 {
             return Err("--sample-every must be at least 1".into());
         }
@@ -392,10 +488,69 @@ fn main() {
     let marker_isolation = cli
         .compatibility_scale
         .map(|s| set_marker_isolation(&mut spec, s));
+    let run = |seed| run_seed(&cli, &spec, wear, marker_isolation, seed);
+
+    let (summary, artifact, default_out) = match cli.sequence {
+        None => {
+            let r = run(cli.seed);
+            (r.summary, r.artifact, r.default_out)
+        }
+        // Seeds in sequence (#857): run from `--seed` on until the rule is
+        // decided, keeping each run's summary and artifact.
+        Some(rule) => {
+            let mut runs = Vec::new();
+            let reading = read_in_sequence(rule, cli.seed.., |seed| {
+                let r = run(seed);
+                let passed = r.passed;
+                runs.push(r);
+                passed
+            });
+            let mut summary: String = (runs.iter())
+                .map(|r| format!("# Seed {}\n\n{}\n", r.seed, r.summary))
+                .collect();
+            summary.push_str(&sequential_reading_section(&reading));
+            let artifact = serde_json::json!({
+                "sequence": reading,
+                "runs": runs.into_iter().map(|r| r.artifact).collect::<Vec<_>>(),
+            });
+            (summary, artifact, "mode1-sequence.json")
+        }
+    };
+    print!("{summary}");
+    let out = cli
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("target/reference-mode").join(default_out));
+    if let Some(dir) = out.parent() {
+        std::fs::create_dir_all(dir).expect("create the artifact directory");
+    }
+    std::fs::write(&out, serde_json::to_string(&artifact).unwrap()).expect("write the artifact");
+    std::fs::write(out.with_extension("md"), &summary).expect("write the summary");
+    eprintln!("wrote {} and its .md summary", out.display());
+}
+
+/// One seed's run: its summary, its artifact, whether it passed (the early
+/// window when asked for, else the guild: the run's, or a paired run's
+/// control arm's) and the artifact's default name.
+struct SeedRun {
+    seed: u64,
+    summary: String,
+    artifact: serde_json::Value,
+    passed: bool,
+    default_out: &'static str,
+}
+
+fn run_seed(
+    cli: &Cli,
+    spec: &Mode1Spec,
+    wear: Wear,
+    marker_isolation: Option<MarkerIsolation>,
+    seed: u64,
+) -> SeedRun {
     let mut world = mode1_mesocosm_with_founders(
-        &spec,
+        spec,
         wear,
-        cli.seed,
+        seed,
         cli.community,
         cli.litter_x,
         cli.decomposer_founders,
@@ -435,7 +590,7 @@ fn main() {
     let header = format!(
         "spec {}, seed {}, {} ticks, wear rate {}, use-wear rate {}, repair rate {}, senescence hazard {}, sample every {}, {community}, litter x{}",
         cli.spec.display(),
-        cli.seed,
+        seed,
         cli.ticks,
         wear.wear_rate,
         wear.use_wear_rate,
@@ -483,12 +638,20 @@ fn main() {
             header
         }
     };
+    // The early window (#857), when asked for.
+    let mut early_window = None;
     // The founder starvation readout (#821), when asked for: its summary
     // section and its artifact entry.
-    let (summary, report, starvation, default_out) = match cli.clear_at {
+    let options = RunOptions {
+        abort_on_line_extinction: cli.abort_on_line_extinction,
+    };
+    let (summary, report, starvation, passed, default_out) = match cli.clear_at {
         None => {
-            let report = run_mode1(&mut world, cli.ticks, cli.sample_every);
+            let report = run_mode1_with(&mut world, cli.ticks, cli.sample_every, options);
             let mut summary = mode1_summary(&with_reach(header), &report);
+            if let Some(s) = line_extinction_section(&[("run", &report)]) {
+                summary.push_str(&format!("\n{s}"));
+            }
             let readout = &report.founders.starvation;
             let starvation = starvation_readout.then(|| {
                 summary.push_str(&format!(
@@ -500,17 +663,31 @@ fn main() {
             if let Some(m) = &report.marker {
                 summary.push_str(&format!("\n{}", marker_readout_section(&[("run", m)])));
             }
+            early_window = cli.early_window.map(|c| {
+                let w = EarlyWindow::read(&report, c);
+                summary.push_str(&format!("\n{}\n", early_window_section(&w)));
+                w
+            });
+            let passed = early_window.map_or(report.guild.passes, |w| w.holds);
             (
                 summary,
                 serde_json::to_value(report),
                 starvation,
+                passed,
                 "mode1.json",
             )
         }
         Some(settle) => {
-            let report = run_paired(world, settle, cli.ticks, cli.sample_every);
+            let report = run_paired_with(world, settle, cli.ticks, cli.sample_every, options);
             let header = with_reach(format!("{header}, settled to tick {settle} then cleared"));
             let mut summary = paired_summary(&header, &report);
+            let arms = [
+                ("perturbed", &report.perturbed),
+                ("control", &report.control),
+            ];
+            if let Some(s) = line_extinction_section(&arms) {
+                summary.push_str(&format!("\n{s}"));
+            }
             let (perturbed, control) = (
                 &report.perturbed.founders.starvation,
                 &report.control.founders.starvation,
@@ -528,25 +705,21 @@ fn main() {
                     marker_readout_section(&[("perturbed", p), ("control", c)])
                 ));
             }
+            // The full reading's seed passes on the paired control's guild,
+            // which holds only with its producers persisting.
+            let passed = report.control.guild.passes;
             (
                 summary,
                 serde_json::to_value(report),
                 starvation,
+                passed,
                 "mode1-paired.json",
             )
         }
     };
-    print!("{summary}");
-
-    let out = cli
-        .out
-        .unwrap_or_else(|| PathBuf::from("target/reference-mode").join(default_out));
-    if let Some(dir) = out.parent() {
-        std::fs::create_dir_all(dir).expect("create the artifact directory");
-    }
     let mut artifact = serde_json::json!({
         "spec": cli.spec,
-        "seed": cli.seed,
+        "seed": seed,
         "ticks": cli.ticks,
         "wear": wear,
         "sample_every": cli.sample_every,
@@ -586,7 +759,17 @@ fn main() {
     if let Some(readout) = starvation {
         artifact["founder_starvation"] = readout;
     }
-    std::fs::write(&out, serde_json::to_string(&artifact).unwrap()).expect("write the artifact");
-    std::fs::write(out.with_extension("md"), &summary).expect("write the summary");
-    eprintln!("wrote {} and its .md summary", out.display());
+    if let Some(w) = early_window {
+        artifact["early_window"] = serde_json::to_value(w).expect("the early window serialises");
+    }
+    if cli.abort_on_line_extinction {
+        artifact["abort_on_line_extinction"] = serde_json::json!(true);
+    }
+    SeedRun {
+        seed,
+        summary,
+        artifact,
+        passed,
+        default_out,
+    }
 }

@@ -1667,6 +1667,13 @@ pub struct Mode1Report {
     /// without marker isolation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marker: Option<MarkerReadout>,
+    /// The world's tick after the step in which the founders' line lost its
+    /// last living member, where the run was asked to abort there
+    /// ([`RunOptions::abort_on_line_extinction`]) and did: the run stopped
+    /// at that tick and its guild fails. `None`, and absent from the
+    /// artifact, otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aborted_at: Option<u64>,
 }
 
 impl Mode1Report {
@@ -1676,6 +1683,76 @@ impl Mode1Report {
         let second_half = &self.samples[self.samples.len() / 2..];
         second_half.iter().map(|s| s.producers).min().unwrap_or(0) > 0
     }
+}
+
+/// The summary section of a run's or arm's abort on line extinction (#857),
+/// one row per run or arm that aborted: `None` with none.
+pub fn line_extinction_section(rows: &[(&str, &Mode1Report)]) -> Option<String> {
+    let aborted: Vec<String> = (rows.iter())
+        .filter_map(|(name, r)| {
+            r.aborted_at.map(|at| {
+                format!("{name}: aborted at tick {at}: the founders' line is extinct, a failure")
+            })
+        })
+        .collect();
+    (!aborted.is_empty()).then(|| {
+        format!(
+            "## Line extinction (--abort-on-line-extinction)\n\n{}\n",
+            aborted.join("\n\n")
+        )
+    })
+}
+
+/// The early window (#857; end-state.md, *The decomposer guild*, *Its
+/// ladder*, rung 2): a short run's necessary conditions for the guild. It
+/// can refute, never support.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct EarlyWindow {
+    /// The world's tick at the run's end: the window it read.
+    pub window_end: u64,
+    /// The declared tick at which founders are counted.
+    pub founder_tick: u64,
+    /// Decomposer founders alive at `founder_tick`.
+    pub founders_alive: usize,
+    /// Births with a parent in the founders' line over the run.
+    pub line_births: usize,
+    /// At least one founder alive at `founder_tick`, and a line birth.
+    pub holds: bool,
+}
+
+impl EarlyWindow {
+    /// Read the early window from a run's report, counting founders at
+    /// `founder_tick`. Panics if the run ended before it.
+    pub fn read(report: &Mode1Report, founder_tick: u64) -> Self {
+        let f = &report.founders;
+        assert!(
+            founder_tick <= f.end_tick,
+            "the founders are counted within the run"
+        );
+        let founders_alive = f.alive_at(founder_tick);
+        let line_births = report.recruitment.as_ref().map_or(0, |r| r.births.len());
+        Self {
+            window_end: f.end_tick,
+            founder_tick,
+            founders_alive,
+            line_births,
+            holds: founders_alive > 0 && line_births > 0,
+        }
+    }
+}
+
+/// The summary section of the early window.
+pub fn early_window_section(w: &EarlyWindow) -> String {
+    format!(
+        "## Early window (--early-window)\n\n\
+         decomposer founders alive at tick {}: {} | founders' line births to tick {}: {} | \
+         holds (a founder alive and a line birth): {}",
+        w.founder_tick,
+        w.founders_alive,
+        w.window_end,
+        w.line_births,
+        if w.holds { "yes" } else { "no" }
+    )
 }
 
 /// The whole world's energy and nutrient budget over a run, with what a
@@ -1757,9 +1834,31 @@ pub struct RoleTally {
     pub no_role: usize,
 }
 
+/// How a run may stop before its declared ticks (#857; end-state.md, *The
+/// decomposer guild*, *Its ladder*). The default runs every tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RunOptions {
+    /// Stop a run (or a paired settle or arm) in the step in which the
+    /// decomposer founders' line (the founders and every descendant) has no
+    /// living member, as a failure: no later tick can rescue the guild,
+    /// which is the founders' line grown into its litter. A world without
+    /// founders has no line and is never aborted.
+    pub abort_on_line_extinction: bool,
+}
+
 /// Step `world` for `ticks` ticks, sampling the centre patch at the start and
 /// every `sample_every` ticks.
 pub fn run_mode1(world: &mut World, ticks: u64, sample_every: u64) -> Mode1Report {
+    run_mode1_with(world, ticks, sample_every, RunOptions::default())
+}
+
+/// [`run_mode1`], stopping early as `options` asks.
+pub fn run_mode1_with(
+    world: &mut World,
+    ticks: u64,
+    sample_every: u64,
+    options: RunOptions,
+) -> Mode1Report {
     let mut observer = Observer::new(world);
     let start = Stock::of(world);
     run_arm(
@@ -1769,6 +1868,7 @@ pub fn run_mode1(world: &mut World, ticks: u64, sample_every: u64) -> Mode1Repor
         Clearance::default(),
         ticks,
         sample_every,
+        options,
     )
 }
 
@@ -1794,22 +1894,39 @@ pub struct PairedReport {
 /// lifespans are the producer deaths after the fork; its first sample's
 /// births and deaths are those since the settle's last sample.
 pub fn run_paired(world: World, settle: u64, ticks: u64, sample_every: u64) -> PairedReport {
-    run_paired_recording(world, settle, ticks, sample_every, true)
+    run_paired_with(world, settle, ticks, sample_every, RunOptions::default())
 }
 
-/// [`run_paired`], with the recruitment readout (#833) recorded or not: off
-/// only to test that it leaves the rest of the report alone.
+/// [`run_paired`], stopping early as `options` asks. With the abort on, a
+/// line extinct in the settle forks there, and both arms abort at once at
+/// the settle's tick of extinction; each arm otherwise aborts on its own.
+pub fn run_paired_with(
+    world: World,
+    settle: u64,
+    ticks: u64,
+    sample_every: u64,
+    options: RunOptions,
+) -> PairedReport {
+    run_paired_recording(world, settle, ticks, sample_every, true, options)
+}
+
+/// [`run_paired_with`], with the recruitment readout (#833) recorded or not:
+/// off only to test that it leaves the rest of the report alone.
 fn run_paired_recording(
     mut world: World,
     settle: u64,
     ticks: u64,
     sample_every: u64,
     record_recruitment: bool,
+    options: RunOptions,
 ) -> PairedReport {
     let mut observer = Observer::new(&mut world);
     observer.record_recruitment = record_recruitment;
     let start = world.tick();
     for _ in 0..settle {
+        if options.abort_on_line_extinction && observer.line_extinct(&world) {
+            break;
+        }
         world.step();
         observer.observe(&mut world);
         let elapsed = world.tick() - start;
@@ -1842,6 +1959,7 @@ fn run_paired_recording(
             clearance,
             ticks,
             sample_every,
+            options,
         ),
         control: run_arm(
             &mut control,
@@ -1850,13 +1968,16 @@ fn run_paired_recording(
             Clearance::default(),
             ticks,
             sample_every,
+            options,
         ),
     }
 }
 
 /// Step `world` for `ticks` ticks under `observer`, sampling the centre patch
 /// at the start and every `sample_every` ticks. `stock` is the world before
-/// `cleared` was taken out of it.
+/// `cleared` was taken out of it. With the abort asked for, it stops after
+/// the step in which the founders' line is extinct (or at once, if it already
+/// is), and its guild fails.
 fn run_arm(
     world: &mut World,
     observer: &mut Observer,
@@ -1864,7 +1985,14 @@ fn run_arm(
     cleared: Clearance,
     ticks: u64,
     sample_every: u64,
+    options: RunOptions,
 ) -> Mode1Report {
+    let abort = options.abort_on_line_extinction;
+    let ticks_to_run = if abort && observer.line_extinct(world) {
+        0
+    } else {
+        ticks
+    };
     let start = world.tick();
     let drain_at_start = observer.carcass_drain;
     // The guild is read over the arm's second half, ticks after `start` from
@@ -1882,7 +2010,7 @@ fn run_arm(
     if marker_isolation {
         line_samples.push(observer.sample_line(world));
     }
-    for _ in 0..ticks {
+    for _ in 0..ticks_to_run {
         world.step();
         observer.observe(world);
         let elapsed = world.tick() - start;
@@ -1898,7 +2026,15 @@ fn run_arm(
                 line_samples.push(observer.sample_line(world));
             }
         }
+        if abort && observer.line_extinct(world) {
+            break;
+        }
     }
+    let aborted_at = if abort {
+        observer.line_extinct_at
+    } else {
+        None
+    };
     let births: Vec<Birth> = std::mem::take(&mut observer.births_log)
         .into_iter()
         .map(|b| Birth {
@@ -1906,7 +2042,9 @@ fn run_arm(
             ..b
         })
         .collect();
-    let guild_holds = role_guilds_from_samples(&guild_samples, &births, ticks).decomposer;
+    // An aborted run is a failure: its guild does not hold.
+    let guild_holds =
+        aborted_at.is_none() && role_guilds_from_samples(&guild_samples, &births, ticks).decomposer;
     let fewest_members = (guild_samples.iter())
         .filter(|(t, _)| *t >= window_start)
         .map(|(_, members)| members.len())
@@ -1960,6 +2098,7 @@ fn run_arm(
         litter: LitterReadout::default(),
         recruitment: observer.recruitment(lineage_drain),
         marker: marker_isolation.then(|| observer.marker_readout(world, line_samples)),
+        aborted_at,
     };
     report.litter = LitterReadout {
         second_half: LitterWindow::read(&litter_samples, &report.producer_lifespans),
@@ -2115,6 +2254,9 @@ struct Observer {
     /// Litter inflow since the last litter sample, and that sample's tick.
     litter_inflow: LitterInflow,
     litter_sampled_at: u64,
+    /// The world's tick at which the founders' line was first seen with no
+    /// living member (#857), once looked for.
+    line_extinct_at: Option<u64>,
 }
 
 impl Observer {
@@ -2151,8 +2293,23 @@ impl Observer {
             lineage_drain: LineageDrain::default(),
             litter_inflow: LitterInflow::default(),
             litter_sampled_at: world.tick(),
+            line_extinct_at: None,
         }
         .with_founders(world)
+    }
+
+    /// Whether the founders' line has no living member in `world`, noting
+    /// the tick it was first seen so. Read off the roster, not the line's
+    /// ids alone, since a clearance removes members without a death. A world
+    /// without founders has no line, and it is never extinct.
+    fn line_extinct(&mut self, world: &World) -> bool {
+        if self.line_extinct_at.is_none()
+            && self.founders.founders > 0
+            && !(world.agents().iter()).any(|a| self.line.contains(&a.id))
+        {
+            self.line_extinct_at = Some(world.tick());
+        }
+        self.line_extinct_at.is_some()
     }
 
     /// Take the agents at the pure heterotroph vertex as the founders.
@@ -3733,6 +3890,7 @@ mod tests {
             guild: GuildReadout::default(),
             recruitment: None,
             marker: None,
+            aborted_at: None,
         };
         let summary = mode1_summary("h", &report);
         assert_eq!(ESTABLISHMENT_AGE, 50);
@@ -4202,6 +4360,7 @@ mod tests {
             guild: GuildReadout::default(),
             recruitment: None,
             marker: None,
+            aborted_at: None,
         };
         let line = "| yes | 2 | 3 | 30.0 / 10.0 (0.250) | 1.0 / 3.0 (0.750) |";
         let summary = mode1_summary("h", &report);
@@ -4266,6 +4425,7 @@ mod tests {
             guild: GuildReadout::default(),
             recruitment: None,
             marker: None,
+            aborted_at: None,
         };
         let line = "| 4 | 3 | 3 | 2 | 2 | 5 | 0.100 (0.300) | 0.084 |";
         let summary = mode1_summary("h", &report);
@@ -4449,6 +4609,7 @@ mod tests {
             },
             recruitment: None,
             marker: None,
+            aborted_at: None,
         };
         let line = "| yes | 6 | 0.250 | 1.0 / 3.0 (0.250) | yes | yes |";
         let summary = mode1_summary("h", &report);
@@ -5011,6 +5172,7 @@ mod tests {
             guild: GuildReadout::default(),
             recruitment: None,
             marker: None,
+            aborted_at: None,
             litter: LitterReadout {
                 samples: vec![],
                 second_half: LitterWindow {
@@ -5464,6 +5626,143 @@ mod tests {
         (births, deaths)
     }
 
+    /// A world of the committed mesocosm's parameters holding one decomposer
+    /// founder and nothing to eat: its line goes extinct when it starves.
+    fn lone_starving_founder() -> World {
+        let spec = Mode1Spec::committed();
+        let mut params = spec.parameters.clone();
+        params.initial_population_size = 1;
+        World::from_recipe(
+            &WorldRecipe {
+                parameters: params,
+                initial_distribution: None,
+                agents: Some(vec![AgentSpec {
+                    position: (0.0, 0.0),
+                    reserve: spec.founder_reserve,
+                    traits: spec.decomposer,
+                    nutrient: 0.0,
+                    founding_cluster: MODE1_DECOMPOSER_CLUSTER,
+                }]),
+                carcasses: Some(Vec::new()),
+                max_ticks: spec.max_ticks,
+            },
+            1,
+        )
+    }
+
+    /// A run asked to abort on line extinction stops in the step the
+    /// founders' line loses its last living member, reports that tick, and
+    /// fails the guild; asked not to, it runs on.
+    #[test]
+    fn a_run_aborts_when_the_founders_line_goes_extinct_and_reports_the_tick() {
+        let ticks = 2000;
+        let abort = RunOptions {
+            abort_on_line_extinction: true,
+        };
+        let mut world = lone_starving_founder();
+        let aborted = run_mode1_with(&mut world, ticks, 10, abort);
+        let full = run_mode1(&mut lone_starving_founder(), ticks, 10);
+
+        let died = full.founders.death_ticks[0];
+        assert!(died < ticks, "the lone founder starves within the run");
+        assert_eq!(full.aborted_at, None);
+        assert_eq!(full.founders.end_tick, ticks);
+        assert_eq!(aborted.aborted_at, Some(died));
+        assert_eq!(world.tick(), died, "the run stops there");
+        assert_eq!(aborted.founders.end_tick, died);
+        assert!(!aborted.guild.passes);
+    }
+
+    /// A line extinct in a paired run's settle forks there, and both arms
+    /// abort at once at the tick it went extinct.
+    #[test]
+    fn a_paired_run_whose_line_dies_in_the_settle_aborts_both_arms() {
+        let died = run_mode1(&mut lone_starving_founder(), 2000, 10)
+            .founders
+            .death_ticks[0];
+        let abort = RunOptions {
+            abort_on_line_extinction: true,
+        };
+        let r = run_paired_with(lone_starving_founder(), 2000, 100, 10, abort);
+        assert_eq!(r.fork_tick, died);
+        for arm in [&r.perturbed, &r.control] {
+            assert_eq!(arm.aborted_at, Some(died));
+            assert_eq!(arm.founders.end_tick, died);
+            assert!(!arm.guild.passes);
+        }
+    }
+
+    /// The early window (G's rung 2) reads, from a short run, the decomposer
+    /// founders alive at its declared tick and the founders' line's births
+    /// over the run, each read independently off a replay of the same world,
+    /// and holds only with a founder alive and a line birth.
+    #[test]
+    fn the_early_window_reads_founders_alive_at_its_tick_and_the_lines_births() {
+        let spec = Mode1Spec::committed();
+        let build = || {
+            mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                4,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let ticks = 100;
+        let report = run_mode1(&mut build(), ticks, 25);
+        let (births, _) = replay_line(build(), ticks);
+        assert!(!births.is_empty(), "seed 4's founders recruit");
+
+        let mut world = build();
+        let founders: std::collections::HashSet<u64> = (world.agents().iter())
+            .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
+            .map(|a| a.id)
+            .collect();
+        // Under the committed mesocosm's bare rules the founders recruit but
+        // are all dead by tick 50: the window holds at 20 and is refuted at
+        // the rung's declared 50.
+        let mut elapsed = 0;
+        for (at, holds) in [(20, true), (50, false)] {
+            while elapsed < at {
+                world.step();
+                elapsed += 1;
+            }
+            let alive = (world.agents().iter())
+                .filter(|a| founders.contains(&a.id))
+                .count();
+            let window = EarlyWindow::read(&report, at);
+            assert_eq!(window.founder_tick, at);
+            assert_eq!(window.window_end, ticks);
+            assert_eq!(window.founders_alive, alive, "tick {at}");
+            assert_eq!(window.line_births, births.len());
+            assert_eq!(window.holds, holds, "tick {at}: {window:?}");
+        }
+
+        let starved = run_mode1(&mut lone_starving_founder(), ticks, 25);
+        let window = EarlyWindow::read(&starved, 50);
+        assert_eq!(window.line_births, 0, "a starving founder cannot recruit");
+        assert!(!window.holds);
+    }
+
+    /// While the line lives, asking for the abort changes nothing.
+    #[test]
+    fn a_run_whose_line_lives_is_the_same_with_the_abort_asked_for() {
+        let spec = Mode1Spec::committed();
+        let build = || {
+            mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                4,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let abort = RunOptions {
+            abort_on_line_extinction: true,
+        };
+        let with = run_mode1_with(&mut build(), 30, 10, abort);
+        assert_eq!(with.aborted_at, None);
+        assert_eq!(with, run_mode1(&mut build(), 30, 10));
+    }
+
     /// Every birth with a parent in the founder line records its tick, its
     /// offspring, whether it was sexual, each parent's id, membership of the
     /// line and traits, and the offspring's traits and nutrient endowment.
@@ -5584,7 +5883,15 @@ mod tests {
                 4,
                 Community::ProducersAndDecomposers,
             );
-            serde_json::to_value(run_paired_recording(world, 60, 60, 10, record)).unwrap()
+            serde_json::to_value(run_paired_recording(
+                world,
+                60,
+                60,
+                10,
+                record,
+                RunOptions::default(),
+            ))
+            .unwrap()
         };
         let (mut with, without) = (run(true), run(false));
         for arm in ["perturbed", "control"] {
