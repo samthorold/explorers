@@ -525,7 +525,7 @@ fn evaluate(
         0.0
     };
 
-    // The sensible-world mean over its four criteria (CONTEXT.md). Trophic
+    // The sensible-world mean over its four criteria (genesis-search.md). Trophic
     // structure is not one: the producer share of living energy it was once
     // scored as is maximised by a world with no heterotrophs (#602).
     let fitness = (os + cs + cd + ts) / 4.0;
