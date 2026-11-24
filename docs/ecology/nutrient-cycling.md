@@ -102,6 +102,11 @@ In marine systems, Redfield (1958) discovered that the average C:N:P ratio of oc
 
 The consumer-resource stoichiometric mismatch has a system-level consequence: it determines the nutrient ratio of recycled material. Herbivores consuming nitrogen-poor plants preferentially retain nitrogen and release phosphorus (or vice versa), altering the N:P ratio of available nutrients and potentially shifting which nutrient limits primary production. Elser et al. (2000) showed that consumer-driven nutrient recycling can qualitatively change nutrient limitation regimes in aquatic systems — the identity of the dominant herbivore determines which nutrient limits algal growth.
 
+*Evidence quality.*
+- **Unconfirmed: Sterner & Elser (2002) itself.** The book could not be reached (De Gruyter's page refused the fetch tool; a publisher's reading sample of chapter 1 could not be fetched). Its rules are known here through the 2013 review by both its authors, read in full in its sections on homeostasis and mass balance (Hessen, Elser, Sterner & Urabe 2013; see [animals](animals.md), *Stoichiometric constraints*, for what it says).
+  - That review confirms that consumers are more homeostatic than their food, though not strictly, that a consumer's release of the limiting element falls toward zero when its food is poor in it, and that excess carbon is respired, released as dissolved organic carbon, or stored. Its evidence is mostly *Daphnia* and freshwater plankton.
+- **Not checked here:** the herbivore C:N figures in *The core principle*, and Elser et al. (2000) on consumer-driven recycling changing which nutrient limits algae. The paper's results would confirm the second.
+
 ## Decomposition kinetics
 
 **Decomposition is catalysed by the decomposer, so its rate depends on the decomposer as well as the litter.** Dead organic matter does not break down by itself. Extracellular enzymes that microbes and fungi produce break it down, so the catalyst's concentration belongs in the rate equation (Schimel & Weintraub 2003). Traditional soil models use first-order kinetics, `dC/dt = −kC`, which leaves the decomposer out. Depolymerisation by these enzymes is the rate-limiting step of the terrestrial nitrogen cycle (Schimel & Bennett 2004).
@@ -242,6 +247,8 @@ Elser, J. J., et al. (2000). Nutritional constraints in terrestrial and freshwat
 Fowler, D., et al. (2013). The global nitrogen cycle in the twenty-first century. *Philosophical Transactions of the Royal Society B*, 368(1621), 20130164.
 
 Gifford, R. M. (2003). Plant respiration in productivity models: conceptualisation, representation and issues for global terrestrial carbon-cycle research. *Functional Plant Biology*, 30(2), 171-186.
+
+Hessen, D. O., Elser, J. J., Sterner, R. W., & Urabe, J. (2013). Ecological stoichiometry: an elementary approach using basic principles. *Limnology and Oceanography*, 58(6), 2219-2236.
 
 Hobbie, S. E. (1992). Effects of plant species on nutrient cycling. *Trends in Ecology & Evolution*, 7(10), 336-339.
 
