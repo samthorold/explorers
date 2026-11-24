@@ -6,7 +6,7 @@ The ecology docs describe observable Earth. This layer describes what we want ou
 
 ## Purpose before structure
 
-The design is ordered the way system dynamics orders a model: purpose first, structure last.
+The design is ordered the way system dynamics orders a model: purpose first, structure last. The [end state](end-state.md) states that purpose as hypotheses with reading rules: the physics is sound, the world persists sensibly, and each reference mode is produced. Their status lives in the [register](register.md), apart from the design.
 
 1. **Reference modes.** The purpose of the world is stated as *reference modes*: the characteristic behaviours over time of real ecosystems, drawn from the [ecology layer](../ecology/), each with a time horizon. The world must be able to produce them from its own rules.
    - **Reference modes live at the patch scale.** A patch is one to three nutrient cells, about the reach of the local interactions: light competition, nutrient sharing and feeding. The domain's own dynamics (gap dynamics, patch dynamics, local consumer–resource cycles) are defined at this scale. Transients count: a local bloom-and-collapse is a behaviour over time like any other.
@@ -30,6 +30,8 @@ There are no imposed environmental cycles: no day/night, no seasons. Every tempo
 
 ## Documents
 
+- [End State](end-state.md) — what the world is meant to become, as hypotheses with reading rules: the purpose, the physics, the world-scale stage condition and the reference modes; the refutation ladder, the one-physics rule, and when a hypothesis is Due
+- [Register](register.md) — the status of every hypothesis, with its last reading; kept apart from the design
 - [Reference Modes](reference-modes.md) — the purpose of the world: the ecology's characteristic behaviours over time, at the patch scale, that the world must be able to produce
 - [World Rules](world-rules.md) — the immutable physics of the simulation: stocks (energy and nutrients), flows, topologies, channels, conservation laws, and the cost structure that creates trade-offs
 - [Trait Space](trait-space.md) — the seven heritable dimensions that define an agent: allocation (kappa), specification (autotrophy, heterotrophy, mobility), and reproduction (fecundity, asexual propensity, dispersal)
