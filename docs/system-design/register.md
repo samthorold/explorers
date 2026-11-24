@@ -29,7 +29,7 @@ Kept by hand. Before any change, review the rows marked Due: read the hypothesis
 | 1 | S15 Reproduction needs both earmarks and conserves the investment | Due | – | none | Due: no test yet. |
 | 1 | S16 Structural death at a fraction of peak structure that rises with breadth | Due | – | none | Due: no test yet. |
 | 1 | S17 A forager steps up the fractional gradient of what targets release | Due | – | none | Due: no test yet. |
-| 1 | S18 A consumer spares living targets that resemble it | Due | – | none | Due: no test yet. |
+| 1 | S18 A consumer spares living targets that resemble it | Due | – | none | Due: no test yet; and its mapping's reason cites the fungi bullet in [cannibalism and kin](../ecology/cannibalism-and-kin.md), *Beyond animals*, whose sentence changed in #875: identity at every *het* locus is sufficient for fusion, not required, and the claim covers filamentous ascomycetes only. |
 | 1 | S19 A world is deterministic per seed and order-independent (unsourced) | Due | – | none | Due: no test yet. |
 | 1 | S20 Growth dilutes wear | Due | – | none | Due: no test yet; the code runs it only behind a switch until its one-physics slice. |
 | 1 | S21 Tissue turnover: upkeep follows the living part | Due | – | none | Due: no test yet; not in the code. |
@@ -57,7 +57,7 @@ Kept by hand. Before any change, review the rows marked Due: read the hypothesis
 
 | Part | Hypothesis | Status | Highest rung | Last reading | Due |
 |---|---|---|---|---|---|
-| 3 | M1 Colonisation overshoot | Due | none | none | Due: blocked by G; rule not yet declared. |
+| 3 | M1 Colonisation overshoot | Due | none | none | Due: no test yet; blocked by G. Rule declared, its refuted line not yet declared. |
 | 3 | M2 Gap dynamics | Due | – | none | Due: no test yet; blocked by G; rule not yet declared. |
 | 3 | M3 Shifting patch mosaic | Due | – | none | Due: no test yet; rule not yet declared. |
 | 3 | M4 Divergent recovery | Due | – | none | Due: no test yet; blocked by G; rule not yet declared. |
