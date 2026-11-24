@@ -10,6 +10,8 @@ Every heterotroph eats organic matter, and the nearest organic matter is often i
 
 The through-line is spatial. Offspring start life next to their parents and siblings. So a consumer that cannot tell kin from non-kin meets its relatives first, and selection on the cost of eating them shapes recognition, timing, dispersal and parental care. The spatial side of that story connects to [spatial ecology](spatial-ecology.md) and to the dispersal section of [life history theory](life-history-theory.md).
 
+This document was written from research whose citations were checked against publisher pages or index records. How deeply each source was read was not recorded. Each section closes with an *Evidence quality* note. The notes say which claims have since been checked against a source and how, where a source disagrees with the text, and, for every claim not checked, what would confirm it.
+
 ## How common it is
 
 Cannibalism is **taxonomically widespread, but in most species it is a small share of the diet.** Both halves matter.
@@ -38,6 +40,21 @@ It is common in fish, amphibian larvae, arachnids and insects. It is least commo
 Extremes exist. Large cannibal fish take about half their diet from their own species. A few specialist herring gulls each ate 2–5 % of a colony's chicks (Polis 1981).
 
 So the everyday intuition that cannibalism is rare is right in one sense: few meals are conspecific. It is wrong in another: few lineages never do it.
+
+*Evidence quality.*
+- **Read in full:** Polis (1981). It confirms:
+  - "over 900 papers" on "about 1300 species";
+  - egg cannibalism in 118 references over "more than 80 families", in "practically every major group of egg-laying animal", and newborns eaten in "more than 80 families";
+  - 25 % of lion cubs eaten by older lions;
+  - the diet shares: 0.1 %, 2.3 % and 9.1 % by frequency against 7.1 %, 22.6 % and 28.4 % by weight in three species, 14.2 % of adult prey in *Paruroctonus mesaensis*, about 50 % of large cannibals' diet in one fish, and gull specialists each eating 2-5 % of a colony's chicks.
+
+  Polis recommends Fox (1975) but is not the source of the text's quotation from it.
+- **Not checked here:**
+  - Fox's (1975) "a normal phenomenon in many natural populations". Fox's text would confirm the quotation.
+  - The mammal count of 75 species in 7 orders (Polis, Myers & Hess 1984). Its abstract would confirm it.
+  - The insect figures (Richardson et al. 2010). Its abstract or table would confirm them.
+  - Birds as comparatively rare (Stanback & Koenig 1992). The chapter would confirm it.
+  - Cannibalism being commonest in fish, amphibian larvae, arachnids and insects. It is uncited; a survey such as Elgar & Crespi (1992) would confirm it.
 
 ## Forms
 
@@ -81,12 +98,35 @@ These cases are the inverse of filial cannibalism. The parent's body is the fina
 
 Mostly females eating males: 88 % of sex-differentiated cases in Polis's (1981) survey. In a field study of the praying mantis *Mantis religiosa*, females ate the male in 31 % of observed matings (Lawrence 1992).
 
+*Evidence quality.*
+- **Read in full:** Polis (1981). It confirms that cannibalism "usually involves a larger size class preying on smaller conspecifics, eggs, or defenseless stages", including the newly moulted. It also confirms 88 % of the 41 species with known sex biases "involved females eating males".
+- **From the abstract on index records:** Chapman et al. (2013). Of 15 females, 60 % were behaviourally polyandrous and 40 % genetically. Some females fertilised by several males produced hatchlings sired by only one of them.
+- **From the abstract and a later review:** Salomon, Schneider & Lubin (2005, *Oikos* 109, 614-622). It confirms that the mother gives about 95 % of her body mass to the young.
+  - The abstract, as a search tool reported it, says she gives *more* to regurgitation than to matriphagy. The text's split of 41 % regurgitated and 54 % eaten has it the other way round.
+  - The paper's results would settle the split.
+- **Not checked here:** each claim below would be confirmed by its paper's abstract.
+  - Perch dynamics (Persson, Byström & Wahlström 2000).
+  - Filial cannibalism (Manica 2002; Neff 2003; Takegaki et al. 2023).
+  - Ladybird sibling cannibalism (Osawa 1992).
+  - *Amaurobius* matriphagy (Kim, Roland & Horel 2000) and *Diaea* (Evans 1998).
+  - Caecilian skin-feeding (Kupfer et al. 2006).
+  - The mantis figure (Lawrence 1992).
+
 ## Drivers
 
 - **Density.** Polis (1981) found 65 reports of cannibalism rising with crowding, and more than 40 describing it as a density-dependent regulator. In insects it is attributed more often to density than to density-independent factors. For example, the share of *Labidomera* eggs eaten rises with clutch size (Richardson et al. 2010). Density raises encounter rates, and the nearest conspecific is a likely meal.
 - **Hunger.** Hunger triggers searching, lowers the attack threshold and widens the range of acceptable prey (Polis 1981). Hungry spadefoot carnivores also become less discriminating about kin (Pfennig, Reeve & Sherman 1993).
 - **Vulnerability and asymmetry.** Moulting, diseased and parasitised individuals are taken. So are individuals out of step in development, where a head start becomes a size advantage. Heat and drought raise cannibalism too (Richardson et al. 2010).
 - **Energy recovery by parents.** Filial cannibalism recovers the energy a parent has sunk into a brood of low value (Manica 2002; Neff 2003).
+
+*Evidence quality.*
+- **Read in full:** Polis (1981), for density and hunger.
+  - It confirms "65 reports" of cannibalism rising with density and "over 40 references" calling it a density-dependent regulator.
+  - Hunger "triggers searching behavior, lowers attack threshold", and hungry consumers expand their diet beyond "the normal limits of acceptable prey".
+- **Not checked here:**
+  - The insect density, vulnerability and heat-and-drought claims (Richardson et al. 2010). The review's abstract would confirm them.
+  - Hungry spadefoots discriminating less (Pfennig, Reeve & Sherman 1993). The paper's results would confirm it.
+  - Energy recovery by parents (Manica 2002; Neff 2003). Each paper's abstract would confirm it.
 
 ## Costs and limits
 
@@ -95,6 +135,12 @@ Three costs keep cannibalism in check.
 1. **Inclusive fitness.** Eating a relative destroys copies of one's own genes. By Hamilton's (1964) rule, eating kin pays only when the energy gained exceeds the victim's reproductive value weighted by relatedness. Kin cannibalism is therefore selected against more strongly than cannibalism of non-kin (Pfennig 1997).
 2. **Pathogens.** Conspecifics share parasites and susceptibilities. Tiger salamander cannibals fed diseased conspecifics survived to metamorphosis less often, and grew less, than those fed diseased prey of another species (Pfennig, Ho & Hoffman 1998). Diseases spread mainly by cannibalism need shared feeding on a victim. They are uncommon even though cannibalism is common (Rudolf & Antonovics 2007). In tiger salamanders, kin selection rather than disease avoidance best explains kin discrimination (Pfennig, Collins & Ziemba 1999).
 3. **Injury.** Fighting an equal is dangerous. This is why cannibalism concentrates on defenceless stages (Polis 1981).
+
+*Evidence quality.*
+- **Read in full:** Polis (1981), for injury. Cannibals are "relatively invulnerable to injury and death" when attacking their victims, and the "decreased risk likely explains" why big eat small.
+- **Not checked here:**
+  - Hamilton (1964), and kin cannibalism being selected against more strongly (Pfennig 1997). Pfennig's review would confirm the second.
+  - The pathogen results (Pfennig, Ho & Hoffman 1998; Rudolf & Antonovics 2007; Pfennig, Collins & Ziemba 1999). Each paper's abstract would confirm its claim.
 
 ## How organisms avoid eating kin
 
@@ -133,6 +179,16 @@ Location works as a recognition rule only because offspring are where their pare
 
 **Evolved restraint in viscous populations.** Indian meal moth (*Plodia interpunctella*) larvae were kept in more viscous food, so they moved less and relatives stayed clustered. Those lines evolved *lower* cannibalism, as kin-selection theory predicts (Boots et al. 2021). This is the experimental case closest to "a kin-blind consumer in a poorly dispersed population". Selection on the cannibal itself reduces its appetite for neighbours.
 
+*Evidence quality.*
+- **From the abstract, as quoted by search tools:** Pfennig, Sherman & Collins (1994). It confirms that "occluding animals' nares temporarily eliminated kin discrimination, implying that olfaction is important in recognition", and that sibships varied in how well they recognised kin. That both morphs prefer less-related victims, and tell siblings from cousins, is not in the extract. The paper's results would confirm it.
+- **From later papers citing it:** Pfennig, Reeve & Sherman (1993). They confirm that spadefoot tadpoles discriminate kin and "preferentially eat unrelated individuals". The nip-and-release behaviour is not in any extract. The paper's methods and results (*Animal Behaviour* 46, 87-94) would confirm it.
+- **From the abstract and press coverage:** Boots et al. (2021). *Plodia* larvae in stickier food, with more limited movement, evolved lower cannibalism within about ten generations.
+- **Not checked here:** each claim below would be confirmed by its paper's abstract.
+  - Kin-dependent morphogenesis (Pfennig & Collins 1993; Pfennig & Frankino 1997). An extract confirms only that Pfennig & Collins tested it, not the result.
+  - The timers (Müller & Eggert 1990; vom Saal 1985).
+  - Recognition by location (Beecher, Beecher & Lumpkin 1981; Evans 1998).
+  - Egg placement (Doumbia, Hemptinne & Dixon 1998).
+
 ## Dispersal and kin competition
 
 Dispersal is the general answer to the problem of relatives as neighbours. Hamilton & May (1977) showed that dispersal is favoured even in uniform, stable habitats. Offspring that stay behind compete with their siblings, so a parent gains by sending some away, even at a cost to the population as a whole.
@@ -152,6 +208,13 @@ The corollary for harm is direct: in a viscous population, *indiscriminate* harm
 
 **A spatial analogue without cannibalism: Janzen–Connell.** Seedlings near their parent tree die at higher rates, because host-specific seed predators, herbivores and pathogens build up around the parent (Janzen 1970; Connell 1971). A meta-analysis of experiments confirms lower seed and seedling survival near same-species adults and at high same-species density (Comita et al. 2014). The parent does not kill its offspring. Its enemies do. The outcome still has the shape of the problem above: being born where your parent is carries a mortality cost, and dispersal escapes it.
 
+*Evidence quality.*
+- **Not checked here:** every claim in this section.
+  - The dispersal theory (Hamilton & May 1977; Taylor 1988; Gandon 1999; Ronce 2007; Bach et al. 2006). Each paper's abstract would confirm it.
+  - The viscosity results (Taylor 1992; Wilson, Pollock & Dugatkin 1992; Queller 1992). Each paper's abstract would confirm it.
+  - Janzen-Connell (Janzen 1970; Connell 1971; Comita et al. 2014). Each paper's abstract would confirm it. [Bacteria and archaea](bacteria-and-archaea.md) cites Bagchi et al. (2014) for the same effect, and that paper's pathogens are fungal.
+- **Not a sourced claim:** that indiscriminate harm in a viscous population lands mostly on relatives is this document's corollary of the viscosity results, not a finding.
+
 ## Beyond animals
 
 Self/non-self and kin discrimination, and self-consumption, occur well outside animals.
@@ -162,6 +225,15 @@ Self/non-self and kin discrimination, and self-consumption, occur well outside a
 - **Social amoebae.** Genetically different *Dictyostelium discoideum* strains segregate during multicellular development, and the more so the more distant they are (Ostrowski et al. 2008).
 - **Ciliates.** In dense, fast-growing cultures, *Blepharisma* forms giant cannibal cells that eat much smaller members of their own species (Dawson 1929). Size asymmetry is again what makes a conspecific edible.
 
+*Evidence quality.*
+- **From the abstract and the PMC record:** Ostrowski et al. (2008). Strains "partially exclude one another during aggregation", and the exclusion rises with genetic distance, measured by microsatellites. The authors frame it as discrimination by genetic similarity rather than kinship.
+- **From a library record and search summaries of the text:** Glass & Dementhon (2006). Heterokaryon incompatibility is programmed cell death after fusion of non-self hyphae, governed by allelic and non-allelic interactions at *het* loci. That networks form only between colonies identical at *all* *het* loci is not in the extract. The review's full text would confirm it.
+- **Not checked here:** each claim below would be confirmed by its paper's abstract.
+  - Sea rocket root allocation (Dudley & File 2007).
+  - *Bacillus* cannibalism (González-Pastor, Hobbs & Losick 2003).
+  - *Blepharisma* (Dawson 1929).
+- **Read in full:** Polis (1981), for the ciliates. It lists "giant cannibal morphs" in several genera of ciliates and other protists.
+
 ## Sessile and viscous consumers
 
 Sessile consumers cannot choose what comes within reach, so their diet is set by what drifts or settles beside them.
@@ -170,6 +242,12 @@ Sessile consumers cannot choose what comes within reach, so their diet is set by
 - **Plants.** No plant is known to eat its own kin. Carnivorous plants catch animals (see [trophic roles](trophic-roles.md), *Mixotrophy*). Plant kin interactions run through competition, as in sea rocket's root allocation above (Dudley & File 2007), not through consumption.
 
 So the domain has sessile cannibals of a sort, and viscous populations where kin-blind harm lands on relatives. Where kin consumption has been selected on directly in such a population, cannibalism fell (Boots et al. 2021). It has no clear analogue for a light-fed, sessile producer that drains its own offspring and siblings. For that case in the simulation, see [the #642 research note](../research/642-light-fed-mixotrophs.md).
+
+*Evidence quality.*
+- **Not checked here:** Woodin (1976), that dense suspension-feeder beds suppress recruitment beneath them. Its abstract would confirm it.
+- **Recalled, not read:** that the larvae taken can include the adults' own species, marked "citation needed" in the text. A study of adult filter feeders ingesting conspecific larvae would confirm it. One example, as recalled and not read, is work on mussels or oysters eating their own settling larvae.
+- **Not a sourced claim:** that the larvae a bed filters are unlikely to be close kin. The text already marks it as an inference from the life cycle.
+- **What the sources leave open:** "No plant is known to eat its own kin" is an absence found in the research, not a sourced negative.
 
 ## Consequences for population dynamics
 
@@ -192,12 +270,23 @@ Different combinations of these components produce five kinds of effect:
 
 **The life-boat mechanism.** Suppose juveniles feed on a resource adults cannot reach. Then adults that eat juveniles use that resource indirectly. A cannibalistic population can then persist when adult food alone would not sustain a non-cannibal one, provided one eaten juvenile yields more than one new offspring at low density (van den Bosch, de Roos & Gabriel 1988). Here cannibalism is a survival channel, not a drain.
 
+*Evidence quality.*
+- **Read in full:** Polis (1981). It cites Ricker (1954) among the density-dependent effects of cannibalism.
+- **Not checked here:** each claim below would be confirmed by its paper's abstract.
+  - The four components and five effects (Claessen, de Roos & Persson 2000, 2004).
+  - *Tribolium* (Costantino et al. 1995, 1997).
+  - The perch cascade (Persson et al. 2003).
+  - The life-boat mechanism (van den Bosch, de Roos & Gabriel 1988).
+  - Ricker's curve, and that he named cannibalism as a mechanism. Ricker (1954) would confirm both.
+
 ## Feedback loops
 
 - **Density → cannibalism → density (balancing).** Crowding raises encounter rates and cannibalism, which removes recruits and relieves crowding. This is the regulatory loop behind Ricker-type recruitment.
 - **Recruitment → cannibal food → cannibal fecundity → recruitment (reinforcing, delayed).** A strong year class feeds the large cannibals, which then reproduce more and produce the next strong year class. The delay and overshoot are how cannibalism destabilises (the perch and *Tribolium* cycles).
 - **Limited dispersal → kin clustered → kin-blind feeding hits kin → selection for recognition, restraint or dispersal (balancing, evolutionary).** Where offspring stay near family, indiscriminate consumption costs inclusive fitness. Selection responds on whichever axis is available: recognition cues, timing rules, reduced appetite (Boots et al. 2021) or wider dispersal (Hamilton & May 1977).
 - **Hunger → less discrimination → more kin eaten.** Starvation weakens kin discrimination (Pfennig, Reeve & Sherman 1993). So in lean times the protection kin recognition gives erodes when it matters most.
+
+*Evidence quality.* The loops are this document's synthesis of the sections above, and rest on their sources and notes. No source states them as loops.
 
 ## ABM and computational literature
 
@@ -213,6 +302,10 @@ Much of the theory above is individual-based or physiologically structured:
 - the *Plodia* selection experiment (Boots et al. 2021);
 - the salamander and spadefoot kin-discrimination work (Pfennig 1997);
 - the viscous-population theory above.
+
+*Evidence quality.*
+- **Rests on the sections above:** the model results, which are the same papers.
+- **What the sources leave open:** the gap is an absence found by the original research, which recorded neither its search terms nor the venues it covered. A search of artificial-life venues for kin-blind predation among related agents would confirm the absence.
 
 ## References
 

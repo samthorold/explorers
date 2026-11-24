@@ -2,6 +2,8 @@
 
 Bacteria and archaea are the metabolic backbone of every ecosystem on Earth. From a systems ecology perspective, they are best understood not as individual organisms but as the primary mediators of biogeochemical flows — the agents that close nutrient loops, unlock energy from inorganic substrates, and regulate the chemical boundary conditions within which all other life operates. Without them, ecosystems are not merely degraded; they cease to function as thermodynamic systems.
 
+This document was first written from recall: its sources were cited but not read. Each section closes with an *Evidence quality* note saying which claims have since been checked against a source, how deeply that source was read, where the source disagrees with the text, and which claims are still recalled, each with what would confirm it.
+
 ## Systemic role
 
 In stock-and-flow terms, microbes occupy three critical positions simultaneously:
@@ -13,6 +15,13 @@ In stock-and-flow terms, microbes occupy three critical positions simultaneously
 **Primary producers (chemoautotrophs and cyanobacteria).** In environments without light — hydrothermal vents, deep subsurface, anoxic sediments — chemoautotrophic bacteria and archaea are the sole entry point for energy into the food web, fixing inorganic carbon using chemical energy from reduced compounds (H2S, NH3, Fe2+, H2). Even in sunlit ecosystems, cyanobacteria contribute substantially to primary production (see below).
 
 **The microbial loop.** In aquatic systems, Azam et al. (1983) described the "microbial loop" — a pathway where dissolved organic carbon (DOC) leaked by phytoplankton is taken up by heterotrophic bacteria, which are then consumed by protists, which are consumed by zooplankton, returning energy to the classical food chain. This loop recovers energy that would otherwise be lost from the system as dissolved organic matter. It can process 30-50% of total primary production in marine systems (Fenchel 2008). From a flows perspective, the microbial loop is a scavenging subsystem that reduces leakage from the main production-consumption pathway.
+
+*Evidence quality.*
+- **From an index record and a reader's summary:** Fenchel (2008). Neither gives a percentage, so the 30-50 % of marine primary production is unconfirmed. Fenchel's text, or Azam et al. (1983), which as recalled gives a range, would confirm or correct it.
+- **Recalled, not read:**
+  - That bacterial decomposition dominates at neutral pH and in water, and fungal decomposition in acid, lignin-rich soils (Wardle et al. 2004). Wardle et al.'s account of the bacterial and fungal energy channels would confirm it.
+  - The bacterial:fungal ratio as a control on nutrient dynamics (Six et al. 2006). Its abstract would confirm it.
+  - The three positions microbes occupy, and the microbial loop pathway (Azam et al. 1983). Azam et al.'s abstract would confirm the pathway. The three positions are textbook knowledge.
 
 ## Energy and nutrient flows
 
@@ -37,6 +46,15 @@ Phosphorus cycling is slower and less microbially dominated than nitrogen, but m
 
 Sulphur cycling in anaerobic environments is almost entirely microbial. Sulphate-reducing bacteria (Desulfovibrio) use sulphate as a terminal electron acceptor, producing H2S. Sulphur-oxidising bacteria (Thiobacillus, Beggiatoa) reverse this. These paired flows create the redox gradients that structure anaerobic sediment communities.
 
+*Evidence quality.*
+- **The sources disagree with two figures:**
+  - **Bond-Lamberty & Thomson (2010), from its abstract on index records.** It estimates *total* soil respiration in 2008 at 98 ± 12 Pg C yr⁻¹, rising by about 0.1 Pg C yr⁻¹ from 1989 to 2008. It gives no microbial figure of about 60 Pg C. The text's number is not this paper's, and its source is unknown.
+  - **Vitousek et al. (2013), from its abstract.** Pre-industrial terrestrial fixation was 58 (40-100) Tg N yr⁻¹, or 44 with geological nitrogen. The 100-290 Tg N yr⁻¹ range is Cleveland et al.'s (1999) estimate of *potential* fixation by natural ecosystems (best estimate about 195), and Vitousek et al. call their own estimate substantially lower than most recent calculations.
+- **Recalled, not read:**
+  - N₂O being about 300× as potent as CO₂ "per molecule". IPCC global-warming-potential tables would confirm the factor. As recalled, the figure is per unit mass over 100 years, not per molecule.
+  - The genera named for each nitrogen and sulphur step, and phosphate solubilisation by organic acids. A microbiology textbook would confirm them.
+  - Methanogenesis paired with methanotrophy. A textbook would confirm it.
+
 ## Feedback loops
 
 Microbes participate in several feedback loops that stabilise or destabilise ecosystems:
@@ -50,6 +68,17 @@ Microbes participate in several feedback loops that stabilise or destabilise eco
 **Soil aggregate feedback.** Bacterial biofilms and fungal hyphae physically stabilise soil aggregates, which improves water retention and aeration, which improves conditions for microbial growth — a positive feedback that builds soil structure over time (Tisdall & Oades 1982, Six et al. 2004). Disturbance (tillage, erosion) breaks this loop.
 
 **pH feedback.** Nitrification produces H+ ions, acidifying the soil. Acidification shifts microbial community composition toward fungi and away from bacteria, reducing nitrification rate — a negative feedback. Conversely, denitrification and ammonification consume H+, raising pH. The microbial community thus buffers soil pH within ranges, though external forcing (acid rain, liming) can overwhelm the buffer capacity (Rousk et al. 2009).
+
+*Evidence quality.*
+- **From the abstract, the publisher's index record and a conference abstract:** Menge et al. The paper is Menge, Levin & Hedin (2009), *American Naturalist* 174, 465-477. The reference list's year, 2012, is wrong.
+  - In its basic model, a facultative fixer that adjusts fixation to its need excludes obligate strategies and never over-fixes. That supports the negative feedback in the text.
+  - It also finds that costs of being facultative, if severe enough, select against it, leaving persistent nitrogen limitation as in temperate forests. So the self-regulation the text describes depends on that cost.
+- **Recalled, not read:**
+  - 16 ATP per N₂ fixed. A biochemistry text on nitrogenase would confirm it.
+  - Oxygen-redox bistability (Canfield et al. 2005), and the Great Oxidation Event at about 2.4 Ga. The book would confirm the first and a review of the event the second.
+  - Decomposition speed controlled by temperature, moisture and substrate quality (Chapin et al. 2011). The textbook would confirm it.
+  - Aggregate stabilisation (Tisdall & Oades 1982; Six et al. 2004). Each paper's abstract would confirm it.
+  - The pH feedback loop (Rousk et al. 2009). As recalled, the cited paper measures fungal and bacterial growth along a pH gradient. Its full text would show whether it says anything about the loop itself; if not, the loop is this document's inference.
 
 ## Key strategies
 
@@ -93,6 +122,17 @@ Bacterial pathogens represent a top-down flow: they reduce host fitness, divert 
 
 Biofilms are spatially structured microbial communities encased in extracellular polymeric substances (EPS). From a systems perspective, biofilm formation is a spatial aggregation strategy that modifies local environmental conditions. Within a biofilm, microbes create steep chemical gradients (O2, pH, nutrients) across distances of micrometres, enabling metabolically diverse consortia to coexist. The outer layer may be aerobic while the interior is anaerobic, allowing coupled nitrification-denitrification within a single structure (Stewart & Franklin 2008). Biofilms on surfaces also resist physical removal (flow, grazing), increasing microbial persistence. In streams, biofilms are the dominant site of nutrient transformation (Battin et al. 2016).
 
+*Evidence quality.*
+- **The sources disagree with the text twice:**
+  - **Bar-On et al. (2018), from search summaries of the paper and a database entry quoting it.** Bacteria hold about 70 Gt C, about 15 % of Earth's roughly 550 Gt C, and about 90 % of that is in the deep subsurface. Archaea hold about 7 Gt C, mostly there too. The text's "2-19 %" is not the paper's figure. Magnabosco et al. (2018) put global prokaryote biomass 4-10× lower, so the deep-subsurface share is contested. Bar-On et al.'s own tables would give the figure.
+  - **Bagchi et al. (2014), from its abstract and news coverage.** It is a fungicide and insecticide experiment in Belize: fungicide lowered seedling diversity, by about 16 % in species richness. The pathogens it implicates are fungi, not bacteria, so it does not support the text's claim about *bacterial* pathogens.
+- **Recalled, not read:**
+  - The chemoautotrophy substrates and genera, and vent food webs independent of the sun (Karl et al. 1980). Karl et al.'s abstract would confirm the vent claim and a microbiology textbook the rest.
+  - The bacterial-against-fungal decomposition table (Wardle et al. 2004; de Boer et al. 2005). Both reviews would confirm it. Its rates (hours to days against weeks to months) are not checked.
+  - Symbiotic fixation as an exchange of photosynthate for nitrogen. A textbook would confirm it.
+  - Negative plant-soil feedback from soil pathogens. A review of plant-soil feedback would confirm it.
+  - Biofilm gradients and coupled nitrification-denitrification (Stewart & Franklin 2008), and biofilms as the main site of stream nutrient transformation (Battin et al. 2016). Each review's abstract would confirm its claim.
+
 ## Cyanobacteria as producers
 
 Cyanobacteria occupy a unique systemic position: they are prokaryotes (bacteria) that perform oxygenic photosynthesis. They are the evolutionary ancestors of chloroplasts and were the original source of atmospheric oxygen.
@@ -104,6 +144,15 @@ Cyanobacteria occupy a unique systemic position: they are prokaryotes (bacteria)
 **Blooms as system state transitions.** Under eutrophication (excess phosphorus or nitrogen loading), cyanobacterial blooms represent a regime shift in aquatic systems. The bloom state is maintained by positive feedback: dense cyanobacteria shade out competitors, reduce mixing by absorbing heat at the surface, and produce toxins that deter grazing (Scheffer et al. 2001). Bloom collapse releases massive organic carbon pulses that fuel bacterial decomposition, which draws down dissolved oxygen, creating hypoxic dead zones — a cascading failure where microbial production overwhelms the system's respiratory capacity.
 
 **Biological soil crusts.** In arid terrestrial systems, cyanobacteria (with lichens, mosses, and fungi) form biological soil crusts that fix both carbon and nitrogen, stabilise soil surfaces against erosion, and modulate water infiltration. These crusts are the primary production base in desert ecosystems (Belnap & Lange 2003).
+
+*Evidence quality.*
+- **The source disagrees with one figure:** Flombaum et al. (2013), read through a database entry that quotes it. Its estimates are about 8.5 % of ocean net primary production for *Prochlorococcus* and 16.7 % for *Synechococcus*, about 25 % together, with high uncertainty. The text's "8-15 % for *Prochlorococcus* alone" is not the paper's figure. The paper itself was not read.
+- **Recalled, not read:**
+  - Cyanobacteria as the ancestors of chloroplasts and the first source of atmospheric oxygen. It is textbook knowledge.
+  - Buoyancy advantage in warm, eutrophic water (Paerl & Huisman 2009). Its abstract would confirm it.
+  - *Trichodesmium* as a major source of nitrogen in the gyres (Capone et al. 2005). Its abstract would confirm it.
+  - The bloom-state feedbacks: shading, heat absorption and toxins (Scheffer et al. 2001). As recalled, the cited paper is a general review of catastrophic shifts. Whether it names these mechanisms would need its full text, and a cyanobacterial bloom review would confirm the mechanisms.
+  - Biological soil crusts as the desert production base (Belnap & Lange 2003). The book would confirm it.
 
 ## ABM and computational literature
 
@@ -139,6 +188,17 @@ Hellweger et al. (2016) provide a comprehensive review of agent-based modelling 
 
 Widder et al. (2016) reviewed computational approaches to modelling microbial communities in environmental contexts, comparing ABMs with differential equation models, metabolic flux models, and statistical approaches. They note that ABMs excel at capturing spatial interactions and community assembly but face computational limits when scaling to realistic population sizes (10^8 - 10^12 cells per gram of soil).
 
+*Evidence quality.*
+- **The sources disagree with the text on IndiMeSH.** It is Borer, Ataman, Hatzimanikatis & Or (2019, *PLOS Computational Biology*), not "Kalman et al. 2018", which no search found. Its abstract describes individual agents carrying metabolic networks solved by flux balance analysis, in an angular pore network. They segregate in response to oxygen and carbon gradients. It does not report metabolically identical agents differentiating through spatial isolation alone. The abstract was read through search summaries.
+- **From the abstract:** Kaiser et al. (2014). In an individual-based model, microbial community dynamics change the relative carbon and nitrogen limitation during litter decay and speed nitrogen recycling in high-C:N litter. That supports "community dynamics, not just substrate, control decomposition". The abstract does not mention the MEMS framework, so that link is unconfirmed.
+- **From secondary summaries:** "kill the winner". Its origin is Thingstad & Lignell (1997) and Thingstad (2000). The cited Thingstad et al. (2007), by its title, is about free-living and aggregate-attached bacteria. Thingstad (2000) would confirm the diversity mechanism.
+- **Recalled, not read:** the rest of the section. Each model paper or review, or its abstract, would confirm its claim:
+  - iDynoMiCS (Lardon et al. 2011) and iDynoMiCS 2.0 (Naylor et al. 2017, a bioRxiv record that was not checked);
+  - BacSim (Kreft et al. 1998), and the claim that spatial structure alone gave stable coexistence;
+  - NUFEB (Li et al. 2019);
+  - MIMICS (Wieder et al. 2015), and the claim that it outperformed first-order models;
+  - Follows et al. (2007), Hellweger & Bucci (2009), Hellweger et al. (2016) and Widder et al. (2016).
+
 ## System without microbes
 
 Removing bacteria and archaea from an ecosystem is not a perturbation — it is a termination of most biogeochemical cycling.
@@ -160,6 +220,11 @@ Removing bacteria and archaea from an ecosystem is not a perturbation — it is 
 - The ocean loses its biological carbon pump. Dead organic matter in surface waters is not remineralised, so the vertical flux of nutrients from the surface to the deep (and back via upwelling) is disrupted.
 
 In systems terms: microbes are not a trophic level that can be compensated for by other organisms. They are the infrastructure of elemental cycling. Removing them is analogous to removing the circulatory system from an animal — the organs (plants, animals, fungi) may be intact, but the flows that sustain them stop.
+
+*Evidence quality.*
+- **Not a sourced claim:** this section is a thought experiment, inferred from the sections above. No system without microbes has been observed.
+- **Recalled, not read:** ruminants and termites depending on gut symbionts for cellulose. A textbook would confirm it.
+- **Inherited, not confirmed:** the 30-50 % figure for the microbial loop, from *Systemic role*.
 
 ## References
 
