@@ -43,8 +43,10 @@
 use explorers_sim::topology::{DETRITAL_RELIANCE_THRESHOLD, TopologyProjection};
 use explorers_sim::{World, WorldRecipe};
 
-const PATHWAY_SCENARIO: &str =
-    "/Users/sam/Projects/explorers/scenarios/example9_detrital_pathway.json";
+const PATHWAY_SCENARIO: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../scenarios/example9_detrital_pathway.json"
+);
 
 fn load_pathway() -> WorldRecipe {
     let contents = std::fs::read_to_string(PATHWAY_SCENARIO).expect("read pathway scenario");

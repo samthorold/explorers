@@ -18,9 +18,10 @@
 use explorers_sim::{Agent, TraitVector, World, WorldParameters, WorldRecipe};
 
 fn feeding_params() -> WorldParameters {
-    let contents = std::fs::read_to_string(
-        "/Users/sam/Projects/explorers/scenarios/example10_predator_prey_hopf.json",
-    )
+    let contents = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scenarios/example10_predator_prey_hopf.json"
+    ))
     .expect("read scenario");
     let recipe: WorldRecipe = serde_json::from_str(&contents).expect("parse scenario");
     recipe.parameters

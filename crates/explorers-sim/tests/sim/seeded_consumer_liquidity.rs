@@ -20,7 +20,7 @@
 
 use explorers_sim::{Agent, World, WorldParameters, WorldRecipe};
 
-const SCENARIO: &str = "/Users/sam/Projects/explorers/scenarios/example4.json";
+const SCENARIO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scenarios/example4.json");
 
 fn load() -> WorldRecipe {
     let contents = std::fs::read_to_string(SCENARIO).expect("read scenario");
