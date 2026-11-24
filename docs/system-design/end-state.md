@@ -189,7 +189,27 @@ The purpose of the world, stated as behaviour over time at the patch scale ([ref
 
 **The no-decomposer arm is not mode 1's.** A stand that has lost its decomposers is divergent recovery's case (M4), which reads exactly that absence. Mode 1 reads only the arm with decomposers.
 
-**Its rule.** The domain gives a direction and a shape, not a range: directional, with sensitivity not yet measured. The ladder and the refuted line are not yet declared.
+**Its rule.** The domain gives a direction and a shape, not a range: directional, with sensitivity not yet measured. It is read only once G is supported, on the commit G was supported on or a later one with G still supported.
+
+**Its horizon, in the world's own time.** The colonising cohort's lifespan is `T_p`, the mesocosm's established producer lifespan: 229 ticks, the control's median established lifespan under the wear law the mesocosm was recalibrated to ([`766-mode1-wear-recalibration.md`](../research/766-mode1-wear-recalibration.md)). The domain puts rise, peak and decline inside about one lifespan of the cohort (reference modes, *Horizon*), but gives no date for the cohort's establishment after the clearance, and "fluctuates about a mean" can only be read over a window that holds the stand's turnover several times. So the clearance is at tick 1,500, once the known state has settled from its founding (about 6.5 `T_p`), and the horizon is 1,500 ticks after it, about 6.5 `T_p`, in two halves of about 3.3 `T_p` each:
+- **the overshoot window**, ticks 1,501 to 2,250, which holds the rise, the peak and the start of the decline with room for colonisation's lag;
+- **the settled window**, ticks 2,251 to 3,000, the arm's second half, the window the decomposer guild is read over too.
+
+The tick figures are declared at `T_p` = 229 and change only with the recalibration that changes `T_p`. Producer biomass is the centre block's producers' summed structure, on the mesocosm's samples every 25 ticks.
+
+**Its ladder.**
+
+0. **The perturbation** (exact, fast lane). After the clearance the 3 × 3 centre block holds no agent and no carcass, its cells' pools keep their nutrient, and every cell outside the block is as it was. Refuted by any violation: a reading on another perturbation is not the domain's colonisation of a cleared patch.
+1. **An early window.** The paired run on seed 1, cleared at tick 1,500, to tick 1,600 (about 0.44 `T_p` after the clearance). Refuted unless the control's centre block holds producers on every sample from 1,500 to 1,600, and the cleared block holds living producers at tick 1,600 with its producer biomass there above its biomass at tick 1,550: the patch is recolonised and its biomass is rising. A cleared patch still empty, or already falling, this soon has no rise for the full reading to find.
+2. **The full reading.** The paired run, arm with decomposers, cleared at tick 1,500 and run to tick 3,000, seeds 1 to 5 in sequence.
+   - **The control's persistence** is the known state's one qualification ([reference modes](reference-modes.md), *How a reference mode is read*): the control's centre block holds producers on every sample from the clearance to tick 3,000. A seed whose control does not persist is not a reading of M1, in either direction. The sequence stops there, and the mesocosm is recalibrated (reference modes, *If the control does not persist*) before the ladder is climbed again. Whether a persisting control is also free of collapse or bloom, by a trend or a range, is not yet declared.
+   - **Peak and decline, against the control.** For each patch, its overshoot is its highest producer biomass on the overshoot window's samples divided by its mean producer biomass over the settled window. A seed passes when the cleared patch's overshoot exceeds the control's over the same windows: the cleared patch's biomass peaked and declined to a lower level, by more than the control's own fluctuation shows. The domain gives no magnitude for the peak or the decline, so the margin above the control's overshoot is not yet declared, and the sign alone passes a seed.
+   - **Fluctuation about a mean.** That the cleared patch's settled window holds no trend is not yet declared, since the domain gives no figure for it. The reading reports the settled window's trend beside the verdict.
+   - **The stopping rule.** Supported at 3 passes, and the sequence stops as soon as 3 passes or 3 failures are reached. Until the panel's sensitivity is measured (a null run with identical arms, and a planted overshoot of known size), 3 failures leave M1 undecided, not refuted: the refuted line is not yet declared. Where G's own full reading ran on the same commit, its paired runs serve for the seeds they cover, taken in the same order.
+
+The rungs are ordered by cost: few-agent tests in milliseconds, one paired run to tick 1,600, then up to five paired runs to tick 3,000 ([instrument runtimes](../agents/instrument-runtimes.md)).
+
+**What the rule leaves out.** The cohort-timing, internal-storage and settled-level predictions are the loops' and are explanation, not part of the rule (above). Neither the no-decomposer arm nor colonisation staggered in time is read.
 
 ### Mode 2: gap dynamics
 

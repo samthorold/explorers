@@ -29,7 +29,7 @@ Kept by hand. Before any change, review the rows marked Due: read the hypothesis
 | 1 | S15 Reproduction needs both earmarks and conserves the investment | Due | – | none | Due: no test yet. |
 | 1 | S16 Structural death at a fraction of peak structure that rises with breadth | Due | – | none | Due: no test yet. |
 | 1 | S17 A forager steps up the fractional gradient of what targets release | Due | – | none | Due: no test yet. |
-| 1 | S18 A consumer spares living targets that resemble it | Due | – | none | Due: no test yet. |
+| 1 | S18 A consumer spares living targets that resemble it | Due | – | none | Due: no test yet; and its mapping's reason cites the fungi bullet in [cannibalism and kin](../ecology/cannibalism-and-kin.md), *Beyond animals*, whose sentence changed in #875: identity at every *het* locus is sufficient for fusion, not required, and the claim covers filamentous ascomycetes only. |
 | 1 | S19 A world is deterministic per seed and order-independent (unsourced) | Due | – | none | Due: no test yet. |
 | 1 | S20 Growth dilutes wear | Due | – | none | Due: no test yet; the code runs it only behind a switch until its one-physics slice. |
 | 1 | S21 Tissue turnover: upkeep follows the living part | Due | – | none | Due: no test yet; not in the code. |
@@ -44,7 +44,7 @@ Kept by hand. Before any change, review the rows marked Due: read the hypothesis
 | Part | Hypothesis | Status | Highest rung | Last reading | Due |
 |---|---|---|---|---|---|
 | 2 | P1 Producers, consumers and decomposers emerge as roles | Due | – | none | Due: no test yet. |
-| 2 | G The decomposer guild: litter is returned by a heterotroph guild that stays heterotroph | Due | none | none | Due: no rung read under its rule. |
+| 2 | G The decomposer guild: litter is returned by a heterotroph guild that stays heterotroph | Due | 0 | Rung 0 held, on #856's merge commit: `g_rung_0_lone_founder_income_covers_its_upkeep_at_the_founding_litter_ratio`. A lone founder at litter ratio 170, under the mesocosm's rules (#814's four, `S_p` 6.937, L 1, K 1), earns 0.19890 a tick against an upkeep of 0.19865 (1.0012 times), with no margin to spare: at ratio 168 it falls below. | Due: rungs 1–3 not yet read; rung 0 can refute, never support. |
 | 2 | Sp Specialists, not mixotrophs, hold living energy where nutrient is not scarce | Due | – | none | Due: never read under its rule. Its test is `reading_sp_on_its_setup`, ignored as a long run. |
 | 2 | P2 Populations fluctuate | Due | – | none | Due: no test yet. |
 | 2 | P3 Trait-space clustering (unsourced) | Due | – | none | Due: no test yet. |
@@ -58,7 +58,7 @@ Kept by hand. Before any change, review the rows marked Due: read the hypothesis
 
 | Part | Hypothesis | Status | Highest rung | Last reading | Due |
 |---|---|---|---|---|---|
-| 3 | M1 Colonisation overshoot | Due | none | none | Due: blocked by G; rule not yet declared. |
+| 3 | M1 Colonisation overshoot | Due | none | none | Due: no test yet; blocked by G. Rule declared, its refuted line not yet declared. |
 | 3 | M2 Gap dynamics | Due | – | none | Due: no test yet; blocked by G; rule not yet declared. |
 | 3 | M3 Shifting patch mosaic | Due | – | none | Due: no test yet; rule not yet declared. |
 | 3 | M4 Divergent recovery | Due | – | none | Due: no test yet; blocked by G; rule not yet declared. |
