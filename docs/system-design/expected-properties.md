@@ -195,6 +195,10 @@ Certain substrate configurations make it very difficult — or impossible — fo
 
 Heterogeneity is also what makes a world **absorb local failure rather than propagate it**. Where places genuinely differ, a lineage can fail in one place and persist in another, and a patch that collapses is recolonised from a neighbour that did not — the source–sink and metapopulation dynamics of [spatial ecology](../ecology/spatial-ecology.md). On a homogeneous substrate every place runs the same experiment, so a failure that is likely anywhere is likely everywhere at once, and the world fails in lockstep. The rules decouple capability from expression at the level of the individual (world rules, *Capability and expression are decoupled*); substrate heterogeneity is the same protection at the level of the landscape.
 
+### Founding clusters
+
+Genesis seeds either one uniform population or several pre-differentiated founding clusters, and the two ask different questions of a world. Seeding several clusters tests whether the world parameters sustain diversity; seeding one tests whether differentiation emerges spontaneously.
+
 ### Founder placement
 
 Founders are seeded as spatially aggregated patches, one or more per founding cluster, with a **founder aggregation** setting how tightly — from tight, separate patches to a well-mixed scatter over the whole surface. It is part of the initial distribution, not the world parameters.

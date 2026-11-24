@@ -58,6 +58,13 @@ Dispersal is also independent of mobility. Sessile organisms disperse offspring 
 
 Dispersal does double duty: it also sets **mate-finding reach for low-mobility agents**. Mate-finding has the same physical solution as offspring placement — move reproductive material across space — so the propagule investment that scatters a sessile agent's offspring also carries its gametes to a stationary partner (pollen, spores, broadcast spawning). An agent's *reproductive reach* is therefore derived from both mobility and dispersal: a mobile agent finds mates through its mobility-derived perception, a sessile agent through gamete broadcast, and the two add smoothly (see [world-rules](world-rules.md), reproductive reach). The consequence is that a mobility-0 agent is **not** reproductively isolated as long as it invests in dispersal — a wolf (high mobility, negligible dispersal) finds mates by moving, a producer (mobility 0, high dispersal) finds them by broadcast. Reproductive reach is the *spatial* axis of mating; the reproductive compatibility distance is the orthogonal *trait-space* axis — both must be satisfied for a sexual event.
 
+### Deferred dimensions
+
+Two candidate dimensions are left out of the vector.
+
+- **Social weight** (the pull toward nearby feeding agents that would make herding emerge) is deferred. Herding is emergent flavour, and no sensible-world criterion needs it.
+- **Chemical signature** is not needed. Recognition reads the whole trait vector against the recognition distance ([world rules](world-rules.md), *Recognition*), so the vector is already its own signature.
+
 ## Decomposer is a behavioural role, not a heritable trait
 
 There is no decomposer dimension, and the current vector cannot hold one even if we wanted it. A carcass retains the *exact* trait vector of the agent that died — a dead producer and a living producer occupy the same point in trait space. Because trophic transfer efficiency is governed by trait-space distance (see [world-rules](world-rules.md)), an agent efficient at draining a producer-carcass is *equally* efficient at draining the living producer beside it: trait distance cannot separate predation from decomposition. "Decomposer" is therefore a reading of what an agent eats — the network position it occupies, in the sense of [trophic roles](../ecology/trophic-roles.md) — never a cluster you can point to in the trait vector. This is the same one-capability stance as the heterotrophy dimension above: target state decides the role, not separate machinery.
