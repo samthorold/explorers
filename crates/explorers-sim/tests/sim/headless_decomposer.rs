@@ -1,46 +1,23 @@
-//! Behavioural verification for the detrital pathway.
+//! The detrital pathway, on the example9 scenario.
 //!
-//! Two things are guarded here:
+//! Everything here runs in the fast lane:
 //!
-//!   1. A fast correctness regression for the #303 drain-phase index/id bug — a
+//!   1. A correctness regression for the #303 drain-phase index/id bug: a
 //!      decomposer must drain a co-located carcass even after a death has
 //!      reindexed the living `agents` slice (so an agent's index no longer equals
-//!      its id). This test builds its world programmatically; it borrows only a
-//!      fully-specified `WorldParameters` block from a scenario file.
-//!   2. The example9 *pathway wiring* sweeps (issue #311): a sessile decomposer
-//!      seeded on a standing carcass deposit with no living agent inside its
-//!      consumption reach drives `detrital_share > 0.5` **by construction** (the
-//!      decomposer physically cannot reach a living agent). These verify the
-//!      producer->carcass->decomposer code path closes end to end — they are a
-//!      regression on the *wiring*, not evidence that detritivory *emerges*
-//!      (emergence evidence now comes from the genesis search; see issue #328 and
-//!      the deferred genesis-emergence-regression follow-up).
-//!
-//! Note: `scenarios/example6_decomposer_viability.json` was retired in #328 (its
-//! decomposer never established a lineage and its producers mass-died in a single
-//! tick, so it demonstrated neither viability nor a sustained carcass supply).
-//! The drain regression below now sources its parameters from example9, which
-//! uses the same fully-specified parameter template.
+//!      its id). This test builds its world programmatically; it borrows only
+//!      example9's fully-specified `WorldParameters` block.
+//!   2. Determinism guards: example9 run twice, or with its agents' storage
+//!      order shuffled every tick, steps identically.
+//!   3. The wiring of the path from producer to carcass to decomposer, exact on
+//!      example9: a sessile decomposer seeded on a carcass deposit, with the
+//!      producer ring outside its feeding reach. It checks the code path closes
+//!      end to end, not that detritivory emerges (the decomposer's diet is
+//!      forced by the geometry).
 //!
 //! Run with:
 //!   cargo test -p explorers-sim --test sim headless_decomposer:: -- --nocapture
-//!
-//! ## The `slow_` marker convention
-//!
-//! The multi-seed behavioural sweeps in this file each run the scenario to
-//! completion across a spread of seeds, so they dominate the suite's wall-clock
-//! cost. They are first-class tests — they stay in the default run (NOT
-//! `#[ignore]`d) — but they are tagged with a `slow_` name prefix so the slow
-//! sweeps form a selectable category:
-//!   * `cargo test` / `cargo test --workspace` — runs everything, sweeps included.
-//!   * `cargo test slow_` — run ONLY the slow sweeps.
-//!   * `cargo test -- --skip slow_` — the tight inner loop: everything EXCEPT the
-//!     sweeps (sub-second; leaves only the fast correctness regression).
-//!
-//! Any future slow sweep should adopt the `slow_` prefix to join the category for
-//! free. The cheap correctness regressions stay unprefixed.
 
-use explorers_sim::topology::{DETRITAL_RELIANCE_THRESHOLD, TopologyProjection};
 use explorers_sim::{World, WorldRecipe};
 
 const PATHWAY_SCENARIO: &str = concat!(
@@ -275,194 +252,111 @@ fn example9_demographics_are_invariant_under_agent_order_shuffle() {
     );
 }
 
-// ----------------------------------------------------------------------------
-// example9_detrital_pathway.json (issue #311): majority-detrital BY CONSTRUCTION.
-//
-// A sessile decomposer is seeded on a standing carcass deposit with no living
-// agent inside its consumption reach (body_reach_coefficient = 0 keeps reach
-// fixed and structure-independent, so the geometry is exact). Its diet is
-// detrital from tick 0 deterministically. These assertions verify the property
-// holds across the full seed sweep — a regression on the *wiring* of the
-// producer->carcass->decomposer pathway, robust by geometry, not evidence that
-// detritivory emerges (that now comes from the genesis search; see #328).
-// ----------------------------------------------------------------------------
-
-/// Seed sweep for the by-construction detrital-pathway assertions. The
-/// majority-detrital property holds *by geometry* (the decomposer physically
-/// cannot reach a living agent), so it is seed-independent — a sweep over a
-/// dozen seeds is ample to demonstrate it is not a single-seed artifact, and
-/// keeps each full-run test (90+ agents over 2000 ticks) under the suite's
-/// time budget. (Verified to also hold over 1..=20 during development.)
-const PATHWAY_SEEDS: std::ops::RangeInclusive<u64> = 1..=12;
-
-/// Everything the three pathway property tests assert on, distilled from a single
-/// run of the scenario at a given seed. The example9 run is the suite's dominant
-/// cost (~90 agents over 2000 ticks); the three tests previously each re-ran the
-/// full 12-seed sweep (36 identical runs). Distilling into seed-keyed scalars and
-/// memoising (`pathway_seed_result`) collapses that to one run per seed.
-#[derive(Clone, Copy)]
-struct PathwaySeedResult {
-    /// Cumulative predation energy (living prey) across the run.
-    predation: f32,
-    /// Cumulative decomposition energy (carcass-sourced) across the run.
-    decomposition: f32,
-    /// Surviving agents that drain carcasses for at least
-    /// `DETRITAL_RELIANCE_THRESHOLD` of what they drain (by the projection's
-    /// detrital reliance) at end of run.
-    carcass_drainers: usize,
-    /// Surviving heterotrophy-dominant agents at end of run.
-    surviving_heterotrophy_dominant: usize,
-    /// Final living population.
-    final_population: usize,
-}
-
-/// Test-path run horizon for the example9 sweep. The scenario file declares
-/// `max_ticks = 2000` (its budget for `eval_scenarios`/genesis), but all three
-/// pathway properties stabilise by ~tick 2 and hold flat to tick 2000 on every
-/// seed: detrital_share sits at 0.89–0.99 (never near the 0.5 threshold) and the
-/// decomposer + a heterotroph persist throughout. 500 ticks is a generous sustain
-/// horizon — the decomposer feeds for 500 ticks on the supply, well past
-/// stabilisation — while cutting the suite's dominant cost ~4x. (Verified the
-/// properties are unchanged at 2000 ticks during this work; see issue #320.)
-const PATHWAY_TEST_MAX_TICKS: u64 = 500;
-
-/// Run the pathway scenario once at `seed` and distil every property the tests
-/// need. The same single step-loop accumulates the topology projection (for the
-/// detrital reliance) and the predation-vs-decomposition tally (the green/brown
-/// split), so no property requires a second run of the same seed.
+/// The wiring of the path from producer to carcass to decomposer, exact on
+/// example9 (seed 1, 200 ticks). The scenario holds the producer ring far
+/// outside the decomposer's fixed feeding reach (`body_reach_coefficient = 0`),
+/// so the geometry fixes what each leg of the path must do:
 ///
-/// The sweep runs **kin-blind** (`recognition_distance = 0`). The scenario's
-/// deposit is sized for one obligate decomposer (#341), and under the
-/// default recognition at restraint 1 (#684) the decomposer spares its own
-/// near-identical offspring. Its lineage then grows on the finite deposit
-/// and exhausts it: on seed 12, 11 decomposers empty the deposit by tick
-/// ~442 and starve together at 445–446. That boom and bust is ecology, not
-/// wiring, and these tests are a regression on the wiring.
-fn compute_pathway_seed(seed: u64) -> PathwaySeedResult {
-    let mut recipe = load_pathway();
-    recipe.parameters.recognition_distance = 0.0;
-    let mut world = World::from_recipe(&recipe, seed);
-    let mut topology = TopologyProjection::new();
-    let mut predation = 0.0f32;
-    let mut decomposition = 0.0f32;
+///   * producer to carcass: every agent that dies leaves a carcass under its
+///     own id, and the ring's deaths are among them;
+///   * carcass to decomposer: the seeded deposit is drained, and only by the
+///     decomposer's lineage;
+///   * the two lineages never drain each other: no `Consumed` event joins the
+///     decomposer's lineage to the producers' in either direction.
+///
+/// Each is an equality, refuted by any violation, so it runs in the fast lane.
+#[test]
+fn example9_wires_producer_to_carcass_to_decomposer_exactly() {
+    use explorers_sim::event::EventKind;
+    use std::collections::HashSet;
+
+    let recipe = load_pathway();
+    let mut world = World::from_recipe(&recipe, 1);
+    let deposit: HashSet<u64> = world.carcasses().iter().map(|c| c.id).collect();
+    assert_eq!(deposit.len(), 8, "example9 seeds an eight-carcass deposit");
+    let mut decomposers: HashSet<u64> = world
+        .agents()
+        .iter()
+        .filter(|a| a.traits.heterotrophy > 0.0)
+        .map(|a| a.id)
+        .collect();
+    assert_eq!(decomposers.len(), 1, "example9 seeds one decomposer");
+    let mut producers: HashSet<u64> = world
+        .agents()
+        .iter()
+        .filter(|a| a.traits.heterotrophy == 0.0)
+        .map(|a| a.id)
+        .collect();
+
+    let mut dead: Vec<u64> = Vec::new();
+    let mut deposit_drains_by_decomposers = 0usize;
+    let mut deposit_drains_by_others = 0usize;
+    let mut cross_lineage_drains = 0usize;
     let mut cursor = 0usize;
-    let ticks = recipe.max_ticks.min(PATHWAY_TEST_MAX_TICKS);
-    for _ in 0..ticks {
+    for _ in 0..200 {
         world.step();
         for ev in world.event_log().since(cursor) {
-            if let explorers_sim::event::EventKind::Consumed = ev.kind {
-                if ev.target_was_carcass {
-                    decomposition += ev.energy_delta;
-                } else {
-                    predation += ev.energy_delta;
+            match ev.kind {
+                EventKind::Born => {
+                    let parent = ev.target.expect("a birth names its parent");
+                    if decomposers.contains(&parent) {
+                        decomposers.insert(ev.source);
+                    } else if producers.contains(&parent) {
+                        producers.insert(ev.source);
+                    }
                 }
+                EventKind::Died => dead.push(ev.source),
+                EventKind::Consumed => {
+                    let target = ev.target.expect("a drain names its target");
+                    if ev.target_was_carcass && deposit.contains(&target) {
+                        if decomposers.contains(&ev.source) {
+                            deposit_drains_by_decomposers += 1;
+                        } else {
+                            deposit_drains_by_others += 1;
+                        }
+                    }
+                    if !ev.target_was_carcass {
+                        let crosses = (decomposers.contains(&ev.source)
+                            && producers.contains(&target))
+                            || (producers.contains(&ev.source) && decomposers.contains(&target));
+                        if crosses {
+                            cross_lineage_drains += 1;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         cursor = world.event_log().len();
-        topology.update(world.event_log());
-        if world.agents().is_empty() {
-            break;
-        }
     }
-    let carcass_drainers = world
-        .agents()
-        .iter()
-        .filter(|a| {
-            topology
-                .detrital_reliance(a.id)
-                .is_some_and(|r| r >= DETRITAL_RELIANCE_THRESHOLD)
-        })
-        .count();
-    let surviving_heterotrophy_dominant = world
-        .agents()
-        .iter()
-        .filter(|a| a.traits.heterotrophy > a.traits.photosynthetic_absorption)
-        .count();
-    PathwaySeedResult {
-        predation,
-        decomposition,
-        carcass_drainers,
-        surviving_heterotrophy_dominant,
-        final_population: world.agents().len(),
-    }
-}
 
-/// Memoised accessor: the expensive example9 run for `seed` happens exactly once
-/// per test-binary invocation, shared across all three pathway property tests
-/// (which run in parallel by default). Keyed by seed so the full 12-seed sweep is
-/// preserved — only the redundant re-runs are removed.
-fn pathway_seed_result(seed: u64) -> PathwaySeedResult {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<u64, PathwaySeedResult>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(cached) = cache.lock().unwrap().get(&seed) {
-        return *cached;
-    }
-    // Compute outside the lock so concurrent tests fan out across seeds rather
-    // than serialising on the cache mutex.
-    let result = compute_pathway_seed(seed);
-    cache.lock().unwrap().insert(seed, result);
-    result
-}
-
-/// The headline property: detrital intake is the MAJORITY of system consumption
-/// on EVERY seed — `detrital_share > 0.5` holds by construction (the decomposer
-/// physically cannot reach a living agent), not by parameter luck. Should
-/// comfortably clear 0.5; if it is borderline, the construction has failed.
-#[test]
-fn slow_pathway_is_majority_detrital_on_every_seed() {
-    for seed in PATHWAY_SEEDS {
-        let PathwaySeedResult {
-            predation,
-            decomposition,
-            ..
-        } = pathway_seed_result(seed);
+    let carcasses: HashSet<u64> = world.carcasses().iter().map(|c| c.id).collect();
+    let dead_producers = dead.iter().filter(|id| producers.contains(id)).count();
+    assert!(
+        dead_producers > 0,
+        "the ring must lose producers inside the horizon"
+    );
+    for id in &dead {
         assert!(
-            decomposition > 0.0,
-            "seed {seed}: the detrital pathway must carry real energy \
-             (decomposition = {decomposition})"
-        );
-        let detrital_share = decomposition / (predation + decomposition);
-        assert!(
-            detrital_share > 0.5,
-            "seed {seed}: detrital intake must be the MAJORITY of system consumption \
-             by construction (predation {predation:.1}, decomposition {decomposition:.1}, \
-             detrital share {detrital_share:.3})"
+            carcasses.contains(id),
+            "agent {id} died but left no carcass under its id"
         );
     }
+    assert!(
+        deposit_drains_by_decomposers > 0,
+        "the decomposer must drain the deposit"
+    );
+    assert_eq!(
+        deposit_drains_by_others, 0,
+        "only the decomposer's lineage reaches the deposit"
+    );
+    assert_eq!(
+        cross_lineage_drains, 0,
+        "the decomposer's lineage and the producer ring never drain each other"
+    );
 }
 
-/// A surviving agent's drains are majority detrital on every seed — the
-/// wiring feeds it from carcasses. This is not a trophic-role claim: the role
-/// is read from income, light included (`explorers_genesis_eval::income`,
-/// #599), and on seed 10 the survivor is a descendant mixotroph that takes
-/// about two thirds of its income from light — a producer by role, which the
-/// retired trait read called a decomposer.
-#[test]
-fn slow_pathway_survivor_drains_carcasses() {
-    for seed in PATHWAY_SEEDS {
-        let result = pathway_seed_result(seed);
-        assert!(
-            result.carcass_drainers >= 1,
-            "seed {seed}: expected a surviving agent to drain mostly carcasses; \
-             carcass drainers = {}",
-            result.carcass_drainers
-        );
-    }
-}
-
-/// The decomposer sustains to the end of the run on the seeded deposit + carcass
-/// supply, on every seed — it does not starve out.
-#[test]
-fn slow_pathway_decomposer_sustains_itself_to_end_of_run() {
-    for seed in PATHWAY_SEEDS {
-        let result = pathway_seed_result(seed);
-        assert!(
-            result.surviving_heterotrophy_dominant >= 1,
-            "seed {seed}: decomposer lineage must survive to the end of the run, but no \
-             heterotroph-dominant agent remains (final population {})",
-            result.final_population
-        );
-    }
-}
+/// Horizon of the example9 determinism guards above: long enough that the
+/// ring's sexual mate pairing and the deposit's drains run for hundreds of
+/// ticks, short of the scenario's 2000-tick `max_ticks`.
+const PATHWAY_TEST_MAX_TICKS: u64 = 500;

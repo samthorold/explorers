@@ -103,7 +103,7 @@ fn a_heterotroph_striding_three_contact_distances_absorbs_e_to_the_minus_three_o
 fn a_recipe_without_the_fields_loads_with_hyphal_uptake_off() {
     let contents = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../scenarios/example13_closed_web.json"
+        "/../../scenarios/example4.json"
     ))
     .expect("read scenario");
     assert!(!contents.contains("hyphal_uptake"));
@@ -122,7 +122,7 @@ fn a_recipe_without_the_fields_loads_with_hyphal_uptake_off() {
 fn nutrient_is_conserved_over_a_run_with_hyphal_uptake_on() {
     let contents = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../scenarios/example13_closed_web.json"
+        "/../../scenarios/example12_generalist_dominance.json"
     ))
     .expect("read scenario");
     let mut recipe: WorldRecipe = serde_json::from_str(&contents).expect("parse scenario");

@@ -45,6 +45,7 @@ Kept by hand. Before any change, review the rows marked Due: read the hypothesis
 |---|---|---|---|---|---|
 | 2 | P1 Producers, consumers and decomposers emerge as roles | Due | – | none | Due: no test yet. |
 | 2 | G The decomposer guild: litter is returned by a heterotroph guild that stays heterotroph | Due | none | none | Due: no rung read under its rule. |
+| 2 | Sp Specialists, not mixotrophs, hold living energy where nutrient is not scarce | Due | – | none | Due: never read under its rule. Its test is `reading_sp_on_its_setup`, ignored as a long run. |
 | 2 | P2 Populations fluctuate | Due | – | none | Due: no test yet. |
 | 2 | P3 Trait-space clustering (unsourced) | Due | – | none | Due: no test yet. |
 | 2 | P4 Coexistence | Due | – | none | Due: no test yet. |

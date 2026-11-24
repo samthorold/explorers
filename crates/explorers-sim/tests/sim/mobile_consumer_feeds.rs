@@ -17,14 +17,22 @@
 
 use explorers_sim::{Agent, TraitVector, World, WorldParameters, WorldRecipe};
 
+/// example4's fully-specified parameters, with the three this test ran at on
+/// the predator–prey scenario it used before that was deleted (#855): a
+/// light upkeep, a gentle trophic-distance decay and a wide contact range.
 fn feeding_params() -> WorldParameters {
     let contents = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../scenarios/example10_predator_prey_hopf.json"
+        "/../../scenarios/example4.json"
     ))
     .expect("read scenario");
     let recipe: WorldRecipe = serde_json::from_str(&contents).expect("parse scenario");
-    recipe.parameters
+    WorldParameters {
+        base_metabolic_rate: 0.1,
+        trophic_distance_decay: 0.5,
+        contact_range_coefficient: 5.0,
+        ..recipe.parameters
+    }
 }
 
 fn trait_with(photosynthetic_absorption: f32, heterotrophy: f32, mobility: f32) -> TraitVector {
