@@ -6,7 +6,7 @@ Measured cost of the reference-mode runs and the other bins still in the workspa
 
 ## Figures
 
-**`reference_mode`** (`cargo run --release -p explorers-reference-modes --bin reference_mode`): the mode-1 mesocosm (9 × 9 nutrient cells, 243 founders, 1,377 standing carcasses at founding). Costs are per run: wall-clock for the runs of under a minute (#796–#804), CPU (`user` + `sys`) from #814 on, where wall-clock matched CPU within 5–20 % when the runs were held awake (below). "Paired" is `--clear-at 1500 --ticks 1500`. "Four rules" is `--size-scaled-base-rate --living-resistance --litter-half-life L --enzyme-half-saturation K --established-producer-structure 6.937`; `k` is `--body-reach-pieces`.
+**`reference_mode`** (`cargo run --release -p explorers-reference-modes --bin reference_mode`): the mode-1 mesocosm (9 × 9 nutrient cells, 243 founders, 1,377 standing carcasses at founding). Costs are per run: wall-clock for the runs of under a minute (#796–#804), CPU (`user` + `sys`) from #814 on, where wall-clock matched CPU within 5–20 % when the runs were held awake (below). "Paired" is `--clear-at 1500 --ticks 1500`. "Four rules" is `--size-scaled-base-rate --living-resistance --litter-half-life L --enzyme-half-saturation K --established-producer-structure 6.937`; `--decomposer-mesocosm` sets them at the decomposer mesocosm's declared L 1 and K 1 (#884). `k` is `--body-reach-pieces`.
 
 | Setting | Cost per run | Note |
 |---|---|---|

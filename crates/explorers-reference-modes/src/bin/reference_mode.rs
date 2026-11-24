@@ -79,6 +79,18 @@
 //! `ρ`, and the guild readout's living-versus-carcass split is the check.
 //! Without the flag `ρ` stays 0 and nothing is recorded.
 //!
+//! `--decomposer-mesocosm` (#884; `end-state.md`, *The decomposer guild*,
+//! *Its setup*) runs the decomposer mesocosm, hypothesis G's setup: the four
+//! rules above (`--litter-half-life`, `--enzyme-half-saturation`,
+//! `--size-scaled-base-rate --established-producer-structure`,
+//! `--living-resistance`) at the values
+//! [`explorers_reference_modes::mesocosm::DecomposerMesocosm::DECLARED`]
+//! declares, so G's rungs read the mesocosm the crate declares rather than
+//! restating it. It refuses those flags, which would set a rule twice, and
+//! `--no-decomposers`. The summary carries the four rules' sections, and the
+//! artifact records the declaration (`decomposer_mesocosm`) beside them.
+//! Without it nothing is recorded and the world is unchanged.
+//!
 //! `--starvation-draws-earmark` and `--starvation-shrinks` (#821; world
 //! rules, flow 8, *When reserve cannot pay: the starvation cascade*) turn on
 //! the cascade's two steps: upkeep reserve cannot pay is drawn from the
@@ -143,7 +155,8 @@
 //!                [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K]
 //!                [--litter-half-life L] [--enzyme-half-saturation K]
 //!                [--size-scaled-base-rate] [--established-producer-structure S_p]
-//!                [--living-resistance] [--starvation-draws-earmark]
+//!                [--living-resistance] [--decomposer-mesocosm]
+//!                [--starvation-draws-earmark]
 //!                [--starvation-shrinks] [--starvation-readout]
 //!                [--marker-isolation --compatibility-scale S]
 //!                [--growth-dilutes-wear] [--early-window C]
@@ -166,18 +179,19 @@ use explorers_reference_modes::ladder::{
     OnFailure, SeedRule, read_in_sequence, sequential_reading_section,
 };
 use explorers_reference_modes::mesocosm::{
-    Community, ESTABLISHED_PRODUCER_LIFESPAN_TICKS, EarlyWindow, MarkerIsolation, Mode1Spec,
-    RunOptions, Wear, body_reach_section, carcass_decay_constant_for_half_life,
-    decomposition_kinetics_section, early_window_section, founder_starvation_section,
-    growth_dilutes_wear_section, line_extinction_section, living_resistance_section,
-    marker_isolation_section, marker_readout_section, mode1_mesocosm_with_founders, mode1_summary,
-    paired_summary, run_mode1_with, run_paired_with, set_body_reach_pieces,
-    set_decomposition_kinetics, set_growth_dilutes_wear, set_living_resistance,
-    set_marker_isolation, set_size_scaled_base_rate, set_size_scaled_base_rate_at,
-    set_starvation_cascade, size_scaled_base_rate_section, starvation_cascade_section,
+    Community, DecomposerMesocosm, ESTABLISHED_PRODUCER_LIFESPAN_TICKS, EarlyWindow,
+    MarkerIsolation, Mode1Spec, RunOptions, Wear, body_reach_section,
+    carcass_decay_constant_for_half_life, decomposition_kinetics_section, early_window_section,
+    founder_starvation_section, growth_dilutes_wear_section, line_extinction_section,
+    living_resistance_section, marker_isolation_section, marker_readout_section,
+    mode1_mesocosm_with_founders, mode1_summary, paired_summary, run_mode1_with, run_paired_with,
+    set_body_reach_pieces, set_decomposition_kinetics, set_growth_dilutes_wear,
+    set_living_resistance, set_marker_isolation, set_size_scaled_base_rate,
+    set_size_scaled_base_rate_at, set_starvation_cascade, size_scaled_base_rate_section,
+    starvation_cascade_section,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--marker-isolation --compatibility-scale S] [--growth-dilutes-wear] [--early-window C] [--abort-on-line-extinction] [--seeds N --passes-needed K [--failures-undecided]] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--decomposer-mesocosm] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--marker-isolation --compatibility-scale S] [--growth-dilutes-wear] [--early-window C] [--abort-on-line-extinction] [--seeds N --passes-needed K [--failures-undecided]] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -209,6 +223,9 @@ struct Cli {
     established_producer_structure: Option<f32>,
     /// Whether living tissue resists drains, at mode 1's `ρ` = 1 (#813).
     living_resistance: bool,
+    /// The decomposer mesocosm (#884), whose declared values set the four
+    /// rules above.
+    decomposer_mesocosm: Option<DecomposerMesocosm>,
     /// The starvation cascade's steps (#821): the earmark pays, then
     /// structure.
     starvation_draws_earmark: bool,
@@ -249,6 +266,7 @@ impl Cli {
             size_scaled_base_rate: false,
             established_producer_structure: None,
             living_resistance: false,
+            decomposer_mesocosm: None,
             starvation_draws_earmark: false,
             starvation_shrinks: false,
             starvation_readout: false,
@@ -272,6 +290,10 @@ impl Cli {
             }
             if flag == "--living-resistance" {
                 cli.living_resistance = true;
+                continue;
+            }
+            if flag == "--decomposer-mesocosm" {
+                cli.decomposer_mesocosm = Some(DecomposerMesocosm::DECLARED);
                 continue;
             }
             if flag == "--starvation-draws-earmark" {
@@ -370,6 +392,27 @@ impl Cli {
         }
         if cli.litter_x == 0 {
             return Err("--litter-x must be at least 1".into());
+        }
+        if let Some(d) = cli.decomposer_mesocosm {
+            if cli.size_scaled_base_rate
+                || cli.established_producer_structure.is_some()
+                || cli.living_resistance
+                || cli.litter_half_life.is_some()
+                || cli.enzyme_half_saturation.is_some()
+            {
+                return Err(
+                    "--decomposer-mesocosm sets the four rules at their declared values: drop --size-scaled-base-rate, --established-producer-structure, --living-resistance, --litter-half-life and --enzyme-half-saturation"
+                        .into(),
+                );
+            }
+            if cli.community == Community::ProducersOnly {
+                return Err("--decomposer-mesocosm needs decomposer founders".into());
+            }
+            cli.size_scaled_base_rate = true;
+            cli.established_producer_structure = Some(d.established_producer_structure);
+            cli.living_resistance = true;
+            cli.litter_half_life = Some(d.litter_half_life);
+            cli.enzyme_half_saturation = Some(d.enzyme_half_saturation);
         }
         if cli.decomposer_founders.is_some() && cli.community == Community::ProducersOnly {
             return Err("--decomposer-founders needs decomposer founders".into());
@@ -744,6 +787,10 @@ fn run_seed(
     }
     if let Some(rho) = living_resistance {
         artifact["living_resistance"] = serde_json::json!(rho);
+    }
+    if let Some(d) = cli.decomposer_mesocosm {
+        artifact["decomposer_mesocosm"] =
+            serde_json::to_value(d).expect("the decomposer mesocosm serialises");
     }
     if let Some(c) = cascade {
         artifact["starvation_cascade"] =

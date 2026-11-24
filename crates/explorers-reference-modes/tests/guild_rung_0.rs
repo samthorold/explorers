@@ -8,7 +8,8 @@
 //!
 //! Income and upkeep are the stepper's, not a hand-copied formula: the founder
 //! is the committed mesocosm's ([`Mode1Spec::committed`]), its upkeep is what
-//! the stepper charges it ([`set_size_scaled_base_rate_at`]), and its income is
+//! the stepper charges it under the decomposer mesocosm's rules
+//! ([`DecomposerMesocosm::apply`]), and its income is
 //! what one tick of the stepper pays it from the litter in its reach. So the
 //! test fails when the physics moves the budget.
 //!
@@ -20,30 +21,16 @@
 //! stepper's budget agrees*) and a whole carcass is about 1.3 of ratio.
 
 use explorers_reference_modes::mesocosm::{
-    CARCASS_ENERGY_PER_CELL, CARCASS_NUTRIENT_PER_CELL, CARCASSES_PER_CELL,
-    MODE1_DECOMPOSER_CLUSTER, Mode1Spec, set_decomposition_kinetics, set_living_resistance,
-    set_size_scaled_base_rate_at,
+    CARCASS_ENERGY_PER_CELL, CARCASS_NUTRIENT_PER_CELL, CARCASSES_PER_CELL, DecomposerMesocosm,
+    MODE1_DECOMPOSER_CLUSTER, Mode1Spec,
 };
 use explorers_sim::event::EventKind;
 use explorers_sim::{AgentSpec, CarcassSpec, World, WorldRecipe, trophic_transfer_efficiency};
 
-/// The domain's founding litter ratio: a stand's litter per unit of its
-/// founding decomposers' structure. Fungi are about 0.6 % of fresh litter's
-/// mass, so the founding ratio is about 170 or more (`docs/ecology/fungi.md`,
-/// *Decomposer biomass against its supply*; reference-modes.md, mode 1,
-/// *Decomposer founders*). 170 is its lower end, the leanest litter a founder
-/// meets in the domain, so the rung reads there.
-const DOMAIN_FOUNDING_LITTER_RATIO: f32 = 170.0;
-
-/// The rules the decomposer mesocosm's readings run under, as the design
-/// declares them: #814's four rules at `S_p` = 6.937, litter half-life 1
-/// producer lifespan and enzyme half-saturation 1 founder capability
-/// (reference-modes.md, mode 1, *Catchment* and *Founder density*, *The
-/// reading*; the budget in *Decomposer founders*, *The stepper's budget
-/// agrees*).
-const ESTABLISHED_PRODUCER_STRUCTURE: f32 = 6.937;
-const LITTER_HALF_LIFE: f32 = 1.0;
-const ENZYME_HALF_SATURATION: f32 = 1.0;
+/// The decomposer mesocosm's rules and the domain's founding litter ratio,
+/// as the mesocosm crate declares them (#884): the rung reads at the ratio's
+/// lower end, the leanest litter a founder meets in the domain.
+const MESOCOSM: DecomposerMesocosm = DecomposerMesocosm::DECLARED;
 
 const SEED: u64 = 1;
 
@@ -110,17 +97,16 @@ fn litter_holding(spec: &Mode1Spec, structure: f32) -> Vec<CarcassSpec> {
 fn g_rung_0_lone_founder_income_covers_its_upkeep_at_the_founding_litter_ratio() {
     let spec = Mode1Spec::committed();
     let founder_structure = lone_founder(&spec, Vec::new()).agents()[0].structure;
-    let litter = DOMAIN_FOUNDING_LITTER_RATIO * founder_structure;
+    let litter = MESOCOSM.founding_litter_ratio * founder_structure;
     let mut world = lone_founder(&spec, litter_holding(&spec, litter));
 
     // The decomposer mesocosm's rules, on the world at founding.
-    set_decomposition_kinetics(&mut world, LITTER_HALF_LIFE, Some(ENZYME_HALF_SATURATION))
-        .expect("the world has its founder");
-    let upkeep = set_size_scaled_base_rate_at(&mut world, ESTABLISHED_PRODUCER_STRUCTURE)
+    let upkeep = (MESOCOSM.apply(&mut world))
+        .expect("the world has its founder")
+        .size_scaled
         .decomposer_founder
         .expect("the world has its founder")
         .size_scaled;
-    set_living_resistance(&mut world);
 
     let founder = world.agents()[0].clone();
     assert_eq!(founder.structure, founder_structure);
@@ -169,7 +155,7 @@ fn g_rung_0_lone_founder_income_covers_its_upkeep_at_the_founding_litter_ratio()
         upkeep.movement,
         income / upkeep.total,
     );
-    assert!((standing / founder.structure - DOMAIN_FOUNDING_LITTER_RATIO).abs() < 0.01);
+    assert!((standing / founder.structure - MESOCOSM.founding_litter_ratio).abs() < 0.01);
     assert!(
         income >= upkeep.total,
         "G rung 0 refuted: a lone founder's income {income} is below its upkeep {}",

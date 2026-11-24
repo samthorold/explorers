@@ -685,6 +685,77 @@ pub fn living_resistance_section(rho: f32) -> String {
     )
 }
 
+/// The decomposer mesocosm (#884): mode 1's mesocosm in its arm with
+/// decomposers, under the rules hypothesis G's ladder reads it in
+/// (`docs/system-design/end-state.md`, *The decomposer guild*, *Its setup*).
+/// Declared once here so every rung reads the same mesocosm and a
+/// recalibration moves them together. It is applied to a world at founding
+/// ([`DecomposerMesocosm::apply`]); the committed mesocosm without it is
+/// unchanged, its four rules off.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct DecomposerMesocosm {
+    /// `S_p` for the size-scaled base rate: #814's settled value, read on the
+    /// mesocosm's own control with all four rules on
+    /// (`docs/research/814-mode1-combined-reading.md`; reference-modes.md,
+    /// mode 1, *Mesocosm*, *Upkeep*).
+    pub established_producer_structure: f32,
+    /// `L`, the litter half-life under full saturation, in producer lifespans
+    /// (reference-modes.md, mode 1, *Drain kinetics, and what the litter can
+    /// feed*; the budget at L 1 in *Decomposer founders*, *The stepper's
+    /// budget agrees*).
+    pub litter_half_life: f32,
+    /// `K`, the enzyme half-saturation, in decomposer founder drain
+    /// capabilities (as `L`).
+    pub enzyme_half_saturation: f32,
+    /// The domain's founding litter ratio: a stand's litter per unit of its
+    /// founding decomposers' structure. Fungi are about 0.6 % of fresh
+    /// litter's mass, so the founding ratio is about 170 or more
+    /// (`docs/ecology/fungi.md`, *Decomposer biomass against its supply*;
+    /// reference-modes.md, mode 1, *Decomposer founders*). 170 is its lower
+    /// end, the leanest litter a founder meets in the domain.
+    pub founding_litter_ratio: f32,
+}
+
+/// The rules [`DecomposerMesocosm::apply`] set, as each setter reports them.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct DecomposerRules {
+    pub kinetics: DecompositionKinetics,
+    pub size_scaled: SizeScaledBaseRate,
+    pub living_resistance: f32,
+}
+
+impl DecomposerMesocosm {
+    /// The decomposer mesocosm as the design declares it: #814's four rules
+    /// (saturating decomposition, its half-saturation, the size-scaled base
+    /// rate and living resistance) at `S_p` 6.937, L 1 and K 1, at the
+    /// founding litter ratio 170.
+    pub const DECLARED: Self = Self {
+        established_producer_structure: 6.937,
+        litter_half_life: 1.0,
+        enzyme_half_saturation: 1.0,
+        founding_litter_ratio: 170.0,
+    };
+
+    /// Turn the four rules on in `world` at founding, at the declared values:
+    /// [`set_decomposition_kinetics`], [`set_size_scaled_base_rate_at`] and
+    /// [`set_living_resistance`]. `None`, leaving the world untouched, when
+    /// it has no decomposer founders, since `K` is in their capabilities.
+    pub fn apply(&self, world: &mut World) -> Option<DecomposerRules> {
+        let kinetics = set_decomposition_kinetics(
+            world,
+            self.litter_half_life,
+            Some(self.enzyme_half_saturation),
+        )?;
+        let size_scaled = set_size_scaled_base_rate_at(world, self.established_producer_structure);
+        let living_resistance = set_living_resistance(world);
+        Some(DecomposerRules {
+            kinetics,
+            size_scaled,
+            living_resistance,
+        })
+    }
+}
+
 /// Turn growth dilution of wear on (#840; world rules, *Somatic wear*,
 /// *Growth dilutes wear*), for mode 1's *Ageing* reading.
 pub fn set_growth_dilutes_wear(world: &mut World) {
@@ -4984,6 +5055,93 @@ mod tests {
         let mut world = mode1_mesocosm(&spec, mesocosm_wear(), 1, Community::ProducersOnly);
         assert!(set_decomposition_kinetics(&mut world, 1.0, Some(1.0)).is_none());
         assert_eq!(world.params().carcass_decay_constant, 0.0);
+    }
+
+    /// The decomposer mesocosm (#884) declares #814's four rules at `S_p`
+    /// 6.937, L 1 and K 1, and the domain's founding litter ratio 170. Applied
+    /// to a world at founding, it sets exactly what the four setters set at
+    /// those values, and reports what they report.
+    #[test]
+    fn the_decomposer_mesocosm_applies_its_four_rules_at_their_declared_values() {
+        let d = DecomposerMesocosm::DECLARED;
+        assert_eq!(d.established_producer_structure, 6.937);
+        assert_eq!(d.litter_half_life, 1.0);
+        assert_eq!(d.enzyme_half_saturation, 1.0);
+        assert_eq!(d.founding_litter_ratio, 170.0);
+
+        let spec = Mode1Spec::committed();
+        let build = || {
+            mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                7,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let mut by_hand = build();
+        let kinetics = set_decomposition_kinetics(&mut by_hand, 1.0, Some(1.0)).unwrap();
+        let size_scaled = set_size_scaled_base_rate_at(&mut by_hand, 6.937);
+        let living_resistance = set_living_resistance(&mut by_hand);
+
+        let mut declared = build();
+        let rules = d
+            .apply(&mut declared)
+            .expect("the mesocosm has decomposers");
+        assert_eq!(rules.kinetics, kinetics);
+        assert_eq!(rules.size_scaled, size_scaled);
+        assert_eq!(rules.living_resistance, living_resistance);
+        assert_eq!(declared.params(), by_hand.params());
+        assert_eq!(agent_state(&declared), agent_state(&by_hand));
+        assert_eq!(carcass_state(&declared), carcass_state(&by_hand));
+
+        // K is in founder capabilities, so without founders nothing is set.
+        let mut bare = mode1_mesocosm(&spec, mesocosm_wear(), 7, Community::ProducersOnly);
+        let before = bare.params().clone();
+        assert!(d.apply(&mut bare).is_none());
+        assert_eq!(bare.params(), &before);
+    }
+
+    /// Without the declaration applied, the committed mesocosm is unchanged
+    /// (#884): its four rules are off, and applying the declaration moves no
+    /// agent, carcass or nutrient and no parameter but the four it sets.
+    #[test]
+    fn the_committed_mesocosm_without_the_declaration_is_unchanged() {
+        let spec = Mode1Spec::committed();
+        let build = || {
+            mode1_mesocosm(
+                &spec,
+                mesocosm_wear(),
+                7,
+                Community::ProducersAndDecomposers,
+            )
+        };
+        let committed = build();
+        let p = committed.params();
+        assert_eq!(p.carcass_decay_constant, 0.0);
+        assert_eq!(p.mass_specific_base_rate, 0.0);
+        assert_eq!(p.living_resistance, 0.0);
+        assert_eq!(
+            p.carcass_half_saturation,
+            explorers_sim::DEFAULT_CARCASS_HALF_SATURATION
+        );
+
+        let mut declared = build();
+        DecomposerMesocosm::DECLARED.apply(&mut declared).unwrap();
+        assert_eq!(agent_state(&declared), agent_state(&committed));
+        assert_eq!(carcass_state(&declared), carcass_state(&committed));
+        assert_eq!(
+            declared.nutrient_grid().cells(),
+            committed.nutrient_grid().cells()
+        );
+        let restored = WorldParameters {
+            carcass_decay_constant: p.carcass_decay_constant,
+            carcass_half_saturation: p.carcass_half_saturation,
+            mass_specific_base_rate: p.mass_specific_base_rate,
+            living_resistance: p.living_resistance,
+            ..declared.params().clone()
+        };
+        assert_eq!(&restored, p);
+        assert_ne!(declared.params(), p);
     }
 
     /// Litter inflow (#804): a death adds the structure its carcass held at
