@@ -123,9 +123,9 @@ Mostly females eating males: 88 % of sex-differentiated cases in Polis's (1981) 
 - **Read in full:** Polis (1981), for density and hunger.
   - It confirms "65 reports" of cannibalism rising with density and "over 40 references" calling it a density-dependent regulator.
   - Hunger "triggers searching behavior, lowers attack threshold", and hungry consumers expand their diet beyond "the normal limits of acceptable prey".
+- **Read as an extract, from a review by the paper's first author:** Pfennig (1997, *BioScience*), through its Gale record, for hungry spadefoots. A fetch tool quoted it: spadefoot cannibals "are less likely to avoid eating siblings when they are hungry than when they have just eaten", citing Pfennig, Reeve & Sherman (1993). The 1993 paper itself was not read: its ADS record came back empty, and ScienceDirect and EurekaMag refused the fetch (HTTP 403). A search tool summarised its abstract as reporting the same, without quoting it.
 - **Not checked here:**
   - The insect density, vulnerability and heat-and-drought claims (Richardson et al. 2010). The review's abstract would confirm them.
-  - Hungry spadefoots discriminating less (Pfennig, Reeve & Sherman 1993). The paper's results would confirm it.
   - Energy recovery by parents (Manica 2002; Neff 2003). Each paper's abstract would confirm it.
 
 ## Costs and limits
@@ -181,7 +181,10 @@ Location works as a recognition rule only because offspring are where their pare
 
 *Evidence quality.*
 - **From the abstract, as quoted by search tools:** Pfennig, Sherman & Collins (1994). It confirms that "occluding animals' nares temporarily eliminated kin discrimination, implying that olfaction is important in recognition", and that sibships varied in how well they recognised kin. That both morphs prefer less-related victims, and tell siblings from cousins, is not in the extract. The paper's results would confirm it.
-- **From later papers citing it:** Pfennig, Reeve & Sherman (1993). They confirm that spadefoot tadpoles discriminate kin and "preferentially eat unrelated individuals". The nip-and-release behaviour is not in any extract. The paper's methods and results (*Animal Behaviour* 46, 87-94) would confirm it.
+- **Read as an extract, from a review by its first author:** Pfennig, Reeve & Sherman (1993), for the nip-and-release behaviour. Pfennig (1997, *BioScience*), through its Gale record, was quoted by a fetch tool: "Cannibals also nip at conspecifics, and, after tasting them, either eat them (if they are nonsiblings) or release them unharmed (if they are siblings)." Later papers citing the 1993 paper also confirm that spadefoot tadpoles "preferentially eat unrelated individuals".
+  - The same review ranks the mechanisms. Spadefoot tadpoles avoid eating relatives "primarily by avoiding those areas of the pond where their relatives are found", and only "secondarily by using taste to distinguish the phenotypes of kin and nonkin (Pfennig et al. 1993)". Indiscriminate cannibalism of kin and non-kin is observed "occasionally". So in spadefoots the cue at the bite is the backstop, and keeping apart from kin does most of the work. This adds to the text rather than contradicting it.
+  - Not confirmed: that the species was *Spea bombifrons*. The extract names spadefoot toad tadpoles without a species.
+  - The 1993 paper itself was not read (its ADS record came back empty; ScienceDirect and EurekaMag refused the fetch). A search tool summarised its abstract as reporting nip-and-release, without quoting it.
 - **From the abstract and press coverage:** Boots et al. (2021). *Plodia* larvae in stickier food, with more limited movement, evolved lower cannibalism within about ten generations.
 - **Not checked here:** each claim below would be confirmed by its paper's abstract.
   - Kin-dependent morphogenesis (Pfennig & Collins 1993; Pfennig & Frankino 1997). An extract confirms only that Pfennig & Collins tested it, not the result.
@@ -227,7 +230,10 @@ Self/non-self and kin discrimination, and self-consumption, occur well outside a
 
 *Evidence quality.*
 - **From the abstract and the PMC record:** Ostrowski et al. (2008). Strains "partially exclude one another during aggregation", and the exclusion rises with genetic distance, measured by microsatellites. The authors frame it as discrimination by genetic similarity rather than kinship.
-- **From a library record and search summaries of the text:** Glass & Dementhon (2006). Heterokaryon incompatibility is programmed cell death after fusion of non-self hyphae, governed by allelic and non-allelic interactions at *het* loci. That networks form only between colonies identical at *all* *het* loci is not in the extract. The review's full text would confirm it.
+- **Read in full:** Glass & Dementhon (2006), from a copy of the published PDF hosted for a university course.
+  - Heterokaryon incompatibility is "compartmentalization and death of hyphae that undergo fusion" between genetically different isolates of the same species. It is governed by *het* loci, through allelic and non-allelic interactions, and modelling puts the number of *het* loci at 7 to 12.
+  - Its Figure 1 shows a healthy heterokaryon between colonies "isogenic at all het loci", and a compartmentalised fusion cell between strains that differ only in *het-c* haplotype. So one *het* difference can be enough, and identity at all of them permits fusion.
+  - **The source qualifies the text's "only".** It does not state that networks form only between colonies identical at all *het* loci, and it gives cases where a difference does not trigger death. In non-allelic systems death needs particular combinations of alleles, as at *het-6*, where incompatibility "requires genetic differences at both un-24 and het-6". At *het-s* the allelic specificity is "not stable": only the prion form of HET-s triggers incompatibility. Loss-of-function mutants at several *het* loci "form vigorous heterokaryons with strains with which they were formerly incompatible", and mutations in the transcription factor *vib-1* suppress incompatibility. And the review covers filamentous ascomycetes only, while the text says "fungi". This is queued for correction (#875, the correction slice).
 - **Not checked here:** each claim below would be confirmed by its paper's abstract.
   - Sea rocket root allocation (Dudley & File 2007).
   - *Bacillus* cannibalism (González-Pastor, Hobbs & Losick 2003).
