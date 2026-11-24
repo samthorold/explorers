@@ -20,6 +20,14 @@ Why this order: in a feedback system, purpose is the least visible part and usua
 
 The implementation (the code) encodes this design. It is close to the codebase — specific to data structures, algorithms, and parameter values — and traces its motivation back to a system design property described here without restating it.
 
+## The world is a complex adaptive system with Earth-analogous ecology
+
+The world is an agent-based model in the tradition of computational ecology (Grimm & Railsback 2005, *Individual-based Modeling and Ecology*; DeAngelis & Grimm 2014). All entities are heterogeneous, adaptive agents interacting locally in 2D continuous space. Population dynamics emerge from individual agent behaviour; there is no top-down control of species populations or ecosystem balance.
+
+The simulation follows real ecological principles: energy conservation, trophic levels (Lindeman 1942), nutrient cycling, carrying capacity. The forms may be alien but the dynamics are grounded. That is what lets the design draw on established ABM literature and ecological models: the ODD protocol (Grimm et al. 2006, 2010) provides the standard description format, and pattern-oriented modelling (Grimm et al. 2005) the validation approach. Alien mechanics are layered on only once the base ecology produces coherent dynamics.
+
+There are no imposed environmental cycles: no day/night, no seasons. Every temporal pattern emerges from agent interactions (the boundary, above). An imposed environmental oscillator is held in reserve, for a world whose endogenous dynamics lack rhythm.
+
 ## Documents
 
 - [Reference Modes](reference-modes.md) — the purpose of the world: the ecology's characteristic behaviours over time, at the patch scale, that the world must be able to produce
