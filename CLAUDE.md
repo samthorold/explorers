@@ -2,6 +2,13 @@
 
 @~/.claude/commons/guides/rust.md
 
+@~/.claude/commons/guides/emergent-systems.md
+
+## End state and register
+
+- **Before any change, review the Due rows of `docs/system-design/register.md`** that the change could affect: read the hypothesis now, defer it with a reason in its Due cell, or revise the design. A change to the stepper (`crates/explorers-sim/src`) makes every hypothesis Due. The hypotheses, their reading rules, the refutation ladder and the one-physics rule are in `docs/system-design/end-state.md`.
+- **Deviation (Project knowledge Guide, *Register*): the register is kept by hand,** not derived from tests and readings. Most hypotheses have no test written against their rule yet, and the readings that exist are long runs whose outputs are reports, not stored results a derivation could read. *Revisit when* the fast-lane hypotheses have tests named against their rules; their rows can then be derived from the suite.
+
 ## Agent skills
 
 ### Issues
