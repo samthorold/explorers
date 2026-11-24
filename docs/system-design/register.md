@@ -57,7 +57,7 @@ Kept by hand. Before any change, review the rows marked Due: read the hypothesis
 
 | Part | Hypothesis | Status | Highest rung | Last reading | Due |
 |---|---|---|---|---|---|
-| 3 | M1 Colonisation overshoot | Due | none | none | Due: blocked by G; rule not yet declared. |
+| 3 | M1 Colonisation overshoot | Due | none | none | Due: no test yet; blocked by G. Rule declared, its refuted line not yet declared. |
 | 3 | M2 Gap dynamics | Due | – | none | Due: no test yet; blocked by G; rule not yet declared. |
 | 3 | M3 Shifting patch mosaic | Due | – | none | Due: no test yet; rule not yet declared. |
 | 3 | M4 Divergent recovery | Due | – | none | Due: no test yet; blocked by G; rule not yet declared. |
