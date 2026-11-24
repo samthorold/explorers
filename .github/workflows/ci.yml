@@ -18,7 +18,12 @@ concurrency:
 
 jobs:
   pre-commit:
-    runs-on: ubuntu-latest
+    # macOS on Apple silicon, where the golden tests' exact f32 bits were
+    # captured: libm's transcendental functions (exp, powf, ...) differ in the
+    # last bits between Apple's libm and glibc, so a Linux runner reads other
+    # bits. The app's eframe build (default features off) also has no Linux
+    # display backend.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7.0.1
 
