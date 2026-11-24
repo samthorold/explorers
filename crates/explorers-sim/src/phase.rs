@@ -12,7 +12,10 @@ use crate::{
 };
 use rand::Rng;
 use rand_distr::{Distribution, Normal, Poisson};
-use std::collections::HashSet;
+// Lookup sets and maps use the fixed Fx hasher (clippy.toml bans std's
+// `HashMap`/`HashSet`); any that is iterated says why its order cannot
+// reach output.
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Photosynthesise: agents with nonzero effective photosynthetic absorption
 /// absorb energy from local solar flux into reserve. Light competition splits
@@ -151,12 +154,7 @@ pub fn absorb_nutrients(
     nutrient_grid: &mut crate::spatial::NutrientGrid,
     params: &WorldParameters,
 ) -> Vec<Event> {
-    absorb_nutrients_after_moves(
-        agents,
-        nutrient_grid,
-        params,
-        &std::collections::HashMap::new(),
-    )
+    absorb_nutrients_after_moves(agents, nutrient_grid, params, &FxHashMap::default())
 }
 
 /// [`absorb_nutrients`] with each agent's most recent move distance, keyed by
@@ -167,13 +165,14 @@ pub fn absorb_nutrients_after_moves(
     agents: &mut [Agent],
     nutrient_grid: &mut crate::spatial::NutrientGrid,
     params: &WorldParameters,
-    distance_moved: &std::collections::HashMap<u64, f32>,
+    distance_moved: &FxHashMap<u64, f32>,
 ) -> Vec<Event> {
     let mut events = Vec::new();
 
-    // Group agents by nutrient grid cell, with their demand.
-    let mut cell_agents: std::collections::HashMap<usize, Vec<(usize, f32)>> =
-        std::collections::HashMap::new();
+    // Group agents by nutrient grid cell, with their demand. Ordered by cell,
+    // so the uptake events below come out in the same order on every run.
+    let mut cell_agents: std::collections::BTreeMap<usize, Vec<(usize, f32)>> =
+        std::collections::BTreeMap::new();
 
     for (i, agent) in agents.iter().enumerate() {
         // Only hyphal uptake reads movement; off, the lookup is skipped too.
@@ -316,7 +315,7 @@ pub fn starvation_cascade_on(params: &WorldParameters) -> bool {
 /// after `metabolise` and handed to `check_death_thresholds`, so a later
 /// credit to the reserve — a heterotroph's own feeding in the drain pass —
 /// cannot revive them (#540).
-pub fn starved_ids(agents: &[Agent], params: &WorldParameters) -> HashSet<u64> {
+pub fn starved_ids(agents: &[Agent], params: &WorldParameters) -> FxHashSet<u64> {
     agents
         .iter()
         .filter(|a| {
@@ -840,7 +839,7 @@ pub fn repair_wear(
 pub fn apply_wear(
     agents: &mut [Agent],
     params: &WorldParameters,
-    usage: &std::collections::HashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]>,
+    usage: &FxHashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]>,
 ) -> Vec<Event> {
     let mut events = Vec::new();
     let baseline_rate = params.wear_rate;
@@ -1080,7 +1079,7 @@ fn route_or_excrete(
     cell_pos: (f32, f32),
     nutrient_grid: &mut crate::spatial::NutrientGrid,
     payments: &PartnerPayments,
-    index_of: &std::collections::HashMap<u64, usize>,
+    index_of: &FxHashMap<u64, usize>,
     dead_agents: &[u64],
     events: &mut Vec<Event>,
 ) {
@@ -1155,8 +1154,8 @@ pub fn resolve_drains_routed(
     debug_assert_eq!(consumer_deficit.len(), agents.len());
     // Slice index by agent id, for crediting routed surplus. Unused (and not
     // built) while nothing was paid.
-    let index_of: std::collections::HashMap<u64, usize> = if payments.is_empty() {
-        std::collections::HashMap::new()
+    let index_of: FxHashMap<u64, usize> = if payments.is_empty() {
+        FxHashMap::default()
     } else {
         agents.iter().enumerate().map(|(i, a)| (a.id, i)).collect()
     };
@@ -1218,7 +1217,7 @@ pub fn resolve_drains_routed(
         // Find consumers within their individual contact range
         let mut consumers = Vec::new();
         let nearby = grid.query_radius(target_pos, max_contact_range);
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = FxHashSet::default();
         for neighbor_id in nearby {
             if !seen.insert(neighbor_id) {
                 continue;
@@ -1417,7 +1416,7 @@ pub fn resolve_drains_routed(
         let carcass_pos = carcasses[carcass_idx].position;
         let nearby = grid.query_radius(carcass_pos, max_contact_range);
         let mut consumers: Vec<(usize, f32, f32)> = Vec::new(); // (idx, demand, trophic_eff)
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = FxHashSet::default();
 
         for neighbor_id in nearby {
             if !seen.insert(neighbor_id) {
@@ -1678,7 +1677,7 @@ fn senesces(agent: &Agent, params: &WorldParameters, run_seed: u64, tick: u64) -
 pub fn check_death_thresholds(
     agents: &mut [Agent],
     params: &WorldParameters,
-    starved: &HashSet<u64>,
+    starved: &FxHashSet<u64>,
     run_seed: u64,
     tick: u64,
 ) -> (Vec<Event>, Vec<Carcass>, f32) {
@@ -2117,7 +2116,7 @@ fn inherit_marker(
 /// Events distinguish asexual (target=None) from sexual (target=Some(mate_id)).
 pub fn resolve_reproduction(
     agents: &mut [Agent],
-    dead_ids: &std::collections::HashSet<u64>,
+    dead_ids: &FxHashSet<u64>,
     grid: &SpatialGrid,
     params: &WorldParameters,
     run_seed: u64,
@@ -2143,7 +2142,7 @@ pub fn resolve_reproduction(
     // repro_nutrient), never from the free reserve or free nutrient store, so
     // growth cannot pin an agent on either gate. The old body-support nutrient
     // gate (`nutrient >= structure * demand`) is gone.
-    let eligible: std::collections::HashSet<usize> = agents
+    let eligible: FxHashSet<usize> = agents
         .iter()
         .enumerate()
         .filter(|(_, a)| {
@@ -2160,7 +2159,7 @@ pub fn resolve_reproduction(
         .collect();
 
     // Track which agents have already reproduced this tick (at most once each).
-    let mut reproduced = std::collections::HashSet::new();
+    let mut reproduced = FxHashSet::default();
 
     // Next agent ID: find max existing ID + 1. Offspring receive canonical ids
     // from this counter *after* being sorted by their world-state key below.
@@ -2174,6 +2173,8 @@ pub fn resolve_reproduction(
     // Each eligible agent rolls against its asexual_propensity. On success it
     // reproduces alone; on failure it will attempt sexual reproduction below.
     let eligible_sorted: Vec<usize> = {
+        // Iterates a hash set, but only to sort it: its order cannot reach
+        // the outcome.
         let mut v: Vec<usize> = eligible.iter().copied().collect();
         v.sort(); // deterministic ordering for reproducibility
         v
@@ -2377,7 +2378,9 @@ pub fn resolve_reproduction(
 
     // ---------- Phase B: Sexual reproduction (fallback for non-asexual) ----------
     // Only eligible agents that have not already reproduced asexually participate.
-    let sexual_eligible: std::collections::HashSet<usize> = eligible
+    // Iterates a hash set into another, which is only looked up and sorted
+    // below: neither order can reach the outcome.
+    let sexual_eligible: FxHashSet<usize> = eligible
         .iter()
         .copied()
         .filter(|i| !reproduced.contains(i))
@@ -2394,6 +2397,7 @@ pub fn resolve_reproduction(
     // function of world state. (This subsumes #343's index tiebreak: ids are the
     // stable key; #343's HashSet-order fix was the symptom, not the invariant.)
     let sexual_eligible_sorted: Vec<usize> = {
+        // Iterates a hash set, but only to sort it.
         let mut v: Vec<usize> = sexual_eligible.iter().copied().collect();
         v.sort_by_key(|&i| agents[i].id);
         v
@@ -2425,7 +2429,7 @@ pub fn resolve_reproduction(
         // id (not slice index), so co-located clonal mates at equal trait
         // distance resolve to the same choice regardless of iteration order.
         let mut best: Option<(usize, f32, u64)> = None;
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = FxHashSet::default();
         seen.insert(i); // exclude self
 
         for neighbor_id in nearby {
@@ -2506,7 +2510,7 @@ pub fn resolve_reproduction(
     });
 
     // Greedily assign pairs: each agent can only reproduce once per tick
-    let mut paired = std::collections::HashSet::new();
+    let mut paired = FxHashSet::default();
     let mut final_pairs: Vec<(usize, usize)> = Vec::new();
 
     for (a, b, _, _, _) in &pair_candidates {
@@ -3603,7 +3607,7 @@ mod tests {
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
-        let moved = std::collections::HashMap::from([(1, 3.0 * params.contact_distance)]);
+        let moved = FxHashMap::from_iter([(1, 3.0 * params.contact_distance)]);
 
         absorb_nutrients_after_moves(&mut agents, &mut grid, &params, &moved);
 
@@ -3693,7 +3697,7 @@ mod tests {
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
-        let moved = std::collections::HashMap::from([(1, 1.0)]);
+        let moved = FxHashMap::from_iter([(1, 1.0)]);
 
         absorb_nutrients_after_moves(&mut agents, &mut grid, &params, &moved);
 
@@ -4707,7 +4711,7 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -4756,7 +4760,7 @@ mod tests {
         agents[0].nutrient = 10.0;
         agents[1].nutrient = 10.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -4815,7 +4819,7 @@ mod tests {
             agents[0].repro_nutrient = 100.0;
             agents[0].nutrient = 100.0;
 
-            let dead_ids = std::collections::HashSet::new();
+            let dead_ids = FxHashSet::default();
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (0.0, 0.0));
 
@@ -4827,7 +4831,7 @@ mod tests {
             let mut offspring = result.offspring;
             let structures: Vec<f32> = offspring.iter().map(|o| o.structure).collect();
             let (_events, carcasses, _diss) =
-                check_death_thresholds(&mut offspring, &params, &HashSet::new(), 0, 0);
+                check_death_thresholds(&mut offspring, &params, &FxHashSet::default(), 0, 0);
             assert!(
                 carcasses.is_empty(),
                 "decomposer offspring must survive its birth tick (seed {seed}): \
@@ -4877,7 +4881,7 @@ mod tests {
             agent.nutrient = 10.0;
         }
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -4927,7 +4931,7 @@ mod tests {
             agent.nutrient = 10.0;
         }
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -4970,7 +4974,7 @@ mod tests {
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
 
-        let no_usage = std::collections::HashMap::new();
+        let no_usage = FxHashMap::default();
         let events = apply_wear(&mut agents, &params, &no_usage);
 
         assert_eq!(events.len(), 1);
@@ -4994,7 +4998,7 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
         agents[0].wear[0] = 1.0; // pre-existing wear
 
-        let no_usage = std::collections::HashMap::new();
+        let no_usage = FxHashMap::default();
         let _events = apply_wear(&mut agents, &params, &no_usage);
 
         // Accumulation only: 0.1 * 0.5 = 0.05, wear goes to 1.05
@@ -5015,7 +5019,7 @@ mod tests {
         ticks: usize,
     ) -> [f32; FUNCTIONAL_TRAIT_COUNT] {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 1000.0, traits)];
-        let usage = std::collections::HashMap::from([(1_u64, usage)]);
+        let usage = FxHashMap::from_iter([(1_u64, usage)]);
         for _ in 0..ticks {
             agents[0].reserve = 1000.0;
             grow(&mut agents, params);
@@ -5136,7 +5140,7 @@ mod tests {
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, zero_traits())];
 
-        let no_usage = std::collections::HashMap::new();
+        let no_usage = FxHashMap::default();
         let events = apply_wear(&mut agents, &params, &no_usage);
         assert!(events.is_empty());
     }
@@ -5159,14 +5163,14 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
 
         // No usage: only baseline wear
-        let no_usage = std::collections::HashMap::new();
+        let no_usage = FxHashMap::default();
         let _events_baseline = apply_wear(&mut agents, &params, &no_usage);
         let baseline_wear = agents[0].wear[0];
         assert!(baseline_wear > 0.0, "baseline wear should accumulate");
 
         // Reset and apply with photosynthesis usage
         agents[0].wear = [0.0; FUNCTIONAL_TRAIT_COUNT];
-        let mut usage = std::collections::HashMap::new();
+        let mut usage = FxHashMap::default();
         usage.insert(1_u64, [5.0_f32, 0.0, 0.0]); // 5.0 energy captured via photosynthesis
         let _events_use = apply_wear(&mut agents, &params, &usage);
         let use_wear = agents[0].wear[0];
@@ -5201,7 +5205,7 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
 
         // With heterotrophy usage
-        let mut usage = std::collections::HashMap::new();
+        let mut usage = FxHashMap::default();
         usage.insert(1_u64, [0.0_f32, 3.0, 0.0]); // 3.0 energy drained
         let _events = apply_wear(&mut agents, &params, &usage);
 
@@ -5231,7 +5235,7 @@ mod tests {
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
 
-        let mut usage = std::collections::HashMap::new();
+        let mut usage = FxHashMap::default();
         usage.insert(1_u64, [0.0_f32, 0.0, 2.0]); // 2.0 energy spent moving
         let _events = apply_wear(&mut agents, &params, &usage);
 
@@ -5262,7 +5266,7 @@ mod tests {
         };
         let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
 
-        let no_usage = std::collections::HashMap::new();
+        let no_usage = FxHashMap::default();
         let _events = apply_wear(&mut agents, &params, &no_usage);
 
         // Only baseline wear: rate * nominal for each trait
@@ -5295,7 +5299,7 @@ mod tests {
         let n = 20_000;
         let mut agents = worn_cohort(n, [0.2, 0.1, 0.0]);
         let (events, carcasses, _) =
-            check_death_thresholds(&mut agents, &params, &HashSet::new(), 7, 3);
+            check_death_thresholds(&mut agents, &params, &FxHashSet::default(), 7, 3);
         let rate = carcasses.len() as f32 / n as f32;
         // Binomial sd √(h(1−h)/n) ≈ 0.0025: four sd either side.
         assert!(
@@ -5317,7 +5321,7 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 0.0, zero_traits())];
 
         let (events, carcasses, _dissipated) =
-            check_death_thresholds(&mut agents, &params, &HashSet::new(), 0, 0);
+            check_death_thresholds(&mut agents, &params, &FxHashSet::default(), 0, 0);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::Died);
@@ -5377,7 +5381,7 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), -5.0, zero_traits())];
 
         let (events, carcasses, _dissipated) =
-            check_death_thresholds(&mut agents, &params, &HashSet::new(), 0, 0);
+            check_death_thresholds(&mut agents, &params, &FxHashSet::default(), 0, 0);
 
         assert_eq!(events.len(), 1);
         assert_eq!(carcasses.len(), 1);
@@ -5407,7 +5411,7 @@ mod tests {
         agents[0].structure = threshold * 0.5; // below threshold
 
         let (events, carcasses, _dissipated) =
-            check_death_thresholds(&mut agents, &params, &HashSet::new(), 0, 0);
+            check_death_thresholds(&mut agents, &params, &FxHashSet::default(), 0, 0);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, EventKind::Died);
@@ -5421,7 +5425,7 @@ mod tests {
         let mut agents = vec![make_agent(1, (0.0, 0.0), 100.0, zero_traits())];
 
         let (events, carcasses, _dissipated) =
-            check_death_thresholds(&mut agents, &params, &HashSet::new(), 0, 0);
+            check_death_thresholds(&mut agents, &params, &FxHashSet::default(), 0, 0);
 
         assert!(events.is_empty());
         assert!(carcasses.is_empty());
@@ -5439,7 +5443,8 @@ mod tests {
         agents[0].repro_nutrient = 2.0; // earmark
         agents[0].structure = 10.0; // bound = 10.0 * 0.1 = 1.0 (zero traits)
 
-        let (_, carcasses, _) = check_death_thresholds(&mut agents, &params, &HashSet::new(), 0, 0);
+        let (_, carcasses, _) =
+            check_death_thresholds(&mut agents, &params, &FxHashSet::default(), 0, 0);
 
         assert_eq!(carcasses.len(), 1);
         // free(5.0) + earmark(2.0) + bound(1.0) = 8.0
@@ -5466,9 +5471,9 @@ mod tests {
         let mut large = vec![make(20.0)];
 
         let (_, small_carcasses, _) =
-            check_death_thresholds(&mut small, &params, &HashSet::new(), 0, 0);
+            check_death_thresholds(&mut small, &params, &FxHashSet::default(), 0, 0);
         let (_, large_carcasses, _) =
-            check_death_thresholds(&mut large, &params, &HashSet::new(), 0, 0);
+            check_death_thresholds(&mut large, &params, &FxHashSet::default(), 0, 0);
 
         assert!(
             large_carcasses[0].nutrient > small_carcasses[0].nutrient,
@@ -7876,7 +7881,7 @@ mod tests {
         agents[1].repro_reserve = 15.0;
         agents[1].repro_nutrient = 15.0;
 
-        let dead_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let dead_ids: FxHashSet<u64> = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -7938,7 +7943,7 @@ mod tests {
         agents[1].repro_nutrient = 15.0;
 
         // Mark agent 1 as dead (killed in drain pass)
-        let mut dead_ids = std::collections::HashSet::new();
+        let mut dead_ids = FxHashSet::default();
         dead_ids.insert(1u64);
 
         let mut grid = SpatialGrid::new(100.0, 10.0);
@@ -7981,7 +7986,7 @@ mod tests {
         agents[1].repro_reserve = 15.0;
         agents[1].repro_nutrient = 15.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8027,7 +8032,7 @@ mod tests {
         agents[0].repro_nutrient = 1.0;
         agents[1].repro_nutrient = 1.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8070,7 +8075,7 @@ mod tests {
         agents[0].nutrient = 0.01; // free store nearly empty
         agents[0].repro_nutrient = 20.0; // earmark well above threshold
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
 
@@ -8111,7 +8116,7 @@ mod tests {
         agents[1].repro_reserve = 20.0;
         agents[1].repro_nutrient = 20.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8186,7 +8191,7 @@ mod tests {
         agents[1].repro_nutrient = 15.0;
         agents[2].nutrient = 10.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (2.0, 0.0));
@@ -8248,7 +8253,7 @@ mod tests {
         agents[1].repro_reserve = 15.0;
         agents[1].repro_nutrient = 15.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8298,7 +8303,7 @@ mod tests {
         agents[1].repro_reserve = 15.0;
         agents[1].repro_nutrient = 15.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8352,7 +8357,7 @@ mod tests {
         agents[1].repro_reserve = 15.0;
         agents[1].repro_nutrient = 15.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8421,7 +8426,7 @@ mod tests {
         agents[1].repro_reserve = 15.0;
         agents[1].repro_nutrient = 15.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8466,7 +8471,7 @@ mod tests {
             agents[1].repro_reserve = 15.0;
             agents[1].repro_nutrient = 15.0;
 
-            let dead_ids = std::collections::HashSet::new();
+            let dead_ids = FxHashSet::default();
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (0.0, 0.0));
             grid.insert(1, (1.0, 0.0));
@@ -8520,7 +8525,7 @@ mod tests {
         agents[1].repro_reserve = 15.0;
         agents[1].repro_nutrient = 15.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8582,7 +8587,7 @@ mod tests {
             repro_nutrient: 20.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -8640,7 +8645,7 @@ mod tests {
         agents[1].repro_reserve = 15.0;
         agents[1].repro_nutrient = 15.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8801,7 +8806,7 @@ mod tests {
         agents[1].repro_reserve = 15.0;
         agents[1].repro_nutrient = 15.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8846,7 +8851,7 @@ mod tests {
         agents[1].repro_reserve = 15.0;
         agents[1].repro_nutrient = 15.0;
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -8895,7 +8900,7 @@ mod tests {
             a.repro_nutrient = 15.0;
         }
 
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (3.0, 0.0));
@@ -8945,7 +8950,7 @@ mod tests {
                 a.repro_nutrient = 15.0;
                 a.wear[2] = mobility_wear; // index 2 = mobility
             }
-            let dead_ids = std::collections::HashSet::new();
+            let dead_ids = FxHashSet::default();
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (0.0, 0.0));
             grid.insert(1, (8.0, 0.0));
@@ -9006,7 +9011,7 @@ mod tests {
             a.repro_reserve = 15.0;
             a.repro_nutrient = 15.0;
         }
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (6.0, 0.0));
@@ -9059,7 +9064,7 @@ mod tests {
                 a.repro_reserve = 15.0;
                 a.repro_nutrient = 15.0;
             }
-            let dead_ids = std::collections::HashSet::new();
+            let dead_ids = FxHashSet::default();
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, (10.0, 10.0));
             grid.insert(1, (14.0, 10.0));
@@ -9170,7 +9175,7 @@ mod tests {
             repro_nutrient: 20.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -9230,7 +9235,7 @@ mod tests {
             repro_nutrient: 20.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -9297,7 +9302,7 @@ mod tests {
                 marker: Default::default(),
             },
         ];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, agents[0].position);
         grid.insert(1, agents[1].position);
@@ -9348,7 +9353,7 @@ mod tests {
             repro_nutrient: 10.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -9411,7 +9416,7 @@ mod tests {
             repro_nutrient: 40.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
         assert!(
@@ -9480,7 +9485,7 @@ mod tests {
             marker: Default::default(),
         };
         let mut agents = vec![mk(1, (0.0, 0.0)), mk(2, (1.0, 0.0))];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, agents[0].position);
         grid.insert(1, agents[1].position);
@@ -9597,7 +9602,7 @@ mod tests {
             repro_nutrient: 20.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -9643,7 +9648,7 @@ mod tests {
             repro_nutrient: 20.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 1, 0);
@@ -9717,7 +9722,7 @@ mod tests {
                 marker: Default::default(),
             },
         ];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, agents[0].position);
         grid.insert(1, agents[1].position);
@@ -9780,7 +9785,7 @@ mod tests {
             repro_nutrient: initial_earmark,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -9879,7 +9884,7 @@ mod tests {
                 marker: Default::default(),
             },
         ];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, (0.0, 0.0));
         grid.insert(1, (1.0, 0.0));
@@ -9955,7 +9960,7 @@ mod tests {
                 repro_nutrient: 50.0,
                 marker: Default::default(),
             }];
-            let dead_ids = std::collections::HashSet::new();
+            let dead_ids = FxHashSet::default();
             let grid = SpatialGrid::new(100.0, 10.0);
 
             let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -10008,7 +10013,7 @@ mod tests {
             repro_nutrient: 20.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -10092,7 +10097,7 @@ mod tests {
                     marker: Default::default(),
                 },
             ];
-            let dead_ids = std::collections::HashSet::new();
+            let dead_ids = FxHashSet::default();
             let mut grid = SpatialGrid::new(100.0, 10.0);
             grid.insert(0, agents[0].position);
             grid.insert(1, agents[1].position);
@@ -10188,7 +10193,7 @@ mod tests {
                 marker: Default::default(),
             },
         ];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(1000.0, 10.0);
         grid.insert(0, a_pos);
         grid.insert(1, b_pos);
@@ -10266,7 +10271,7 @@ mod tests {
                 marker: Default::default(),
             },
         ];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, shared);
         grid.insert(1, shared);
@@ -10318,7 +10323,7 @@ mod tests {
             repro_nutrient: 50.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -10368,7 +10373,7 @@ mod tests {
             repro_nutrient: 20.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -10420,7 +10425,7 @@ mod tests {
             a.repro_nutrient = 15.0;
         }
 
-        let dead_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let dead_ids: FxHashSet<u64> = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(0, agents[0].position);
         grid.insert(1, agents[1].position);
@@ -10790,7 +10795,7 @@ mod tests {
             repro_nutrient: 10.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -10864,7 +10869,7 @@ mod tests {
             repro_nutrient: 10.0,
             marker: Default::default(),
         }];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let grid = SpatialGrid::new(100.0, 10.0);
 
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
@@ -10947,7 +10952,7 @@ mod tests {
                 marker: Default::default(),
             },
         ];
-        let dead_ids = std::collections::HashSet::new();
+        let dead_ids = FxHashSet::default();
         let mut grid = SpatialGrid::new(100.0, 10.0);
         grid.insert(1, (0.0, 0.0));
         grid.insert(2, (1.0, 0.0));
@@ -11011,7 +11016,7 @@ mod tests {
                 repro_nutrient: 100.0,
                 marker: Default::default(),
             }];
-            let dead_ids = std::collections::HashSet::new();
+            let dead_ids = FxHashSet::default();
             let grid = SpatialGrid::new(100.0, 10.0);
             let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, seed, 0);
             let n = result.offspring.len();

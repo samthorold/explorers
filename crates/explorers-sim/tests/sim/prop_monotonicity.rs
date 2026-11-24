@@ -13,7 +13,7 @@ use crate::support;
 use explorers_sim::spatial::SpatialGrid;
 use explorers_sim::{Agent, Carcass, World, WorldParameters, phase};
 use proptest::prelude::*;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use support::{WorldCase, world_case};
 
 /// Multiplicative perturbation applied to the parameter under test. Bounded
@@ -50,8 +50,8 @@ fn index_grid(agents: &[Agent], params: &WorldParameters) -> SpatialGrid {
 /// `lower[id] ≤ upper[id]` for every agent id, with `what` naming the compared
 /// quantity and `change` the perturbation, for the failure message.
 fn assert_pointwise_le(
-    lower: &HashMap<u64, f32>,
-    upper: &HashMap<u64, f32>,
+    lower: &BTreeMap<u64, f32>,
+    upper: &BTreeMap<u64, f32>,
     what: &str,
     change: &str,
 ) -> Result<(), TestCaseError> {
@@ -65,12 +65,12 @@ fn assert_pointwise_le(
     Ok(())
 }
 
-fn by_id<T>(agents: &[Agent], f: impl Fn(&Agent) -> T) -> HashMap<u64, T> {
+fn by_id<T>(agents: &[Agent], f: impl Fn(&Agent) -> T) -> BTreeMap<u64, T> {
     agents.iter().map(|a| (a.id, f(a))).collect()
 }
 
 /// Per-agent income from one `photosynthesise` pass under `params`.
-fn photosynthetic_income(world: &World, params: &WorldParameters) -> HashMap<u64, f32> {
+fn photosynthetic_income(world: &World, params: &WorldParameters) -> BTreeMap<u64, f32> {
     let mut agents = world.agents().to_vec();
     let before = by_id(&agents, |a| a.reserve);
     let grid = index_grid(&agents, params);
@@ -108,7 +108,7 @@ proptest! {
 }
 
 /// Per-agent reserve after one `metabolise` pass under `params`.
-fn reserve_after_metabolise(world: &World, params: &WorldParameters) -> HashMap<u64, f32> {
+fn reserve_after_metabolise(world: &World, params: &WorldParameters) -> BTreeMap<u64, f32> {
     let mut agents = world.agents().to_vec();
     phase::metabolise(&mut agents, params);
     by_id(&agents, |a| a.reserve)
@@ -147,7 +147,7 @@ proptest! {
 /// (living-target and carcass drains together), for every agent alive at the
 /// start of the pass. Consumers the pass kills are recorded from the phase's
 /// mutated slice too, since the death threshold check leaves the slice intact.
-fn drain_energy_gain(world: &World, params: &WorldParameters) -> HashMap<u64, f32> {
+fn drain_energy_gain(world: &World, params: &WorldParameters) -> BTreeMap<u64, f32> {
     let mut agents = world.agents().to_vec();
     // `Carcass` is not `Clone`; copy its public fields.
     let mut carcasses: Vec<Carcass> = world
@@ -208,7 +208,7 @@ proptest! {
 
 /// Per-agent maintenance charge (reserve paid to heat) from one `metabolise`
 /// pass under `params`.
-fn maintenance_charge(world: &World, params: &WorldParameters) -> HashMap<u64, f32> {
+fn maintenance_charge(world: &World, params: &WorldParameters) -> BTreeMap<u64, f32> {
     let mut agents = world.agents().to_vec();
     let before = by_id(&agents, |a| a.reserve);
     phase::metabolise(&mut agents, params);
@@ -250,7 +250,7 @@ proptest! {
 /// at the cell of the agent at `focus` (a fraction of the slice) first set to
 /// `pool`. Uptake is the growth of the free store plus the reproductive
 /// earmark, the two accounts the kappa split credits.
-fn nutrient_uptake(world: &World, focus: f32, pool: f32) -> HashMap<u64, f32> {
+fn nutrient_uptake(world: &World, focus: f32, pool: f32) -> BTreeMap<u64, f32> {
     let mut agents = world.agents().to_vec();
     let mut nutrient_grid = world.nutrient_grid().clone();
     let idx = ((agents.len() - 1) as f32 * focus).round() as usize;
@@ -294,7 +294,7 @@ proptest! {
 }
 
 /// Per-agent structure built by one `grow` pass under `params`.
-fn structure_growth(world: &World, params: &WorldParameters) -> HashMap<u64, f32> {
+fn structure_growth(world: &World, params: &WorldParameters) -> BTreeMap<u64, f32> {
     let mut agents = world.agents().to_vec();
     let before = by_id(&agents, |a| a.structure);
     phase::grow(&mut agents, params);

@@ -66,7 +66,7 @@ fn reproduce(
     for (i, a) in agents.iter().enumerate() {
         grid.insert(i as u64, a.position);
     }
-    let dead = std::collections::HashSet::new();
+    let dead = rustc_hash::FxHashSet::default();
     resolve_reproduction(agents, &dead, &grid, params, 7, tick)
 }
 

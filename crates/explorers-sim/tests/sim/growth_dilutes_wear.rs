@@ -127,7 +127,7 @@ fn wear_path(nutrient: f32, ticks: usize) -> Vec<(f32, f32, f32, f32)> {
     let mut a = worn(producer(), 10.0);
     a.nutrient = nutrient;
     let mut agents = vec![a];
-    let usage = std::collections::HashMap::new();
+    let usage = rustc_hash::FxHashMap::default();
     let mut path = Vec::new();
     for _ in 0..ticks {
         agents[0].reserve = 1.0 + 0.1 * agents[0].structure;

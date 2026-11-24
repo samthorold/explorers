@@ -1,7 +1,7 @@
 mod nutrient_overlay;
 mod verdict;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 
 use eframe::egui;
@@ -416,7 +416,7 @@ impl RoleBreakdown {
     }
 
     /// Tally a roles map (from the income ledger) into the breakdown.
-    fn from_roles(roles: &HashMap<u64, TrophicRole>) -> Self {
+    fn from_roles(roles: &BTreeMap<u64, TrophicRole>) -> Self {
         let mut breakdown = RoleBreakdown {
             total: roles.len(),
             ..Default::default()
@@ -1739,7 +1739,7 @@ mod tests {
         // The breakdown tallies a behavioural roles map from the projection, so a
         // Decomposer can actually appear (the old trait-only path never produced
         // one).
-        let roles = HashMap::from([
+        let roles = BTreeMap::from([
             (1u64, TrophicRole::Producer),
             (2u64, TrophicRole::Producer),
             (3u64, TrophicRole::Consumer),
@@ -1754,7 +1754,7 @@ mod tests {
 
     #[test]
     fn role_breakdown_of_empty_population_is_all_zero() {
-        let breakdown = RoleBreakdown::from_roles(&HashMap::new());
+        let breakdown = RoleBreakdown::from_roles(&BTreeMap::new());
         assert_eq!(breakdown.total, 0);
         assert_eq!(breakdown.producers, 0);
         assert_eq!(breakdown.consumers, 0);

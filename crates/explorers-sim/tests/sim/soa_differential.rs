@@ -108,7 +108,7 @@ fn assert_grow_identical(agents: &[Agent], params: &WorldParameters, ctx: &str) 
 fn assert_wear_identical(
     agents: &[Agent],
     params: &WorldParameters,
-    usage: &std::collections::HashMap<u64, [f32; 3]>,
+    usage: &rustc_hash::FxHashMap<u64, [f32; 3]>,
     ctx: &str,
 ) {
     let mut scalar = agents.to_vec();
@@ -167,7 +167,7 @@ fn apply_wear_soa_is_bit_identical_example4() {
     assert!(!agents.is_empty());
     // Build a usage map covering most agents with varied per-trait usage, plus
     // leave some agents absent (default-zero usage) to exercise both branches.
-    let mut usage = std::collections::HashMap::new();
+    let mut usage = rustc_hash::FxHashMap::default();
     for (k, a) in agents.iter().enumerate() {
         if k % 5 == 0 {
             continue; // some agents have no usage entry
@@ -196,7 +196,7 @@ fn multitick_differential(scenario: &str, seed: u64, ticks: u64) {
             assert_metabolise_identical(&agents, &params, &ctx);
             assert_grow_identical(&agents, &params, &ctx);
             // Deterministic synthetic usage map derived from agent id.
-            let mut usage = std::collections::HashMap::new();
+            let mut usage = rustc_hash::FxHashMap::default();
             for a in &agents {
                 let f = ((a.id % 17) as f32) * 0.01;
                 usage.insert(a.id, [f, f * 0.3, f * 0.7]);

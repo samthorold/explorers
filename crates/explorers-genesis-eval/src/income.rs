@@ -20,7 +20,9 @@
 //! stepper, and is fed the log tail after each step like the topology
 //! projection.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+
+use rustc_hash::FxHashMap;
 
 use explorers_sim::event::{EventKind, EventLog};
 use explorers_sim::topology::{DETRITAL_RELIANCE_THRESHOLD, TrophicRole};
@@ -101,7 +103,8 @@ impl Entry {
 #[derive(Clone, Debug, Default)]
 pub struct IncomeLedger {
     cursor: usize,
-    income: HashMap<u64, Entry>,
+    // Lookups only, never iterated.
+    income: FxHashMap<u64, Entry>,
 }
 
 impl IncomeLedger {
@@ -164,7 +167,7 @@ impl IncomeLedger {
 
     /// The trophic roles of the given agents, keyed by id. An agent with no
     /// income yet has no role and is left out.
-    pub fn roles_of(&self, ids: impl IntoIterator<Item = u64>) -> HashMap<u64, TrophicRole> {
+    pub fn roles_of(&self, ids: impl IntoIterator<Item = u64>) -> BTreeMap<u64, TrophicRole> {
         ids.into_iter()
             .filter_map(|id| self.role(id).map(|role| (id, role)))
             .collect()
@@ -309,7 +312,7 @@ mod tests {
         assert_eq!(ledger.role(9), None, "no income yet, no role");
         assert_eq!(
             ledger.roles_of([8, 9]),
-            HashMap::from([(8, TrophicRole::Decomposer)]),
+            BTreeMap::from([(8, TrophicRole::Decomposer)]),
             "an agent with no role is left out"
         );
     }

@@ -1,0 +1,4 @@
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "std seeds its hasher per process, so iteration order differs run to run and output built from it does not reproduce (Commons Rust Guide, *Testing*). Use BTreeMap where order matters, rustc_hash::FxHashMap for lookups." },
+    { path = "std::collections::HashSet", reason = "std seeds its hasher per process, so iteration order differs run to run and output built from it does not reproduce (Commons Rust Guide, *Testing*). Use BTreeSet where order matters, rustc_hash::FxHashSet for lookups." },
+]

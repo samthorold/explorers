@@ -449,7 +449,7 @@ mod tests {
                 NutrientLayer::Combined,
             ]
         );
-        let labels: std::collections::HashSet<_> =
+        let labels: std::collections::BTreeSet<_> =
             NutrientLayer::ALL.iter().map(|l| l.label()).collect();
         assert_eq!(
             labels.len(),

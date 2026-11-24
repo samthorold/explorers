@@ -1302,7 +1302,7 @@ pub struct World {
     /// = did not move). Movement runs after uptake within a tick, so this is
     /// the movement hyphal uptake reads as substrate contact (world-rules.md
     /// flow 2): the move that placed the agent where it now absorbs.
-    last_move_distance: std::collections::HashMap<u64, f32>,
+    last_move_distance: rustc_hash::FxHashMap<u64, f32>,
     /// Energy each network partner delivered to each agent in the most recent
     /// redistribution (flow 5). Drains run before redistribution within a
     /// tick, so this is the payment the next tick's routed surplus is split
@@ -1430,7 +1430,7 @@ impl World {
             next_seq: 0,
             ledger: energy_ledger::EnergyLedger::new(),
             nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
-            last_move_distance: std::collections::HashMap::new(),
+            last_move_distance: rustc_hash::FxHashMap::default(),
             last_partner_payments: phase::PartnerPayments::default(),
         }
     }
@@ -1527,7 +1527,7 @@ impl World {
                 next_seq: 0,
                 ledger: energy_ledger::EnergyLedger::new(),
                 nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
-                last_move_distance: std::collections::HashMap::new(),
+                last_move_distance: rustc_hash::FxHashMap::default(),
                 last_partner_payments: phase::PartnerPayments::default(),
             }
         } else if let Some(ref distribution) = recipe.initial_distribution {
@@ -1582,13 +1582,16 @@ impl World {
 
         let extent = self.params.world_extent;
 
-        // Snapshot pre-tick state for energy ledger conservation verification
-        let pre_agent_energy: std::collections::HashMap<u64, f32> = self
+        // Snapshot pre-tick state for energy ledger conservation verification.
+        // Ordered by id: the ledger records below iterate these (and their
+        // post-tick twins), so the ledger's flows come out in the same order
+        // on every run.
+        let pre_agent_energy: std::collections::BTreeMap<u64, f32> = self
             .agents
             .iter()
             .map(|a| (a.id, a.reserve + a.structure + a.repro_reserve))
             .collect();
-        let pre_carcass_energy: std::collections::HashMap<u64, f32> =
+        let pre_carcass_energy: std::collections::BTreeMap<u64, f32> =
             self.carcasses.iter().map(|c| (c.id, c.energy)).collect();
 
         // Snapshot pre-tick nutrient per pool for the nutrient ledger.
@@ -1604,9 +1607,9 @@ impl World {
         let pre_carcass_nutrient: f32 = self.carcasses.iter().map(|c| c.nutrient).sum();
 
         // Snapshot trait vectors for ledger efficiency calculations
-        let pre_agent_traits: std::collections::HashMap<u64, TraitVector> =
+        let pre_agent_traits: rustc_hash::FxHashMap<u64, TraitVector> =
             self.agents.iter().map(|a| (a.id, a.traits)).collect();
-        let pre_carcass_traits: std::collections::HashMap<u64, TraitVector> =
+        let pre_carcass_traits: rustc_hash::FxHashMap<u64, TraitVector> =
             self.carcasses.iter().map(|c| (c.id, c.traits)).collect();
 
         // Build spatial grid once at start of tick
@@ -1679,7 +1682,7 @@ impl World {
         events.extend(drain_result.events);
 
         // Mark deaths from drain resolution
-        let drain_dead_ids: std::collections::HashSet<u64> =
+        let drain_dead_ids: rustc_hash::FxHashSet<u64> =
             drain_result.dead_agents.iter().copied().collect();
         for agent in self.agents.iter_mut() {
             if drain_dead_ids.contains(&agent.id) {
@@ -1803,7 +1806,7 @@ impl World {
         // move_result.move_distance is aligned by index with self.agents at move
         // time; no agents are added or removed between move and wear, so the
         // index -> id mapping is stable.
-        let move_distance_by_id: std::collections::HashMap<u64, f32> = self
+        let move_distance_by_id: rustc_hash::FxHashMap<u64, f32> = self
             .agents
             .iter()
             .enumerate()
@@ -1815,8 +1818,8 @@ impl World {
         events.extend(move_result.events);
 
         // 8. Wear: collect per-agent usage from earlier phases
-        let mut usage_data: std::collections::HashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]> =
-            std::collections::HashMap::new();
+        let mut usage_data: rustc_hash::FxHashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]> =
+            rustc_hash::FxHashMap::default();
         // Autotrophy usage: energy captured via photosynthesis
         for ev in events
             .iter()
@@ -1863,7 +1866,7 @@ impl World {
         let threshold_deaths = threshold_carcasses.len();
         self.dissipated_energy += death_dissipated;
         events.extend(death_events);
-        let threshold_dead: std::collections::HashSet<u64> =
+        let threshold_dead: rustc_hash::FxHashSet<u64> =
             threshold_carcasses.iter().map(|c| c.id).collect();
         for c in threshold_carcasses {
             self.carcasses.push(c);
@@ -1886,23 +1889,16 @@ impl World {
         // Built from event data and state snapshots, after all phases complete.
         self.ledger.clear();
 
-        let post_agent_energy: std::collections::HashMap<u64, f32> = self
+        let post_agent_energy: std::collections::BTreeMap<u64, f32> = self
             .agents
             .iter()
             .map(|a| (a.id, a.reserve + a.structure + a.repro_reserve))
             .collect();
-        let post_carcass_energy: std::collections::HashMap<u64, f32> =
+        let post_carcass_energy: std::collections::BTreeMap<u64, f32> =
             self.carcasses.iter().map(|c| (c.id, c.energy)).collect();
 
-        // Collect all agent IDs that exist at start or end of tick
-        let mut all_agent_ids = std::collections::HashSet::new();
-        for &id in pre_agent_energy.keys() {
-            all_agent_ids.insert(id);
-        }
-        for &id in post_agent_energy.keys() {
-            all_agent_ids.insert(id);
-        }
-        let mut all_carcass_ids = std::collections::HashSet::new();
+        // Collect all carcass IDs that exist at start or end of tick
+        let mut all_carcass_ids = std::collections::BTreeSet::new();
         for &id in pre_carcass_energy.keys() {
             all_carcass_ids.insert(id);
         }
@@ -2133,7 +2129,7 @@ impl World {
         if self.connections.is_empty() {
             return;
         }
-        let live: std::collections::HashSet<u64> = self.agents.iter().map(|a| a.id).collect();
+        let live: rustc_hash::FxHashSet<u64> = self.agents.iter().map(|a| a.id).collect();
         self.connections
             .retain(|c| live.contains(&c.builder) && live.contains(&c.partner));
     }
@@ -2172,7 +2168,7 @@ impl World {
     /// Distance each agent moved in the most recent move phase, by id (absent
     /// = did not move): what the next tick's hyphal uptake reads as substrate
     /// contact. Read-only, for instruments that replay the tick.
-    pub fn last_move_distance(&self) -> &std::collections::HashMap<u64, f32> {
+    pub fn last_move_distance(&self) -> &rustc_hash::FxHashMap<u64, f32> {
         &self.last_move_distance
     }
 
@@ -4292,7 +4288,7 @@ mod tests {
         for _ in 0..40 {
             world.step();
             world.energy_ledger().assert_balanced();
-            let live: std::collections::HashSet<u64> =
+            let live: std::collections::BTreeSet<u64> =
                 world.agents().iter().map(|a| a.id).collect();
             for c in world.connections() {
                 assert!(
@@ -4630,9 +4626,9 @@ mod tests {
         for _ in 0..50 {
             world.step();
         }
-        let carcass_ids: std::collections::HashSet<u64> =
+        let carcass_ids: std::collections::BTreeSet<u64> =
             world.carcasses().iter().map(|c| c.id).collect();
-        let agent_ids: std::collections::HashSet<u64> =
+        let agent_ids: std::collections::BTreeSet<u64> =
             world.agents().iter().map(|a| a.id).collect();
         assert!(
             carcass_ids.is_disjoint(&agent_ids),
@@ -5381,7 +5377,7 @@ mod tests {
         assert!(births > 0, "reproduction should produce births this tick");
         let born: Vec<&event::Event> = world.event_log().by_kind(&event::EventKind::Born);
         assert_eq!(born.len(), births, "one Born event per offspring");
-        let alive: std::collections::HashSet<u64> = world.agents().iter().map(|a| a.id).collect();
+        let alive: std::collections::BTreeSet<u64> = world.agents().iter().map(|a| a.id).collect();
         for ev in &born {
             assert!(
                 alive.contains(&ev.source),
@@ -5393,7 +5389,7 @@ mod tests {
             assert_eq!(ev.second_parent, None, "asexual birth has no mate");
             assert_eq!(ev.tick, 0);
         }
-        let offspring: std::collections::HashSet<u64> = born.iter().map(|e| e.source).collect();
+        let offspring: std::collections::BTreeSet<u64> = born.iter().map(|e| e.source).collect();
         assert_eq!(offspring.len(), births, "offspring ids are distinct");
     }
 
@@ -5439,7 +5435,8 @@ mod tests {
                 marker: Default::default(),
             });
         }
-        let parents: std::collections::HashSet<u64> = world.agents().iter().map(|a| a.id).collect();
+        let parents: std::collections::BTreeSet<u64> =
+            world.agents().iter().map(|a| a.id).collect();
 
         world.step();
 

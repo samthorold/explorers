@@ -241,10 +241,10 @@ mod tests {
                 let center = (pos_dist.sample(&mut rng), pos_dist.sample(&mut rng));
                 let radius = Uniform::new(0.0_f32, 30.0).unwrap().sample(&mut rng);
 
-                let grid_results: std::collections::HashSet<u64> =
+                let grid_results: std::collections::BTreeSet<u64> =
                     grid.query_radius(center, radius).into_iter().collect();
 
-                let brute_results: std::collections::HashSet<u64> = agents
+                let brute_results: std::collections::BTreeSet<u64> = agents
                     .iter()
                     .filter(|(_, pos)| {
                         crate::toroidal_distance(center, *pos, world_extent) <= radius

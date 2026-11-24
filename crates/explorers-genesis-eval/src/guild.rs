@@ -4,7 +4,7 @@
 //! realised income ([`crate::income`], #599), never from its trait vector. Reported only (genesis-search.md, the authority boundary): never
 //! a behaviour axis, never a fitness term, never read by the robustness floor.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use explorers_sim::TraitVector;
 use explorers_sim::event::{Event, EventKind, EventLog};
@@ -65,7 +65,7 @@ pub fn heterotroph_guilds(
 /// The living roster at one world tick, each agent read into its trophic
 /// role by the income ledger as of that tick (`IncomeLedger::update_before`
 /// then `roles_of`). An agent with no income yet has no role and is absent.
-pub type RoleSnapshot = (u64, HashMap<u64, TrophicRole>);
+pub type RoleSnapshot = (u64, BTreeMap<u64, TrophicRole>);
 
 /// The descent facts of one `Born` event — what the guild's recruitment clause
 /// reads. Taken off the log at observation time so the rollout need not keep
@@ -144,8 +144,8 @@ pub fn role_guilds_from_samples(
         TrophicRole::Decomposer,
     ];
     let window_start = window_start(max_ticks);
-    let mut sustained: HashMap<TrophicRole, bool> = ROLES.iter().map(|r| (*r, true)).collect();
-    let mut members: HashMap<TrophicRole, HashSet<u64>> = HashMap::new();
+    let mut sustained: BTreeMap<TrophicRole, bool> = ROLES.iter().map(|r| (*r, true)).collect();
+    let mut members: BTreeMap<TrophicRole, BTreeSet<u64>> = BTreeMap::new();
     let mut sampled = false;
     for (_, roles) in role_snapshots.iter().filter(|(t, _)| *t >= window_start) {
         sampled = true;
