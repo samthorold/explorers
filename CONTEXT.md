@@ -11,7 +11,7 @@ The fundamental unit of the simulation. Everything in the world is an agent: org
 _Avoid_: entity, creature, organism (when referring to the simulation abstraction)
 
 **Trait vector**:
-A seven-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Organised in three layers. **Allocation** (1 dimension): kappa — the fraction of mobilised energy routed to soma vs reproduction. **Specification** (3 dimensions): autotrophy, heterotrophy, mobility — these determine how an agent acquires energy and moves through the world. Autotrophy and heterotrophy are independent dimensions, not a spectrum — an agent can invest in both, paying each trait's maintenance separately. **Reproduction** (3 dimensions): fecundity, asexual propensity, dispersal. All six traits are independently evolvable, each carrying its own cost — there is no shared budget that forces them to sum to a fixed value. Some capabilities are subordinate to trait dimensions rather than independent traits: sensing is subordinate to mobility (mobile agents sense; sessile agents do not need to), nutrient uptake is implicit in autotrophy. Some quantities are derived from the trait vector rather than stored in it: mate selectivity emerges from trait-space divergence evaluated against a physics-defined **reproductive compatibility distance**, not from an explicit trait.
+A seven-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Organised in three layers. **Allocation** (1 dimension): kappa — the fraction of mobilised energy routed to soma vs reproduction. **Specification** (3 dimensions): autotrophy, heterotrophy, mobility — these determine how an agent acquires energy and moves through the world. Autotrophy and heterotrophy are independent dimensions, not a spectrum — an agent can invest in both, paying each trait's maintenance separately. **Reproduction** (3 dimensions): fecundity, asexual propensity, dispersal. All seven traits are independently evolvable, each carrying its own cost — there is no shared budget that forces them to sum to a fixed value. Some capabilities are subordinate to trait dimensions rather than independent traits: sensing is subordinate to mobility (mobile agents sense; sessile agents do not need to), nutrient uptake is implicit in autotrophy. Some quantities are derived from the trait vector rather than stored in it: mate selectivity emerges from trait-space divergence evaluated against a physics-defined **reproductive compatibility distance**, not from an explicit trait.
 _Avoid_: stats, attributes, genome (genome implies a genotype/phenotype distinction that doesn't exist here)
 
 **Kappa**:
@@ -194,7 +194,7 @@ Movement biased up the gradient of what a resource releases, so a richer or near
 _Avoid_: pathfinding, tracking, homing
 
 **Social foraging**:
-Attraction toward nearby feeding agents. An agent's social weight trait determines the strength of this pull. Combined with chemotaxis and a random exploration component to produce the agent's movement vector. Herding is an emergent property of high social weight across a local population.
+Attraction toward nearby feeding agents, whose strength is an agent's **social weight**. Combined with chemotaxis and a random exploration component to produce the agent's movement vector. Herding is an emergent property of high social weight across a local population. Social weight is a deferred trait dimension, not in the trait vector, so no current agent forages socially.
 _Avoid_: flocking, herding (as a mechanic — herding is emergent, not prescribed)
 
 **Sensing range**:
@@ -321,12 +321,11 @@ _Avoid_: energy conductance (the DEB term is the grounding, but "mobilisation ra
 
 **Intake ceiling**:
 The fullness at which a consumer reads half sated: a fixed multiple of its own maintenance, so a large, costly body processes more, as gut and handling capacity scale in the domain. The multiple is a world parameter, and one ceiling sets both currencies.
-_Avoid_: satiation sensitivity (the former name for the shape of a reserve-based gate, which this replaces), gut capacity (the domain analogue, not the physics)
+_Avoid_: satiation sensitivity (the former name for the shape of a reserve-based gate, which this replaces), gut capacity (the domain analogue, not the physics), appetite (a trait word; this is world physics), hunger threshold (there is no threshold)
 
 **Fullness**:
 A consumer's recent intake per tick in one currency, a moving average that each tick's intake fills and that clears over the **clearance time**. Satiation reads it against the intake ceiling. A newborn inherits its parent's fullness, as it inherits provisioned reserve and nutrient.
 _Avoid_: gut content (light counts toward fullness, and no gut holds light), reserve (fullness is a flow average, not stored energy)
-_Avoid_: appetite (a trait word; this is world physics), hunger threshold (there is no threshold)
 
 **Reproduction efficiency**:
 Fraction of energy invested by the parent that the offspring actually receives. The remainder is dissipated. Reproduction is lossy like all energy transfers.
@@ -452,7 +451,7 @@ When an agent's reserve reaches zero (starvation, predation) or its structure dr
 
 > **Dev:** An agent with high autotrophy and low mobility — is that a plant?
 >
-> **Domain:** It has a producer's investment profile — its specification traits are concentrated in autotrophy, leaving little investment in heterotrophy or mobility. Whether it *is* a producer is a reading of what it lives on: if light is most of its income, it's a producer. Because it invests in autotrophy, it extracts nutrients from the substrate — the same sessile infrastructure serves both light capture and nutrient extraction. Its low mobility means it pays no movement overhead, which is why sessile autotrophy dominates: sunlight is ambient, so mobility adds cost for zero additional energy income. If it also has moderate heterotrophy, it's a mixotroph by investment — its consumption machinery mostly idles while light keeps it sated, and fires when it runs short of energy or nutrient — and what confines it is structural fragility (a broad body dies after a smaller loss of structure), not its maintenance bill — per-trait maintenance caps each trait but is breadth-neutral.
+> **Domain:** It has a producer's investment profile — its specification traits are concentrated in autotrophy, leaving little investment in heterotrophy or mobility. Whether it *is* a producer is a reading of what it lives on: if light is most of its income, it's a producer. Because it invests in autotrophy, it extracts nutrients from the substrate — the same sessile infrastructure serves both light capture and nutrient extraction. Its low mobility means it pays no movement overhead, which is why sessile autotrophy dominates: sunlight is ambient, so mobility adds cost for zero additional energy income. If it also has moderate heterotrophy, it's a mixotroph by investment — its consumption machinery drains what it reaches every tick, however well light feeds it, since expression is ungated — and what confines it is structural fragility (a broad body dies after a smaller loss of structure), not its maintenance bill — per-trait maintenance caps each trait but is breadth-neutral.
 >
 > **Dev:** What happens when a herbivore eats a producer?
 >
