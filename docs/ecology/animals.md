@@ -2,6 +2,8 @@
 
 Animals are the mobile consumer compartment of ecosystems. In systems terms, they are the principal agents that move energy laterally and vertically through food webs, regulate producer biomass through consumption, and redistribute nutrients across space through movement. Every animal, from a soil nematode to an apex predator, exists as a node in a network of stocks and flows — drawing down one stock (prey, forage, carrion) and feeding another (predator biomass, fecal nutrients, carcass pools).
 
+This document was first written from recall: its sources were cited but not read. Each section closes with an *Evidence quality* note saying which claims have since been checked against a source, how deeply that source was read, where the source disagrees with the text, and which claims are still recalled, each with what would confirm it.
+
 ## Systemic role
 
 Animals occupy consumer trophic levels. Primary consumers (herbivores) draw energy from the producer stock. Secondary and tertiary consumers (predators) draw from consumer stocks. Detritivores and scavengers draw from the dead organic matter pool, operating as a parallel decomposition pathway alongside microbial decomposition.
@@ -16,6 +18,17 @@ The key stocks and flows:
 At each trophic transfer, roughly 10% of energy passes upward (Lindeman 1942). This thermodynamic constraint means animal biomass pyramids are steep: producer biomass >> herbivore biomass >> predator biomass. The constraint also limits food chain length to typically 4-5 levels (Pimm 1982).
 
 Animals also function as nutrient vectors. Herbivores accelerate nutrient cycling by converting recalcitrant plant tissue into labile fecal matter — the "grazing acceleration hypothesis" (McNaughton et al. 1997). Predators concentrate nutrients through carcass deposition. Migratory animals move nutrients across ecosystem boundaries entirely: Pacific salmon transport marine-derived nitrogen into freshwater and terrestrial systems (Helfield & Naiman 2001), and seabirds deposit guano that fertilizes island ecosystems at rates orders of magnitude above background deposition (Anderson & Polis 1999).
+
+*Evidence quality.*
+- **Checked against search extracts:** Lindeman (1942) and Pimm (1982). Neither text was read.
+- **The sources disagree with the text on two figures:**
+  - Lindeman did not state a 10 % rule. Summaries of the paper say he reported efficiencies from 0.1 % to 37.5 %, and "about 10 %" is a later summary of that range.
+  - Pimm's 1982 analysis, as quoted by DeAngelis (1992), found three or four levels in 47 of 56 food webs. The text's "typically 4-5" is one level too long.
+- **Recalled, not read:**
+  - McNaughton et al. (1997) as the source of a "grazing acceleration hypothesis". Its abstract would confirm whether the paper makes the claim and uses the name.
+  - Helfield & Naiman (2001) on salmon-derived nitrogen. Its abstract would confirm it.
+  - Anderson & Polis (1999), "orders of magnitude above background". The paper's flux figures set against background deposition would confirm it.
+- **Not a sourced claim:** the stock-and-flow list is this document's framing.
 
 ## Energy and nutrient flows
 
@@ -38,6 +51,17 @@ Not all consumed energy enters animal biomass. Assimilation efficiency varies by
 ### Stoichiometric constraints
 
 Animals maintain relatively homeostatic body nutrient ratios (particularly C:N:P) compared to their food sources. Herbivores consuming nitrogen-poor plant tissue must process large volumes to meet nitrogen demands, excreting excess carbon. This stoichiometric mismatch (Sterner & Elser 2002) shapes consumption rates, growth efficiency, and the nutrient composition of waste products — effectively filtering nutrient ratios as energy moves up trophic levels.
+
+*Evidence quality.*
+- **Read in full:** Polis (1981), for the hunger claim in *Consumption as a regulated flow*. It says hunger "triggers searching behavior, lowers attack threshold", and that consumers "expand their diet beyond the normal limits of acceptable prey during periods of hunger".
+- **Read as an extract:** Sitters et al. (2017, *Frontiers in Earth Science*, open access), for *Stoichiometric constraints*. A fetch tool quoted it as stating Sterner & Elser's first rule: "To maintain homeostasis, a consumer will retain the element that most limits its growth" "while releasing relatively large amounts of the element in excess relative to its needs". The review cites Sterner & Elser (2002) for the rule. It says laboratory work with *Daphnia* supports the rule, field evidence is mixed, and most of the work is from freshwater plankton. Sterner & Elser's book was not read.
+- **From a search extract:** van der Meer (2006), a review of DEB theory, for Kooijman (2010). In DEB, ingestion is proportional to surface area times the scaled functional response `f = X/(X+K)`, a Holling type II curve in food density. The extract does not say that ingestion is independent of the reserve held. Kooijman's own text was not read for this claim.
+- **Recalled, not read:**
+  - That satiation is a ceiling set well above upkeep, set by handling time and gut volume, with the surplus going to growth and reproduction. No source is cited. A study of maximum intake as a multiple of maintenance would confirm it, as would Kooijman (2010) on ingestion against reserve density.
+  - Holling's three functional-response types. The cited 1959 paper is the sawfly field study. Holling's papers of 1959 would confirm it, including the companion paper "Some characteristics of simple types of predation and parasitism".
+  - Murdoch & Oaten (1975), that a type II response destabilises and a type III response stabilises. The review's stability analysis would confirm it.
+  - The assimilation efficiencies: about 80 % for carnivores and 20-50 % for herbivores (Begon et al. 2006). Begon et al.'s table would confirm them. For detritivores, see [trophic roles](trophic-roles.md).
+  - That herbivores excrete excess carbon. Sterner & Elser (2002) on herbivore carbon release would confirm it.
 
 ## Feedback loops
 
@@ -71,6 +95,18 @@ This distinction matters for modeling. Partial consumption creates a fast negati
 
 Predators affect prey not only through direct killing but through behavioral modification. Prey reduce foraging time and shift habitat use in response to predation risk — the "landscape of fear" (Laundre et al. 2001). This non-consumptive effect can be as large as or larger than direct mortality in its impact on prey fitness and ecosystem structure (Preisser et al. 2005). In systems terms, predation risk acts as an information flow that modulates the consumption flow between herbivores and producers.
 
+*Evidence quality.*
+- **From index records and search extracts:**
+  - Elton & Nicholson (1942), for *Predator-prey oscillations*. The paper draws on Hudson's Bay Company fur returns and reports nineteen cycles between 1752 and 1935, averaging 9.63 years. Later statisticians questioned how the fur records had been read (Cole 1951, 1954). The paper itself was not read.
+  - de Roos et al. (1991). Later reviews cite it for the stabilising effect of limited mobility. They define "statistical stabilization" as the near-constant total that comes from summing out-of-phase local populations. The 1991 paper was not retrieved, so it is not confirmed that it coined the term.
+- **Recalled, not read:**
+  - Lotka (1925) and Volterra (1926) as the first formalisation. The two texts would confirm it.
+  - That homogeneous Lotka-Volterra systems give neutrally stable orbits or extinction. A textbook treatment of the model would confirm it.
+  - The cascade claims: Yellowstone wolves (Ripple & Beschta 2004), mesopredator release (Soulé et al. 1988), and cascades being stronger in water than on land (Shurin et al. 2002). Each paper's abstract would confirm its own claim. For Shurin et al., the abstract would also show whether it attributes the difference to producer traits.
+  - Compensatory regrowth and grazing optimisation (McNaughton 1979). The paper's abstract would confirm it.
+  - The landscape of fear (Laundré et al. 2001), and non-consumptive effects as large as or larger than direct killing (Preisser et al. 2005). The meta-analysis's pooled effect sizes would confirm the second.
+- **Not a sourced claim:** the agent-level reading of the cycle is this document's framing.
+
 ## Key strategies
 
 ### Herbivory as a flow
@@ -101,6 +137,15 @@ Social behaviors — herding, pack hunting, mobbing, colony formation — are em
 - **Pack hunting**: Enables predation on prey larger than individual predators could take. Alters the size spectrum of available prey, connecting energy pools that would otherwise be inaccessible. Wolf packs taking elk, army ants overwhelming large arthropods.
 - **Eusociality** (ants, termites, naked mole-rats): Division of labor creates superorganism-level efficiency. Leaf-cutter ant colonies function as agricultural systems, cultivating fungal gardens — a consumer that has internalized its own producer.
 
+*Evidence quality.*
+- **From a search extract of Holt's opening pages, and later definitions:** Holt (1977). The source disagrees with the text. Holt's apparent competition is an indirect *negative* interaction between two prey that share a predator. The text attributes to it the *release* of a scarce prey when a generalist switches to another, which is prey switching, a different mechanism. The paper was not read.
+- **Recalled, not read:**
+  - That the predator's numerical and functional responses decide whether it regulates or tracks its prey (Sinclair et al. 2003). The paper's abstract would confirm whether it makes this claim. As recalled, it is about prey size and predator diversity in the Serengeti.
+  - Paine's sea star removal (1966). The 1966 paper's results section would confirm that the removal results it reports show the collapse in diversity.
+  - Scavenging moving nutrients to roosts and dens (Wilson & Wolkovich 2011), and vulture loss raising carcass persistence (Markandya et al. 2008). Each paper's abstract would confirm its claim.
+  - The selfish herd (Hamilton 1971). Its abstract would confirm it.
+  - The grazer, browser and granivore distinctions, pack hunting and eusociality. They are uncited general knowledge, which a textbook would confirm.
+
 ## The mobility advantage
 
 Mobility is the defining systemic property that distinguishes animals from producers and most decomposers. It has several interacting consequences:
@@ -114,6 +159,13 @@ Mobility is the defining systemic property that distinguishes animals from produ
 **Spatial coupling of ecosystems**: Mobile animals connect spatially separated ecosystem compartments. Diel vertical migration of zooplankton transports carbon from ocean surface waters to depth (the biological pump; Steinberg et al. 2000). Hippos transport terrestrial organic matter into rivers. Migrating wildebeest move nutrients across the Serengeti along a precipitation gradient (Holdo et al. 2009). These cross-boundary flows would not exist without animal mobility.
 
 **The cost-benefit tradeoff**: Mobility imposes a metabolic tax. Endothermic animals (birds, mammals) spend 10-30x more energy per unit body mass than ectotherms (reptiles, insects) at rest. The energy budget for movement constrains body size, reproductive output, and population density. Each organism's energy budget creates a direct coupling between movement decisions and survival.
+
+*Evidence quality.*
+- **Recalled, not read:** every claim in this section.
+  - The cost of locomotion as 10-15× basal metabolic rate (Schmidt-Nielsen 1972). The paper's figures would confirm it. As recalled, the paper gives cost of transport per distance, which may not convert to a multiple of basal rate.
+  - Endotherms spending 10-30× more energy than ectotherms at rest. It is uncited. A comparative study of resting metabolic rates at equal body mass would confirm or correct the factor.
+  - Zooplankton migration and the biological pump (Steinberg et al. 2000), and wildebeest moving nutrients (Holdo et al. 2009). Each source's abstract would confirm its claim.
+  - Hippos moving organic matter into rivers. It is uncited; a study of hippo-mediated carbon subsidy would confirm it.
 
 ## Invertebrates as system infrastructure
 
@@ -134,6 +186,13 @@ Pollinator loss does not remove energy from the system directly but collapses th
 ### Aquatic invertebrates
 
 In freshwater and marine systems, invertebrates dominate the consumer trophic levels by biomass. Zooplankton are the primary consumers of phytoplankton and the primary prey of larval and planktivorous fish. Filter-feeding bivalves (mussels, oysters) can filter entire water column volumes in days, controlling phytoplankton biomass and water clarity — an ecosystem engineering function (Newell 2004).
+
+*Evidence quality.*
+- **Recalled, not read:** every claim in this section.
+  - Earthworms turning over the top 15 cm in decades (Darwin 1881). Darwin's own rates, given as mould deposited per year, would confirm it.
+  - Termites processing up to 50 % of leaf litter (Bignell & Eggleton 2000). The chapter's table would confirm it.
+  - About 87 % of flowering plants being animal-pollinated (Ollerton et al. 2011). The paper's abstract would confirm it.
+  - The nestedness of pollination networks (Bascompte et al. 2003), and bivalves filtering the water column in days (Newell 2004). Each paper's abstract would confirm its claim.
 
 ## ABM and computational literature
 
@@ -175,6 +234,10 @@ More complex ABMs simulate entire animal communities. **Railsback & Grimm (2019,
 
 **DeAngelis & Grimm (2014)** reviewed individual-based models in ecology, noting that animal IBMs have been most successful when focused on specific mechanisms (e.g., foraging behavior driving population dynamics) rather than attempting comprehensive simulation of all ecological interactions simultaneously.
 
+*Evidence quality.*
+- **Recalled, not read:** every model and review in this section. The source, or its abstract, would confirm each one: Wilensky (1997), Grimm & Railsback (2005), MacArthur & Pianka (1966), Charnov (1976), Railsback & Harvey (2002), Reynolds (1987), Couzin et al. (2002), McLane et al. (2011), Grimm et al. (2006, 2010), Railsback & Grimm (2019) and DeAngelis & Grimm (2014).
+- **The text and its own reference list disagree on Tang & Bennett (2010).** The text describes a review of ABMs in landscape ecology, while the cited title is a review of agent-based models of animal movement. The paper's abstract would settle which it is.
+
 ## System without animals
 
 Removing animals from an ecosystem does not simply reduce biodiversity — it fundamentally alters system dynamics at every level.
@@ -200,6 +263,13 @@ Recruitment failure in animal-pollinated plant species. Over a generation timesc
 ### The compounding effect
 
 These removals interact. Losing predators AND pollinators simultaneously produces different dynamics than losing either alone. The system's response is nonlinear and path-dependent — the interactions between trophic levels, functional groups, and spatial processes generate emergent dynamics that cannot be predicted from single-factor analysis.
+
+*Evidence quality.*
+- **Recalled, not read:**
+  - The Kaibab irruption (Leopold 1943) and its reinterpretation (Binkley et al. 2006). Binkley et al.'s abstract would confirm both.
+  - Grasslands converting to shrubland or forest in grazing exclosures. It is uncited; a review of exclosure experiments would confirm it.
+  - Dung accumulating when dung beetles are lost. It is uncited; a study of dung-beetle removal in pasture would confirm it.
+- **Not a sourced claim:** the rest of the section is this document's inference from the sections above, not an observation of systems with animals removed.
 
 ---
 
