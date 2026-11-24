@@ -1,13 +1,13 @@
 # Project Vision
 
-What the game is for, so design and engineering choices can be judged against it. The canonical design is in `CONTEXT.md` and `docs/system-design/`.
+What the game is for, so design and engineering choices can be judged against it. The canonical design is in `docs/system-design/`, in the language of `CONTEXT.md`.
 
 ## The game
 
 The player navigates a complex, initially incomprehensible world of interconnected, adaptive agents. The emotional arc runs from danger and confusion, through wonder, to co-existence: exploitation and mastery lead to ruin, symbiosis leads to success. The aesthetic and emotional reference is *Scavengers Reign*.
 
 Design pillars:
-- **No explicit rules of engagement.** The player learns by interacting and watching. No tutorials, HUDs or rule explanations — agents' traits and interactions are read visually (`CONTEXT.md`, *Visual behaviour language*).
+- **No explicit rules of engagement.** The player learns by interacting and watching. No tutorials, HUDs or rule explanations — agents' traits and interactions are read visually, through a **visual behaviour language**: agent traits map to visual properties, and interactions produce visible effects. The player learns to read the ecology by watching how things look and behave. No text, no numbers, no labels.
 - **An open-ended sandbox.** No win state, no objectives.
 - **Emergence over script.** The world is an agent-based model of heterogeneous, adaptive agents with Earth-analogous ecology; favour emergent behaviour over scripted content.
 - **Technology-agnostic design.** The design is the identity; the implementation is secondary to it.
