@@ -54,14 +54,30 @@ Animals maintain relatively homeostatic body nutrient ratios (particularly C:N:P
 
 *Evidence quality.*
 - **Read in full:** Polis (1981), for the hunger claim in *Consumption as a regulated flow*. It says hunger "triggers searching behavior, lowers attack threshold", and that consumers "expand their diet beyond the normal limits of acceptable prey during periods of hunger".
-- **Read as an extract:** Sitters et al. (2017, *Frontiers in Earth Science*, open access), for *Stoichiometric constraints*. A fetch tool quoted it as stating Sterner & Elser's first rule: "To maintain homeostasis, a consumer will retain the element that most limits its growth" "while releasing relatively large amounts of the element in excess relative to its needs". The review cites Sterner & Elser (2002) for the rule. It says laboratory work with *Daphnia* supports the rule, field evidence is mixed, and most of the work is from freshwater plankton. Sterner & Elser's book was not read.
-- **From a search extract:** van der Meer (2006), a review of DEB theory, for Kooijman (2010). In DEB, ingestion is proportional to surface area times the scaled functional response `f = X/(X+K)`, a Holling type II curve in food density. The extract does not say that ingestion is independent of the reserve held. Kooijman's own text was not read for this claim.
+- **Read as an extract:** Sitters et al. (2017, *Frontiers in Earth Science*, open access), for *Stoichiometric constraints*. A fetch tool quoted it as stating Sterner & Elser's first rule: "To maintain homeostasis, a consumer will retain the element that most limits its growth" "while releasing relatively large amounts of the element in excess relative to its needs". The review cites Sterner & Elser (2002) for the rule. It says laboratory work with *Daphnia* supports the rule, field evidence is mixed, and most of the work is from freshwater plankton.
+- **Read in full, its sections on homeostasis and mass balance:** Hessen, Elser, Sterner & Urabe (2013), a review by both of the book's authors, for *Stoichiometric constraints*.
+  - Heterotrophs are generally more homeostatic than autotrophs, which a meta-analysis supports, but "Numerous studies now show nonstrict homeostasis in diverse heterotrophic consumers". The text's "relatively homeostatic" matches.
+  - Retention of the limiting element: *Daphnia*'s phosphorus release was "negatively correlated with algal P content, and tellingly approached zero release at low, but still ecologically realistic, P : C ratio" (Olsen et al. 1986, as reviewed).
+  - Disposal of excess carbon: "In addition to increased respiration, consumers may temporarily store C in energy and C-rich storage compound (lipids), dispose of excess C as dissolved organic forms", or put it into carbon-rich eggs. So excess carbon is released, as the text says, but not all of it: some is stored.
+  - Consumers can raise their feeding rate on food poor in the limiting element (compensatory feeding), but not at high food abundance, "because there is an upper limit on feeding rate by a finite handling time" (Suzuki-Ohno et al. 2012, as reviewed).
+  - The evidence is again mostly *Daphnia* and freshwater plankton.
+- **Unconfirmed: Sterner & Elser (2002) itself.** The book is not open. De Gruyter's page for it answered the fetch tool with HTTP 405 and returned an empty body otherwise. A publisher's reading sample of chapter 1, listed on bilder.buecher.de, could not be fetched: the host did not resolve. The book's rules are known here only through the 2013 review by its authors and through Sitters et al.
+- **Read in full, the sections on feeding, assimilation and reserve (§§2.1–2.3) and feeding extensions (§7.2):** Kooijman's *Summary of concepts* of DEB theory (2010, the author's own summary of the third edition's concepts, without equations, evidence or references). The book itself was not read.
+  - In the standard model, "The feeding rate is proportional to the surface area of the individual and the food–handling time is independent of food density" (Table 2.1). Searching and handling give the Holling type II scaled functional response in food density. Reserve is mobilised at a rate that depends "on the amounts of reserve and structure only, not on food availability". A fixed fraction of mobilised reserve goes to somatic maintenance plus growth, the rest to maturity maintenance plus maturation or reproduction (the κ-rule). So in the standard model ingestion does not read the reserve, and one reserve funds maintenance, growth and reproduction together, as the text says.
+  - **The source qualifies the text.** "If organisms meet substrate after starvation they typically show hyperphagia: they eat more than expected on the basis of the Holling type II functional response." Kooijman models it by making "specific uptake dependent on reserve density, such that this extra uptake drops out when reserve is at pseudo-steady state". So ingestion that ignores the reserve is the standard model's simplification, not an observation, and after starvation intake does rise with hunger. The text's "Ingestion follows the scaled functional response to food density, not the reserve held" states it as a fact about the domain, and its claim that hunger acts on what is eaten rather than on how much needs the same qualification. This is queued for correction (#875, the correction slice).
+  - Kooijman also names satiation as an extension, modelled through the binding of arriving prey during handling, not a feature of the standard model.
+  - Van der Meer (2006), a review of DEB theory, was earlier seen only as a search extract and agrees on the functional response.
+- **Abstract only:** Peterson, Nagy & Diamond (1990, *PNAS*), through its Europe PMC record, for intake capacity as a multiple of upkeep. Across 37 vertebrate species, sustained metabolic rate, "fueled by food intake rather than by transient depletion of energy reserves", is less than 7 times resting metabolic rate, and "most values fall between 1.5 and 5". This supports a ceiling on sustained intake set well above resting upkeep. Three limits on how far it reaches:
+  - The ratio is to resting metabolism, not to all upkeep, so it says less about intake against total maintenance.
+  - Most of the species are endotherms (32 of 37, humans included).
+  - The authors leave open whether the ceiling lies in "the digestive tract's ability to process food or in each tissue's metabolic capacity", so that gut volume sets it is not confirmed.
+
+  The full text was not read: Europe PMC holds no text of it. Hammond & Diamond (1997, *Nature*), which extends it, was not read.
 - **Recalled, not read:**
-  - That satiation is a ceiling set well above upkeep, set by handling time and gut volume, with the surplus going to growth and reproduction. No source is cited. A study of maximum intake as a multiple of maintenance would confirm it, as would Kooijman (2010) on ingestion against reserve density.
+  - That handling time and gut volume set the satiation ceiling. Handling time as a limit on feeding rate is confirmed above (Kooijman; Hessen et al. 2013). Gut volume is not, and the authors of the sustained-scope data leave it open. A study of digestive limits on intake would confirm it.
   - Holling's three functional-response types. The cited 1959 paper is the sawfly field study. Holling's papers of 1959 would confirm it, including the companion paper "Some characteristics of simple types of predation and parasitism".
   - Murdoch & Oaten (1975), that a type II response destabilises and a type III response stabilises. The review's stability analysis would confirm it.
   - The assimilation efficiencies: about 80 % for carnivores and 20-50 % for herbivores (Begon et al. 2006). Begon et al.'s table would confirm them. For detritivores, see [trophic roles](trophic-roles.md).
-  - That herbivores excrete excess carbon. Sterner & Elser (2002) on herbivore carbon release would confirm it.
 
 ## Feedback loops
 
@@ -307,11 +323,17 @@ Hamilton, W.D. (1971). Geometry for the selfish herd. *Journal of Theoretical Bi
 
 Helfield, J.M. & Naiman, R.J. (2001). Effects of salmon-derived nitrogen on riparian forest growth and implications for stream productivity. *Ecology*, 82(9), 2403-2409.
 
+Hessen, D.O., Elser, J.J., Sterner, R.W. & Urabe, J. (2013). Ecological stoichiometry: an elementary approach using basic principles. *Limnology and Oceanography*, 58(6), 2219-2236. doi:10.4319/lo.2013.58.6.2219
+
 Holdo, R.M., Holt, R.D., Sinclair, A.R.E., Godley, B.J. & Thirgood, S. (2009). Migratory wildebeest and nutrient cycling in the Serengeti. In *Serengeti III* (pp. 207-234). University of Chicago Press.
 
 Holling, C.S. (1959). The components of predation as revealed by a study of small-mammal predation of the European pine sawfly. *The Canadian Entomologist*, 91(5), 293-320.
 
 Holt, R.D. (1977). Predation, apparent competition, and the structure of prey communities. *Theoretical Population Biology*, 12(2), 197-229.
+
+Kooijman, S.A.L.M. (2010). *Dynamic Energy Budget Theory for Metabolic Organisation* (3rd ed.). Cambridge University Press.
+
+Kooijman, S.A.L.M. (2010). *Summary of concepts of Dynamic Energy Budget theory for metabolic organisation* (companion to the 3rd edition). https://www.bio.vu.nl/thb/research/bib/Kooy2010_i.pdf
 
 Laundre, J.W., Hernandez, L. & Altendorf, K.B. (2001). Wolves, elk, and bison: reestablishing the "landscape of fear" in Yellowstone National Park. *Canadian Journal of Zoology*, 79(8), 1401-1409.
 
@@ -338,6 +360,8 @@ Newell, R.I.E. (2004). Ecosystem influences of natural and cultivated population
 Ollerton, J., Winfree, R. & Tarrant, S. (2011). How many flowering plants are pollinated by animals? *Oikos*, 120(3), 321-326.
 
 Paine, R.T. (1966). Food web complexity and species diversity. *The American Naturalist*, 100(910), 65-75.
+
+Peterson, C.C., Nagy, K.A. & Diamond, J. (1990). Sustained metabolic scope. *Proceedings of the National Academy of Sciences*, 87(6), 2324-2328. doi:10.1073/pnas.87.6.2324
 
 Pimm, S.L. (1982). *Food Webs*. Chapman and Hall.
 
