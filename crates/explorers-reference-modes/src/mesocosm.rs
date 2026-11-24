@@ -1,7 +1,9 @@
 //! Reference-mode mesocosm (#751; reference-modes.md, *Colonisation
 //! overshoot*, *Mesocosm*).
 
-use std::collections::HashMap;
+// Lookup maps and sets use the fixed Fx hasher (clippy.toml bans std's
+// `HashMap`/`HashSet`); anything iterated into a readout is a `BTreeMap`.
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use explorers_genesis_eval::guild::{
     Birth, GUILD_MIN_SIZE, RoleSnapshot, role_guilds_from_samples,
@@ -1099,7 +1101,7 @@ impl LitterInflow {
     /// read from `at_death` by the carcass's id (a runtime carcass keeps its
     /// agent's id); `producer` says whether the dead was a producer. Anything
     /// else is ignored.
-    pub fn book(&mut self, event: &Event, producer: bool, at_death: &HashMap<u64, f32>) {
+    pub fn book(&mut self, event: &Event, producer: bool, at_death: &FxHashMap<u64, f32>) {
         if event.kind != EventKind::Died {
             return;
         }
@@ -2280,14 +2282,14 @@ struct Observer {
     cursor: usize,
     /// The tick each living agent came onto the roster: the run's start for
     /// those already there, the world's tick after its birth step otherwise.
-    birth_tick: HashMap<u64, u64>,
+    birth_tick: FxHashMap<u64, u64>,
     births: usize,
     deaths: usize,
     lifespans: Vec<u64>,
     senescent_lifespans: Vec<u64>,
     /// Each agent's nominal traits, kept while it lives so a drain in the
     /// step it dies is still booked to its side.
-    traits: HashMap<u64, TraitVector>,
+    traits: FxHashMap<u64, TraitVector>,
     /// Carcass-drain energy since the observer began, by drainer autotrophy.
     carcass_drain: DrainSplit,
     /// The guild members' drain since the observer began.
@@ -2295,20 +2297,20 @@ struct Observer {
     /// Every birth since the log was last taken (`run_arm` takes it).
     births_log: Vec<Birth>,
     /// The living founders' traits, by id.
-    living_founders: HashMap<u64, TraitVector>,
+    living_founders: std::collections::BTreeMap<u64, TraitVector>,
     /// The founders and every agent descended from one.
-    line: std::collections::HashSet<u64>,
+    line: FxHashSet<u64>,
     /// Traits of the agents and carcasses standing before the step about to
     /// be read, kept while any founder lives: the targets a founder's drain
     /// can name, whose traits set the efficiency it gets.
-    agent_traits: HashMap<u64, TraitVector>,
-    carcass_traits: HashMap<u64, TraitVector>,
+    agent_traits: FxHashMap<u64, TraitVector>,
+    carcass_traits: FxHashMap<u64, TraitVector>,
     founders: FounderReadout,
     /// Each founder through the starvation cascade (#821), by id.
     starving: std::collections::BTreeMap<u64, FounderStarvation>,
     /// Each living member of the founder line as the next step begins: its
     /// stores and body, and the upkeep that step's metabolism reads.
-    stores: HashMap<u64, Stores>,
+    stores: std::collections::BTreeMap<u64, Stores>,
     /// Whether the recruitment readout (#833) is recorded: always, with
     /// founders, but for the test that it leaves the world alone.
     record_recruitment: bool,
@@ -2317,7 +2319,7 @@ struct Observer {
     /// The line's births (#833), in order.
     line_births: Vec<LineBirth>,
     /// Births to each living line member so far (#833).
-    line_offspring: HashMap<u64, u32>,
+    line_offspring: FxHashMap<u64, u32>,
     /// The line's deaths (#833), in order.
     line_deaths: Vec<LineDeath>,
     /// Carcass drain by lineage since the last sample (#833).
@@ -2349,17 +2351,17 @@ impl Observer {
             carcass_drain: DrainSplit::default(),
             guild_drain: GuildDrain::default(),
             births_log: Vec::new(),
-            living_founders: HashMap::new(),
-            line: std::collections::HashSet::new(),
-            agent_traits: HashMap::new(),
-            carcass_traits: HashMap::new(),
+            living_founders: std::collections::BTreeMap::new(),
+            line: FxHashSet::default(),
+            agent_traits: FxHashMap::default(),
+            carcass_traits: FxHashMap::default(),
             founders: FounderReadout::default(),
             starving: std::collections::BTreeMap::new(),
-            stores: HashMap::new(),
+            stores: std::collections::BTreeMap::new(),
             record_recruitment: true,
             lives: std::collections::BTreeMap::new(),
             line_births: Vec::new(),
-            line_offspring: HashMap::new(),
+            line_offspring: FxHashMap::default(),
             line_deaths: Vec::new(),
             lineage_drain: LineageDrain::default(),
             litter_inflow: LitterInflow::default(),
@@ -2493,22 +2495,22 @@ impl Observer {
         let after = world.tick();
         // The stepper marks a senescent death with `Senesced` just before its
         // `Died`, in the same step.
-        let mut senesced = std::collections::HashSet::new();
+        let mut senesced = FxHashSet::default();
         let founders_began = !self.living_founders.is_empty();
         let (mut gained, mut drained) = (0.0_f64, 0.0_f64);
         // Each founder's own gain and drain in this step (#833).
-        let mut income: HashMap<u64, (f64, f64)> = HashMap::new();
+        let mut income: FxHashMap<u64, (f64, f64)> = FxHashMap::default();
         self.read_running_out(after);
         // Agents born in this step are on the roster now; those that died in
         // it are still in the map from the step before.
         (self.traits).extend(world.agents().iter().map(|a| (a.id, a.traits)));
         // The carcasses this step's deaths left, by id, for the litter inflow.
-        let died: std::collections::HashSet<u64> = (world.event_log().since(self.cursor).iter())
+        let died: FxHashSet<u64> = (world.event_log().since(self.cursor).iter())
             .filter(|e| e.kind == EventKind::Died)
             .map(|e| e.source)
             .collect();
-        let at_death: HashMap<u64, f32> = if died.is_empty() {
-            HashMap::new()
+        let at_death: FxHashMap<u64, f32> = if died.is_empty() {
+            FxHashMap::default()
         } else {
             (world.carcasses().iter())
                 .filter(|c| died.contains(&c.id))
@@ -2640,10 +2642,10 @@ impl Observer {
     fn record_lives(
         &mut self,
         world: &World,
-        died: &std::collections::HashSet<u64>,
-        income: &HashMap<u64, (f64, f64)>,
+        died: &FxHashSet<u64>,
+        income: &FxHashMap<u64, (f64, f64)>,
     ) {
-        let standing: std::collections::HashSet<u64> = (world.agents().iter())
+        let standing: FxHashSet<u64> = (world.agents().iter())
             .filter(|a| self.lives.contains_key(&a.id))
             .map(|a| a.id)
             .collect();
@@ -2777,7 +2779,7 @@ impl Observer {
 
     /// The living guild members, read into the decomposer role for the
     /// committed guild predicate.
-    fn guild_members(&self, world: &World) -> HashMap<u64, TrophicRole> {
+    fn guild_members(&self, world: &World) -> std::collections::BTreeMap<u64, TrophicRole> {
         (world.agents().iter())
             .filter(|a| is_guild_member(self.income.role(a.id), &a.traits))
             .map(|a| (a.id, TrophicRole::Decomposer))
@@ -3678,7 +3680,7 @@ mod tests {
         let report = run_mode1(&mut build(), ticks, 10);
 
         let mut world = build();
-        let founders: std::collections::HashSet<u64> = world
+        let founders: FxHashSet<u64> = world
             .agents()
             .iter()
             .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
@@ -3733,7 +3735,7 @@ mod tests {
         let report = run_mode1(&mut build(), ticks, 10);
 
         let mut world = build();
-        let founders: HashMap<u64, TraitVector> = world
+        let founders: FxHashMap<u64, TraitVector> = world
             .agents()
             .iter()
             .filter(|a| a.traits.photosynthetic_absorption == 0.0)
@@ -3741,9 +3743,9 @@ mod tests {
             .collect();
         let (mut gained, mut drained) = (vec![], vec![]);
         for _ in 0..ticks {
-            let agents: HashMap<u64, TraitVector> =
+            let agents: FxHashMap<u64, TraitVector> =
                 world.agents().iter().map(|a| (a.id, a.traits)).collect();
-            let carcasses: HashMap<u64, TraitVector> =
+            let carcasses: FxHashMap<u64, TraitVector> =
                 world.carcasses().iter().map(|c| (c.id, c.traits)).collect();
             let cursor = world.event_log().len();
             world.step();
@@ -4331,7 +4333,7 @@ mod tests {
         let report = run_mode1(&mut build(), ticks, 10);
 
         let mut world = build();
-        let mut traits: HashMap<u64, TraitVector> = HashMap::new();
+        let mut traits: FxHashMap<u64, TraitVector> = FxHashMap::default();
         let mut expected = DrainSplit::default();
         for _ in 0..ticks {
             traits.extend(world.agents().iter().map(|a| (a.id, a.traits)));
@@ -5175,7 +5177,7 @@ mod tests {
         }
         // Agents 1 and 3 were producers; their carcasses held 4.0 and 0.5 at
         // death, agent 2's held 1.5.
-        let at_death = HashMap::from([(1, 4.0_f32), (2, 1.5), (3, 0.5)]);
+        let at_death = FxHashMap::from_iter([(1, 4.0_f32), (2, 1.5), (3, 0.5)]);
         let producers = [1, 3];
         let mut inflow = LitterInflow::default();
         for e in log.since(0) {
@@ -5205,8 +5207,7 @@ mod tests {
             3,
             Community::ProducersAndDecomposers,
         );
-        let seeded: std::collections::HashSet<u64> =
-            world.carcasses().iter().map(|c| c.id).collect();
+        let seeded: FxHashSet<u64> = world.carcasses().iter().map(|c| c.id).collect();
         let report = run_mode1(&mut world, 120, 10);
         let litter = &report.litter;
         assert_eq!(litter.samples.len(), report.samples.len());
@@ -5427,13 +5428,14 @@ mod tests {
             })
             .collect();
             for _ in 0..ticks {
-                let before: HashMap<u64, (f32, f32, f32, f32)> = (world.agents().iter())
-                    .filter(|a| expected.contains_key(&a.id))
-                    .map(|a| {
-                        let upkeep = explorers_sim::phase::metabolic_cost(a, world.params());
-                        (a.id, (a.reserve, a.repro_reserve, a.structure, upkeep))
-                    })
-                    .collect();
+                let before: std::collections::BTreeMap<u64, (f32, f32, f32, f32)> =
+                    (world.agents().iter())
+                        .filter(|a| expected.contains_key(&a.id))
+                        .map(|a| {
+                            let upkeep = explorers_sim::phase::metabolic_cost(a, world.params());
+                            (a.id, (a.reserve, a.repro_reserve, a.structure, upkeep))
+                        })
+                        .collect();
                 let cursor = world.event_log().len();
                 world.step();
                 let after = world.tick();
@@ -5544,7 +5546,7 @@ mod tests {
     /// through begins, the upkeep that step charges, its own gain and drain
     /// in it, and the tick and cause of its death.
     fn replay_founder_lives(mut world: World, ticks: u64) -> Vec<FounderLife> {
-        let founders: HashMap<u64, TraitVector> = (world.agents().iter())
+        let founders: FxHashMap<u64, TraitVector> = (world.agents().iter())
             .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
             .map(|a| (a.id, a.traits))
             .collect();
@@ -5561,19 +5563,20 @@ mod tests {
             })
             .collect();
         for _ in 0..ticks {
-            let agents: HashMap<u64, TraitVector> =
+            let agents: FxHashMap<u64, TraitVector> =
                 world.agents().iter().map(|a| (a.id, a.traits)).collect();
-            let carcasses: HashMap<u64, TraitVector> =
+            let carcasses: FxHashMap<u64, TraitVector> =
                 world.carcasses().iter().map(|c| (c.id, c.traits)).collect();
-            let before: HashMap<u64, explorers_sim::Agent> = (world.agents().iter())
-                .filter(|a| founders.contains_key(&a.id))
-                .map(|a| (a.id, a.clone()))
-                .collect();
+            let before: std::collections::BTreeMap<u64, explorers_sim::Agent> =
+                (world.agents().iter())
+                    .filter(|a| founders.contains_key(&a.id))
+                    .map(|a| (a.id, a.clone()))
+                    .collect();
             let cursor = world.event_log().len();
             world.step();
             let after = world.tick();
-            let mut income: HashMap<u64, (f64, f64)> = HashMap::new();
-            let mut senesced = std::collections::HashSet::new();
+            let mut income: FxHashMap<u64, (f64, f64)> = FxHashMap::default();
+            let mut senesced = FxHashSet::default();
             for e in world.event_log().since(cursor) {
                 if e.kind == EventKind::Senesced {
                     senesced.insert(e.source);
@@ -5704,17 +5707,17 @@ mod tests {
     /// event log of `world` stepped `ticks` times. The line is the founders
     /// and every agent born to a living member; traits are nominal.
     fn replay_line(mut world: World, ticks: u64) -> (Vec<LineBirth>, Vec<LineDeath>) {
-        let mut line: std::collections::HashSet<u64> = (world.agents().iter())
+        let mut line: FxHashSet<u64> = (world.agents().iter())
             .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
             .map(|a| a.id)
             .collect();
-        let mut born_at: HashMap<u64, u64> = line.iter().map(|&id| (id, 0)).collect();
-        let mut offspring: HashMap<u64, u32> = HashMap::new();
-        let mut traits: HashMap<u64, TraitVector> = HashMap::new();
+        let mut born_at: FxHashMap<u64, u64> = line.iter().map(|&id| (id, 0)).collect();
+        let mut offspring: FxHashMap<u64, u32> = FxHashMap::default();
+        let mut traits: FxHashMap<u64, TraitVector> = FxHashMap::default();
         let (mut births, mut deaths) = (vec![], vec![]);
         for _ in 0..ticks {
             traits.extend(world.agents().iter().map(|a| (a.id, a.traits)));
-            let entering: HashMap<u64, (f32, f32)> = (world.agents().iter())
+            let entering: FxHashMap<u64, (f32, f32)> = (world.agents().iter())
                 .filter(|a| line.contains(&a.id))
                 .map(|a| {
                     let upkeep = explorers_sim::phase::metabolic_cost(a, world.params());
@@ -5725,7 +5728,7 @@ mod tests {
             world.step();
             let after = world.tick();
             traits.extend(world.agents().iter().map(|a| (a.id, a.traits)));
-            let mut senesced = std::collections::HashSet::new();
+            let mut senesced = FxHashSet::default();
             for e in world.event_log().since(cursor) {
                 match e.kind {
                     EventKind::Senesced => {
@@ -5871,7 +5874,7 @@ mod tests {
         assert!(!births.is_empty(), "seed 4's founders recruit");
 
         let mut world = build();
-        let founders: std::collections::HashSet<u64> = (world.agents().iter())
+        let founders: FxHashSet<u64> = (world.agents().iter())
             .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
             .map(|a| a.id)
             .collect();
@@ -5978,8 +5981,7 @@ mod tests {
         let readout = report.recruitment.expect("founders are followed");
         assert_eq!(readout.deaths, deaths);
         assert!(deaths.iter().any(|d| d.offspring > 0), "a parent dies");
-        let founder_ids: std::collections::HashSet<u64> =
-            readout.founders.iter().map(|f| f.id).collect();
+        let founder_ids: FxHashSet<u64> = readout.founders.iter().map(|f| f.id).collect();
         assert!(
             deaths.iter().any(|d| !founder_ids.contains(&d.id)),
             "a descendant dies"

@@ -333,7 +333,7 @@ pub fn grow_soa(s: &mut AgentSoA, params: &WorldParameters) -> (Vec<Event>, f32)
 pub fn apply_wear_soa(
     s: &mut AgentSoA,
     params: &WorldParameters,
-    usage: &std::collections::HashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]>,
+    usage: &rustc_hash::FxHashMap<u64, [f32; FUNCTIONAL_TRAIT_COUNT]>,
 ) -> Vec<Event> {
     let mut events = Vec::new();
     let baseline_rate = params.wear_rate;

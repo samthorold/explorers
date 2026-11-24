@@ -7,6 +7,10 @@ resolver = "3"
 rand = "0.9"
 rand_chacha = "0.9"
 rand_distr = "0.5"
+# A fixed hasher: a hash container keyed with it visits its entries in the
+# same order on every run, unlike std's per-process seeded `RandomState`
+# (clippy.toml bans std's `HashMap`/`HashSet`).
+rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 explorers-sim = { path = "crates/explorers-sim" }

@@ -80,7 +80,7 @@ proptest! {
         let mut world = World::new(case.params.clone(), case.dist.clone(), case.seed);
         let b = case.params.base_metabolic_rate;
         for tick in 0..case.ticks {
-            let before_ids: std::collections::HashSet<u64> =
+            let before_ids: std::collections::BTreeSet<u64> =
                 world.agents().iter().map(|a| a.id).collect();
             let e_before = total_energy(&world);
             let solar_before = world.total_solar_input();

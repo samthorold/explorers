@@ -981,7 +981,7 @@ pub fn distinct_cluster_count(
     labels
         .iter()
         .filter_map(|l| *l)
-        .collect::<std::collections::HashSet<_>>()
+        .collect::<std::collections::BTreeSet<_>>()
         .len()
 }
 
@@ -1967,7 +1967,7 @@ mod tests {
             world.agents().len() >= ROSTER_FLOOR,
             "the fixture must reach the horizon with a roster the gates read"
         );
-        let roles: std::collections::HashMap<u64, explorers_sim::topology::TrophicRole> =
+        let roles: std::collections::BTreeMap<u64, explorers_sim::topology::TrophicRole> =
             (900_001..900_001 + count).map(|id| (id, role)).collect();
         let role_snapshots: Vec<guild::RoleSnapshot> =
             (6..=max_ticks).map(|t| (t, roles.clone())).collect();
@@ -2216,7 +2216,7 @@ mod tests {
             .into_iter()
             .filter_map(guild::Birth::of)
             .collect();
-        let roles: std::collections::HashMap<u64, explorers_sim::topology::TrophicRole> = [parent]
+        let roles: std::collections::BTreeMap<u64, explorers_sim::topology::TrophicRole> = [parent]
             .into_iter()
             .chain(900_001..900_006)
             .map(|id| (id, explorers_sim::topology::TrophicRole::Consumer))
@@ -2970,7 +2970,7 @@ mod tests {
             traits.push(make_trait_vector([5.0 + i as f32 * 0.01, 0.0, 0.0, 0.0]));
         }
         let labels = dbscan(&traits, 0.5, 3);
-        let cluster_ids: std::collections::HashSet<_> = labels.iter().filter_map(|l| *l).collect();
+        let cluster_ids: std::collections::BTreeSet<_> = labels.iter().filter_map(|l| *l).collect();
         assert_eq!(
             cluster_ids.len(),
             2,
@@ -2987,7 +2987,7 @@ mod tests {
         let cluster_count = labels
             .iter()
             .filter_map(|l| *l)
-            .collect::<std::collections::HashSet<_>>()
+            .collect::<std::collections::BTreeSet<_>>()
             .len();
         assert!(
             cluster_count <= 1,

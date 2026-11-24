@@ -1,7 +1,9 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+
+use rustc_hash::FxHashMap;
 
 /// An endpoint in an energy flow: where energy comes from or goes to.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EnergyEndpoint {
     /// Solar flux — the sole source of energy entering the system.
     SolarTap,
@@ -66,8 +68,8 @@ impl EnergyLedger {
     /// since each of those calls scans every flow.
     pub fn endpoint_totals(&self) -> EndpointTotals {
         let mut totals = EndpointTotals {
-            received: HashMap::new(),
-            sent: HashMap::new(),
+            received: FxHashMap::default(),
+            sent: FxHashMap::default(),
         };
         for (source, destination, amount) in &self.flows {
             *totals.sent.entry(source.clone()).or_insert_with(empty_sum) += amount;
@@ -106,8 +108,9 @@ impl EnergyLedger {
     ///
     /// Panics if the ledger is imbalanced.
     pub fn assert_balanced(&self) {
-        // Compute net balance per endpoint
-        let mut balances: HashMap<EnergyEndpoint, f32> = HashMap::new();
+        // Compute net balance per endpoint. Ordered, so the `retained` sum
+        // below adds the same balances in the same order on every run.
+        let mut balances: BTreeMap<EnergyEndpoint, f32> = BTreeMap::new();
         for (source, destination, amount) in &self.flows {
             *balances.entry(source.clone()).or_default() -= amount;
             *balances.entry(destination.clone()).or_default() += amount;
@@ -216,8 +219,9 @@ fn empty_sum() -> f32 {
 /// Per-endpoint inflow and outflow totals of a ledger's flows, as
 /// [`EnergyLedger::endpoint_totals`] takes them.
 pub struct EndpointTotals {
-    received: HashMap<EnergyEndpoint, f32>,
-    sent: HashMap<EnergyEndpoint, f32>,
+    // Lookup only: never iterated.
+    received: FxHashMap<EnergyEndpoint, f32>,
+    sent: FxHashMap<EnergyEndpoint, f32>,
 }
 
 impl EndpointTotals {

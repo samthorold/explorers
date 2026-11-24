@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 explorers-sim.workspace = true
+rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

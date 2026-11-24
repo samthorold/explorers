@@ -268,20 +268,20 @@ fn example9_demographics_are_invariant_under_agent_order_shuffle() {
 #[test]
 fn example9_wires_producer_to_carcass_to_decomposer_exactly() {
     use explorers_sim::event::EventKind;
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
 
     let recipe = load_pathway();
     let mut world = World::from_recipe(&recipe, 1);
-    let deposit: HashSet<u64> = world.carcasses().iter().map(|c| c.id).collect();
+    let deposit: BTreeSet<u64> = world.carcasses().iter().map(|c| c.id).collect();
     assert_eq!(deposit.len(), 8, "example9 seeds an eight-carcass deposit");
-    let mut decomposers: HashSet<u64> = world
+    let mut decomposers: BTreeSet<u64> = world
         .agents()
         .iter()
         .filter(|a| a.traits.heterotrophy > 0.0)
         .map(|a| a.id)
         .collect();
     assert_eq!(decomposers.len(), 1, "example9 seeds one decomposer");
-    let mut producers: HashSet<u64> = world
+    let mut producers: BTreeSet<u64> = world
         .agents()
         .iter()
         .filter(|a| a.traits.heterotrophy == 0.0)
@@ -330,7 +330,7 @@ fn example9_wires_producer_to_carcass_to_decomposer_exactly() {
         cursor = world.event_log().len();
     }
 
-    let carcasses: HashSet<u64> = world.carcasses().iter().map(|c| c.id).collect();
+    let carcasses: BTreeSet<u64> = world.carcasses().iter().map(|c| c.id).collect();
     let dead_producers = dead.iter().filter(|id| producers.contains(id)).count();
     assert!(
         dead_producers > 0,

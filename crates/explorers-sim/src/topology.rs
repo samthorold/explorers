@@ -1,18 +1,18 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::event::{EventKind, EventLog};
 
 /// An agent's trophic role: a reading of its recent realised income, never
 /// of its trait vector (CONTEXT.md, *Trophic role*). The read itself lives
 /// with the evaluator (`explorers_genesis_eval::income`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TrophicRole {
     Producer,
     Consumer,
     Decomposer,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum EdgeKind {
     /// Predation: energy drained from a living target (the green food web).
     Consumed,
@@ -29,11 +29,11 @@ pub const DETRITAL_RELIANCE_THRESHOLD: f32 = 0.5;
 #[derive(Clone, Debug)]
 pub struct TopologyProjection {
     cursor: usize,
-    active_agents: HashSet<u64>,
-    birth_tick: HashMap<u64, u64>,
-    death_tick: HashMap<u64, u64>,
-    edges: HashMap<(u64, u64, EdgeKind), f32>,
-    lineage: HashMap<u64, (u64, u64)>,
+    active_agents: BTreeSet<u64>,
+    birth_tick: BTreeMap<u64, u64>,
+    death_tick: BTreeMap<u64, u64>,
+    edges: BTreeMap<(u64, u64, EdgeKind), f32>,
+    lineage: BTreeMap<u64, (u64, u64)>,
     pending_parents: Option<(u64, u64)>,
 }
 
@@ -41,11 +41,11 @@ impl TopologyProjection {
     pub fn new() -> Self {
         Self {
             cursor: 0,
-            active_agents: HashSet::new(),
-            birth_tick: HashMap::new(),
-            death_tick: HashMap::new(),
-            edges: HashMap::new(),
-            lineage: HashMap::new(),
+            active_agents: BTreeSet::new(),
+            birth_tick: BTreeMap::new(),
+            death_tick: BTreeMap::new(),
+            edges: BTreeMap::new(),
+            lineage: BTreeMap::new(),
             pending_parents: None,
         }
     }
@@ -107,7 +107,7 @@ impl TopologyProjection {
         }
     }
 
-    pub fn active_agents(&self) -> &HashSet<u64> {
+    pub fn active_agents(&self) -> &BTreeSet<u64> {
         &self.active_agents
     }
 
@@ -146,7 +146,7 @@ impl TopologyProjection {
             .sum()
     }
 
-    pub fn active_agents_at(&self, tick: u64) -> HashSet<u64> {
+    pub fn active_agents_at(&self, tick: u64) -> BTreeSet<u64> {
         self.birth_tick
             .iter()
             .filter(|&(&agent, &born)| {
@@ -160,9 +160,12 @@ impl TopologyProjection {
         self.lineage.get(&agent_id).copied()
     }
 
-    pub fn lineage_clusters(&self) -> HashMap<u64, usize> {
-        let mut parent: HashMap<u64, u64> = HashMap::new();
-        let all_agents: HashSet<u64> = self
+    /// Each agent the projection has seen, labelled with its lineage cluster.
+    /// Labels are handed out in order of each cluster's lowest agent id, so
+    /// the same log labels its clusters the same way on every run.
+    pub fn lineage_clusters(&self) -> BTreeMap<u64, usize> {
+        let mut parent: BTreeMap<u64, u64> = BTreeMap::new();
+        let all_agents: BTreeSet<u64> = self
             .birth_tick
             .keys()
             .chain(self.death_tick.keys())
@@ -172,7 +175,7 @@ impl TopologyProjection {
             parent.insert(a, a);
         }
 
-        fn find(parent: &mut HashMap<u64, u64>, x: u64) -> u64 {
+        fn find(parent: &mut BTreeMap<u64, u64>, x: u64) -> u64 {
             let mut root = x;
             while parent[&root] != root {
                 root = parent[&root];
@@ -205,9 +208,9 @@ impl TopologyProjection {
             }
         }
 
-        let mut cluster_id_map: HashMap<u64, usize> = HashMap::new();
+        let mut cluster_id_map: BTreeMap<u64, usize> = BTreeMap::new();
         let mut next_id = 0;
-        let mut result = HashMap::new();
+        let mut result = BTreeMap::new();
         for &a in &all_agents {
             let root = find(&mut parent, a);
             let id = *cluster_id_map.entry(root).or_insert_with(|| {
@@ -624,11 +627,11 @@ mod tests {
         let mut proj = TopologyProjection::new();
         proj.update(&log);
 
-        assert_eq!(proj.active_agents_at(0), HashSet::new());
-        assert_eq!(proj.active_agents_at(1), HashSet::from([1]));
-        assert_eq!(proj.active_agents_at(2), HashSet::from([1, 2]));
-        assert_eq!(proj.active_agents_at(3), HashSet::from([2]));
-        assert_eq!(proj.active_agents_at(4), HashSet::from([2, 3]));
+        assert_eq!(proj.active_agents_at(0), BTreeSet::new());
+        assert_eq!(proj.active_agents_at(1), BTreeSet::from([1]));
+        assert_eq!(proj.active_agents_at(2), BTreeSet::from([1, 2]));
+        assert_eq!(proj.active_agents_at(3), BTreeSet::from([2]));
+        assert_eq!(proj.active_agents_at(4), BTreeSet::from([2, 3]));
     }
 
     #[test]
@@ -708,6 +711,66 @@ mod tests {
         assert_eq!(clusters[&1], clusters[&3]);
         // Agent 4 should be in a different cluster
         assert_ne!(clusters[&1], clusters[&4]);
+    }
+
+    /// Cluster labels follow the lowest agent id in each cluster, so the same
+    /// log labels its clusters the same way on every run (and in every
+    /// process). Twenty lone founders plus one mated pair: the chance that
+    /// hash-set iteration happens to visit them in id order is negligible, so
+    /// labels handed out in iteration order fail this reliably.
+    #[test]
+    fn lineage_clusters_are_labelled_by_lowest_agent_id() {
+        let born = |seq: u64, source: u64| Event {
+            tick: 1,
+            seq,
+            kind: EventKind::Reproduced,
+            source,
+            target: None,
+            energy_delta: 10.0,
+            position: None,
+            target_was_carcass: false,
+            second_parent: None,
+            nutrient_delta: 0.0,
+        };
+        // Founders 1..=20, born in descending id order.
+        let mut events: Vec<Event> = (0..20).map(|i| born(i, 20 - i)).collect();
+        // Founders 3 and 17 mate -> child 21, joining their clusters.
+        events.push(Event {
+            tick: 1,
+            seq: 20,
+            kind: EventKind::Reproduced,
+            source: 17,
+            target: Some(3),
+            energy_delta: 0.0,
+            position: None,
+            target_was_carcass: false,
+            second_parent: None,
+            nutrient_delta: 0.0,
+        });
+        events.push(born(21, 21));
+        let log = make_log(events);
+
+        let mut proj = TopologyProjection::new();
+        proj.update(&log);
+        let clusters = proj.lineage_clusters();
+
+        // Clusters in order of their lowest member: {1}, {2}, {3, 17, 21},
+        // {4}, ..., {16}, {18}, {19}, {20}.
+        let mut expected = Vec::new();
+        let mut next = 0;
+        for id in 1..=20u64 {
+            if id == 17 {
+                continue;
+            }
+            expected.push((id, next));
+            next += 1;
+        }
+        expected.push((17, 2));
+        expected.push((21, 2));
+        for (id, label) in expected {
+            assert_eq!(clusters[&id], label, "agent {id}");
+        }
+        assert_eq!(clusters.len(), 21);
     }
 
     #[test]
