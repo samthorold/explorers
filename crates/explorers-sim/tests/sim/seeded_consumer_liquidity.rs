@@ -96,7 +96,11 @@ fn seeded_consumer_keeps_a_reserve_cushion_past_tick_one() {
 /// predation energy rather than starving at the retention buffer first.
 #[test]
 fn seeded_consumers_survive_to_establish_a_feeding_income() {
-    let recipe = load();
+    let mut recipe = load();
+    // The income read is predation on living prey, which the world's own
+    // living-tissue resistance (ρ = 1, #865) closes: read it in the
+    // controlled variant without resistance.
+    recipe.parameters.living_resistance = 0.0;
     let mut world = World::from_recipe(&recipe, 1);
 
     let consumer_ids: Vec<u64> = world

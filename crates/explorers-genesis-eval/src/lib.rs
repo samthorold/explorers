@@ -1223,6 +1223,10 @@ mod tests {
             carcass_decay_constant: explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
+            // Without living-tissue resistance, the controlled variant
+            // (#865): these tests read the evaluator on a live mixed world
+            // whose consumers graze its producers, which the world's own
+            // ρ = 1 closes (the fixture then falls to monoculture).
             living_resistance: 0.0,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
@@ -2848,7 +2852,7 @@ mod tests {
             carcass_decay_constant: explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
-            living_resistance: 0.0,
+            living_resistance: explorers_sim::DEFAULT_LIVING_RESISTANCE,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,

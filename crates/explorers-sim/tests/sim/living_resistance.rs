@@ -4,13 +4,16 @@
 //! Every drain on a living target is multiplied by `(1 − ρ)`, `ρ` the world's
 //! `living_resistance` in `[0, 1]`, after expression and recognition and
 //! before the proportional split among co-feeders. Carcasses carry no `ρ`,
-//! and `ρ = 0` is the world without resistance.
+//! and `ρ = 0` is the world without resistance, a controlled variant. It is
+//! physics in every world since #865, at the domain's `ρ = 1`
+//! ([`DEFAULT_LIVING_RESISTANCE`]). The rung test of S25 (end-state.md,
+//! part 1) is `s25_rung_…`.
 
 use crate::support;
 
-use explorers_sim::phase::{DrainResult, resolve_drains};
+use explorers_sim::phase::{DrainResult, move_agents, resolve_drains};
 use explorers_sim::spatial::{NutrientGrid, SpatialGrid};
-use explorers_sim::{Agent, Carcass, TraitVector, WorldParameters};
+use explorers_sim::{Agent, Carcass, DEFAULT_LIVING_RESISTANCE, TraitVector, WorldParameters};
 
 const EXTENT: f32 = 100.0;
 const SITE: (f32, f32) = (50.0, 50.0);
@@ -93,6 +96,212 @@ fn lone_drain(rho: f32) -> f32 {
     let mut agents = vec![consumer(1, 1.2), producer(50.0)];
     let result = drain(&mut agents, &mut [], &params(rho));
     living_drains(&result).iter().map(|&(_, d)| d).sum()
+}
+
+/// The world's own parameters: the viable baseline, whose `ρ` is the
+/// world's default.
+fn world_params() -> WorldParameters {
+    WorldParameters {
+        world_extent: EXTENT,
+        ..support::viable_baseline()
+    }
+}
+
+/// The producer, dead: a carcass of its structure and traits at `SITE`.
+fn dead_producer(structure: f32) -> Carcass {
+    Carcass {
+        id: TARGET,
+        ..carcass(structure)
+    }
+}
+
+/// Structure each consumer drained from the carcass `TARGET` this pass.
+fn carcass_drains(result: &DrainResult) -> Vec<(u64, f32)> {
+    let mut drains: Vec<(u64, f32)> = result
+        .events
+        .iter()
+        .filter(|e| e.target_was_carcass && e.target == Some(TARGET))
+        .map(|e| (e.source, e.energy_delta))
+        .collect();
+    drains.sort_by_key(|&(id, _)| id);
+    drains
+}
+
+/// A foraging decomposer at `SITE`, apart from the drain scenes' consumers:
+/// senses 5.0 (mobility 0.5 × `sensing_range_coefficient` 10) and steers
+/// with heterotrophy 0.8, far in trait space from the producer.
+fn forager() -> Agent {
+    Agent {
+        id: 0,
+        traits: TraitVector {
+            mobility: 0.5,
+            ..traits(0.8)
+        },
+        ..consumer(0, 0.8)
+    }
+}
+
+fn cue_params(base: WorldParameters) -> WorldParameters {
+    WorldParameters {
+        sensing_range_coefficient: 10.0,
+        movement_cost_coefficient: 0.0,
+        ..base
+    }
+}
+
+/// The forager's position after one movement tick among `living` (forager
+/// first) and `carcasses`.
+fn step(
+    mut living: Vec<Agent>,
+    carcasses: &[Carcass],
+    params: &WorldParameters,
+    seed: u64,
+) -> (u32, u32) {
+    let mut grid = SpatialGrid::new(EXTENT, 10.0);
+    for (i, a) in living.iter().enumerate() {
+        grid.insert(i as u64, a.position);
+    }
+    move_agents(&mut living, carcasses, &grid, params, seed, 0);
+    let p = living[0].position;
+    (p.0.to_bits(), p.1.to_bits())
+}
+
+/// S25 (end-state.md, part 1): living tissue resists every drain, and death
+/// removes the resistance. At the world's own `ρ`, on a few agents:
+/// - each consumer's drain on a living producer is `(1 − ρ)` of what it
+///   drains with no resistance, alone and in a split among co-feeders;
+/// - the producer's movement cue is scaled by the same `(1 − ρ)`: a forager
+///   among it and a carcass steps as it would toward the carcass and a
+///   producer of `(1 − ρ)` its structure in the world without resistance;
+/// - the same producer, dead, is drained, and pulls, exactly as with no
+///   resistance.
+#[test]
+fn s25_rung_a_living_target_resists_its_drains_and_its_cue_at_the_worlds_resistance_and_its_carcass_does_not()
+ {
+    let world = world_params();
+    let rho = world.living_resistance;
+    assert_eq!(rho, DEFAULT_LIVING_RESISTANCE, "the world's own ρ");
+    assert_eq!(rho, 1.0, "the domain closes living tissue (#865)");
+    let open = WorldParameters {
+        living_resistance: 0.0,
+        ..world
+    };
+
+    // Drains on a living producer, ample and scarce.
+    for structure in [500.0, 1.0] {
+        let run = |p: &WorldParameters| {
+            let mut agents = vec![consumer(1, 1.2), consumer(2, 0.7), producer(structure)];
+            let before = agents[2].structure;
+            let drains = living_drains(&drain(&mut agents, &mut [], p));
+            (drains, before - agents[2].structure)
+        };
+        let (open_drains, _) = run(&open);
+        assert_eq!(open_drains.len(), 2, "S = {structure}: both drain, open");
+        let (resisted, lost) = run(&world);
+        let open_total: f32 = open_drains.iter().map(|&(_, d)| d).sum();
+        for &(id, d) in &open_drains {
+            let got = resisted
+                .iter()
+                .find(|&&(r, _)| r == id)
+                .map_or(0.0, |&(_, r)| r);
+            let bound = (1.0 - rho) * d;
+            assert!(
+                got <= bound + 1e-6 * open_total,
+                "S = {structure}, consumer {id}: drained {got}, above (1 − ρ) × {d}"
+            );
+            if structure > open_total {
+                // Ample: the split does not bind, so each takes its whole
+                // resisted demand.
+                assert!(
+                    (got - bound).abs() <= 1e-6 * open_total,
+                    "S = {structure}, consumer {id}: drained {got}, expected {bound}"
+                );
+            }
+        }
+        assert!(
+            lost <= (1.0 - rho) * open_total + 1e-6 * open_total,
+            "S = {structure}: the producer lost {lost}"
+        );
+    }
+
+    // Death removes the resistance: the dead producer is drained bit for bit
+    // as with no resistance.
+    let carcass_pass = |p: &WorldParameters| {
+        let mut agents = vec![consumer(1, 1.2), consumer(2, 0.7)];
+        let mut carcasses = vec![dead_producer(40.0)];
+        let drains = carcass_drains(&drain(&mut agents, &mut carcasses, p));
+        let stocks = [carcasses[0].energy, carcasses[0].nutrient];
+        (
+            drains
+                .iter()
+                .map(|&(id, d)| (id, d.to_bits()))
+                .collect::<Vec<_>>(),
+            stocks.map(f32::to_bits),
+        )
+    };
+    let open_carcass = carcass_pass(&open);
+    assert_eq!(open_carcass.0.len(), 2, "both drain the carcass");
+    assert_eq!(carcass_pass(&world), open_carcass, "a carcass carries no ρ");
+
+    // The cue. A producer of structure S on +x, a carcass on −x.
+    let world_cue = cue_params(world);
+    let open_cue = cue_params(open);
+    let structure = 8.0_f32;
+    let mut living = producer(structure);
+    living.position = (SITE.0 + 2.0, SITE.1);
+    let mut litter = dead_producer(3.0);
+    litter.id = 99;
+    litter.position = (SITE.0 - 2.0, SITE.1);
+    let mut scaled = living.clone();
+    scaled.structure *= 1.0 - rho;
+    scaled.peak_structure = scaled.structure;
+    for seed in 0..20 {
+        let resisted = step(
+            vec![forager(), living.clone()],
+            std::slice::from_ref(&litter),
+            &world_cue,
+            seed,
+        );
+        let reference_living = if scaled.structure > 0.0 {
+            vec![forager(), scaled.clone()]
+        } else {
+            vec![forager()]
+        };
+        let reference = step(
+            reference_living,
+            std::slice::from_ref(&litter),
+            &open_cue,
+            seed,
+        );
+        assert_eq!(resisted, reference, "seed {seed}: the living cue is scaled");
+        // The carcass's cue is not: alone with the forager, it steps the
+        // same at the world's ρ and with none.
+        assert_eq!(
+            step(
+                vec![forager()],
+                std::slice::from_ref(&litter),
+                &world_cue,
+                seed
+            ),
+            step(
+                vec![forager()],
+                std::slice::from_ref(&litter),
+                &open_cue,
+                seed
+            ),
+            "seed {seed}: the carcass cue carries no ρ"
+        );
+        assert_ne!(
+            step(
+                vec![forager()],
+                std::slice::from_ref(&litter),
+                &world_cue,
+                seed
+            ),
+            step(vec![forager()], &[], &world_cue, seed),
+            "seed {seed}: the carcass pulls"
+        );
+    }
 }
 
 #[test]

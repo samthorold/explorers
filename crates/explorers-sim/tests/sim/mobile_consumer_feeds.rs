@@ -19,7 +19,10 @@ use explorers_sim::{Agent, TraitVector, World, WorldParameters, WorldRecipe};
 
 /// example4's fully-specified parameters, with the three this test ran at on
 /// the predator–prey scenario it used before that was deleted (#855): a
-/// light upkeep, a gentle trophic-distance decay and a wide contact range.
+/// light upkeep, a gentle trophic-distance decay and a wide contact range;
+/// and without living-tissue resistance, the controlled variant in which a
+/// consumer can drain living prey at all (the world's own ρ = 1 closes it,
+/// #865).
 fn feeding_params() -> WorldParameters {
     let contents = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -31,6 +34,7 @@ fn feeding_params() -> WorldParameters {
         base_metabolic_rate: 0.1,
         trophic_distance_decay: 0.5,
         contact_range_coefficient: 5.0,
+        living_resistance: 0.0,
         ..recipe.parameters
     }
 }
