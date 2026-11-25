@@ -194,7 +194,12 @@ fn the_cascade_runs_with_turnover_at_its_default_rate() {
 /// that holds no reserve, drained well above its structural threshold, lives.
 #[test]
 fn a_drained_target_at_zero_reserve_lives_above_its_threshold() {
-    let p = params();
+    // The target must be drained, so the world is open to drains on living
+    // tissue: the controlled variant ρ = 0 (#865).
+    let p = WorldParameters {
+        living_resistance: 0.0,
+        ..params()
+    };
     let consumer = Agent {
         id: 1,
         reserve: 100.0,

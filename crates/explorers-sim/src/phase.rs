@@ -1234,7 +1234,9 @@ pub fn resolve_drains_routed(
                 // Living tissue resists drains (world-rules.md, *Living
                 // tissue resists drains*): the expressed demand is scaled by
                 // `1 − ρ` before the split, so the split shares resisted
-                // demands. At ρ = 0 the factor is exactly 1.
+                // demands. At the world's own ρ = 1 (#865) no living target
+                // is drained; ρ = 0 is the controlled variant without
+                // resistance, where the factor is exactly 1.
                 let demand = eff_heterotrophy
                     * crate::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK
                     * expression
@@ -2002,8 +2004,8 @@ fn move_agents_with(
                 // the drain pass's recognition gives toward it, so a
                 // recognised twin pulls nothing; then times `1 − ρ`, the
                 // factor living-tissue resistance puts on its drain, so a
-                // wholly resisted target pulls nothing either. At ρ = 0 the
-                // factor is exactly 1.
+                // wholly resisted target pulls nothing either, as every
+                // living target does at the world's own ρ = 1 (#865).
                 let expression = living_target_expression(resemblance(
                     &agents[i].traits,
                     &agents[j].traits,
@@ -2962,6 +2964,11 @@ mod tests {
             carcass_decay_constant: crate::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
+            // Open to drains, the controlled variant without living-tissue
+            // resistance: these tests pin the drain and cue mechanics on
+            // living targets (S9–S11, S18), which the world's own ρ = 1
+            // closes (#865). Resistance is tested at the world's ρ in
+            // `tests/sim/living_resistance.rs`.
             living_resistance: 0.0,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,

@@ -32,6 +32,10 @@
 //! Re-pinned for #864: saturating decomposition in every world, so a carcass
 //! yields `k_d · S · Σc / (K + Σc)` a tick; recognition still subtracts
 //! nothing at `recognition_distance = 0`.
+//! Since #865 living tissue resists every drain at the world's own `ρ = 1`,
+//! so recognition, which acts only on living targets, has nothing to spare.
+//! These worlds run in the controlled variant without resistance (`ρ = 0`),
+//! where it does; that variant is the stepper as it was, so the pins hold.
 
 use explorers_sim::{World, WorldRecipe};
 
@@ -89,6 +93,7 @@ const PINNED: [(&str, u64, u64, u64); 2] = [
 
 fn run(scenario: &str, seed: u64, ticks: u64, recognition_distance: Option<f32>) -> u64 {
     let mut recipe = load_recipe(scenario);
+    recipe.parameters.living_resistance = 0.0;
     if let Some(d) = recognition_distance {
         recipe.parameters.recognition_distance = d;
     }

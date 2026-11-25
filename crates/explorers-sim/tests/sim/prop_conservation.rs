@@ -133,9 +133,10 @@ proptest! {
         check_stores_non_negative(&case)?;
     }
 
-    /// The three conservation invariants with living-tissue resistance on
-    /// (#813): a resisted drain moves less structure, never creates or
-    /// destroys it, on either carcass path.
+    /// The three conservation invariants across living-tissue resistance
+    /// (#813, #865): a resisted drain moves less structure, never creates or
+    /// destroys it. Every other case runs at the world's `ρ = 1`, so this is
+    /// where the ledgers meet drains on living targets (`ρ < 1`).
     #[test]
     fn conservation_holds_with_living_resistance(
         case in world_case_with_living_resistance()
@@ -405,7 +406,7 @@ fn issue_901_first_case() -> WorldCase {
         carcass_decay_constant: explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT,
         carcass_half_saturation: 1.0,
         base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
-        living_resistance: 0.0,
+        living_resistance: explorers_sim::DEFAULT_LIVING_RESISTANCE,
         contact_distance: 0.1,
         compatibility_scale: 1.0,
         tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
