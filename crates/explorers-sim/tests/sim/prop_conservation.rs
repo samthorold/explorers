@@ -7,8 +7,8 @@ use crate::support;
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use proptest::prelude::*;
 use support::{
-    WorldCase, world_case, world_case_with_growth_dilution, world_case_with_hyphal_uptake,
-    world_case_with_living_resistance, world_case_with_marker_isolation, world_case_with_network,
+    WorldCase, world_case, world_case_with_hyphal_uptake, world_case_with_living_resistance,
+    world_case_with_marker_isolation, world_case_with_network,
     world_case_with_saturating_decomposition, world_case_with_size_scaled_uptake,
     world_case_with_starvation_cascade, world_case_with_wear,
 };
@@ -106,8 +106,9 @@ proptest! {
     /// redistribution and routed surplus move energy and nutrient between
     /// partners, never create or destroy them.
     /// The three conservation invariants with somatic wear on (#763): repair
-    /// dissipates soma energy it pays for, and a senescent death makes a
-    /// carcass like any other.
+    /// dissipates soma energy it pays for, a senescent death makes a carcass
+    /// like any other, and growth's dilution of wear (#840, in every world
+    /// since #858) moves wear only, never energy or nutrient.
     #[test]
     fn conservation_holds_with_wear_and_senescence(case in world_case_with_wear()) {
         check_energy_ledger_identity(&case)?;
@@ -145,17 +146,6 @@ proptest! {
     #[test]
     fn conservation_holds_with_marker_isolation(
         case in world_case_with_marker_isolation()
-    ) {
-        check_energy_ledger_identity(&case)?;
-        check_nutrient_closure(&case)?;
-        check_stores_non_negative(&case)?;
-    }
-
-    /// The three conservation invariants with growth diluting wear (#840):
-    /// dilution moves wear only, never energy or nutrient.
-    #[test]
-    fn conservation_holds_with_growth_diluting_wear(
-        case in world_case_with_growth_dilution()
     ) {
         check_energy_ledger_identity(&case)?;
         check_nutrient_closure(&case)?;
@@ -406,7 +396,6 @@ fn issue_901_first_case() -> WorldCase {
         contact_distance: 0.1,
         marker_isolation: false,
         compatibility_scale: 1.0,
-        growth_dilutes_wear: false,
     };
     let dist = InitialDistribution {
         mean_traits: TraitVector {

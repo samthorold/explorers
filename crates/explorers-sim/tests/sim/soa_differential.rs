@@ -260,15 +260,14 @@ fn elementwise_phases_bit_identical_with_size_scaled_base_rate() {
     );
 }
 
-/// Growth dilutes wear (#840) runs inside `grow`, so its SoA mirror must
-/// dilute bit for bit too. The warmed agents are given wear, so there is
-/// something to dilute.
+/// Growth dilutes wear (#840, in every world since #858) runs inside `grow`,
+/// so its SoA mirror must dilute bit for bit too. The warmed agents are given
+/// wear, so there is something to dilute.
 #[test]
 fn grow_soa_is_bit_identical_with_growth_diluting_wear() {
     let recipe = load_recipe("example4.json");
-    let (mut agents, mut params) = warmed_agents(&recipe, 1, 50);
+    let (mut agents, params) = warmed_agents(&recipe, 1, 50);
     assert!(!agents.is_empty());
-    params.growth_dilutes_wear = true;
     for (k, a) in agents.iter_mut().enumerate() {
         let f = 0.05 + (k as f32) * 0.011;
         a.wear = [f, f * 0.5, f * 0.25];

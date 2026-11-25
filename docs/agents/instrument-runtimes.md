@@ -20,7 +20,7 @@ Measured cost of the reference-mode runs and the other bins still in the workspa
 | Four rules (L = K = 1), catchment `k` = 131.6 / 387.0 / 1,083.7 (`R` = 170 / 500 / 1,400) | 1,142–1,556 s / 1,869–2,616 s / 2,652–3,161 s | `docs/research/826-mode1-catchment.md` |
 | #826's settings with `--decomposer-founders` 20 / 10 / 5 (`k` = 68.85 / 137.7 / 275.4), with the `recruitment` readout | 855–1,118 s / 1,463–1,756 s / 1,644–2,016 s | `docs/research/833-mode1-recruitment-diagnostic.md` |
 | #829's command at `n` = 10 / 5 with `--marker-isolation --compatibility-scale 100` | 1,319–1,636 s / 1,413–1,799 s | `docs/research/837-mode1-crossing.md` |
-| #837's command plus `--growth-dilutes-wear`, `n` = 10 / 5 | 1,404–1,620 s / 1,563–1,925 s | `docs/research/840-mode1-ageing.md` |
+| #837's command plus `--growth-dilutes-wear` (the flag is gone since #858, which puts dilution in every world), `n` = 10 / 5 | 1,404–1,620 s / 1,563–1,925 s | `docs/research/840-mode1-ageing.md` |
 
 **Reading by the ladder** (#857; `end-state.md`, *The decomposer guild*, *Its ladder*). Three options make the expensive rungs fail fast. None has its own measured figure yet; the costs below are derived from the rows above.
 

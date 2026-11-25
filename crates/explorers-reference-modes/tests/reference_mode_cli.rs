@@ -769,52 +769,11 @@ fn abort_on_line_extinction_stops_the_run_and_reports_the_tick() {
     assert!(stderr.contains("decomposer founders"), "{stderr}");
 }
 
-/// `--growth-dilutes-wear` (#840) turns growth dilution on and records it in
-/// the artifact and summary; without the flag nothing is recorded. On, a
-/// founder that grows ends with less wear than in the same run with it off,
-/// and none with more.
+/// Growth dilutes wear in every world (#858), so #840's
+/// `--growth-dilutes-wear` is gone: a command that still passes it is
+/// refused, rather than run as though it chose something.
 #[test]
-fn growth_dilutes_wear_records_the_switch_and_lowers_growing_founders_wear() {
-    let dir = scratch("growth-dilutes-wear");
-    let founders = ["--decomposer-founders", "5"];
-    let plain = run_with(&dir.join("plain.json"), &founders);
-    assert!(plain.get("growth_dilutes_wear").is_none());
-    let md = std::fs::read_to_string(dir.join("plain.md")).unwrap();
-    assert!(!md.contains("Growth dilutes wear"), "{md}");
-
-    let on = run_with(
-        &dir.join("on.json"),
-        &[&founders[..], &["--growth-dilutes-wear"]].concat(),
-    );
-    assert_eq!(on["growth_dilutes_wear"].as_bool(), Some(true));
-    let md = std::fs::read_to_string(dir.join("on.md")).unwrap();
-    assert!(md.contains("## Growth dilutes wear"), "{md}");
-
-    let last_wear = |artifact: &serde_json::Value| -> Vec<f64> {
-        let founders = artifact["report"]["recruitment"]["founders"]
-            .as_array()
-            .expect("the recruitment readout's founders");
-        founders
-            .iter()
-            .map(|f| {
-                f["wear"]
-                    .as_array()
-                    .unwrap()
-                    .last()
-                    .unwrap()
-                    .as_f64()
-                    .unwrap()
-            })
-            .collect()
-    };
-    let (off_wear, on_wear) = (last_wear(&plain), last_wear(&on));
-    assert_eq!(off_wear.len(), 5);
-    assert!(
-        on_wear.iter().zip(&off_wear).all(|(a, b)| a <= b),
-        "{on_wear:?} vs {off_wear:?}"
-    );
-    assert!(
-        on_wear.iter().zip(&off_wear).any(|(a, b)| a < b),
-        "{on_wear:?} vs {off_wear:?}"
-    );
+fn the_retired_growth_dilution_flag_is_refused() {
+    let stderr = refused(&["--growth-dilutes-wear"]);
+    assert!(stderr.contains("--growth-dilutes-wear"), "{stderr}");
 }
