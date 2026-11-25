@@ -120,7 +120,7 @@ Nutrient a connected agent excretes beyond its stoichiometric need, sent to its 
 _Avoid_: nutrient gift (it is paid for), redistribution (that is the gradient flow of stores)
 
 **Hyphal uptake**:
-**Nutrient uptake** from the available pool by a heterotroph, through the absorptive surface decomposers and mycorrhizal fungi feed with. It rides on effective heterotrophy, weighted by **substrate contact**, and shares the pool with autotrophic uptake as one absorptive demand. A world switch.
+**Nutrient uptake** from the available pool by a heterotroph, through the absorptive surface decomposers and mycorrhizal fungi feed with. It rides on effective heterotrophy, weighted by **substrate contact**, and shares the pool with autotrophic uptake as one absorptive demand.
 _Avoid_: mycorrhizal uptake (mycorrhiza is the partnership, not the uptake), immobilisation (the domain word for decomposers' net nutrient retention, broader than this flow)
 
 **Substrate contact**:

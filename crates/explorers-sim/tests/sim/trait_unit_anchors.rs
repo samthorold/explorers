@@ -119,9 +119,11 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// there is no wear to dilute, and it is unchanged.
 /// Both re-pinned for #859: every living agent sheds tissue each tick, part
 /// recycled and the rest left as necromass piles, which consumers drain.
+/// Both re-pinned for #860: hyphal uptake in every world, so still
+/// heterotrophs and mixotrophs draw pool nutrient through their heterotrophy.
 const GOLDEN: [(&str, u64, u64, u64); 2] = [
-    ("example4.json", 7, 300, 0xa0690b1d4d1b9195),
-    ("example4.json+wear", 11, 300, 0x2ece0984798a888e),
+    ("example4.json", 7, 300, 0x0dc0c6f9391ea9d1),
+    ("example4.json+wear", 11, 300, 0x845b8db355d6c1f7),
 ];
 
 #[test]

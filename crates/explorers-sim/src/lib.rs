@@ -776,20 +776,14 @@ pub struct WorldParameters {
     /// above.
     #[serde(default)]
     pub starvation_shrinks: bool,
-    /// Hyphal uptake switch (#654, #727; world-rules.md flow 2, *Hyphal
-    /// uptake*): when on, pool demand adds `contact × effective
-    /// heterotrophy × u_A` to the autotrophic demand, `contact` being
-    /// substrate contact `exp(−d / contact_distance)` on the distance `d` the
-    /// agent moved in the most recent move phase. Default `false` skips the
-    /// hyphal term, so demand is the autotrophic rule bit for bit and every
-    /// existing recipe, pin and the atlas are unchanged. Not in genesis's box.
-    #[serde(default)]
-    pub hyphal_uptake: bool,
     /// Contact distance `d_c` (world-rules.md flow 2, *Substrate contact is
     /// one predicate*; *Unit anchors*): the movement length over which
-    /// substrate contact falls by `1/e`. Units of length. Inert while
-    /// `hyphal_uptake` is off. Fixed, not searched; instruments may override
-    /// it. Default [`DEFAULT_CONTACT_DISTANCE`].
+    /// substrate contact falls by `1/e`. Units of length. Hyphal uptake
+    /// (flow 2, physics in every world since #860) reads it: pool demand adds
+    /// `exp(−d / d_c) × effective heterotrophy × u_A` to the autotrophic
+    /// demand, `d` being the distance the agent moved in the most recent move
+    /// phase. Fixed, not searched; instruments may override it. Default
+    /// [`DEFAULT_CONTACT_DISTANCE`].
     #[serde(default = "default_contact_distance")]
     pub contact_distance: f32,
     /// Marker isolation switch (#837; world-rules.md flow 4, *Reproductive
@@ -2462,7 +2456,6 @@ mod tests {
             growth_retention_multiplier: 2.0,
             reserve_mobilisation_rate: 1.0,
             offspring_structure_fraction: 0.2,
-            hyphal_uptake: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
@@ -4964,7 +4957,6 @@ mod tests {
             growth_retention_multiplier: 2.0,
             reserve_mobilisation_rate: 1.0,
             offspring_structure_fraction: 0.2,
-            hyphal_uptake: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,

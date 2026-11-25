@@ -92,25 +92,32 @@ fn recipe() -> WorldRecipe {
 /// 1.0 to 0.571, coexistence 1.0 to 0.14); seed 2's rose from 0.764 to 0.783
 /// and seed 3's moved from 0.783 to 0.776. The carcass-locked fraction rose
 /// on every seed (0.129, 0.092, 0.114 to 0.198, 0.166, 0.223).
+/// Re-pinned under #860: hyphal uptake in every world, so still heterotrophs
+/// and mixotrophs draw pool nutrient through their heterotrophy — a physics
+/// change, not a changed read. Seed 1's fitness rose from 0.388 to 0.704
+/// (clustering 0.571 to 0.944, coexistence 0.14 to 0.76); seed 2 held at
+/// 0.782 (coexistence 0.91 to 0.93); seed 3's fell from 0.776 to 0.534
+/// (clustering 1.0 to 0.798, coexistence 0.99 to 0.09). The carcass-locked
+/// fraction rose on seed 1 (0.198 to 0.266) and barely moved on seeds 2 and 3.
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
     (
         1,
         [
-            1053202332, 1045896555, 1058162981, 1041194025, 1059145646, 1045077641,
+            1060386506, 1051022104, 1064421148, 1061326684, 1061804835, 1049107404,
         ],
     ),
     (
         2,
         [
-            1061712955, 1046703273, 1065353216, 1063843267, 1065353216, 1042915854,
+            1061688364, 1047752645, 1065353216, 1064178811, 1064656962, 1042772616,
         ],
     ),
     (
         3,
         [
-            1061586972, 1043412467, 1065353216, 1065185444, 1064329806, 1046777059,
+            1057541634, 1048521404, 1061970713, 1035489772, 1065353216, 1046602189,
         ],
     ),
 ];

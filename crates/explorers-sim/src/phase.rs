@@ -122,22 +122,18 @@ pub fn nutrient_uptake_demand(agent: &Agent, params: &WorldParameters) -> f32 {
 /// structure. At `b = 0` the size term is skipped, not evaluated, so demand is
 /// bit-identical to the size-blind rule at every structure, including zero.
 ///
-/// With `hyphal_uptake` on (#654, #727), the rate becomes `effective
-/// autotrophy + contact × effective heterotrophy`, contact being
-/// [`substrate_contact`] on `distance_moved`, and the anchor and size term
-/// apply to the whole demand. With it off the hyphal term is skipped, not
-/// evaluated as zero, so demand is the autotrophic rule bit for bit.
+/// Hyphal uptake (#727, physics in every world since #860) adds `contact ×
+/// effective heterotrophy` to the rate, contact being [`substrate_contact`]
+/// on `distance_moved`, and the anchor and size term apply to the whole
+/// demand: roots and hyphae are one absorptive surface.
 pub fn nutrient_uptake_demand_after_move(
     agent: &Agent,
     distance_moved: f32,
     params: &WorldParameters,
 ) -> f32 {
     let k = params.wear_degradation_steepness;
-    let mut rate = agent.effective_trait_with_steepness(0, k);
-    if params.hyphal_uptake {
-        rate +=
-            substrate_contact(distance_moved, params) * agent.effective_trait_with_steepness(1, k);
-    }
+    let rate = agent.effective_trait_with_steepness(0, k)
+        + substrate_contact(distance_moved, params) * agent.effective_trait_with_steepness(1, k);
     let demand = rate * crate::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK;
     let b = params.uptake_structure_exponent;
     if b == 0.0 {
@@ -159,8 +155,7 @@ pub fn absorb_nutrients(
 
 /// [`absorb_nutrients`] with each agent's most recent move distance, keyed by
 /// agent id (absent = did not move), which hyphal uptake reads as substrate
-/// contact. Autotrophic demand, and all demand while `hyphal_uptake` is off,
-/// ignores it.
+/// contact. Autotrophic demand ignores it.
 pub fn absorb_nutrients_after_moves(
     agents: &mut [Agent],
     nutrient_grid: &mut crate::spatial::NutrientGrid,
@@ -175,12 +170,8 @@ pub fn absorb_nutrients_after_moves(
         std::collections::BTreeMap::new();
 
     for (i, agent) in agents.iter().enumerate() {
-        // Only hyphal uptake reads movement; off, the lookup is skipped too.
-        let moved = if params.hyphal_uptake {
-            distance_moved.get(&agent.id).copied().unwrap_or(0.0)
-        } else {
-            0.0
-        };
+        // Only hyphal uptake reads movement.
+        let moved = distance_moved.get(&agent.id).copied().unwrap_or(0.0);
         let demand = nutrient_uptake_demand_after_move(agent, moved, params);
         if demand <= 0.0 {
             continue;
@@ -3025,7 +3016,6 @@ mod tests {
             living_resistance: 0.0,
             starvation_draws_earmark: false,
             starvation_shrinks: false,
-            hyphal_uptake: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
@@ -3707,13 +3697,10 @@ mod tests {
         );
     }
 
-    // --- Hyphal uptake (#654, #727) ---
+    // --- Hyphal uptake (#654, #727; physics since #860) ---
 
     fn hyphal_params() -> WorldParameters {
-        WorldParameters {
-            hyphal_uptake: true,
-            ..test_params()
-        }
+        test_params()
     }
 
     #[test]
@@ -3808,23 +3795,7 @@ mod tests {
     }
 
     #[test]
-    fn with_hyphal_uptake_off_a_heterotroph_draws_nothing_from_the_pool() {
-        let params = test_params();
-        let traits = TraitVector {
-            heterotrophy: 1.0,
-            ..zero_traits()
-        };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
-        let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
-
-        let events = absorb_nutrients(&mut agents, &mut grid, &params);
-
-        assert!(events.is_empty());
-        assert_eq!(grid.total(), 100.0);
-    }
-
-    #[test]
-    fn autotrophic_uptake_does_not_read_contact_with_hyphal_uptake_on() {
+    fn autotrophic_uptake_does_not_read_contact() {
         let params = hyphal_params();
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
@@ -4002,12 +3973,11 @@ mod tests {
     }
 
     #[test]
-    fn absorb_nutrients_zero_autotrophy_gets_zero_uptake() {
-        // Agents with zero autotrophy cannot absorb nutrients from the available pool —
-        // they must obtain nutrient through consumption.
+    fn absorb_nutrients_no_absorptive_surface_gets_zero_uptake() {
+        // An agent with neither autotrophy (roots) nor heterotrophy (hyphae,
+        // #860) cannot absorb nutrients from the available pool.
         let params = test_params();
         let traits = TraitVector {
-            heterotrophy: 0.8,
             mobility: 0.5,
             ..zero_traits()
         };
@@ -7114,7 +7084,7 @@ mod tests {
         // funds the earmark.
         let params = test_params();
         let consumer_traits = TraitVector {
-            photosynthetic_absorption: 0.0, // pure heterotroph: no pool uptake
+            photosynthetic_absorption: 0.0, // pure heterotroph: no roots
             heterotrophy: 2.0,
             kappa: 0.5,
             ..zero_traits()
@@ -7130,8 +7100,9 @@ mod tests {
         agents[0].structure = 5.0;
         agents[1].structure = 10.0;
 
-        // A nutrient-rich pool the consumer cannot tap (zero autotrophy).
-        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
+        // An empty pool: since #860 a still heterotroph's hyphae would tap a
+        // rich one, so the earmark below can come from prey alone.
+        let mut nutrient_grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         absorb_nutrients(&mut agents, &mut nutrient_grid, &params);
         assert!(
             (agents[0].repro_nutrient).abs() < 1e-6,

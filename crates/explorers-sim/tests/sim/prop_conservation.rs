@@ -7,10 +7,11 @@ use crate::support;
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use proptest::prelude::*;
 use support::{
-    WorldCase, world_case, world_case_with_fast_tissue_turnover, world_case_with_hyphal_uptake,
-    world_case_with_living_resistance, world_case_with_marker_isolation, world_case_with_network,
+    WorldCase, world_case, world_case_with_fast_tissue_turnover, world_case_with_living_resistance,
+    world_case_with_marker_isolation, world_case_with_network,
     world_case_with_saturating_decomposition, world_case_with_size_scaled_uptake,
-    world_case_with_starvation_cascade, world_case_with_wear,
+    world_case_with_starvation_cascade, world_case_with_varied_contact_distance,
+    world_case_with_wear,
 };
 
 /// Relative f32 tolerance for the energy identity: f32 carries ~7 significant
@@ -92,11 +93,14 @@ proptest! {
         check_stores_non_negative(&case)?;
     }
 
-    /// The three conservation invariants with hyphal uptake on (#727):
-    /// heterotrophs drawing on the pool change who takes how much, never how
-    /// much exists.
+    /// The three conservation invariants across contact distances (#727; hyphal
+    /// uptake in every world since #860): heterotrophs drawing on the pool, from
+    /// nearly roving to nearly still, change who takes how much, never how much
+    /// exists.
     #[test]
-    fn conservation_holds_with_hyphal_uptake(case in world_case_with_hyphal_uptake()) {
+    fn conservation_holds_across_contact_distances(
+        case in world_case_with_varied_contact_distance()
+    ) {
         check_energy_ledger_identity(&case)?;
         check_nutrient_closure(&case)?;
         check_stores_non_negative(&case)?;
@@ -405,7 +409,6 @@ fn issue_901_first_case() -> WorldCase {
         living_resistance: 0.0,
         starvation_draws_earmark: true,
         starvation_shrinks: true,
-        hyphal_uptake: false,
         contact_distance: 0.1,
         marker_isolation: false,
         compatibility_scale: 1.0,
