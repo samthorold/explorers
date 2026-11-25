@@ -55,6 +55,8 @@ The degenerate configurations in [expected properties](expected-properties.md) a
 
 This is the weakest necessary condition for life — clearing it is far from sufficient — but failing it is a guaranteed kill, decidable from two numbers.
 
+> **The gate's `B` is a per-agent constant, which the physics no longer has.** Since #862 the base rate is `b · S` ([world rules](world-rules.md), flow 8, *The base rate scales with structure*), so a producer of structure `S` nets at most `F − b · S`, and a small enough body always clears `F > b · S`. The gate as stated, and the bounds below that count in base metabolisms `B`, are therefore not yet restated for the size-scaled rule: read `B` as the base rate `base_metabolic_rate` charges a body of the base-rate reference structure `S_p`, which the size-scaled rule leaves unchanged, and the gate as a kill for bodies at or above `S_p` only.
+
 ## Bound — sustained population (solar ceiling)
 
 *Form-free on the income side; fully pinned on the drain side.* The extinction gate's two ingredients — solar flux is the sole external energy source, and metabolism charges at least `B` every tick — combined with the geometry of light competition, give the first **affirmative** statement on the existence side. It is not a region where life is impossible; it is a ceiling that every living state must respect, however the searched coefficients fall.

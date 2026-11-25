@@ -103,10 +103,10 @@ fn g_rung_0_lone_founder_income_covers_its_upkeep_at_the_founding_litter_ratio()
     // The decomposer mesocosm's rules, on the world at founding.
     let upkeep = (MESOCOSM.apply(&mut world))
         .expect("the world has its founder")
-        .size_scaled
+        .upkeep
         .decomposer_founder
         .expect("the world has its founder")
-        .size_scaled;
+        .upkeep;
 
     let founder = world.agents()[0].clone();
     assert_eq!(founder.structure, founder_structure);

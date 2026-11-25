@@ -75,12 +75,12 @@ fn fingerprint(world: &World) -> u64 {
 /// The scenarios, seeds and horizons, with the pre-recognition fingerprint of
 /// each.
 const PINNED: [(&str, u64, u64, u64); 2] = [
-    ("example4.json", 7, 200, 0x8090_7671_3ef3_10e3),
+    ("example4.json", 7, 200, 0x19de_bdc1_2be7_f22e),
     (
         "example9_detrital_pathway.json",
         11,
         200,
-        0x44cb_2c7e_b1a0_270c,
+        0x1855_0dc9_e71d_2f1d,
     ),
 ];
 

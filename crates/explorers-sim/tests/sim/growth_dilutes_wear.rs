@@ -123,9 +123,12 @@ fn a_fall_in_structure_leaves_wear_unchanged() {
 /// the wear on its first functional trait after each tick, with the
 /// structure it had before and after that tick's growth.
 fn wear_path(nutrient: f32, ticks: usize) -> Vec<(f32, f32, f32, f32)> {
+    // No base rate: since #862 it is `b · S`, so a retention buffer that grew
+    // with the body would eat the refill and stall the steady relative growth.
     let p = WorldParameters {
         repair_rate: 0.1,
         wear_rate: 0.01,
+        base_metabolic_rate: 0.0,
         structure_maintenance_coefficient: 0.0,
         ..params()
     };

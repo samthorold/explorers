@@ -259,19 +259,16 @@ fn kinetics_options_set_and_record_the_decomposition_parameters() {
     assert!(md.contains("## Decomposition kinetics"), "{md}");
 }
 
-/// `--decomposer-mesocosm` (#884) runs the decomposer mesocosm: its four
-/// rules at the values the mesocosm crate declares, the run the explicit
-/// flags at `S_p` 6.937, L 1 and K 1 give, state for state, and it records
-/// the declaration.
+/// `--decomposer-mesocosm` (#884) runs the decomposer mesocosm: its rules at
+/// the values the mesocosm crate declares, the run the explicit flags at L 1
+/// and K 1 give, state for state, with the size-scaled base rate at the
+/// world's `S_p` (#862), and it records the declaration.
 #[test]
 fn decomposer_mesocosm_runs_the_declared_rules() {
     let dir = scratch("decomposer-mesocosm");
     let explicit = run_with(
         &dir.join("explicit.json"),
         &[
-            "--size-scaled-base-rate",
-            "--established-producer-structure",
-            "6.937",
             "--living-resistance",
             "--litter-half-life",
             "1",
@@ -280,18 +277,13 @@ fn decomposer_mesocosm_runs_the_declared_rules() {
         ],
     );
     let declared = run_with(&dir.join("declared.json"), &["--decomposer-mesocosm"]);
-    for key in [
-        "report",
-        "decomposition_kinetics",
-        "size_scaled_base_rate",
-        "living_resistance",
-    ] {
+    for key in ["report", "decomposition_kinetics", "living_resistance"] {
         assert!(explicit.get(key).is_some(), "{key}");
         assert_eq!(declared[key], explicit[key], "{key}");
     }
     assert!(explicit.get("decomposer_mesocosm").is_none());
     let d = &declared["decomposer_mesocosm"];
-    assert!((d["established_producer_structure"].as_f64().unwrap() - 6.937).abs() < 1e-6);
+    assert!(d.get("established_producer_structure").is_none(), "{d}");
     assert_eq!(d["litter_half_life"], 1.0);
     assert_eq!(d["enzyme_half_saturation"], 1.0);
     assert_eq!(d["founding_litter_ratio"], 170.0);
@@ -299,12 +291,13 @@ fn decomposer_mesocosm_runs_the_declared_rules() {
     assert!(md.contains("## Decomposition kinetics"), "{md}");
 }
 
-/// `--decomposer-mesocosm` sets the four rules itself, so it refuses a flag
-/// that would set one of them again, and it needs decomposer founders.
+/// `--decomposer-mesocosm` sets its rules itself, so it refuses a flag that
+/// would set one of them again or move `S_p`, and it needs decomposer
+/// founders.
 #[test]
 fn decomposer_mesocosm_refuses_its_rules_flags_and_no_decomposers() {
     for extra in [
-        &["--size-scaled-base-rate"][..],
+        &["--established-producer-structure", "4"][..],
         &["--living-resistance"][..],
         &["--litter-half-life", "2"][..],
         &["--no-decomposers"][..],
@@ -334,90 +327,57 @@ fn enzyme_half_saturation_without_litter_half_life_is_refused() {
     assert!(stderr.contains("--litter-half-life"), "{stderr}");
 }
 
-/// `--size-scaled-base-rate` (#807) turns the size-scaled base rate on at
-/// `b = base_metabolic_rate / S_p + structure_maintenance_coefficient` and
-/// records `b`, `S_p` and the founders' upkeep under both rules in the
-/// artifact and summary; without it nothing is recorded.
+/// The size-scaled base rate has no switch since #862: the retired
+/// `--size-scaled-base-rate` is refused as unknown.
 #[test]
-fn size_scaled_base_rate_sets_and_records_b() {
-    let dir = scratch("size-scaled");
-    let default = run_with(&dir.join("default.json"), &[]);
-    let set = run_with(&dir.join("set.json"), &["--size-scaled-base-rate"]);
-    assert!(default.get("size_scaled_base_rate").is_none());
-    let r = &set["size_scaled_base_rate"];
-    let s_p = r["established_producer_structure"].as_f64().unwrap();
-    assert!((s_p - 21.6).abs() < 1e-5, "{r}");
-    let b = r["mass_specific_base_rate"].as_f64().unwrap();
-    let expected = r["base_metabolic_rate"].as_f64().unwrap() / s_p
-        + r["structure_maintenance_coefficient"].as_f64().unwrap();
-    assert!((b - expected).abs() < 1e-6, "{r}");
-    let founder = &r["decomposer_founder"];
-    assert!(founder["per_agent"]["total"].as_f64().unwrap() > 0.4, "{r}");
-    assert!(
-        founder["size_scaled"]["total"].as_f64().unwrap() < 0.13,
-        "{r}"
-    );
-    assert!(
-        r["median_producer"]["size_scaled"]["total"].is_number(),
-        "{r}"
-    );
-    assert_ne!(default["report"], set["report"]);
-    let md = std::fs::read_to_string(dir.join("set.md")).unwrap();
-    assert!(md.contains("## Size-scaled base rate"), "{md}");
+fn the_retired_size_scaled_base_rate_flag_is_refused() {
+    let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+        .args(["--ticks", "1", "--size-scaled-base-rate"])
+        .output()
+        .expect("the instrument runs");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--size-scaled-base-rate"), "{stderr}");
 }
 
-/// `--established-producer-structure S_p` (#814) sets the `S_p` from which
-/// `--size-scaled-base-rate` derives `b`, and records it; at #804's 21.6 the
-/// run is the flag's default. It needs `--size-scaled-base-rate` and a
-/// finite `S_p` above 0.
+/// `--established-producer-structure S_p` (#814) sets the world's base-rate
+/// reference structure in place of its default and records `S_p`, `b` and
+/// the founders' upkeep; at the default 6.937 the run is the default run,
+/// and without the flag nothing is recorded. It needs a finite `S_p` above
+/// 0.
 #[test]
-fn established_producer_structure_sets_s_p_for_the_size_scaled_rule() {
+fn established_producer_structure_sets_the_worlds_s_p() {
     let dir = scratch("established-producer-structure");
-    let default = run_with(&dir.join("default.json"), &["--size-scaled-base-rate"]);
+    let default = run_with(&dir.join("default.json"), &[]);
     let same = run_with(
         &dir.join("same.json"),
-        &[
-            "--size-scaled-base-rate",
-            "--established-producer-structure",
-            "21.6",
-        ],
+        &["--established-producer-structure", "6.937"],
     );
     let set = run_with(
         &dir.join("set.json"),
-        &[
-            "--size-scaled-base-rate",
-            "--established-producer-structure",
-            "11.9",
-        ],
+        &["--established-producer-structure", "11.9"],
     );
+    assert!(default.get("base_rate_reference_structure").is_none());
     assert_eq!(default["report"], same["report"]);
-    assert_eq!(
-        default["size_scaled_base_rate"],
-        same["size_scaled_base_rate"]
-    );
-    let r = &set["size_scaled_base_rate"];
-    let s_p = r["established_producer_structure"].as_f64().unwrap();
+    let r = &set["base_rate_reference_structure"];
+    let s_p = r["base_rate_reference_structure"].as_f64().unwrap();
     assert!((s_p - 11.9).abs() < 1e-5, "{r}");
     let b = r["mass_specific_base_rate"].as_f64().unwrap();
     let expected = r["base_metabolic_rate"].as_f64().unwrap() / s_p
         + r["structure_maintenance_coefficient"].as_f64().unwrap();
     assert!((b - expected).abs() < 1e-6, "{r}");
+    assert!(
+        r["decomposer_founder"]["upkeep"]["total"].is_number(),
+        "{r}"
+    );
+    assert!(r["median_producer"]["upkeep"]["total"].is_number(), "{r}");
     assert_ne!(default["report"], set["report"]);
     let md = std::fs::read_to_string(dir.join("set.md")).unwrap();
     assert!(md.contains("/ 11.9 +"), "{md}");
 
     for args in [
-        &["--established-producer-structure", "11.9"][..],
-        &[
-            "--size-scaled-base-rate",
-            "--established-producer-structure",
-            "0",
-        ][..],
-        &[
-            "--size-scaled-base-rate",
-            "--established-producer-structure",
-            "inf",
-        ][..],
+        &["--established-producer-structure", "0"][..],
+        &["--established-producer-structure", "inf"][..],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
             .args(["--ticks", "1"])

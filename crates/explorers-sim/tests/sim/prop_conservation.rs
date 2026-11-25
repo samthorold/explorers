@@ -404,7 +404,7 @@ fn issue_901_first_case() -> WorldCase {
         leaching_rate: 0.0,
         carcass_decay_constant: 0.0,
         carcass_half_saturation: 1.0,
-        mass_specific_base_rate: 0.0,
+        base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
         living_resistance: 0.0,
         starvation_draws_earmark: true,
         starvation_shrinks: true,

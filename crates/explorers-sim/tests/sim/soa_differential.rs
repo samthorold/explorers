@@ -239,24 +239,25 @@ fn elementwise_phases_bit_identical_with_cross_trait_cost() {
     );
 }
 
-/// #807: with the size-scaled base rate on, the SoA metabolise and grow still
-/// match the scalar phases bit for bit, and the rule is live on this agent set
-/// (it changes what metabolise dissipates).
+/// #807, in every world since #862: at another base-rate reference structure
+/// the SoA metabolise and grow still match the scalar phases bit for bit, and
+/// the size-scaled base rate is live on this agent set (moving `S_p` changes
+/// what metabolise dissipates).
 #[test]
-fn elementwise_phases_bit_identical_with_size_scaled_base_rate() {
+fn elementwise_phases_bit_identical_across_base_rate_reference_structures() {
     let recipe = load_recipe("example4.json");
-    let (agents, off) = warmed_agents(&recipe, 1, 50);
+    let (agents, default) = warmed_agents(&recipe, 1, 50);
     assert!(!agents.is_empty());
-    let mut on = off.clone();
-    on.mass_specific_base_rate = 0.025;
-    assert_metabolise_identical(&agents, &on, "example4 metabolise, size-scaled base rate");
-    assert_grow_identical(&agents, &on, "example4 grow, size-scaled base rate");
+    let mut other = default.clone();
+    other.base_rate_reference_structure = 21.6;
+    assert_metabolise_identical(&agents, &other, "example4 metabolise, S_p 21.6");
+    assert_grow_identical(&agents, &other, "example4 grow, S_p 21.6");
 
     let dissipated = |p: &WorldParameters| phase::metabolise(&mut agents.to_vec(), p).1;
     assert_ne!(
-        dissipated(&on).to_bits(),
-        dissipated(&off).to_bits(),
-        "the size-scaled base rate must change some agent's cost in this set"
+        dissipated(&other).to_bits(),
+        dissipated(&default).to_bits(),
+        "the reference structure must change some agent's cost in this set"
     );
 }
 

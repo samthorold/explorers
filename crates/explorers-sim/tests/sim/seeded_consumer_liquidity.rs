@@ -34,14 +34,7 @@ fn is_consumer(a: &Agent) -> bool {
 /// The per-tick metabolic retention buffer the grow phase protects — reserve at or
 /// below this is *not* mobilisable, so a consumer pinned here has no cushion.
 fn retention_buffer(a: &Agent, p: &WorldParameters) -> f32 {
-    let exp = p.maintenance_cost_exponent;
-    let metabolic = p.base_metabolic_rate
-        + a.traits.photosynthetic_absorption.powf(exp) * p.photo_maintenance_cost
-        + a.traits.heterotrophy.powf(exp) * p.heterotrophy_maintenance_cost
-        + a.traits.mobility.powf(exp) * p.mobility_maintenance_cost
-        + a.traits.asexual_propensity.powf(exp) * p.asexual_propensity_maintenance_cost
-        + a.structure * p.structure_maintenance_coefficient;
-    metabolic * p.growth_retention_multiplier
+    explorers_sim::phase::metabolic_cost(a, p) * p.growth_retention_multiplier
 }
 
 /// example4 ships with `reserve_mobilisation_rate < 1.0`, so a seeded consumer

@@ -108,8 +108,10 @@ fn s21_rung_a_body_whose_income_falls_sheds_at_the_declared_rate_into_litter_and
     let ratio = stoichiometric_demand(&producer(), 1.0, world.params());
 
     let mut litter = 0.0_f32;
-    // Eight ticks: its reserve pays about nine of upkeep.
-    for tick in 0..8 {
+    // Six ticks: its reserve pays about seven of upkeep at the size-scaled
+    // base rate (#862), under which this body of 10.8 pays more than the
+    // per-agent constant charged it.
+    for tick in 0..6 {
         let before = world.agents()[0].clone();
         let seq = world.event_log().len();
         world.step();

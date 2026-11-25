@@ -121,9 +121,11 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// recycled and the rest left as necromass piles, which consumers drain.
 /// Both re-pinned for #860: hyphal uptake in every world, so still
 /// heterotrophs and mixotrophs draw pool nutrient through their heterotrophy.
+/// Both re-pinned for #862: the base rate is `b · S` in every world, so small
+/// bodies pay less upkeep and large ones more.
 const GOLDEN: [(&str, u64, u64, u64); 2] = [
-    ("example4.json", 7, 300, 0x0dc0c6f9391ea9d1),
-    ("example4.json+wear", 11, 300, 0x845b8db355d6c1f7),
+    ("example4.json", 7, 300, 0xdaf82f50e602eb44),
+    ("example4.json+wear", 11, 300, 0x5219dfb8577b39c8),
 ];
 
 #[test]

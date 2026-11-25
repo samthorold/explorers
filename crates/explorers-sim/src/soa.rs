@@ -191,13 +191,11 @@ impl AgentSoA {
 /// over column reads so the surrounding loop autovectorises.
 #[inline]
 fn maintenance_cost(s: &AgentSoA, i: usize, params: &WorldParameters, exp: f32) -> f32 {
-    let (base, structure_term) = crate::phase::base_and_structure_cost(s.structure[i], params);
-    let per_trait = base
+    let per_trait = crate::phase::base_cost(s.structure[i], params)
         + s.t_photo[i].powf(exp) * params.photo_maintenance_cost
         + s.t_hetero[i].powf(exp) * params.heterotrophy_maintenance_cost
         + s.t_mobility[i].powf(exp) * params.mobility_maintenance_cost
-        + s.t_asexual[i].powf(exp) * params.asexual_propensity_maintenance_cost
-        + structure_term;
+        + s.t_asexual[i].powf(exp) * params.asexual_propensity_maintenance_cost;
     crate::phase::with_cross_trait_cost(per_trait, s.t_photo[i], s.t_hetero[i], params)
 }
 

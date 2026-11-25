@@ -465,6 +465,10 @@ pub struct WorldParameters {
     #[serde(default = "default_trophic_distance_decay")]
     pub trophic_distance_decay: f32,
     pub reproduction_efficiency: f32,
+    /// The base rate an agent of structure `base_rate_reference_structure`
+    /// (`S_p`) pays per tick, with the structure term on top; any other agent
+    /// pays in proportion to its structure (#862; world-rules.md flow 8, *The
+    /// base rate scales with structure*; [`WorldParameters::mass_specific_base_rate`]).
     pub base_metabolic_rate: f32,
     pub movement_cost_coefficient: f32,
     /// Sensing range = mobility * sensing_range_coefficient.
@@ -724,19 +728,17 @@ pub struct WorldParameters {
     /// [`DEFAULT_CARCASS_HALF_SATURATION`].
     #[serde(default = "default_carcass_half_saturation")]
     pub carcass_half_saturation: f32,
-    /// Mass-specific base metabolic rate `b` (world-rules.md flow 8, *The
-    /// base rate scales with structure*, *`β` is 1*): when positive, an
-    /// agent's base metabolic cost is `b · S`, `S` its structure, in place of
-    /// the per-agent constant `base_metabolic_rate` *and* of the linear
-    /// structure term `structure_maintenance_coefficient · S`, which `b`
-    /// absorbs (the design sets `b = base_metabolic_rate / S_p +
-    /// structure_maintenance_coefficient`), so neither is charged as well.
-    /// Trait maintenance, the cross-trait cost and movement are unchanged.
-    /// Energy per unit structure per tick. Default `0.0` is off: the
-    /// per-agent rule, so every existing recipe, pin and fixture is
-    /// bit-unchanged.
-    #[serde(default)]
-    pub mass_specific_base_rate: f32,
+    /// `S_p`, the structure at which `base_metabolic_rate` is stated
+    /// (world-rules.md flow 8, *The base rate scales with structure*, *How
+    /// large `b` is*): the median established producer's. An agent's base
+    /// cost is `b · S`, `S` its structure, at the mass-specific rate
+    /// [`WorldParameters::mass_specific_base_rate`], so an agent of structure
+    /// `S_p` pays what the per-agent constant charged it. A structure, finite
+    /// and above 0. Default [`DEFAULT_BASE_RATE_REFERENCE_STRUCTURE`].
+    /// Recipes from before #862 may carry `mass_specific_base_rate`, the
+    /// switch this replaced; it is ignored on load.
+    #[serde(default = "default_base_rate_reference_structure")]
+    pub base_rate_reference_structure: f32,
     /// Living-tissue resistance `ρ` (world-rules.md, *Consumption is
     /// incremental → Living tissue resists drains*): every drain on a living
     /// target is multiplied by `1 − ρ`, after expression and recognition and
@@ -901,6 +903,37 @@ pub const DEFAULT_UPTAKE_REFERENCE_STRUCTURE: f32 = 100.0;
 
 fn default_uptake_reference_structure() -> f32 {
     DEFAULT_UPTAKE_REFERENCE_STRUCTURE
+}
+
+/// Design default `S_p` (world-rules.md flow 8, *How large `b` is*): the
+/// median structure of the living established producers in the mode 1
+/// mesocosm's control, as #814 settled it under the size-scaled rule
+/// (`docs/research/814-mode1-combined-reading.md`: 6.937 pooled over seeds
+/// 1–5, 112,000 producer-samples, the last iteration moving it −1.1 %). A
+/// world parameter, stated once here, because a run's producers are one of
+/// its outputs and are not known when the rate is set. #870 re-reads it
+/// under the full physics.
+pub const DEFAULT_BASE_RATE_REFERENCE_STRUCTURE: f32 = 6.937;
+
+fn default_base_rate_reference_structure() -> f32 {
+    DEFAULT_BASE_RATE_REFERENCE_STRUCTURE
+}
+
+impl WorldParameters {
+    /// The mass-specific base rate `b = base_metabolic_rate / S_p +
+    /// structure_maintenance_coefficient` (world-rules.md flow 8, *How large
+    /// `b` is*), `S_p` the [`base_rate_reference_structure`]: energy per unit
+    /// structure per tick. An agent's base cost is `b · S`, which absorbs the
+    /// linear structure term, so an agent of structure `S_p` pays
+    /// `base_metabolic_rate + structure_maintenance_coefficient · S_p`, what
+    /// the per-agent constant charged it.
+    ///
+    /// [`base_rate_reference_structure`]: WorldParameters::base_rate_reference_structure
+    #[inline]
+    pub fn mass_specific_base_rate(&self) -> f32 {
+        self.base_metabolic_rate / self.base_rate_reference_structure
+            + self.structure_maintenance_coefficient
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2399,7 +2432,7 @@ mod tests {
             leaching_rate: 0.0,
             carcass_decay_constant: 0.0,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
-            mass_specific_base_rate: 0.0,
+            base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
             starvation_draws_earmark: false,
             starvation_shrinks: false,
@@ -3208,22 +3241,27 @@ mod tests {
     }
 
     #[test]
-    fn mass_specific_base_rate_round_trips_and_defaults_off() {
-        // #807: a recipe or checkpoint that predates the size-scaled base
-        // rate loads with it off (b = 0, the per-agent rule).
+    fn base_rate_reference_structure_round_trips_defaults_and_ignores_the_retired_switch() {
+        // #862: the reference structure round-trips; a recipe or checkpoint
+        // that predates it loads at the default; one that still carries
+        // #807's `mass_specific_base_rate` switch loads to the same
+        // parameters, the field ignored.
         let mut params = test_params();
-        params.mass_specific_base_rate = 0.025;
+        params.base_rate_reference_structure = 21.6;
         let json = serde_json::to_string(&params).unwrap();
         let back: WorldParameters = serde_json::from_str(&json).unwrap();
         assert_eq!(back, params);
 
         let mut value = serde_json::to_value(test_params()).unwrap();
-        value
-            .as_object_mut()
-            .unwrap()
-            .remove("mass_specific_base_rate");
-        let without: WorldParameters = serde_json::from_value(value).unwrap();
-        assert_eq!(without.mass_specific_base_rate, 0.0);
+        let obj = value.as_object_mut().unwrap();
+        obj.remove("base_rate_reference_structure");
+        obj.insert("mass_specific_base_rate".into(), serde_json::json!(0.025));
+        let old: WorldParameters = serde_json::from_value(value).unwrap();
+        assert_eq!(old, test_params());
+        assert_eq!(
+            old.base_rate_reference_structure,
+            DEFAULT_BASE_RATE_REFERENCE_STRUCTURE
+        );
     }
 
     #[test]
@@ -3605,15 +3643,17 @@ mod tests {
             founder_aggregation: 0.0,
         };
         let mut world = World::new(params, dist, 42);
-        // Manually add pure producers, seeded with a little nutrient so they can
-        // lay down initial structure on the first tick.
+        // Manually add pure producers with a little structure, so they pay a
+        // base rate and keep a retention buffer (#862: the base rate is
+        // `b · S`, and a structureless body would mobilise its whole reserve),
+        // seeded with a little nutrient so they can grow on the first tick.
         for i in 0..10 {
             world.add_agent(Agent {
                 id: 0, // will be reassigned
                 position: (i as f32 * 5.0 - 25.0, 0.0),
                 reserve: 50.0,
-                structure: 0.0,
-                peak_structure: 0.0,
+                structure: 1.0,
+                peak_structure: 1.0,
                 nutrient: 5.0,
                 traits: TraitVector {
                     photosynthetic_absorption: 0.8,
@@ -4048,6 +4088,9 @@ mod tests {
         params.network_connection_cap = 4;
         params.network_redistribution_rate = 0.5;
         params.network_transfer_efficiency = 0.8;
+        // Founded without structure, they pay no base rate and keep no
+        // retention buffer (#862): they hold their reserve instead.
+        params.reserve_mobilisation_rate = 0.0;
         let recipe = WorldRecipe {
             parameters: params,
             initial_distribution: None,
@@ -4093,6 +4136,9 @@ mod tests {
         params.network_connection_cap = 4;
         params.network_redistribution_rate = 0.5;
         params.network_transfer_efficiency = 0.8;
+        // Founded without structure, they pay no base rate and keep no
+        // retention buffer (#862): they hold their reserve instead.
+        params.reserve_mobilisation_rate = 0.0;
         let recipe = WorldRecipe {
             parameters: params,
             initial_distribution: None,
@@ -4157,6 +4203,9 @@ mod tests {
         params.network_connection_cap = 4;
         params.network_redistribution_rate = 0.5;
         params.network_transfer_efficiency = 0.8;
+        // Founded without structure, they pay no base rate and keep no
+        // retention buffer (#862): they hold their reserve instead.
+        params.reserve_mobilisation_rate = 0.0;
         let recipe = WorldRecipe {
             parameters: params,
             initial_distribution: None,
@@ -4451,8 +4500,11 @@ mod tests {
         params.network_redistribution_rate = 0.5;
         params.network_transfer_efficiency = 0.8;
         // Both hold their reserve (no growth or reproduction) so the
-        // producer stays the energy donor.
+        // producer stays the energy donor. They are founded without
+        // structure, so their base rate, and with it their retention buffer,
+        // is 0 (#862): nothing is mobilised instead.
         params.growth_retention_multiplier = 1000.0;
+        params.reserve_mobilisation_rate = 0.0;
         let recipe = WorldRecipe {
             parameters: params,
             initial_distribution: None,
@@ -4908,7 +4960,7 @@ mod tests {
             leaching_rate: 0.0,
             carcass_decay_constant: 0.0,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
-            mass_specific_base_rate: 0.0,
+            base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
             starvation_draws_earmark: false,
             starvation_shrinks: false,

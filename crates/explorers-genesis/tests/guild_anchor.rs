@@ -107,27 +107,22 @@ fn recipe() -> WorldRecipe {
 /// to 0, seed 2's rose from 0.93 to 0.98, seed 3's held at 0.09. The
 /// carcass-locked fraction fell on every seed (0.266, 0.164, 0.221 to 0.170,
 /// 0.134, 0.109).
+/// Re-pinned under #862: the base rate is `b · S` in every world, at the
+/// rate that leaves a producer of the established structure 6.937 paying what
+/// it did — a physics change, not a changed read. Every seed now reads zero
+/// on every column: the recipe, found under the per-agent constant, fails
+/// before it scores (seed 1 by nutrient lockup at tick 1950; on all three the
+/// agents of autotrophy 0.3 or less fall to a handful or none by ticks
+/// 1800–1900, and carcasses pile up). So until
+/// the recipe is found again under the full physics (after #870), this
+/// anchor pins only that the guild read does not turn a failed world into a
+/// scoring one.
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
-    (
-        1,
-        [
-            1058288591, 1052718225, 1064777997, 0, 1064958951, 1043209244,
-        ],
-    ),
-    (
-        2,
-        [
-            1060772118, 1049052463, 1062426957, 1065017672, 1062635307, 1040823731,
-        ],
-    ),
-    (
-        3,
-        [
-            1056878767, 1043538383, 1064234735, 1035489772, 1061855166, 1038062853,
-        ],
-    ),
+    (1, [0, 0, 0, 0, 0, 0]),
+    (2, [0, 0, 0, 0, 0, 0]),
+    (3, [0, 0, 0, 0, 0, 0]),
 ];
 
 fn readings(seed: u64) -> [u32; 6] {
