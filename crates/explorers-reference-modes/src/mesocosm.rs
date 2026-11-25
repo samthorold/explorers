@@ -484,28 +484,11 @@ pub fn decomposition_kinetics_section(k: &DecompositionKinetics) -> String {
     )
 }
 
-/// `S_p`, the median structure of an established producer (alive and older
-/// than [`ESTABLISHMENT_AGE`] ticks) in the committed mode 1 mesocosm's
-/// control, against which `--size-scaled-base-rate` sets `b` (#807; world
-/// rules, flow 8, *How large `b` is*). Read by #804
-/// (`docs/research/804-mode1-litter-supply.md`): 21.6 pooled over seeds 1–5
-/// on the control arms' second halves, 18,274 producer-samples, seed medians
-/// 18.1–24.2. A constant, because a run's own producers are one of its
-/// outputs and are not known when `b` is set.
-pub const ESTABLISHED_PRODUCER_STRUCTURE: f32 = 21.6;
-
-/// The mass-specific base rate at which an agent of structure `s_p` pays
-/// under `b · S` what it pays under the per-agent rule:
-/// `b = base_metabolic_rate / S_p + structure_maintenance_coefficient`.
-pub fn mass_specific_base_rate_for(params: &WorldParameters, s_p: f32) -> f32 {
-    params.base_metabolic_rate / s_p + params.structure_maintenance_coefficient
-}
-
-/// One agent's per-tick upkeep under one metabolic rule, as #804 reckoned it.
+/// One agent's per-tick upkeep under the world's rules, as #804 reckoned it.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Upkeep {
-    /// The base rate and structure term: `base_metabolic_rate +
-    /// structure_maintenance_coefficient · S` per agent, `b · S` size-scaled.
+    /// The base rate, which carries the structure term: `b · S` (world rules,
+    /// flow 8, *The base rate scales with structure*).
     pub base_and_structure: f32,
     /// What `metabolise` charges: the above, trait maintenance and the
     /// cross-trait cost.
@@ -517,45 +500,38 @@ pub struct Upkeep {
     pub total: f32,
 }
 
-/// An agent's upkeep at founding under both rules.
+/// An agent's upkeep at founding.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct FoundingUpkeep {
     /// Its structure at founding.
     pub structure: f32,
-    /// Under the per-agent base rate (`mass_specific_base_rate` 0).
-    pub per_agent: Upkeep,
-    /// Under the size-scaled base rate `b · S`.
-    pub size_scaled: Upkeep,
+    /// Its upkeep under the world's rules.
+    pub upkeep: Upkeep,
 }
 
-/// What `--size-scaled-base-rate` set (#807), read from the world the run
-/// built.
+/// The founders' upkeep at founding under the world's rules (#807, #862),
+/// with the base rate that sets it.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
-pub struct SizeScaledBaseRate {
-    /// `S_p`: [`ESTABLISHED_PRODUCER_STRUCTURE`], or the value given to
-    /// [`set_size_scaled_base_rate_at`].
-    pub established_producer_structure: f32,
-    /// The per-agent base rate `b` replaces.
+pub struct FoundersUpkeep {
+    /// `S_p`, the world's base-rate reference structure.
+    pub base_rate_reference_structure: f32,
+    /// The base rate an agent of structure `S_p` pays.
     pub base_metabolic_rate: f32,
     /// The structure coefficient `b` absorbs.
     pub structure_maintenance_coefficient: f32,
-    /// `b`, set on the world, per unit structure per tick.
+    /// `b`, per unit structure per tick.
     pub mass_specific_base_rate: f32,
     /// A decomposer founder's upkeep, each field the mean over the founders:
     /// `None` without them.
     pub decomposer_founder: Option<FoundingUpkeep>,
-    /// The producer founder of median per-agent upkeep (the lower median):
-    /// `None` without producers.
+    /// The producer founder of median upkeep (the lower median): `None`
+    /// without producers.
     pub median_producer: Option<FoundingUpkeep>,
 }
 
 fn upkeep(agent: &explorers_sim::Agent, params: &WorldParameters) -> Upkeep {
     let metabolic = explorers_sim::phase::metabolic_cost(agent, params);
-    let base_and_structure = if params.mass_specific_base_rate > 0.0 {
-        params.mass_specific_base_rate * agent.structure
-    } else {
-        params.base_metabolic_rate + params.structure_maintenance_coefficient * agent.structure
-    };
+    let base_and_structure = params.mass_specific_base_rate() * agent.structure;
     let stride = agent.effective_trait_with_steepness(2, params.wear_degradation_steepness)
         * explorers_sim::units::MOBILITY_DISTANCE_PER_TICK;
     let movement = stride * params.movement_cost_coefficient * agent.structure;
@@ -567,31 +543,14 @@ fn upkeep(agent: &explorers_sim::Agent, params: &WorldParameters) -> Upkeep {
     }
 }
 
-/// Turn the size-scaled base rate on in `world`, at `b` from
-/// [`ESTABLISHED_PRODUCER_STRUCTURE`] ([`mass_specific_base_rate_for`]), and
-/// record the founders' upkeep under both rules. Call it on a world at
-/// founding, with the switch off.
-pub fn set_size_scaled_base_rate(world: &mut World) -> SizeScaledBaseRate {
-    set_size_scaled_base_rate_at(world, ESTABLISHED_PRODUCER_STRUCTURE)
-}
-
-/// [`set_size_scaled_base_rate`] at an `S_p` given explicitly (#814), for a
-/// reading that settles `S_p` under the rules it runs with rather than
-/// #804's per-agent world. `s_p` is a structure, finite and above 0.
-pub fn set_size_scaled_base_rate_at(world: &mut World, s_p: f32) -> SizeScaledBaseRate {
-    let per_agent = WorldParameters {
-        mass_specific_base_rate: 0.0,
-        ..world.params().clone()
-    };
-    let b = mass_specific_base_rate_for(&per_agent, s_p);
-    let size_scaled = WorldParameters {
-        mass_specific_base_rate: b,
-        ..per_agent.clone()
-    };
+/// The founders' upkeep at founding under `world`'s rules: the decomposer
+/// founders' mean and the median producer founder's. Read it on a world at
+/// founding, after every rule a run sets.
+pub fn founders_upkeep(world: &World) -> FoundersUpkeep {
+    let params = world.params();
     let founding = |a: &explorers_sim::Agent| FoundingUpkeep {
         structure: a.structure,
-        per_agent: upkeep(a, &per_agent),
-        size_scaled: upkeep(a, &size_scaled),
+        upkeep: upkeep(a, params),
     };
     let decomposers: Vec<FoundingUpkeep> = world
         .agents()
@@ -602,16 +561,14 @@ pub fn set_size_scaled_base_rate_at(world: &mut World, s_p: f32) -> SizeScaledBa
     let mean = |v: &dyn Fn(&FoundingUpkeep) -> f32| {
         (decomposers.iter().map(|f| v(f) as f64).sum::<f64>() / decomposers.len() as f64) as f32
     };
-    let mean_upkeep = |u: fn(&FoundingUpkeep) -> &Upkeep| Upkeep {
-        base_and_structure: mean(&|f| u(f).base_and_structure),
-        metabolic: mean(&|f| u(f).metabolic),
-        movement: mean(&|f| u(f).movement),
-        total: mean(&|f| u(f).total),
-    };
     let decomposer_founder = (!decomposers.is_empty()).then(|| FoundingUpkeep {
         structure: mean(&|f| f.structure),
-        per_agent: mean_upkeep(|f| &f.per_agent),
-        size_scaled: mean_upkeep(|f| &f.size_scaled),
+        upkeep: Upkeep {
+            base_and_structure: mean(&|f| f.upkeep.base_and_structure),
+            metabolic: mean(&|f| f.upkeep.metabolic),
+            movement: mean(&|f| f.upkeep.movement),
+            total: mean(&|f| f.upkeep.total),
+        },
     });
     let mut producers: Vec<FoundingUpkeep> = world
         .agents()
@@ -619,30 +576,38 @@ pub fn set_size_scaled_base_rate_at(world: &mut World, s_p: f32) -> SizeScaledBa
         .filter(|a| a.traits.photosynthetic_absorption > 0.0)
         .map(founding)
         .collect();
-    producers.sort_by(|a, b| a.per_agent.total.total_cmp(&b.per_agent.total));
+    producers.sort_by(|a, b| a.upkeep.total.total_cmp(&b.upkeep.total));
     let median_producer = (!producers.is_empty()).then(|| producers[(producers.len() - 1) / 2]);
-    world.params_mut().mass_specific_base_rate = b;
-    SizeScaledBaseRate {
-        established_producer_structure: s_p,
-        base_metabolic_rate: per_agent.base_metabolic_rate,
-        structure_maintenance_coefficient: per_agent.structure_maintenance_coefficient,
-        mass_specific_base_rate: b,
+    FoundersUpkeep {
+        base_rate_reference_structure: params.base_rate_reference_structure,
+        base_metabolic_rate: params.base_metabolic_rate,
+        structure_maintenance_coefficient: params.structure_maintenance_coefficient,
+        mass_specific_base_rate: params.mass_specific_base_rate(),
         decomposer_founder,
         median_producer,
     }
 }
 
-/// The summary's account of the size-scaled base rate set.
-pub fn size_scaled_base_rate_section(r: &SizeScaledBaseRate) -> String {
+/// Set the base-rate reference structure `S_p` in `world` in place of the
+/// default (#814's option, kept as an override since #862 made the rule the
+/// world's), and record the founders' upkeep at it. `s_p` is a structure,
+/// finite and above 0. Call it on a world at founding.
+pub fn set_base_rate_reference_structure(world: &mut World, s_p: f32) -> FoundersUpkeep {
+    world.params_mut().base_rate_reference_structure = s_p;
+    founders_upkeep(world)
+}
+
+/// The summary's account of a base-rate reference structure a run set.
+pub fn base_rate_reference_structure_section(r: &FoundersUpkeep) -> String {
     use std::fmt::Write;
     let mut out = format!(
-        "## Size-scaled base rate (--size-scaled-base-rate)\n\n\
+        "## Base-rate reference structure (--established-producer-structure)\n\n\
          b = base_metabolic_rate / S_p + structure_maintenance_coefficient = \
          {} / {} + {} = {:.5} per unit structure per tick\n\n\
-         | founder at founding | structure | rule | base and structure | metabolic | movement (full stride) | upkeep |\n\
-         |---|---:|---|---:|---:|---:|---:|",
+         | founder at founding | structure | base and structure | metabolic | movement (full stride) | upkeep |\n\
+         |---|---:|---:|---:|---:|---:|",
         r.base_metabolic_rate,
-        r.established_producer_structure,
+        r.base_rate_reference_structure,
         r.structure_maintenance_coefficient,
         r.mass_specific_base_rate,
     );
@@ -651,14 +616,13 @@ pub fn size_scaled_base_rate_section(r: &SizeScaledBaseRate) -> String {
         ("producer (median)", r.median_producer),
     ] {
         let Some(f) = f else { continue };
-        for (rule, u) in [("per agent", f.per_agent), ("size-scaled", f.size_scaled)] {
-            write!(
-                out,
-                "\n| {name} | {:.3} | {rule} | {:.4} | {:.4} | {:.4} | {:.4} |",
-                f.structure, u.base_and_structure, u.metabolic, u.movement, u.total
-            )
-            .unwrap();
-        }
+        let u = f.upkeep;
+        write!(
+            out,
+            "\n| {name} | {:.3} | {:.4} | {:.4} | {:.4} | {:.4} |",
+            f.structure, u.base_and_structure, u.metabolic, u.movement, u.total
+        )
+        .unwrap();
     }
     out
 }
@@ -693,14 +657,12 @@ pub fn living_resistance_section(rho: f32) -> String {
 /// Declared once here so every rung reads the same mesocosm and a
 /// recalibration moves them together. It is applied to a world at founding
 /// ([`DecomposerMesocosm::apply`]); the committed mesocosm without it is
-/// unchanged, its four rules off.
+/// unchanged, its rules off. #814's fourth rule, the size-scaled base rate at
+/// `S_p` 6.937, is the world's own since #862
+/// ([`explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE`]), so the
+/// declaration no longer sets it.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct DecomposerMesocosm {
-    /// `S_p` for the size-scaled base rate: #814's settled value, read on the
-    /// mesocosm's own control with all four rules on
-    /// (`docs/research/814-mode1-combined-reading.md`; reference-modes.md,
-    /// mode 1, *Mesocosm*, *Upkeep*).
-    pub established_producer_structure: f32,
     /// `L`, the litter half-life under full saturation, in producer lifespans
     /// (reference-modes.md, mode 1, *Drain kinetics, and what the litter can
     /// feed*; the budget at L 1 in *Decomposer founders*, *The stepper's
@@ -722,37 +684,39 @@ pub struct DecomposerMesocosm {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct DecomposerRules {
     pub kinetics: DecompositionKinetics,
-    pub size_scaled: SizeScaledBaseRate,
+    /// The founders' upkeep under the rules applied, at the world's base
+    /// rate (#862).
+    pub upkeep: FoundersUpkeep,
     pub living_resistance: f32,
 }
 
 impl DecomposerMesocosm {
-    /// The decomposer mesocosm as the design declares it: #814's four rules
-    /// (saturating decomposition, its half-saturation, the size-scaled base
-    /// rate and living resistance) at `S_p` 6.937, L 1 and K 1, at the
-    /// founding litter ratio 170.
+    /// The decomposer mesocosm as the design declares it: #814's rules that
+    /// are not yet the world's (saturating decomposition, its
+    /// half-saturation, and living resistance) at L 1 and K 1, at the
+    /// founding litter ratio 170. The size-scaled base rate runs at the
+    /// world's `S_p`, #814's 6.937.
     pub const DECLARED: Self = Self {
-        established_producer_structure: 6.937,
         litter_half_life: 1.0,
         enzyme_half_saturation: 1.0,
         founding_litter_ratio: 170.0,
     };
 
-    /// Turn the four rules on in `world` at founding, at the declared values:
-    /// [`set_decomposition_kinetics`], [`set_size_scaled_base_rate_at`] and
-    /// [`set_living_resistance`]. `None`, leaving the world untouched, when
-    /// it has no decomposer founders, since `K` is in their capabilities.
+    /// Turn the rules on in `world` at founding, at the declared values:
+    /// [`set_decomposition_kinetics`] and [`set_living_resistance`], and read
+    /// the founders' upkeep ([`founders_upkeep`]). `None`, leaving the world
+    /// untouched, when it has no decomposer founders, since `K` is in their
+    /// capabilities.
     pub fn apply(&self, world: &mut World) -> Option<DecomposerRules> {
         let kinetics = set_decomposition_kinetics(
             world,
             self.litter_half_life,
             Some(self.enzyme_half_saturation),
         )?;
-        let size_scaled = set_size_scaled_base_rate_at(world, self.established_producer_structure);
         let living_resistance = set_living_resistance(world);
         Some(DecomposerRules {
             kinetics,
-            size_scaled,
+            upkeep: founders_upkeep(world),
             living_resistance,
         })
     }
@@ -4778,75 +4742,56 @@ mod tests {
         assert!(set_body_reach_pieces(&mut world, 10.0).is_none());
     }
 
-    /// `set_size_scaled_base_rate` (#807; world rules, flow 8, *How large `b`
-    /// is*) sets `b = base_metabolic_rate / S_p +
-    /// structure_maintenance_coefficient`, `S_p` the established producers'
-    /// median structure #804 read, and records the decomposer founder's and
-    /// the median producer founder's upkeep at founding under both rules.
-    /// #804 worked the founder's out by hand: 0.407 a tick today, 0.121
-    /// size-scaled.
+    /// `founders_upkeep` (#807, #862; world rules, flow 8, *How large `b`
+    /// is*) records the decomposer founder's and the median producer
+    /// founder's upkeep at founding under the world's base rate `b · S`, `b =
+    /// base_metabolic_rate / S_p + structure_maintenance_coefficient` at the
+    /// world's `S_p`, 6.937.
     #[test]
-    fn set_size_scaled_base_rate_sets_b_and_records_the_upkeep() {
-        assert_eq!(ESTABLISHED_PRODUCER_STRUCTURE, 21.6);
+    fn founders_upkeep_records_the_size_scaled_base_rate() {
         let spec = Mode1Spec::committed();
-        let mut world = mode1_mesocosm(
+        let world = mode1_mesocosm(
             &spec,
             mesocosm_wear(),
             1,
             Community::ProducersAndDecomposers,
         );
-        let before = world.params().clone();
-        assert_eq!(before.mass_specific_base_rate, 0.0);
-        let r = set_size_scaled_base_rate(&mut world);
-        let b = before.base_metabolic_rate / ESTABLISHED_PRODUCER_STRUCTURE
-            + before.structure_maintenance_coefficient;
+        let p = world.params();
         assert_eq!(
-            r.established_producer_structure,
-            ESTABLISHED_PRODUCER_STRUCTURE
+            p.base_rate_reference_structure,
+            explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE
         );
+        let r = founders_upkeep(&world);
+        let b = p.base_metabolic_rate / 6.937 + p.structure_maintenance_coefficient;
         assert_eq!(r.mass_specific_base_rate, b);
-        assert_eq!(world.params().mass_specific_base_rate, b);
-        assert!((b - 0.02496).abs() < 1e-4, "b {b}");
+        assert!((b - 0.05651).abs() < 1e-4, "b {b}");
 
         let founder = r.decomposer_founder.expect("decomposer founders");
         assert!(
-            (founder.per_agent.total - 0.407).abs() < 1e-3,
+            (founder.upkeep.base_and_structure - b * founder.structure).abs() < 1e-6,
             "{founder:?}"
         );
-        assert!(
-            (founder.size_scaled.total - 0.121).abs() < 1e-3,
-            "{founder:?}"
-        );
-        assert!((founder.per_agent.base_and_structure - 0.347).abs() < 1e-3);
-        assert!((founder.size_scaled.base_and_structure - 0.061).abs() < 1e-3);
-        assert_eq!(founder.per_agent.movement, founder.size_scaled.movement);
-        assert!((founder.per_agent.movement - 0.0165).abs() < 1e-3);
-
-        // The median producer founder, smaller than S_p, pays less.
+        assert!((founder.upkeep.movement - 0.0165).abs() < 1e-3);
+        // The median producer founder, smaller than S_p, pays less base rate
+        // than the per-agent constant charged it.
         let producer = r.median_producer.expect("producer founders");
-        assert!(producer.structure < ESTABLISHED_PRODUCER_STRUCTURE);
+        assert!(producer.structure < 6.937);
         assert!(
-            producer.size_scaled.total < producer.per_agent.total,
+            producer.upkeep.base_and_structure
+                < p.base_metabolic_rate + p.structure_maintenance_coefficient * producer.structure,
             "{producer:?}"
         );
-        let section = size_scaled_base_rate_section(&r);
-        assert!(section.contains("## Size-scaled base rate"), "{section}");
 
         // Producers only: no decomposer founder to record.
-        let mut world = mode1_mesocosm(&spec, mesocosm_wear(), 1, Community::ProducersOnly);
-        assert!(
-            set_size_scaled_base_rate(&mut world)
-                .decomposer_founder
-                .is_none()
-        );
+        let world = mode1_mesocosm(&spec, mesocosm_wear(), 1, Community::ProducersOnly);
+        assert!(founders_upkeep(&world).decomposer_founder.is_none());
     }
 
-    /// `set_size_scaled_base_rate_at` (#814) sets `b` from an `S_p` given
-    /// explicitly, so a reading can settle `S_p` under the rules it runs
-    /// with, and records that `S_p`. At [`ESTABLISHED_PRODUCER_STRUCTURE`] it
-    /// is `set_size_scaled_base_rate`.
+    /// `set_base_rate_reference_structure` (#814's option) sets `S_p` in place
+    /// of the default and records the upkeep at it: a smaller `S_p` raises
+    /// `b`, so the founder pays more.
     #[test]
-    fn set_size_scaled_base_rate_at_takes_s_p_explicitly() {
+    fn set_base_rate_reference_structure_takes_s_p_explicitly() {
         let spec = Mode1Spec::committed();
         let build = || {
             mode1_mesocosm(
@@ -4856,27 +4801,31 @@ mod tests {
                 Community::ProducersAndDecomposers,
             )
         };
+        let default = build();
+        let d = founders_upkeep(&default);
         let mut world = build();
-        let before = world.params().clone();
-        let r = set_size_scaled_base_rate_at(&mut world, 11.9);
-        let b = before.base_metabolic_rate / 11.9 + before.structure_maintenance_coefficient;
-        assert_eq!(r.established_producer_structure, 11.9);
-        assert_eq!(r.mass_specific_base_rate, b);
-        assert_eq!(world.params().mass_specific_base_rate, b);
-        let founder = r.decomposer_founder.expect("decomposer founders");
-        // A smaller S_p raises b, so the founder pays more than at 21.6.
-        let mut default = build();
-        let d = set_size_scaled_base_rate(&mut default);
-        assert!(b > d.mass_specific_base_rate);
-        assert!(founder.size_scaled.total > d.decomposer_founder.unwrap().size_scaled.total);
-        assert_eq!(founder.per_agent, d.decomposer_founder.unwrap().per_agent);
+        let r = set_base_rate_reference_structure(&mut world, 4.0);
+        assert_eq!(world.params().base_rate_reference_structure, 4.0);
+        assert_eq!(r.base_rate_reference_structure, 4.0);
+        assert!(r.mass_specific_base_rate > d.mass_specific_base_rate);
+        assert!(
+            r.decomposer_founder.unwrap().upkeep.total > d.decomposer_founder.unwrap().upkeep.total
+        );
+        let section = base_rate_reference_structure_section(&r);
+        assert!(
+            section.contains("## Base-rate reference structure"),
+            "{section}"
+        );
 
-        let mut at_constant = build();
+        let mut at_default = build();
         assert_eq!(
-            set_size_scaled_base_rate_at(&mut at_constant, ESTABLISHED_PRODUCER_STRUCTURE),
+            set_base_rate_reference_structure(
+                &mut at_default,
+                explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE
+            ),
             d
         );
-        assert_eq!(at_constant.params(), default.params());
+        assert_eq!(at_default.params(), default.params());
     }
 
     /// Ticks until a carcass drained every tick by one unit-heterotrophy
@@ -5065,14 +5014,14 @@ mod tests {
         assert_eq!(world.params().carcass_decay_constant, 0.0);
     }
 
-    /// The decomposer mesocosm (#884) declares #814's four rules at `S_p`
-    /// 6.937, L 1 and K 1, and the domain's founding litter ratio 170. Applied
-    /// to a world at founding, it sets exactly what the four setters set at
-    /// those values, and reports what they report.
+    /// The decomposer mesocosm (#884) declares #814's rules that are not yet
+    /// the world's at L 1 and K 1, and the domain's founding litter ratio
+    /// 170; the size-scaled base rate at `S_p` 6.937 is the world's own
+    /// (#862). Applied to a world at founding, it sets exactly what the
+    /// setters set at those values, and reports what they report.
     #[test]
-    fn the_decomposer_mesocosm_applies_its_four_rules_at_their_declared_values() {
+    fn the_decomposer_mesocosm_applies_its_rules_at_their_declared_values() {
         let d = DecomposerMesocosm::DECLARED;
-        assert_eq!(d.established_producer_structure, 6.937);
         assert_eq!(d.litter_half_life, 1.0);
         assert_eq!(d.enzyme_half_saturation, 1.0);
         assert_eq!(d.founding_litter_ratio, 170.0);
@@ -5088,15 +5037,16 @@ mod tests {
         };
         let mut by_hand = build();
         let kinetics = set_decomposition_kinetics(&mut by_hand, 1.0, Some(1.0)).unwrap();
-        let size_scaled = set_size_scaled_base_rate_at(&mut by_hand, 6.937);
         let living_resistance = set_living_resistance(&mut by_hand);
+        let upkeep = founders_upkeep(&by_hand);
+        assert_eq!(upkeep.base_rate_reference_structure, 6.937);
 
         let mut declared = build();
         let rules = d
             .apply(&mut declared)
             .expect("the mesocosm has decomposers");
         assert_eq!(rules.kinetics, kinetics);
-        assert_eq!(rules.size_scaled, size_scaled);
+        assert_eq!(rules.upkeep, upkeep);
         assert_eq!(rules.living_resistance, living_resistance);
         assert_eq!(declared.params(), by_hand.params());
         assert_eq!(agent_state(&declared), agent_state(&by_hand));
@@ -5110,8 +5060,8 @@ mod tests {
     }
 
     /// Without the declaration applied, the committed mesocosm is unchanged
-    /// (#884): its four rules are off, and applying the declaration moves no
-    /// agent, carcass or nutrient and no parameter but the four it sets.
+    /// (#884): its rules are off, and applying the declaration moves no
+    /// agent, carcass or nutrient and no parameter but the three it sets.
     #[test]
     fn the_committed_mesocosm_without_the_declaration_is_unchanged() {
         let spec = Mode1Spec::committed();
@@ -5126,7 +5076,6 @@ mod tests {
         let committed = build();
         let p = committed.params();
         assert_eq!(p.carcass_decay_constant, 0.0);
-        assert_eq!(p.mass_specific_base_rate, 0.0);
         assert_eq!(p.living_resistance, 0.0);
         assert_eq!(
             p.carcass_half_saturation,
@@ -5144,7 +5093,6 @@ mod tests {
         let restored = WorldParameters {
             carcass_decay_constant: p.carcass_decay_constant,
             carcass_half_saturation: p.carcass_half_saturation,
-            mass_specific_base_rate: p.mass_specific_base_rate,
             living_resistance: p.living_resistance,
             ..declared.params().clone()
         };

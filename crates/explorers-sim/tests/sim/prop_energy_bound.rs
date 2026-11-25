@@ -65,10 +65,13 @@ proptest! {
     #![proptest_config(support::proptest_config(256))]
 
     /// Lemma 2 of the note: every agent alive at the start of a tick that is
-    /// still alive at its end paid its full metabolic cost (at least the base
-    /// rate `B`) to heat, and no other flow creates energy, so
-    /// `E_tot(t+1) ≤ E_tot(t) + P(t) − B · N_s(t)` with `N_s` the tick's
-    /// survivors. Deaths only move energy to carcasses or heat, so this is
+    /// still alive at its end paid its full metabolic cost (at least its base
+    /// rate) to heat, and no other flow creates energy, so
+    /// `E_tot(t+1) ≤ E_tot(t) + P(t) − Σ base rates` over the tick's
+    /// survivors. Since #862 a survivor's base rate is `b · S`, `S` its
+    /// structure at the start of the tick (metabolism runs before anything
+    /// moves structure), where the note's `B` was one constant per agent.
+    /// Deaths only move energy to carcasses or heat, so this is
     /// independent of the #445 starvation-overdraft accounting bug.
     ///
     /// Runs over the full search domain, including non-integer and odd
@@ -78,10 +81,10 @@ proptest! {
     #[test]
     fn total_energy_drops_by_base_rate_per_survivor(case in world_case()) {
         let mut world = World::new(case.params.clone(), case.dist.clone(), case.seed);
-        let b = case.params.base_metabolic_rate;
+        let b = case.params.mass_specific_base_rate();
         for tick in 0..case.ticks {
-            let before_ids: std::collections::BTreeSet<u64> =
-                world.agents().iter().map(|a| a.id).collect();
+            let structure_before: std::collections::BTreeMap<u64, f32> =
+                world.agents().iter().map(|a| (a.id, a.structure)).collect();
             let e_before = total_energy(&world);
             let solar_before = world.total_solar_input();
             world.step();
@@ -89,10 +92,14 @@ proptest! {
             let survivors = world
                 .agents()
                 .iter()
-                .filter(|a| before_ids.contains(&a.id))
+                .filter(|a| structure_before.contains_key(&a.id))
                 .count();
+            let base_paid: f32 = (world.agents().iter())
+                .filter_map(|a| structure_before.get(&a.id))
+                .map(|s| b * s)
+                .sum();
             let e_after = total_energy(&world);
-            let bound = e_before + income - b * survivors as f32;
+            let bound = e_before + income - base_paid;
             let slack = (e_before + income).abs().max(1.0) * REL_TOLERANCE;
             prop_assert!(
                 e_after <= bound + slack,
@@ -141,7 +148,9 @@ fn lone_producer_hoards_reproductive_allocation_without_bound() {
     };
     // Past the transient the per-tick gain settles toward a positive limit
     // (structure, the only taxed stock, saturates; the allocation does not).
-    for _ in 0..50 {
+    // The transient is 100 ticks: since #862 the base rate is `b · S`, so
+    // the growing body's upkeep rises with it and its structure settles later.
+    for _ in 0..100 {
         world.step();
     }
     assert_eq!(world.agents().len(), 1, "the lone producer must persist");

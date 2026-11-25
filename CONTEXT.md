@@ -152,7 +152,7 @@ Gross primary production minus autotrophic respiration. The energy actually avai
 _Avoid_: NPP (abbreviation), surplus (implies waste — NPP is the functional output of the producer base)
 
 **Metabolic cost**:
-The energy an agent expends per **tick**. Comprises a base rate, plus costs for movement, sensing, trait maintenance, and somatic maintenance (governed by **kappa**). Each specification trait (autotrophy, heterotrophy, mobility) costs energy to maintain whether used or not — and each trait's maintenance cost grows superlinearly with its own value, which caps each trait (breadth-neutral: see **Trait maintenance cost**). Agents that carry traits they never exercise pay for the biological machinery, creating selection pressure against idle machinery. Somatic maintenance — repairing accumulated **wear** — is funded from the soma fraction of mobilised energy as determined by kappa, competing directly with reproduction. Metabolism costs energy only — nutrients are not released as metabolic waste. Nutrients leave living agents only through grazing (the bound portion of the structure eaten) or death.
+The energy an agent expends per **tick**. Comprises a base rate, proportional to the agent's structure (the **mass-specific base rate**), plus costs for movement, sensing, trait maintenance, and somatic maintenance (governed by **kappa**). Each specification trait (autotrophy, heterotrophy, mobility) costs energy to maintain whether used or not — and each trait's maintenance cost grows superlinearly with its own value, which caps each trait (breadth-neutral: see **Trait maintenance cost**). Agents that carry traits they never exercise pay for the biological machinery, creating selection pressure against idle machinery. Somatic maintenance — repairing accumulated **wear** — is funded from the soma fraction of mobilised energy as determined by kappa, competing directly with reproduction. Metabolism costs energy only — nutrients are not released as metabolic waste. Nutrients leave living agents only through grazing (the bound portion of the structure eaten) or death.
 _Avoid_: upkeep, energy drain, maintenance
 
 **Somatic wear**:
@@ -307,6 +307,13 @@ _Avoid_: root coefficient (there is no separate root organ; the body is the upta
 
 **Uptake reference structure**:
 The body size `s_ref` at which size-scaled **nutrient uptake** equals size-blind uptake, whatever the **uptake structure exponent**. A world parameter, in units of structure; inert while the exponent is 0.
+
+**Base-rate reference structure**:
+The body size `S_p` at which an agent pays the base rate the world states, `base_metabolic_rate`, on top of the structure term. Every body pays the **mass-specific base rate** `b = base_metabolic_rate / S_p + structure_maintenance_coefficient` per unit of its structure, so one of structure `S_p` pays what a per-agent constant would. Its value is the structure of a median established producer. A world parameter, in units of structure.
+_Avoid_: established producer structure (that is the reading its value comes from, not the parameter)
+
+**Mass-specific base rate**:
+The base rate per unit of structure, `b`: an agent's base **metabolic cost** is `b · S`, `S` its structure, with no per-agent constant. Derived from `base_metabolic_rate`, the **base-rate reference structure** and `structure_maintenance_coefficient`, not set on its own.
 
 **Growth retention multiplier**:
 The size of the retention buffer in the grow phase, expressed as a multiple of an agent's per-tick metabolic cost. Surplus eligible for kappa-allocation is `reserve − (metabolic_cost × multiplier)`. A higher multiplier makes agents hoard more reserve against future metabolism before committing any to soma or reproductive allocation, slowing both growth and reproductive accumulation. The retention buffer sets *which* reserve is mobilisable; the **reserve mobilisation rate** sets *how fast* that mobilisable reserve is drawn down. A world parameter.
