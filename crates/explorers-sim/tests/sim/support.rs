@@ -88,7 +88,7 @@ pub fn viable_baseline() -> WorldParameters {
         recognition_distance: 0.5,
         cross_trait_cost: 0.0,
         leaching_rate: 0.0,
-        carcass_decay_constant: 0.0,
+        carcass_decay_constant: explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT,
         carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
         base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
         living_resistance: 0.0,
@@ -300,13 +300,15 @@ pub fn world_case_with_fast_tissue_turnover() -> impl Strategy<Value = WorldCase
     })
 }
 
-/// A stepper case with saturating carcass decomposition on (#803): the wear
-/// case, so senescent and starved agents leave carcasses within the run, with
-/// the decay constant drawn from slow to total per tick and the
-/// half-saturation constant either from a hundredth of one unit drainer to
-/// several, where carcasses persist, or far below one drainer, where a fast
-/// decay crosses the remnant floor within a few ticks. A separate strategy,
-/// so `world_case()` draws exactly the inputs it always has.
+/// A stepper case with saturating carcass decomposition stressed (#803;
+/// physics in every world at the default since #864): the wear case, so
+/// senescent and starved agents leave carcasses within the run, with the
+/// decay constant drawn from slow to total per tick, far faster than the
+/// default, and the half-saturation constant either from a hundredth of one
+/// unit drainer to several, where carcasses persist, or far below one
+/// drainer, where a fast decay crosses the remnant floor within a few ticks.
+/// A separate strategy, so `world_case()` draws exactly the inputs it always
+/// has.
 pub fn world_case_with_saturating_decomposition() -> impl Strategy<Value = WorldCase> {
     (
         world_case_with_wear(),
@@ -322,10 +324,10 @@ pub fn world_case_with_saturating_decomposition() -> impl Strategy<Value = World
 
 /// A stepper case with living-tissue resistance on (#813): the wear case, so
 /// living targets are drained and carcasses form within the run, with `ρ`
-/// drawn across `[0, 1]` or at 1, where no living target is drained, and
-/// saturating carcass decomposition on in half the cases, so both carcass
-/// paths run beside the resisted living drains. A separate strategy, so
-/// `world_case()` draws exactly the inputs it always has.
+/// drawn across `[0, 1]` or at 1, where no living target is drained, and the
+/// carcass decay constant at the world's own in half the cases and drawn up
+/// to total per tick in the rest. A separate strategy, so `world_case()`
+/// draws exactly the inputs it always has.
 pub fn world_case_with_living_resistance() -> impl Strategy<Value = WorldCase> {
     (
         world_case_with_wear(),
@@ -334,9 +336,21 @@ pub fn world_case_with_living_resistance() -> impl Strategy<Value = WorldCase> {
     )
         .prop_map(|(mut case, rho, k_d)| {
             case.params.living_resistance = rho;
-            case.params.carcass_decay_constant = k_d;
+            case.params.carcass_decay_constant = decay_constant_or_default(k_d);
             case
         })
+}
+
+/// A drawn carcass decay constant, or the world's own where the strategy
+/// draws the retired off value 0 (#864): the dimension is still drawn, so
+/// committed regression seeds replay the cases they were saved for, but 0
+/// no longer means the additive drain, so it reads as the default.
+fn decay_constant_or_default(k_d: f32) -> f32 {
+    if k_d > 0.0 {
+        k_d
+    } else {
+        explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT
+    }
 }
 
 /// A stepper case with the network on (flow 5, #738): the C1 domain with a
@@ -384,8 +398,8 @@ pub fn proptest_config(cases: u32) -> ProptestConfig {
 
 /// A stepper case where agents starve within the run (#821, #863): the wear
 /// case, so agents starve, draw down their earmark, shrink and die by the
-/// structural rule, with saturating carcass decomposition on in half the
-/// cases. The nutrient pool is drawn small (50 to 500, against the
+/// structural rule, with the carcass decay constant at the world's own in
+/// half the cases and drawn up to total per tick in the rest. The nutrient pool is drawn small (50 to 500, against the
 /// baseline's 50000), so the closure tolerance, relative to the total, is
 /// fine enough to catch the bound nutrient a burn frees going astray. The
 /// starvation cascade runs in every case of every strategy since #863; this
@@ -398,7 +412,7 @@ pub fn world_case_with_starvation_cascade() -> impl Strategy<Value = WorldCase> 
         50.0f32..=500.0,
     )
         .prop_map(|(mut case, k_d, pool)| {
-            case.params.carcass_decay_constant = k_d;
+            case.params.carcass_decay_constant = decay_constant_or_default(k_d);
             case.params.initial_nutrient_pool = pool;
             case
         })

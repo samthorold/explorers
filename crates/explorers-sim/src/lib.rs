@@ -142,7 +142,8 @@ pub const DEFAULT_SENESCENCE_HAZARD: f32 = 0.01;
 /// 0.5 is the band's geometric centre.
 pub const TISSUE_LIFETIME_LITTER_HALF_LIVES: f32 = 0.5;
 
-/// The world's time anchor for the turnover rate: a litter half-life of
+/// The world's time anchor for the turnover rate and the carcass decay
+/// constant ([`DEFAULT_CARCASS_DECAY_CONSTANT`]): a litter half-life of
 /// `REFERENCE_LITTER_HALF_LIFE` producer lifespans of
 /// `REFERENCE_PRODUCER_LIFESPAN_TICKS` ticks, the mode 1 mesocosm's declared
 /// `L` and its established producers' lifespan `T_p`
@@ -714,17 +715,18 @@ pub struct WorldParameters {
     /// holds. The total drained from one carcass is
     /// `D = k_d · S · Σc / (K + Σc)`, `Σc` the summed drain capability of its
     /// drainers, and each drainer takes `c / Σc` of it. Per tick, in `[0, 1]`.
-    /// A carcass that falls below [`CARCASS_REMNANT_FLOOR_FRACTION`] of its
-    /// structure at death leaves the world. Default `0.0` keeps carcass drains
-    /// additive, shared only at the cap, with no floor, so every existing
-    /// recipe, pin and fixture is bit-unchanged.
-    #[serde(default)]
+    /// A drained carcass that falls below [`CARCASS_REMNANT_FLOOR_FRACTION`]
+    /// of its structure at death leaves the world. Physics in every world
+    /// since #864: the default is the domain's, anchored to producer
+    /// lifespan, [`DEFAULT_CARCASS_DECAY_CONSTANT`]. Recipes that predate it
+    /// load at that default. `0` is a controlled variant in which no carcass
+    /// yields anything, never a default.
+    #[serde(default = "default_carcass_decay_constant")]
     pub carcass_decay_constant: f32,
     /// Half-saturation constant `K` of saturating carcass decomposition: the
     /// summed drain capability `Σc` at which a carcass yields half of
     /// `k_d · S`. Units of drain capability, structure per tick (one agent at
-    /// effective heterotrophy 1 has capability `u_H`). Inert while
-    /// `carcass_decay_constant` is 0. Default
+    /// effective heterotrophy 1 has capability `u_H`). Default
     /// [`DEFAULT_CARCASS_HALF_SATURATION`].
     #[serde(default = "default_carcass_half_saturation")]
     pub carcass_half_saturation: f32,
@@ -859,12 +861,38 @@ fn default_carcass_half_saturation() -> f32 {
     DEFAULT_CARCASS_HALF_SATURATION
 }
 
+/// The decay constant `k_d = ln 2 / (L × T_p)` per tick at which a carcass
+/// under full saturation (`Σc ≫ K`) has a half-life of `l` producer
+/// lifespans of `t_p` ticks (world-rules.md, *Carcass decomposition
+/// saturates in its decomposers*, *How large `k_d` is*).
+pub const fn carcass_decay_constant(l: f32, t_p: f32) -> f32 {
+    std::f32::consts::LN_2 / (l * t_p)
+}
+
+/// The decay constant every world runs at unless it states its own (#864):
+/// a litter half-life under full saturation of [`REFERENCE_LITTER_HALF_LIFE`]
+/// producer lifespans of [`REFERENCE_PRODUCER_LIFESPAN_TICKS`] ticks, the
+/// world's time anchor that tissue turnover also reads, about 0.00303 per
+/// tick (a half-life of 229 ticks). The domain's litter half-lives are about
+/// 0.5–4 years against producer lifespans of the same order
+/// (`docs/ecology/nutrient-cycling.md`, *Decomposition kinetics*); 1 sits in
+/// that band. Stated once here, because a run's producer lifespan is one of
+/// its outputs and is not known when `k_d` is set. #870 re-reads `T_p` under
+/// the full physics.
+pub const DEFAULT_CARCASS_DECAY_CONSTANT: f32 = carcass_decay_constant(
+    REFERENCE_LITTER_HALF_LIFE,
+    REFERENCE_PRODUCER_LIFESPAN_TICKS,
+);
+
+fn default_carcass_decay_constant() -> f32 {
+    DEFAULT_CARCASS_DECAY_CONSTANT
+}
+
 /// Remnant floor of saturating carcass decomposition: a drained carcass whose
 /// structure falls below this fraction of its structure at death leaves the
 /// world, its last structure dissipated and its nutrient mineralised to its
 /// cell. A numerical floor, not an ecological claim: under first-order decay
-/// no drain ever empties a carcass. Applies only while
-/// `carcass_decay_constant` is positive.
+/// no drain ever empties a carcass.
 pub const CARCASS_REMNANT_FLOOR_FRACTION: f32 = 1.0e-6;
 
 fn default_contact_distance() -> f32 {
@@ -2407,7 +2435,7 @@ mod tests {
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
-            carcass_decay_constant: 0.0,
+            carcass_decay_constant: crate::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
@@ -3339,9 +3367,9 @@ mod tests {
     }
 
     #[test]
-    fn saturating_decomposition_parameters_round_trip_and_default_off() {
-        // #803: a recipe or checkpoint that predates saturating carcass
-        // decomposition loads with it off (k_d = 0) and K at its default.
+    fn saturating_decomposition_parameters_round_trip_and_load_at_the_worlds_own() {
+        // #803, #864: a recipe or checkpoint that predates saturating carcass
+        // decomposition loads at the world's own k_d and K.
         let mut params = test_params();
         params.carcass_decay_constant = 0.3;
         params.carcass_half_saturation = 2.5;
@@ -3354,7 +3382,10 @@ mod tests {
         obj.remove("carcass_decay_constant");
         obj.remove("carcass_half_saturation");
         let without: WorldParameters = serde_json::from_value(value).unwrap();
-        assert_eq!(without.carcass_decay_constant, 0.0);
+        assert_eq!(
+            without.carcass_decay_constant,
+            DEFAULT_CARCASS_DECAY_CONSTANT
+        );
         assert_eq!(
             without.carcass_half_saturation,
             DEFAULT_CARCASS_HALF_SATURATION
@@ -4933,7 +4964,7 @@ mod tests {
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
-            carcass_decay_constant: 0.0,
+            carcass_decay_constant: crate::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
