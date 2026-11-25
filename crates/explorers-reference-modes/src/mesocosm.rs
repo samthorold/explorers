@@ -856,43 +856,6 @@ pub fn marker_readout_section(rows: &[(&str, &MarkerReadout)]) -> String {
     out
 }
 
-/// The starvation cascade's switches a run set (#821; world rules, flow 8,
-/// *When reserve cannot pay: the starvation cascade*).
-#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
-pub struct StarvationCascade {
-    /// Step 1: upkeep reserve cannot pay is drawn from the energy earmark.
-    pub draws_earmark: bool,
-    /// Step 2: what is left is paid by burning structure (shrinking).
-    pub shrinks: bool,
-}
-
-/// Set the starvation cascade's two switches in `world` and return them.
-pub fn set_starvation_cascade(
-    world: &mut World,
-    draws_earmark: bool,
-    shrinks: bool,
-) -> StarvationCascade {
-    let params = world.params_mut();
-    params.starvation_draws_earmark = draws_earmark;
-    params.starvation_shrinks = shrinks;
-    StarvationCascade {
-        draws_earmark,
-        shrinks,
-    }
-}
-
-/// The summary section recording the starvation cascade a run set.
-pub fn starvation_cascade_section(c: &StarvationCascade) -> String {
-    let on = |b: bool| if b { "on" } else { "off" };
-    format!(
-        "## Starvation cascade (--starvation-draws-earmark, --starvation-shrinks)\n\n\
-         upkeep reserve cannot pay is drawn from the energy earmark: {}; \
-         what is left is paid by burning structure (shrinking): {}",
-        on(c.draws_earmark),
-        on(c.shrinks)
-    )
-}
-
 /// The summary's account of the feeding reach `--body-reach-pieces` set.
 pub fn body_reach_section(r: &BodyReach) -> String {
     format!(
@@ -1315,8 +1278,8 @@ impl FounderReadout {
 /// Its unallocated reserve *runs out* in the first step it begins with
 /// reserve no greater than that step's upkeep (`metabolic_cost`, what the
 /// stepper's metabolism charges): metabolism leaves the reserve at zero, and
-/// any rest of the upkeep falls to the cascade, or with both switches off the
-/// founder starves. Upkeep is paid in the third phase of a step, and a
+/// any rest of the upkeep falls to the cascade, the earmark and then
+/// structure (physics in every world since #863). Upkeep is paid in the third phase of a step, and a
 /// decomposer founder's reserve and structure do not change in the two
 /// before it, so its state as the step begins is the state metabolism reads.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -2403,8 +2366,7 @@ impl Observer {
     /// Count the step just taken against each founder that lived through it
     /// on the cascade: on the earmark if the earmark paid some of its upkeep,
     /// on structure if burned structure did.
-    fn read_cascade_ticks(&mut self, world: &World) {
-        let p = world.params();
+    fn read_cascade_ticks(&mut self) {
         for (id, s) in &self.stores {
             let (reserve, earmark, upkeep) = (s.reserve, s.earmark, s.upkeep);
             if reserve > upkeep || !self.living_founders.contains_key(id) {
@@ -2412,15 +2374,11 @@ impl Observer {
             }
             let f = self.starving.get_mut(id).expect("every founder is read");
             let shortfall = upkeep - reserve.max(0.0);
-            let from_earmark = if p.starvation_draws_earmark {
-                earmark.max(0.0)
-            } else {
-                0.0
-            };
-            if p.starvation_draws_earmark && earmark > 0.0 && shortfall > 0.0 {
+            let from_earmark = earmark.max(0.0);
+            if earmark > 0.0 && shortfall > 0.0 {
                 f.ticks_on_earmark += 1;
             }
-            if p.starvation_shrinks && shortfall > from_earmark {
+            if shortfall > from_earmark {
                 f.ticks_on_structure += 1;
             }
         }
@@ -2578,7 +2536,7 @@ impl Observer {
         if self.record_recruitment {
             self.record_lives(world, &died, &income);
         }
-        self.read_cascade_ticks(world);
+        self.read_cascade_ticks();
         self.remember_stores(world);
         self.remember_targets(world);
         self.income.update(world.event_log());
@@ -5349,29 +5307,26 @@ mod tests {
     /// event log and the founders' states before each step. A founder's
     /// unallocated reserve *runs out* in the first step it begins with
     /// reserve no greater than that step's upkeep: metabolism leaves it at
-    /// zero, and any rest falls to the cascade (or it starves). The earmark
-    /// at that moment is its earmark as that step began. A tick on the
-    /// earmark (on structure) is a step after which the founder lives and in
-    /// which the earmark (structure) paid some of its upkeep.
+    /// zero, and any rest falls to the cascade. The earmark at that moment is
+    /// its earmark as that step began. A tick on the earmark (on structure)
+    /// is a step after which the founder lives and in which the earmark
+    /// (structure) paid some of its upkeep.
     #[test]
     fn the_founder_starvation_readout_follows_each_founder_through_the_cascade() {
         let spec = Mode1Spec::committed();
-        let build = |earmark: bool, shrinks: bool| {
-            let mut world = mode1_mesocosm(
+        let build = || {
+            mode1_mesocosm(
                 &spec,
                 mesocosm_wear(),
                 4,
                 Community::ProducersAndDecomposers,
-            );
-            let set = set_starvation_cascade(&mut world, earmark, shrinks);
-            assert_eq!((set.draws_earmark, set.shrinks), (earmark, shrinks));
-            world
+            )
         };
-        for (earmark, shrinks) in [(false, false), (true, false), (false, true), (true, true)] {
+        {
             let ticks = 80;
-            let report = run_mode1(&mut build(earmark, shrinks), ticks, 10);
+            let report = run_mode1(&mut build(), ticks, 10);
 
-            let mut world = build(earmark, shrinks);
+            let mut world = build();
             let mut expected: std::collections::BTreeMap<u64, FounderStarvation> = (world
                 .agents()
                 .iter())
@@ -5427,11 +5382,11 @@ mod tests {
                         continue;
                     }
                     let shortfall = upkeep - reserve.max(0.0);
-                    let from_earmark = if earmark { earmark_held.max(0.0) } else { 0.0 };
-                    if earmark && earmark_held > 0.0 && shortfall > 0.0 {
+                    let from_earmark = earmark_held.max(0.0);
+                    if earmark_held > 0.0 && shortfall > 0.0 {
                         f.ticks_on_earmark += 1;
                     }
-                    if shrinks && shortfall > from_earmark {
+                    if shortfall > from_earmark {
                         f.ticks_on_structure += 1;
                         assert!(
                             now.structure < structure,
@@ -5442,15 +5397,15 @@ mod tests {
             }
             let expected: Vec<FounderStarvation> = expected.into_values().collect();
             let readout = &report.founders.starvation;
-            assert_eq!(readout.founders, expected, "arm ({earmark}, {shrinks})");
+            assert_eq!(readout.founders, expected);
             assert!(readout.ran_out() > 0, "some founder runs out of reserve");
             let lived_on = |f: &FounderStarvation| (f.ticks_on_earmark, f.ticks_on_structure);
             let total: (u64, u64) = expected
                 .iter()
                 .map(lived_on)
                 .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
-            assert_eq!(total.0 > 0, earmark, "earmark ticks iff the switch is on");
-            assert_eq!(total.1 > 0, shrinks, "structure ticks iff the switch is on");
+            assert!(total.0 > 0, "some founder lives on its earmark");
+            assert!(total.1 > 0, "some founder lives on its structure");
         }
     }
 
@@ -5750,10 +5705,16 @@ mod tests {
 
     /// A world of the committed mesocosm's parameters holding one decomposer
     /// founder and nothing to eat: its line goes extinct when it starves.
+    /// It cannot reproduce either: since #863 the starvation cascade keeps a
+    /// starving founder alive on its earmark long enough for hyphal uptake
+    /// to fill its nutrient earmark, and it would then reproduce before it
+    /// died (it reproduced at tick 32 and died at 36, its two offspring
+    /// living to 79).
     fn lone_starving_founder() -> World {
         let spec = Mode1Spec::committed();
         let mut params = spec.parameters.clone();
         params.initial_population_size = 1;
+        params.reproduction_energy_threshold = f32::MAX;
         World::from_recipe(
             &WorldRecipe {
                 parameters: params,
@@ -5829,7 +5790,7 @@ mod tests {
                 Community::ProducersAndDecomposers,
             )
         };
-        let ticks = 100;
+        let ticks = 160;
         let report = run_mode1(&mut build(), ticks, 25);
         let (births, _) = replay_line(build(), ticks);
         assert!(!births.is_empty(), "seed 4's founders recruit");
@@ -5839,13 +5800,14 @@ mod tests {
             .filter(|a| a.traits.photosynthetic_absorption == 0.0 && a.traits.heterotrophy > 0.0)
             .map(|a| a.id)
             .collect();
-        // Under the committed mesocosm's bare rules the founders recruit but
-        // are all dead by tick 50: the window holds at 15 and is refuted at
-        // the rung's declared 50. (Held at 20 until #858: growth dilution
-        // moved the last founder's death from tick 24 to 19; 12 of the 81
-        // are alive at 15.)
+        // Under the committed mesocosm's bare rules the founders recruit and
+        // 14 of the 81 are alive at the rung's declared 50, all dead by 160:
+        // the window holds at 50 and is refuted at 160. (Until #863, without
+        // the starvation cascade, all were dead by tick 19 and the window
+        // was refuted at 50; held at 15. This test checks the instrument, and
+        // it is not a reading of rung 2.)
         let mut elapsed = 0;
-        for (at, holds) in [(15, true), (50, false)] {
+        for (at, holds) in [(50, true), (160, false)] {
             while elapsed < at {
                 world.step();
                 elapsed += 1;

@@ -416,32 +416,23 @@ fn living_resistance_sets_rho_to_one_and_closes_living_targets() {
     assert!(md.contains("## Living-tissue resistance"), "{md}");
 }
 
-/// `--starvation-draws-earmark` and `--starvation-shrinks` (#821) turn the
-/// starvation cascade's two steps on and record both in the artifact and
-/// summary; either writes the founder starvation readout, which
-/// `--starvation-readout` writes alone, for a control with both off. Without
-/// any of them nothing is recorded.
+/// `--starvation-readout` (#821) writes the founder starvation readout, the
+/// starvation cascade being physics in every world (#863); without it nothing
+/// is recorded, and the readout leaves the report itself as it was. The
+/// retired switches `--starvation-draws-earmark` and `--starvation-shrinks`
+/// are refused as unknown.
 #[test]
-fn the_starvation_cascade_options_set_both_switches_and_write_the_founder_readout() {
+fn the_starvation_readout_follows_the_founders_through_the_cascade() {
     let dir = scratch("starvation-cascade");
-    let plain = run_with(&dir.join("plain.json"), &[]);
+    let plain = run_with(&dir.join("plain.json"), &["--ticks", "40"]);
     assert!(plain.get("starvation_cascade").is_none());
     assert!(plain.get("founder_starvation").is_none());
 
-    let both = run_with(
-        &dir.join("both.json"),
-        &[
-            "--ticks",
-            "40",
-            "--starvation-draws-earmark",
-            "--starvation-shrinks",
-        ],
+    let read = run_with(
+        &dir.join("read.json"),
+        &["--ticks", "40", "--starvation-readout"],
     );
-    assert_eq!(
-        both["starvation_cascade"],
-        serde_json::json!({"draws_earmark": true, "shrinks": true})
-    );
-    let founders = both["founder_starvation"]["founders"].as_array().unwrap();
+    let founders = read["founder_starvation"]["founders"].as_array().unwrap();
     assert_eq!(founders.len(), 81, "one entry per decomposer founder");
     assert!(
         founders
@@ -449,40 +440,17 @@ fn the_starvation_cascade_options_set_both_switches_and_write_the_founder_readou
             .any(|f| f["ticks_on_earmark"].as_u64().unwrap() > 0),
         "some founder lives on its earmark within 40 ticks"
     );
-    let md = std::fs::read_to_string(dir.join("both.md")).unwrap();
-    assert!(md.contains("## Starvation cascade"), "{md}");
-    assert!(md.contains("earmark: on"), "{md}");
-    assert!(md.contains("(shrinking): on"), "{md}");
+    let md = std::fs::read_to_string(dir.join("read.md")).unwrap();
     assert!(md.contains("## Founder starvation readout"), "{md}");
+    assert_eq!(read["report"], plain["report"]);
 
-    let earmark = run_with(&dir.join("earmark.json"), &["--starvation-draws-earmark"]);
-    assert_eq!(
-        earmark["starvation_cascade"],
-        serde_json::json!({"draws_earmark": true, "shrinks": false})
-    );
-    let shrinks = run_with(&dir.join("shrinks.json"), &["--starvation-shrinks"]);
-    assert_eq!(
-        shrinks["starvation_cascade"],
-        serde_json::json!({"draws_earmark": false, "shrinks": true})
-    );
-
-    let control = run_with(&dir.join("control.json"), &["--starvation-readout"]);
-    assert!(control.get("starvation_cascade").is_none());
-    let founders = control["founder_starvation"]["founders"]
-        .as_array()
-        .unwrap();
-    assert!(
-        founders
-            .iter()
-            .all(|f| f["ticks_on_earmark"] == 0 && f["ticks_on_structure"] == 0),
-        "with both off no founder lives on the cascade"
-    );
-    // The readout leaves the report itself as it was.
-    assert_eq!(control["report"], plain["report"]);
+    for flag in ["--starvation-draws-earmark", "--starvation-shrinks"] {
+        assert!(refused(&["--ticks", "1", flag]).contains(flag));
+    }
 
     let paired = run_with(
         &dir.join("paired.json"),
-        &["--clear-at", "5", "--starvation-shrinks"],
+        &["--clear-at", "5", "--starvation-readout"],
     );
     for arm in ["perturbed", "control"] {
         assert_eq!(

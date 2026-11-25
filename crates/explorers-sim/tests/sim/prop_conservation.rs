@@ -157,10 +157,10 @@ proptest! {
         check_stores_non_negative(&case)?;
     }
 
-    /// The three conservation invariants with the starvation cascade on
-    /// (#821): drawing upkeep from the earmark and burning structure move
-    /// energy to heat and bound nutrient to the free store, never create or
-    /// destroy either.
+    /// The three conservation invariants where agents starve within the run,
+    /// on small pools (#821, #863): drawing upkeep from the earmark and
+    /// burning structure move energy to heat and bound nutrient to the free
+    /// store, never create or destroy either.
     #[test]
     fn conservation_holds_with_the_starvation_cascade(
         case in world_case_with_starvation_cascade()
@@ -348,8 +348,9 @@ fn issue_444_minimal_case() -> WorldCase {
     }
 }
 
-/// The proptest-shrunk case from #901, built from its printed values: both
-/// starvation-cascade switches on, a pool of 50 over four cells drawn down by
+/// The proptest-shrunk case from #901, built from its printed values (drawn
+/// while the starvation cascade had switches, with both on; it is physics in
+/// every world since #863): a pool of 50 over four cells drawn down by
 /// 28 founders' seed bodies to 1.05e-5 in the one cell they share.
 fn issue_901_first_case() -> WorldCase {
     let params = WorldParameters {
@@ -406,8 +407,6 @@ fn issue_901_first_case() -> WorldCase {
         carcass_half_saturation: 1.0,
         base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
         living_resistance: 0.0,
-        starvation_draws_earmark: true,
-        starvation_shrinks: true,
         contact_distance: 0.1,
         compatibility_scale: 1.0,
         tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,

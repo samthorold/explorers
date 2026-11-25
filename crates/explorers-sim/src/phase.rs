@@ -253,8 +253,8 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
         let paid = cost.min(agent.reserve.max(0.0));
         agent.reserve -= paid;
         // What reserve could not pay falls to the starvation cascade (flow
-        // 8): the earmark, then structure, each behind its own switch. With
-        // both off nothing more is paid and the agent starves.
+        // 8): the earmark, then structure. What those cannot pay either is
+        // not paid, and the agent starves.
         let cost = paid + starvation_cascade(agent, cost - paid, params);
         total_dissipated += cost;
         events.push(Event {
@@ -275,21 +275,21 @@ pub fn metabolise(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>
 
 /// Pay `shortfall`, the upkeep unallocated reserve could not, from the
 /// starvation cascade's stores in DEBkiss's order (world-rules.md flow 8,
-/// *When reserve cannot pay: the starvation cascade*): first the energy
-/// earmark, with `starvation_draws_earmark` on, then structure, with
-/// `starvation_shrinks` on. A unit of burned structure yields its embodied
-/// energy in full, and the nutrient bound in it (`burned × demand`) returns
-/// to the free store; the peak structure is left alone, so the structural
-/// death rule measures the shrunk body against it. Returns the energy paid,
-/// at most `shortfall`. With both switches off it pays nothing.
+/// *When reserve cannot pay: the starvation cascade*), physics in every
+/// world since #863: first the energy earmark, then structure. A unit of
+/// burned structure yields its embodied energy in full, and the nutrient
+/// bound in it (`burned × demand`) returns to the free store; the peak
+/// structure is left alone, so the structural death rule measures the shrunk
+/// body against it. Each draw is capped at what its store holds, so neither
+/// falls below zero. Returns the energy paid, at most `shortfall`.
 fn starvation_cascade(agent: &mut Agent, shortfall: f32, params: &WorldParameters) -> f32 {
     let mut unpaid = shortfall;
-    if unpaid > 0.0 && params.starvation_draws_earmark {
+    if unpaid > 0.0 {
         let drawn = unpaid.min(agent.repro_reserve.max(0.0));
         agent.repro_reserve -= drawn;
         unpaid -= drawn;
     }
-    if unpaid > 0.0 && params.starvation_shrinks {
+    if unpaid > 0.0 {
         let burned = unpaid.min(agent.structure.max(0.0));
         agent.structure -= burned;
         agent.nutrient += crate::stoichiometric_demand(&agent.traits, burned, params);
@@ -298,30 +298,24 @@ fn starvation_cascade(agent: &mut Agent, shortfall: f32, params: &WorldParameter
     shortfall - unpaid
 }
 
-/// Whether either step of the starvation cascade is on. With it on, a
-/// reserve at zero is not by itself death: the agent lives on its earmark
-/// or its structure until the cascade cannot pay.
-pub fn starvation_cascade_on(params: &WorldParameters) -> bool {
-    params.starvation_draws_earmark || params.starvation_shrinks
-}
-
 /// The agents `metabolise` left unable to pay this tick's metabolism, who
 /// have starved. Their charge was capped at what they held, so their reserve
 /// is exactly zero, and so is every store the starvation cascade (flow 8)
-/// draws on with its switch on: the earmark and structure. Read straight
-/// after `metabolise` and handed to `check_death_thresholds`, so a later
-/// credit to the reserve — a heterotroph's own feeding in the drain pass —
-/// cannot revive them (#540).
-pub fn starved_ids(agents: &[Agent], params: &WorldParameters) -> FxHashSet<u64> {
+/// draws on: the earmark and structure. Read straight after `metabolise` and
+/// handed to `check_death_thresholds`, so a later credit to the reserve — a
+/// heterotroph's own feeding in the drain pass — cannot revive them (#540).
+pub fn starved_ids(agents: &[Agent]) -> FxHashSet<u64> {
     agents
         .iter()
-        .filter(|a| {
-            a.reserve <= 0.0
-                && (!params.starvation_draws_earmark || a.repro_reserve <= 0.0)
-                && (!params.starvation_shrinks || a.structure <= 0.0)
-        })
+        .filter(|a| exhausted(a))
         .map(|a| a.id)
         .collect()
+}
+
+/// Whether every store the starvation cascade draws on is empty: reserve,
+/// the energy earmark and structure. Such an agent cannot pay any upkeep.
+fn exhausted(a: &Agent) -> bool {
+    a.reserve <= 0.0 && a.repro_reserve <= 0.0 && a.structure <= 0.0
 }
 
 /// The reserve an agent holds back to cover near-future metabolism: its per-tick
@@ -1365,9 +1359,7 @@ pub fn resolve_drains_routed(
     for drain in &living_drains {
         let agent = &agents[drain.target_idx];
         let threshold = crate::death_threshold(&agent.traits, agent.peak_structure);
-        let dies = (agent.reserve <= 0.0 && !starvation_cascade_on(params))
-            || (agent.structure > 0.0 && agent.structure < threshold)
-            || agent.structure <= 0.0;
+        let dies = (agent.structure > 0.0 && agent.structure < threshold) || agent.structure <= 0.0;
 
         if dies && !dead_agents.contains(&agent.id) {
             dead_agents.push(agent.id);
@@ -1803,9 +1795,10 @@ pub fn check_death_thresholds(
     for agent in agents.iter_mut() {
         let threshold = crate::death_threshold(&agent.traits, agent.peak_structure);
         // Under the starvation cascade a reserve at zero is not death: the
-        // agent lives on its earmark or structure until `starved` says not.
-        let dies = (agent.reserve <= 0.0 && !starvation_cascade_on(params))
-            || starved.contains(&agent.id)
+        // agent lives on its earmark or structure until they are spent too,
+        // or `starved` says it could not pay this tick.
+        let dies = starved.contains(&agent.id)
+            || exhausted(agent)
             || (agent.structure > 0.0 && agent.structure < threshold);
         let senesces = !dies && senesces(agent, params, run_seed, tick);
 
@@ -2984,8 +2977,6 @@ mod tests {
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
-            starvation_draws_earmark: false,
-            starvation_shrinks: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: crate::DEFAULT_TISSUE_TURNOVER_RATE,
@@ -4044,27 +4035,32 @@ mod tests {
         assert!((dissipated - 1.0).abs() < 1e-6);
     }
 
-    /// Flow 8 with reserve depletion: an agent whose reserve cannot cover
-    /// its metabolic cost pays only what it holds — reserve lands at exactly
-    /// zero (starvation) and only the energy it actually held dissipates.
+    /// Flow 8 with reserve depletion: an agent whose reserve, earmark and
+    /// structure together cannot cover its metabolic cost pays only what it
+    /// holds — each store lands at exactly zero (starvation) and only the
+    /// energy it actually held dissipates.
     #[test]
     fn metabolise_caps_charge_at_available_reserve() {
         let params = WorldParameters {
-            base_metabolic_rate: 1.0,
+            base_metabolic_rate: 100.0,
             ..test_params()
         };
         let mut agent = make_agent(1, (0.0, 0.0), 0.25, zero_traits());
         agent.structure = params.base_rate_reference_structure;
+        agent.repro_reserve = 0.5;
+        let held = 0.25 + 0.5 + agent.structure;
         let mut agents = vec![agent];
 
         let (events, dissipated) = metabolise(&mut agents, &params);
 
         assert_eq!(agents[0].reserve, 0.0, "reserve is depleted, not overdrawn");
+        assert_eq!(agents[0].repro_reserve, 0.0, "the earmark is not overdrawn");
+        assert_eq!(agents[0].structure, 0.0, "structure is not overdrawn");
         assert!(
-            (dissipated - 0.25).abs() < 1e-6,
+            (dissipated - held).abs() < 1e-5,
             "only held energy dissipates"
         );
-        assert!((events[0].energy_delta - 0.25).abs() < 1e-6);
+        assert!((events[0].energy_delta - held).abs() < 1e-5);
     }
 
     #[test]
@@ -5424,11 +5420,12 @@ mod tests {
     /// #540: an agent whose metabolic charge was capped has starved this tick,
     /// even when a later phase (its own feeding in the drain pass) credits it a
     /// vanishing amount. The residue must not let it survive as a survivor that
-    /// never paid its base rate.
+    /// never paid its base rate. The charge outruns its reserve and its
+    /// structure together, so the starvation cascade cannot pay it either.
     #[test]
     fn check_death_kills_agent_whose_metabolic_charge_was_capped() {
         let params = WorldParameters {
-            base_metabolic_rate: 1.0,
+            base_metabolic_rate: 100.0,
             ..test_params()
         };
         let mut agents = vec![at_reference_structure(
@@ -5436,7 +5433,7 @@ mod tests {
             &params,
         )];
         metabolise(&mut agents, &params);
-        let starved = starved_ids(&agents, &params);
+        let starved = starved_ids(&agents);
         // A later phase credits sub-epsilon residue.
         agents[0].reserve += 1.6e-10;
 
@@ -5451,23 +5448,35 @@ mod tests {
     }
 
     /// An agent that paid its full charge is not starved, however little
-    /// reserve it has left.
+    /// reserve it has left, and nor is one whose earmark or structure paid
+    /// what its reserve could not (the starvation cascade).
     #[test]
     fn starved_ids_excludes_agents_that_paid_in_full() {
         let params = WorldParameters {
-            base_metabolic_rate: 1.0,
+            base_metabolic_rate: 100.0,
             ..test_params()
         };
+        let cost =
+            100.0 + params.structure_maintenance_coefficient * params.base_rate_reference_structure;
+        let mut on_earmark =
+            at_reference_structure(make_agent(3, (0.0, 0.0), 0.25, zero_traits()), &params);
+        on_earmark.repro_reserve = 2.0 * cost;
         let mut agents = vec![
             at_reference_structure(make_agent(1, (0.0, 0.0), 0.25, zero_traits()), &params),
-            at_reference_structure(make_agent(2, (0.0, 0.0), 1.5, zero_traits()), &params),
+            at_reference_structure(
+                make_agent(2, (0.0, 0.0), 1.5 * cost, zero_traits()),
+                &params,
+            ),
+            on_earmark,
         ];
         metabolise(&mut agents, &params);
 
-        let starved = starved_ids(&agents, &params);
+        let starved = starved_ids(&agents);
 
         assert!(starved.contains(&1));
         assert!(!starved.contains(&2));
+        assert!(!starved.contains(&3));
+        assert_eq!(agents[2].reserve, 0.0);
     }
 
     #[test]
@@ -5537,9 +5546,10 @@ mod tests {
         agents[0].nutrient = 5.0; // free store
         agents[0].repro_nutrient = 2.0; // earmark
         agents[0].structure = 10.0; // bound = 10.0 * 0.1 = 1.0 (zero traits)
+        // It starved this tick (the starvation cascade could not pay).
+        let starved: FxHashSet<u64> = [1].into_iter().collect();
 
-        let (_, carcasses, _) =
-            check_death_thresholds(&mut agents, &params, &FxHashSet::default(), 0, 0);
+        let (_, carcasses, _) = check_death_thresholds(&mut agents, &params, &starved, 0, 0);
 
         assert_eq!(carcasses.len(), 1);
         // free(5.0) + earmark(2.0) + bound(1.0) = 8.0
@@ -5564,11 +5574,11 @@ mod tests {
         };
         let mut small = vec![make(2.0)];
         let mut large = vec![make(20.0)];
+        // Each starved this tick (the starvation cascade could not pay).
+        let starved: FxHashSet<u64> = [1].into_iter().collect();
 
-        let (_, small_carcasses, _) =
-            check_death_thresholds(&mut small, &params, &FxHashSet::default(), 0, 0);
-        let (_, large_carcasses, _) =
-            check_death_thresholds(&mut large, &params, &FxHashSet::default(), 0, 0);
+        let (_, small_carcasses, _) = check_death_thresholds(&mut small, &params, &starved, 0, 0);
+        let (_, large_carcasses, _) = check_death_thresholds(&mut large, &params, &starved, 0, 0);
 
         assert!(
             large_carcasses[0].nutrient > small_carcasses[0].nutrient,

@@ -92,8 +92,6 @@ pub fn viable_baseline() -> WorldParameters {
         carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
         base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
         living_resistance: 0.0,
-        starvation_draws_earmark: false,
-        starvation_shrinks: false,
         contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
         compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
         tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
@@ -384,13 +382,15 @@ pub fn proptest_config(cases: u32) -> ProptestConfig {
     }
 }
 
-/// A stepper case with both steps of the starvation cascade on (#821): the
-/// wear case, so agents starve, draw down their earmark, shrink and die by
-/// the structural rule within the run, with saturating carcass decomposition
-/// on in half the cases. The nutrient pool is drawn small (50 to 500, against
-/// the baseline's 50000), so the closure tolerance, relative to the total, is
-/// fine enough to catch the bound nutrient a burn frees going astray. A
-/// separate strategy, so `world_case()` draws exactly the inputs it always has.
+/// A stepper case where agents starve within the run (#821, #863): the wear
+/// case, so agents starve, draw down their earmark, shrink and die by the
+/// structural rule, with saturating carcass decomposition on in half the
+/// cases. The nutrient pool is drawn small (50 to 500, against the
+/// baseline's 50000), so the closure tolerance, relative to the total, is
+/// fine enough to catch the bound nutrient a burn frees going astray. The
+/// starvation cascade runs in every case of every strategy since #863; this
+/// one keeps its small pools, and draws exactly the inputs it drew while the
+/// cascade had switches, so its committed regression seeds still replay.
 pub fn world_case_with_starvation_cascade() -> impl Strategy<Value = WorldCase> {
     (
         world_case_with_wear(),
@@ -398,8 +398,6 @@ pub fn world_case_with_starvation_cascade() -> impl Strategy<Value = WorldCase> 
         50.0f32..=500.0,
     )
         .prop_map(|(mut case, k_d, pool)| {
-            case.params.starvation_draws_earmark = true;
-            case.params.starvation_shrinks = true;
             case.params.carcass_decay_constant = k_d;
             case.params.initial_nutrient_pool = pool;
             case

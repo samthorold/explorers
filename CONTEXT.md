@@ -39,7 +39,7 @@ The universal currency of the simulation. Enters the world only through solar fl
 _Avoid_: health, mana, resources
 
 **Reserve**:
-An agent's metabolic fuel — the operating account through which all energy flows. Photosynthesis and consumption income enter as reserve. Metabolic costs, growth, and reproduction are paid from reserve. Reserve fluctuates each tick as income and costs are applied. Death occurs when reserve reaches zero (starvation). Distinct from structure: reserve is the fuel gauge, not the body. Reserve has an earmarked sub-account, the **reproductive allocation**, which accumulates the (1 − kappa) share of surplus committed by kappa in the grow phase; it is still part of reserve (and still part of the agent's energy total for conservation purposes) but is reserved for reproduction and is not available to fund metabolism, except in the **starvation cascade**. Energy still exists in only two forms — reserve and structure — the reproductive allocation is a labelled fraction of reserve, not a third form.
+An agent's metabolic fuel — the operating account through which all energy flows. Photosynthesis and consumption income enter as reserve. Metabolic costs, growth, and reproduction are paid from reserve. Reserve fluctuates each tick as income and costs are applied. Reserve at zero is not death by itself: what it cannot pay falls to the **starvation cascade**, and an agent starves when that cannot pay either. Distinct from structure: reserve is the fuel gauge, not the body. Reserve has an earmarked sub-account, the **reproductive allocation**, which accumulates the (1 − kappa) share of surplus committed by kappa in the grow phase; it is still part of reserve (and still part of the agent's energy total for conservation purposes) but is reserved for reproduction and is not available to fund metabolism, except in the **starvation cascade**. Energy still exists in only two forms — reserve and structure — the reproductive allocation is a labelled fraction of reserve, not a third form.
 _Avoid_: energy (when specifically meaning the metabolic balance), stamina
 
 **Structure**:
@@ -47,7 +47,7 @@ An agent's embodied biomass energy — the physical body built up over its lifet
 _Avoid_: biomass (too overloaded in ecology), body size, HP
 
 **Starvation cascade**:
-The order in which a starving agent pays upkeep that its unallocated reserve cannot cover. It draws first from the **reproductive allocation**, then from its own **structure**, which is **shrinking**. Each step is switched separately. A shrinking agent dies at the same complexity-dependent threshold, a fraction of its peak structure, that grazing meets.
+The order in which a starving agent pays upkeep that its unallocated reserve cannot cover. It draws first from the **reproductive allocation**, then from its own **structure**, which is **shrinking**. A shrinking agent dies at the same complexity-dependent threshold, a fraction of its peak structure, that grazing meets.
 _Avoid_: emergency reserve (there is no third store; the cascade draws on stores the agent already holds)
 
 **Shrinking**:

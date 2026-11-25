@@ -532,8 +532,6 @@ fn default_recipe() -> WorldRecipe {
             carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
-            starvation_draws_earmark: false,
-            starvation_shrinks: false,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
