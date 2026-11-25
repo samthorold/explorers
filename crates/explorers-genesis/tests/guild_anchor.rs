@@ -99,25 +99,33 @@ fn recipe() -> WorldRecipe {
 /// 0.782 (coexistence 0.91 to 0.93); seed 3's fell from 0.776 to 0.534
 /// (clustering 1.0 to 0.798, coexistence 0.99 to 0.09). The carcass-locked
 /// fraction rose on seed 1 (0.198 to 0.266) and barely moved on seeds 2 and 3.
+/// Re-pinned under #861: reproductive isolation follows ancestry in every
+/// world, so the recipe's two founding clusters (producers and heterotrophs)
+/// never cross and mates are chosen by marker distance, not trait distance —
+/// a physics change, not a changed read. Fitness fell on every seed (0.704,
+/// 0.782, 0.534 to 0.579, 0.727, 0.497); seed 1's coexistence fell from 0.76
+/// to 0, seed 2's rose from 0.93 to 0.98, seed 3's held at 0.09. The
+/// carcass-locked fraction fell on every seed (0.266, 0.164, 0.221 to 0.170,
+/// 0.134, 0.109).
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
     (
         1,
         [
-            1060386506, 1051022104, 1064421148, 1061326684, 1061804835, 1049107404,
+            1058288591, 1052718225, 1064777997, 0, 1064958951, 1043209244,
         ],
     ),
     (
         2,
         [
-            1061688364, 1047752645, 1065353216, 1064178811, 1064656962, 1042772616,
+            1060772118, 1049052463, 1062426957, 1065017672, 1062635307, 1040823731,
         ],
     ),
     (
         3,
         [
-            1057541634, 1048521404, 1061970713, 1035489772, 1065353216, 1046602189,
+            1056878767, 1043538383, 1064234735, 1035489772, 1061855166, 1038062853,
         ],
     ),
 ];

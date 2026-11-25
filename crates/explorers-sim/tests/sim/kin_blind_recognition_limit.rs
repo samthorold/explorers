@@ -80,7 +80,7 @@ const PINNED: [(&str, u64, u64, u64); 2] = [
         "example9_detrital_pathway.json",
         11,
         200,
-        0xf51c_dc35_5094_49ec,
+        0x44cb_2c7e_b1a0_270c,
     ),
 ];
 

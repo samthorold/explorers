@@ -28,7 +28,6 @@
     "senescence_hazard": 0.022,
     "base_nutrient_ratio": 0.17636932,
     "specification_nutrient_coefficient": 0.34099215,
-    "reproductive_compatibility_distance": 3.8054206,
     "mobility_maintenance_cost": 0.0,
     "maintenance_cost_exponent": 2.2052748,
     "nutrient_grid_cell_size": 10.0,

@@ -2210,16 +2210,12 @@ pub struct ReproductionResult {
 /// An offspring's neutral marker (#837; world-rules.md flow 4, *The
 /// marker*): each dimension from one parent at random, then an independent
 /// unit Gaussian step. An asexual birth passes its parent as both, so the
-/// coin is drawn and the marker copied. Without a stream (marker isolation
-/// off) nothing is drawn and the marker is zero.
+/// coin is drawn and the marker copied.
 fn inherit_marker(
-    rng: Option<&mut crate::keyed_rng::KeyedRng>,
+    rng: &mut crate::keyed_rng::KeyedRng,
     lo: &crate::Marker,
     hi: &crate::Marker,
 ) -> crate::Marker {
-    let Some(rng) = rng else {
-        return [0.0; crate::MARKER_DIMS];
-    };
     let step = Normal::new(0.0_f32, 1.0).unwrap();
     std::array::from_fn(|dim| {
         let inherited = if rng.random::<bool>() {
@@ -2236,7 +2232,8 @@ fn inherit_marker(
 /// Each eligible agent first rolls against its `asexual_propensity`. On success
 /// the agent reproduces alone — offspring are clones with mutation applied (no
 /// crossover). On failure the agent falls through to sexual mate-finding: pairs
-/// by closest trait-space distance within spatial proximity, invests energy from
+/// within spatial proximity that pass their marker-compatibility draw, closest
+/// in the marker first (world-rules.md flow 4), invest energy from
 /// both parents, produces offspring with uniform crossover + Gaussian mutation.
 ///
 /// Events distinguish asexual (target=None) from sexual (target=Some(mate_id)).
@@ -2410,16 +2407,14 @@ pub fn resolve_reproduction(
         let dispersal_radius = parent_traits.dispersal * crate::units::DISPERSAL_KERNEL_SIGMA;
 
         // The marker (#837): copied from the parent and stepped, on its own
-        // keyed stream, only under marker isolation.
+        // keyed stream.
         let parent_marker = agents[i].marker;
-        let mut marker_rng = params.marker_isolation.then(|| {
-            crate::keyed_rng::agent_rng(
-                run_seed,
-                parent_id,
-                tick,
-                crate::keyed_rng::PhaseTag::MarkerInheritance,
-            )
-        });
+        let mut marker_rng = crate::keyed_rng::agent_rng(
+            run_seed,
+            parent_id,
+            tick,
+            crate::keyed_rng::PhaseTag::MarkerInheritance,
+        );
 
         for birth_slot in 0..offspring_count {
             // Asexual offspring: parent traits + mutation only (no crossover)
@@ -2459,7 +2454,7 @@ pub fn resolve_reproduction(
             dissipated += prov.heat;
 
             let child = Agent {
-                marker: inherit_marker(marker_rng.as_mut(), &parent_marker, &parent_marker),
+                marker: inherit_marker(&mut marker_rng, &parent_marker, &parent_marker),
                 // Placeholder id; the canonical id is assigned after all
                 // offspring are sorted by their world-state key below.
                 id: 0,
@@ -2512,8 +2507,6 @@ pub fn resolve_reproduction(
         .filter(|i| !reproduced.contains(i))
         .collect();
 
-    let compatibility_distance = params.reproductive_compatibility_distance;
-
     // Iterate eligible agents in **stable-id** order, and resolve every
     // pairing tie on agent ids rather than slice indices (#376). Slice indices
     // are not stable identity — a shuffled `agents` slice gives the same agent a
@@ -2550,10 +2543,10 @@ pub fn resolve_reproduction(
         let reach = eff_mobility * sensing_coeff + agent_i.traits.dispersal * dispersal_reach_coeff;
 
         let nearby = grid.query_radius(agent_i.position, reach);
-        // Best mate: closest in trait space (in the marker, under marker
-        // isolation), tiebroken on the candidate's stable
-        // id (not slice index), so co-located clonal mates at equal trait
-        // distance resolve to the same choice regardless of iteration order.
+        // Best mate: the compatible candidate closest in the marker,
+        // tiebroken on the candidate's stable id (not slice index), so
+        // co-located clonal mates at equal marker distance resolve to the
+        // same choice regardless of iteration order.
         let mut best: Option<(usize, f32, u64)> = None;
         let mut seen = FxHashSet::default();
         seen.insert(i); // exclude self
@@ -2572,37 +2565,29 @@ pub fn resolve_reproduction(
                 continue;
             }
             let j_id = agents[j].id;
-            // The mating distance: marker distance under marker isolation
-            // (#837), trait distance otherwise.
-            let mate_dist = if params.marker_isolation {
-                // One keyed draw per candidate pair per tick against its
-                // compatibility, before mating. Pair-keyed, so the draw is
-                // the pair's whichever side seeks. Trait distance and the
-                // trait threshold play no part.
-                let c = crate::marker_compatibility(
-                    &agent_i.marker,
-                    &agents[j].marker,
-                    params.compatibility_scale,
-                );
-                let mut rng = crate::keyed_rng::pair_rng(
-                    run_seed,
-                    agent_i.id,
-                    j_id,
-                    tick,
-                    crate::keyed_rng::PhaseTag::MarkerCompatibility,
-                );
-                if rng.random::<f64>() >= c {
-                    continue;
-                }
-                crate::marker_distance_squared(&agent_i.marker, &agents[j].marker).sqrt()
-            } else {
-                let trait_dist = agent_i.traits.distance(&agents[j].traits);
-                // Check reproductive compatibility: trait distance must be within world param threshold
-                if compatibility_distance > 0.0 && trait_dist > compatibility_distance {
-                    continue;
-                }
-                trait_dist
-            };
+            // Reproductive isolation follows ancestry (#837, #861): one keyed
+            // draw per candidate pair per tick against its marker
+            // compatibility, before mating. Pair-keyed, so the draw is the
+            // pair's whichever side seeks. A pair that fails it does not
+            // form: neither earmark is drawn, and the seeker may take
+            // another candidate. Trait distance plays no part.
+            let c = crate::marker_compatibility(
+                &agent_i.marker,
+                &agents[j].marker,
+                params.compatibility_scale,
+            );
+            let mut rng = crate::keyed_rng::pair_rng(
+                run_seed,
+                agent_i.id,
+                j_id,
+                tick,
+                crate::keyed_rng::PhaseTag::MarkerCompatibility,
+            );
+            if rng.random::<f64>() >= c {
+                continue;
+            }
+            let mate_dist =
+                crate::marker_distance_squared(&agent_i.marker, &agents[j].marker).sqrt();
             let better = match best {
                 None => true,
                 Some((_, best_dist, best_id)) => {
@@ -2622,10 +2607,9 @@ pub fn resolve_reproduction(
         }
     }
 
-    // Sort by mating distance, trait or marker (closest pairs first),
-    // tiebroken on the (low, high)
-    // agent **ids**. Clonal producers share traits, so many candidate pairs tie
-    // on trait distance; keying the tiebreak on stable ids (not slice indices)
+    // Sort by marker distance (closest pairs first), tiebroken on the
+    // (low, high) agent **ids**. Founders of one cluster share a marker, so
+    // many candidate pairs tie on marker distance; keying the tiebreak on stable ids (not slice indices)
     // makes the greedy assignment below a pure function of world state, invariant
     // under any agent-slice permutation (#376).
     pair_candidates.sort_by(|a, b| {
@@ -2799,21 +2783,19 @@ pub fn resolve_reproduction(
             (b_traits, a_traits)
         };
         // The marker (#837), likewise bound to the low-id parent, on its own
-        // pair-keyed stream, only under marker isolation.
+        // pair-keyed stream.
         let (lo_marker, hi_marker) = if a_id < b_id {
             (agents[*a_idx].marker, agents[*b_idx].marker)
         } else {
             (agents[*b_idx].marker, agents[*a_idx].marker)
         };
-        let mut marker_rng = params.marker_isolation.then(|| {
-            crate::keyed_rng::pair_rng(
-                run_seed,
-                a_id,
-                b_id,
-                tick,
-                crate::keyed_rng::PhaseTag::MarkerInheritance,
-            )
-        });
+        let mut marker_rng = crate::keyed_rng::pair_rng(
+            run_seed,
+            a_id,
+            b_id,
+            tick,
+            crate::keyed_rng::PhaseTag::MarkerInheritance,
+        );
 
         for birth_slot in 0..offspring_count {
             // Trait crossover: each dimension from one parent (uniform crossover)
@@ -2868,7 +2850,7 @@ pub fn resolve_reproduction(
             dissipated += prov.heat;
 
             let child = Agent {
-                marker: inherit_marker(marker_rng.as_mut(), &lo_marker, &hi_marker),
+                marker: inherit_marker(&mut marker_rng, &lo_marker, &hi_marker),
                 // Placeholder id; the canonical id is assigned after all
                 // offspring are sorted by their world-state key below.
                 id: 0,
@@ -2986,7 +2968,6 @@ mod tests {
             senescence_hazard: 0.0,
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
-            reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
             nutrient_grid_cell_size: 10.0,
@@ -3017,7 +2998,6 @@ mod tests {
             starvation_draws_earmark: false,
             starvation_shrinks: false,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
-            marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: crate::DEFAULT_TISSUE_TURNOVER_RATE,
         }
@@ -8863,19 +8843,18 @@ mod tests {
         );
     }
 
-    // --- Reproductive compatibility distance ---
+    // --- Reproductive compatibility follows the marker, not the traits ---
 
     #[test]
-    fn reproduction_uses_world_param_compatibility_distance() {
-        // Agents whose trait-space distance exceeds reproductive_compatibility_distance
-        // cannot mate, regardless of spatial proximity.
+    fn trait_distant_agents_of_one_ancestry_mate() {
+        // Isolation follows ancestry (world-rules.md flow 4): a producer and
+        // a heterotroph sharing a marker mate however far apart their traits.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            reproductive_compatibility_distance: 0.5, // tight threshold
             ..test_params()
         };
         // Two agents with trait distance > 0.5
@@ -8894,12 +8873,7 @@ mod tests {
             fecundity: 1.0,
             ..zero_traits()
         };
-        let dist = traits_a.distance(&traits_b);
-        assert!(
-            dist > 0.5,
-            "trait distance should exceed compatibility threshold: {}",
-            dist
-        );
+        assert!(traits_a.distance(&traits_b) > 1.0);
 
         let mut agents = vec![
             make_agent(1, (0.0, 0.0), 100.0, traits_a),
@@ -8920,22 +8894,23 @@ mod tests {
         let result = resolve_reproduction(&mut agents, &dead_ids, &grid, &params, 0, 0);
 
         assert!(
-            result.offspring.is_empty(),
-            "agents beyond compatibility distance should not reproduce"
+            result
+                .events
+                .iter()
+                .any(|e| e.kind == EventKind::Reproduced && e.target.is_some()),
+            "trait distance plays no part in mating"
         );
     }
 
     #[test]
-    fn reproduction_compatible_within_world_param_distance() {
-        // Agents whose trait-space distance is within reproductive_compatibility_distance
-        // can mate.
+    fn identical_agents_of_one_ancestry_mate() {
+        // Co-located clones sharing a marker are fully compatible.
         let params = WorldParameters {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            reproductive_compatibility_distance: 5.0, // generous threshold
             ..test_params()
         };
         let traits = TraitVector {
@@ -8983,7 +8958,6 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            reproductive_compatibility_distance: 5.0,
             sensing_range_coefficient: 10.0,
             dispersal_reach_coefficient: 10.0, // dispersal 0.5 -> reach 5.0
             ..test_params()
@@ -9031,7 +9005,6 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            reproductive_compatibility_distance: 5.0,
             sensing_range_coefficient: 10.0,
             wear_degradation_steepness: 1.0,
             ..test_params()
@@ -9088,7 +9061,6 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            reproductive_compatibility_distance: 5.0,
             sensing_range_coefficient: 10.0,
             dispersal_reach_coefficient: 10.0,
             ..test_params()
@@ -9141,7 +9113,6 @@ mod tests {
             reproduction_efficiency: 0.7,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
-            reproductive_compatibility_distance: 5.0,
             sensing_range_coefficient: 10.0,
             ..test_params()
         };
@@ -9369,7 +9340,6 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             contact_range_coefficient: 100.0,
-            reproductive_compatibility_distance: 10.0,
             ..test_params()
         };
         let traits = TraitVector {
@@ -9558,7 +9528,6 @@ mod tests {
             reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
             growth_efficiency: 1.0,
-            reproductive_compatibility_distance: 5.0,
             sensing_range_coefficient: 50.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
@@ -9779,7 +9748,6 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             contact_range_coefficient: 100.0,
-            reproductive_compatibility_distance: 10.0,
             ..test_params()
         };
         let traits_a = TraitVector {
@@ -9944,7 +9912,6 @@ mod tests {
             reproduction_energy_threshold: 10.0,
             reproduction_nutrient_threshold: 1.0,
             reproduction_efficiency: 1.0,
-            reproductive_compatibility_distance: 10.0,
             mutation_rate: 0.0,
             asexual_propensity_maintenance_cost: 0.0,
             dispersal_propagule_cost_coefficient: 0.0,
@@ -10152,7 +10119,6 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             contact_range_coefficient: 100.0,
-            reproductive_compatibility_distance: 10.0,
             ..test_params()
         };
 
@@ -10256,7 +10222,6 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             sensing_range_coefficient: 2000.0, // mobility 0.3 -> reach 600 > gap 300
-            reproductive_compatibility_distance: 10.0,
             world_extent: 1000.0,
             ..test_params()
         };
@@ -10336,7 +10301,6 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             sensing_range_coefficient: 100.0,
-            reproductive_compatibility_distance: 10.0,
             ..test_params()
         };
         let traits = TraitVector {
@@ -10507,7 +10471,6 @@ mod tests {
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             sensing_range_coefficient: 2000.0, // wide reach so the distant pair forms
-            reproductive_compatibility_distance: 10.0,
             world_extent: extent,
             ..test_params()
         };
@@ -11013,7 +10976,6 @@ mod tests {
             reproduction_efficiency: 0.6,
             growth_efficiency: 0.5,
             offspring_structure_fraction: 0.3,
-            reproductive_compatibility_distance: 5.0,
             mutation_rate: 0.0,
             mutation_magnitude: 0.0,
             sensing_range_coefficient: 50.0,

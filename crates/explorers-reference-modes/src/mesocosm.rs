@@ -758,36 +758,36 @@ impl DecomposerMesocosm {
     }
 }
 
-/// Mode 1's producers' founding cluster under marker isolation (#837).
+/// Mode 1's producers' founding cluster (#837).
 pub const MODE1_PRODUCER_CLUSTER: u32 = 0;
-/// Mode 1's decomposer founders' founding cluster under marker isolation
-/// (#837): a separately arriving clade, unrelated to the producers.
+/// Mode 1's decomposer founders' founding cluster (#837): a separately
+/// arriving clade, unrelated to the producers.
 pub const MODE1_DECOMPOSER_CLUSTER: u32 = 1;
 
-/// The marker isolation a run set (#837; world rules, flow 4,
-/// *Reproductive isolation follows ancestry, through a neutral marker*).
+/// A compatibility scale a run set in place of the default (#837, #861;
+/// world rules, flow 4, *Reproductive isolation follows ancestry, through a
+/// neutral marker*).
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
-pub struct MarkerIsolation {
+pub struct CompatibilityScale {
     /// `s`: compatibility is `exp(−d² / (2s²))` at marker distance `d`.
     pub compatibility_scale: f32,
 }
 
-/// Turn marker isolation on in `spec` at compatibility scale `s`, and return
-/// it. It acts at world creation, where each founding cluster's founders
-/// take its marker origin, so it is set on the spec the mesocosm is built
-/// from, not on a built world.
-pub fn set_marker_isolation(spec: &mut Mode1Spec, s: f32) -> MarkerIsolation {
-    spec.parameters.marker_isolation = true;
+/// Set the compatibility scale `s` in `spec`, and return it. It acts at
+/// world creation too, where each founding cluster's founders take its
+/// marker origin `10 s` from every other, so it is set on the spec the
+/// mesocosm is built from, not on a built world.
+pub fn set_compatibility_scale(spec: &mut Mode1Spec, s: f32) -> CompatibilityScale {
     spec.parameters.compatibility_scale = s;
-    MarkerIsolation {
+    CompatibilityScale {
         compatibility_scale: s,
     }
 }
 
-/// The summary section recording the marker isolation a run set.
-pub fn marker_isolation_section(m: &MarkerIsolation) -> String {
+/// The summary section recording the compatibility scale a run set.
+pub fn compatibility_scale_section(m: &CompatibilityScale) -> String {
     format!(
-        "## Marker isolation (--marker-isolation, --compatibility-scale)\n\n\
+        "## Compatibility scale (--compatibility-scale)\n\n\
          compatibility scale s = {}: a pair mates only past one draw against \
          c = exp(−d² / (2s²)) at marker distance d; producers found cluster {}, \
          decomposer founders cluster {}, 10 s apart (c = e⁻⁵⁰)",
@@ -1726,8 +1726,8 @@ pub struct Mode1Report {
     /// the artifact, without founders.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recruitment: Option<RecruitmentReadout>,
-    /// The marker readout (#837): `None`, and absent from the artifact,
-    /// without marker isolation.
+    /// The marker readout (#837): recorded by every run since marker
+    /// isolation is physics (#861); `None` only in hand-built reports.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marker: Option<MarkerReadout>,
     /// The world's tick after the step in which the founders' line lost its
@@ -2068,11 +2068,7 @@ fn run_arm(
     let mut samples = vec![observer.sample_centre(world)];
     let mut litter_samples = vec![observer.sample_litter(world)];
     let mut lineage_drain = vec![observer.sample_lineage_drain(world)];
-    let marker_isolation = world.params().marker_isolation;
-    let mut line_samples = Vec::new();
-    if marker_isolation {
-        line_samples.push(observer.sample_line(world));
-    }
+    let mut line_samples = vec![observer.sample_line(world)];
     for _ in 0..ticks_to_run {
         world.step();
         observer.observe(world);
@@ -2085,9 +2081,7 @@ fn run_arm(
             litter_samples.push(observer.sample_litter(world));
             lineage_drain.push(observer.sample_lineage_drain(world));
             guild_samples.push((elapsed, observer.guild_members(world)));
-            if marker_isolation {
-                line_samples.push(observer.sample_line(world));
-            }
+            line_samples.push(observer.sample_line(world));
         }
         if abort && observer.line_extinct(world) {
             break;
@@ -2160,7 +2154,7 @@ fn run_arm(
         guild: GuildReadout::default(),
         litter: LitterReadout::default(),
         recruitment: observer.recruitment(lineage_drain),
-        marker: marker_isolation.then(|| observer.marker_readout(world, line_samples)),
+        marker: Some(observer.marker_readout(world, line_samples)),
         aborted_at,
     };
     report.litter = LitterReadout {
@@ -5940,9 +5934,11 @@ mod tests {
         let abort = RunOptions {
             abort_on_line_extinction: true,
         };
-        let with = run_mode1_with(&mut build(), 30, 10, abort);
+        // Seed 4's line is extinct by tick 23 since #861 (it no longer
+        // recruits hybrids), so the run stops short of it.
+        let with = run_mode1_with(&mut build(), 20, 10, abort);
         assert_eq!(with.aborted_at, None);
-        assert_eq!(with, run_mode1(&mut build(), 30, 10));
+        assert_eq!(with, run_mode1(&mut build(), 20, 10));
     }
 
     /// Every birth with a parent in the founder line records its tick, its
@@ -5969,17 +5965,12 @@ mod tests {
             assert_eq!(b.parents.len(), 1 + b.sexual as usize);
             assert!(b.parents.iter().any(|p| p.in_line));
         }
-        // Crossing with a parent outside the line, and mating within it.
-        let sexual = |both_in: bool| {
-            (births.iter())
-                .filter(|b| b.sexual)
-                .any(|b| b.parents.iter().all(|p| p.in_line) == both_in)
-        };
+        // The founders are an unrelated founding cluster (#861): no birth in
+        // the line has a parent outside it.
         assert!(
-            sexual(false),
-            "a sexual birth with a parent outside the line"
+            (births.iter()).all(|b| b.parents.iter().all(|p| p.in_line)),
+            "a line birth with a parent outside the line"
         );
-        assert!(sexual(true), "a sexual birth within the line");
     }
 
     /// Each line member that dies records its tick, age, cause, traits and
@@ -6087,67 +6078,55 @@ mod tests {
         assert_eq!(with, without);
     }
 
-    /// Under marker isolation (#837) mode 1's producers found cluster 0 and
-    /// its decomposer founders cluster 1: unrelated clades, 10 s apart in
-    /// the marker.
+    /// Mode 1's producers found cluster 0 and its decomposer founders cluster
+    /// 1 (#837): unrelated clades, 10 s apart in the marker, at the default
+    /// scale or one an instrument sets.
     #[test]
-    fn marker_isolation_founds_producers_and_decomposer_founders_as_two_clusters() {
-        let mut spec = Mode1Spec::committed();
-        let set = set_marker_isolation(&mut spec, 100.0);
-        assert_eq!(set.compatibility_scale, 100.0);
-        let world = mode1_mesocosm_with_founders(
-            &spec,
+    fn mode1_founds_producers_and_decomposer_founders_as_two_clusters() {
+        for s in [None, Some(7.0)] {
+            let mut spec = Mode1Spec::committed();
+            if let Some(s) = s {
+                assert_eq!(set_compatibility_scale(&mut spec, s).compatibility_scale, s);
+            }
+            let s = s.unwrap_or(explorers_sim::DEFAULT_COMPATIBILITY_SCALE);
+            let world = mode1_mesocosm_with_founders(
+                &spec,
+                mesocosm_wear(),
+                3,
+                Community::ProducersAndDecomposers,
+                1,
+                Some(10),
+            );
+            assert_eq!(world.params().compatibility_scale, s);
+            let (mut producers, mut decomposers) = (0, 0);
+            for a in world.agents() {
+                if a.traits.photosynthetic_absorption > 0.0 {
+                    producers += 1;
+                    assert_eq!(a.marker, explorers_sim::marker_origin(0, s));
+                } else {
+                    decomposers += 1;
+                    assert_eq!(a.marker, explorers_sim::marker_origin(1, s));
+                }
+            }
+            assert_eq!((producers, decomposers), (PRODUCERS_PER_CELL * 81, 10));
+        }
+    }
+
+    /// The marker readout (#837) is written by every run: each sample counts
+    /// the founder line and its share below autotrophy 0.1, and the end
+    /// reads pairwise compatibility within the line and within the
+    /// producers.
+    #[test]
+    fn every_run_records_the_marker_readout() {
+        let mut world = mode1_mesocosm_with_founders(
+            &Mode1Spec::committed(),
             mesocosm_wear(),
-            3,
+            2,
             Community::ProducersAndDecomposers,
             1,
             Some(10),
         );
-        assert!(world.params().marker_isolation);
-        assert_eq!(world.params().compatibility_scale, 100.0);
-        let (mut producers, mut decomposers) = (0, 0);
-        for a in world.agents() {
-            if a.traits.photosynthetic_absorption > 0.0 {
-                producers += 1;
-                assert_eq!(a.marker, explorers_sim::marker_origin(0, 100.0));
-            } else {
-                decomposers += 1;
-                assert_eq!(a.marker, explorers_sim::marker_origin(1, 100.0));
-            }
-        }
-        assert_eq!((producers, decomposers), (PRODUCERS_PER_CELL * 81, 10));
-    }
-
-    /// The marker readout (#837) is written only under marker isolation, so
-    /// a default report is unchanged. Under it, each sample counts the
-    /// founder line and its share below autotrophy 0.1, and the end reads
-    /// pairwise compatibility within the line and within the producers.
-    #[test]
-    fn the_marker_readout_is_recorded_only_under_marker_isolation() {
-        let build = |on: bool| {
-            let mut spec = Mode1Spec::committed();
-            if on {
-                set_marker_isolation(&mut spec, 100.0);
-            }
-            mode1_mesocosm_with_founders(
-                &spec,
-                mesocosm_wear(),
-                2,
-                Community::ProducersAndDecomposers,
-                1,
-                Some(10),
-            )
-        };
-        let plain = run_mode1(&mut build(false), 60, 20);
-        assert!(plain.marker.is_none());
-        assert!(
-            serde_json::to_value(&plain)
-                .unwrap()
-                .get("marker")
-                .is_none()
-        );
-
-        let report = run_mode1(&mut build(true), 60, 20);
+        let report = run_mode1(&mut world, 60, 20);
         let marker = report.marker.as_ref().expect("the readout is recorded");
         assert_eq!(marker.samples.len(), report.samples.len());
         let first = &marker.samples[0];

@@ -12,7 +12,7 @@ A file that is neither is deleted. An outcome kept by hand beside a scenario (a 
 | File | What it is | What reads it |
 |---|---|---|
 | `example4.json` | A small mixed world: about twenty producers and two mobile consumers, reproducing sexually and asexually. The template for a fully specified parameter block. | Byte-identity tests (golden trajectories, the SoA differential, creation and kin-blind fingerprints) and tests that borrow its parameter block, in `crates/explorers-sim`. |
-| `example9_detrital_pathway.json` | A sessile, obligate decomposer seeded on a carcass deposit, with a producer ring outside its feeding reach (`body_reach_coefficient = 0`, so the geometry is exact). A wiring test of part 1, the physics: the path from producer to carcass to decomposer, not a phenomenon. | `example9_wires_producer_to_carcass_to_decomposer_exactly` (fast lane, exact) and the determinism guards in `headless_decomposer.rs`. |
+| `example9_detrital_pathway.json` | A sessile, obligate decomposer seeded on a carcass deposit, with a producer ring outside its feeding reach (`body_reach_coefficient = 0`, so the geometry is exact). The decomposer founds its own founding cluster, unrelated to the producers, so the producers' broadcast gametes cannot reach it as mates. A wiring test of part 1, the physics: the path from producer to carcass to decomposer, not a phenomenon. | `example9_wires_producer_to_carcass_to_decomposer_exactly` (fast lane, exact) and the determinism guards in `headless_decomposer.rs`. |
 | `example12_generalist_dominance.json` | Specialist producers, specialist mobile consumers, sessile mixotrophs and mobile mixotrophs on one producer ring, with light and prey in reach of all. | The setup of hypothesis Sp, under trophic structure in the end state; its test is `crates/explorers-genesis-eval/tests/specialists_hold_living_energy.rs`. |
 
 ## File format
@@ -36,5 +36,6 @@ cargo run -p explorers-app -- --scenario scenarios/example4.json --trace --seed 
 ## Adding a scenario
 
 1. **Add it with what reads it**: the test that loads it, or the hypothesis in the end state that names it as its setup, with that hypothesis's rule, test and register row.
-2. **Specify every `WorldParameter`** (copy `example4.json`), so the file fully determines its world. A parameter left out takes its code default, and defaults move under old files.
-3. **Use current vocabulary.** `photosynthetic_absorption` (now [`autotrophy`](../CONTEXT.md)) and `contact_radius` (now `contact_range_coefficient`) load only through serde aliases.
+2. **Name each founder's founding cluster** (`founding_cluster`, default 0) when the roster stands for unrelated clades, a plant cohort and its decomposers: founders of one cluster are interfertile ([world rules](../docs/system-design/world-rules.md), flow 4).
+3. **Specify every `WorldParameter`** (copy `example4.json`), so the file fully determines its world. A parameter left out takes its code default, and defaults move under old files.
+4. **Use current vocabulary.** `photosynthetic_absorption` (now [`autotrophy`](../CONTEXT.md)) and `contact_radius` (now `contact_range_coefficient`) load only through serde aliases.
