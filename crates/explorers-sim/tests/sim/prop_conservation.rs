@@ -81,9 +81,10 @@ proptest! {
 proptest! {
     #![proptest_config(support::proptest_config(128))]
 
-    /// The three conservation invariants with size-scaled uptake on (#644):
-    /// scaling each agent's demand by its body changes who takes how much,
-    /// never how much exists.
+    /// The three conservation invariants across uptake reference structures
+    /// (#644; uptake is size-scaled in every case since #866): scaling each
+    /// agent's demand by its body changes who takes how much, never how much
+    /// exists.
     #[test]
     fn conservation_holds_with_size_scaled_uptake(
         case in world_case_with_size_scaled_uptake()
