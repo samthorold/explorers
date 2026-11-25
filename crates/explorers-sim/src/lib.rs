@@ -746,11 +746,14 @@ pub struct WorldParameters {
     /// target is multiplied by `1 − ρ`, after expression and recognition and
     /// before the proportional split among co-feeders, so a resisted drain
     /// also shrinks its share of a split. Carcass drains carry no `ρ`, on the
-    /// additive and the saturating path alike. Dimensionless, in `[0, 1]`;
-    /// `1` closes living tissue to every consumer. Default `0.0` is off: the
-    /// world without resistance, so every existing recipe, pin and fixture is
-    /// bit-unchanged.
-    #[serde(default)]
+    /// saturating carcass drain alike. The movement cue toward a living
+    /// target carries the same `1 − ρ`. Dimensionless, in `[0, 1]`. Physics
+    /// in every world since #865: the default is the domain's,
+    /// [`DEFAULT_LIVING_RESISTANCE`] (`1`, living tissue closed to every
+    /// consumer), and recipes that predate it load at that default. A value
+    /// below 1 is a controlled variant, for reading the drain physics on
+    /// living targets (S9, S11, S18), never a default.
+    #[serde(default = "default_living_resistance")]
     pub living_resistance: f32,
     /// Contact distance `d_c` (world-rules.md flow 2, *Substrate contact is
     /// one predicate*; *Unit anchors*): the movement length over which
@@ -859,6 +862,18 @@ pub const DEFAULT_CARCASS_HALF_SATURATION: f32 = units::HETEROTROPHY_STRUCTURE_D
 
 fn default_carcass_half_saturation() -> f32 {
     DEFAULT_CARCASS_HALF_SATURATION
+}
+
+/// The world's living-tissue resistance `ρ = 1` (world-rules.md, *Living
+/// tissue resists drains*, *How large `ρ` is*; physics in every world since
+/// #865). The world's heterotrophy carries no adaptation to living tissue,
+/// so every heterotroph is a consumer the domain's living tissue is closed
+/// to: nonhost resistance is the norm, and saprotrophs feed only on what is
+/// already dead (`docs/ecology/plants.md`, *Defence against microbes*).
+pub const DEFAULT_LIVING_RESISTANCE: f32 = 1.0;
+
+fn default_living_resistance() -> f32 {
+    DEFAULT_LIVING_RESISTANCE
 }
 
 /// The decay constant `k_d = ln 2 / (L × T_p)` per tick at which a carcass
@@ -2438,7 +2453,7 @@ mod tests {
             carcass_decay_constant: crate::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
-            living_resistance: 0.0,
+            living_resistance: crate::DEFAULT_LIVING_RESISTANCE,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -2669,9 +2684,12 @@ mod tests {
         // paying this tick's metabolism, 10 ticks of maintenance above its
         // retention buffer drains a trait-distant living target at its full
         // heterotrophic capability.
+        // Without living-tissue resistance (the controlled variant, #865):
+        // the world's own ρ = 1 closes the living target.
         let params = WorldParameters {
             initial_population_size: 0,
             reserve_mobilisation_rate: 1.0,
+            living_resistance: 0.0,
             ..test_params()
         };
         let m = params.base_metabolic_rate;
@@ -3268,11 +3286,12 @@ mod tests {
     }
 
     #[test]
-    fn living_resistance_round_trips_and_defaults_off() {
-        // #813: a recipe or checkpoint that predates living-tissue
-        // resistance loads with it off (ρ = 0, no resistance).
+    fn living_resistance_round_trips_and_loads_at_the_worlds_own() {
+        // #865: living-tissue resistance is physics in every world, so a
+        // recipe or checkpoint that predates it loads at the domain's ρ = 1.
+        // A recipe that sets the controlled variant ρ = 0 keeps it.
         let mut params = test_params();
-        params.living_resistance = 1.0;
+        params.living_resistance = 0.0;
         let json = serde_json::to_string(&params).unwrap();
         let back: WorldParameters = serde_json::from_str(&json).unwrap();
         assert_eq!(back, params);
@@ -3280,7 +3299,8 @@ mod tests {
         let mut value = serde_json::to_value(test_params()).unwrap();
         value.as_object_mut().unwrap().remove("living_resistance");
         let without: WorldParameters = serde_json::from_value(value).unwrap();
-        assert_eq!(without.living_resistance, 0.0);
+        assert_eq!(without.living_resistance, DEFAULT_LIVING_RESISTANCE);
+        assert_eq!(without.living_resistance, 1.0);
     }
 
     #[test]
@@ -3781,6 +3801,9 @@ mod tests {
             trophic_distance_decay: 0.0,
             initial_population_size: 0,
             movement_cost_coefficient: 0.0,
+            // The target is living: without resistance (controlled variant,
+            // #865), or the world's ρ = 1 leaves nothing to drain.
+            living_resistance: 0.0,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -4967,7 +4990,7 @@ mod tests {
             carcass_decay_constant: crate::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
-            living_resistance: 0.0,
+            living_resistance: crate::DEFAULT_LIVING_RESISTANCE,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,

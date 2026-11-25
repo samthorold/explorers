@@ -268,16 +268,10 @@ fn decomposer_mesocosm_runs_the_declared_rules() {
     let dir = scratch("decomposer-mesocosm");
     let explicit = run_with(
         &dir.join("explicit.json"),
-        &[
-            "--living-resistance",
-            "--litter-half-life",
-            "1",
-            "--enzyme-half-saturation",
-            "1",
-        ],
+        &["--litter-half-life", "1", "--enzyme-half-saturation", "1"],
     );
     let declared = run_with(&dir.join("declared.json"), &["--decomposer-mesocosm"]);
-    for key in ["report", "decomposition_kinetics", "living_resistance"] {
+    for key in ["report", "decomposition_kinetics"] {
         assert!(explicit.get(key).is_some(), "{key}");
         assert_eq!(declared[key], explicit[key], "{key}");
     }
@@ -298,7 +292,6 @@ fn decomposer_mesocosm_runs_the_declared_rules() {
 fn decomposer_mesocosm_refuses_its_rules_flags_and_no_decomposers() {
     for extra in [
         &["--established-producer-structure", "4"][..],
-        &["--living-resistance"][..],
         &["--litter-half-life", "2"][..],
         &["--no-decomposers"][..],
     ] {
@@ -397,27 +390,30 @@ fn established_producer_structure_sets_the_worlds_s_p() {
     }
 }
 
-/// `--living-resistance` (#813) sets `ρ` = 1, the design's value for mode 1's
-/// consumers (world rules, *Living tissue resists drains*), and records it in
-/// the artifact and summary. With body reach exposing the producers, the
-/// guild drains living targets without it and none with it; without the
-/// option nothing is recorded.
+/// Living tissue resists every drain in every world since #865, at the
+/// world's own `ρ = 1` (world rules, *Living tissue resists drains*): with
+/// body reach exposing the producers, the guild drains no living target, and
+/// nothing about it is recorded. The retired `--living-resistance` is
+/// refused as unknown.
 #[test]
-fn living_resistance_sets_rho_to_one_and_closes_living_targets() {
+fn living_tissue_is_closed_to_the_guild_and_the_retired_flag_is_refused() {
     let dir = scratch("living-resistance");
-    let reach = ["--body-reach-pieces", "10"];
-    let open = run_with(&dir.join("open.json"), &reach);
-    let resisted = run_with(
-        &dir.join("resisted.json"),
-        &[&reach[..], &["--living-resistance"]].concat(),
-    );
-    assert!(open.get("living_resistance").is_none());
-    assert_eq!(resisted["living_resistance"].as_f64(), Some(1.0));
-    let living = |a: &serde_json::Value| a["report"]["guild"]["drain"]["living"].as_f64().unwrap();
-    assert!(living(&open) > 0.0, "{}", open["report"]["guild"]);
-    assert_eq!(living(&resisted), 0.0, "{}", resisted["report"]["guild"]);
-    let md = std::fs::read_to_string(dir.join("resisted.md")).unwrap();
-    assert!(md.contains("## Living-tissue resistance"), "{md}");
+    let reached = run_with(&dir.join("reached.json"), &["--body-reach-pieces", "10"]);
+    assert!(reached.get("living_resistance").is_none());
+    let living = reached["report"]["guild"]["drain"]["living"]
+        .as_f64()
+        .unwrap();
+    assert_eq!(living, 0.0, "{}", reached["report"]["guild"]);
+    let md = std::fs::read_to_string(dir.join("reached.md")).unwrap();
+    assert!(!md.contains("## Living-tissue resistance"), "{md}");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
+        .args(["--ticks", "1", "--living-resistance"])
+        .output()
+        .expect("the instrument runs");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--living-resistance"), "{stderr}");
 }
 
 /// `--starvation-readout` (#821) writes the founder starvation readout, the

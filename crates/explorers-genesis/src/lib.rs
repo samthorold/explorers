@@ -440,7 +440,7 @@ mod tests {
             carcass_decay_constant: explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
-            living_resistance: 0.0,
+            living_resistance: explorers_sim::DEFAULT_LIVING_RESISTANCE,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
@@ -806,10 +806,14 @@ mod tests {
         // A base rate of 1.5, not the shared fixture's 0.9, since #864: under
         // saturating decomposition the 0.9 world, energy-dead at the gate's
         // tick 50, recovers by the horizon (a gate disagreement), and this
-        // test needs a world that stays dead.
+        // test needs a world that stays dead. Since #865 living tissue
+        // resists every drain, so its producers are no longer grazed, and the
+        // 1.5 world recovers by the horizon as well: the fixture stays dead
+        // in the controlled variant without resistance, `ρ = 0`.
         let (params, dist) = energy_dying_world();
         let params = WorldParameters {
             base_metabolic_rate: 1.5,
+            living_resistance: 0.0,
             ..params
         };
         let config = |fraction: f32| RunConfig {

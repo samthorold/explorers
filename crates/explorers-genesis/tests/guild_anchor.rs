@@ -117,6 +117,12 @@ fn recipe() -> WorldRecipe {
 /// the recipe is found again under the full physics (after #870), this
 /// anchor pins only that the guild read does not turn a failed world into a
 /// scoring one.
+/// Since #865 living tissue resists every drain at the world's own `ρ = 1`.
+/// The recipe then still reads zero on every column, but its three seeds
+/// took 523 s in the workspace test run, against 89 s at `ρ = 0`. So the
+/// anchor runs the recipe in the controlled variant without resistance
+/// (`ρ = 0`), the world it ran before #865. Re-pinning it under the full physics waits on the
+/// recipe being found again (#870).
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
@@ -126,7 +132,8 @@ const GOLDEN: [(u64, [u32; 6]); 3] = [
 ];
 
 fn readings(seed: u64) -> [u32; 6] {
-    let recipe = recipe();
+    let mut recipe = recipe();
+    recipe.parameters.living_resistance = 0.0;
     let run_config = RunConfig {
         max_ticks: recipe.max_ticks,
         eval_config: EvalConfig::default(),

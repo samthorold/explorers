@@ -629,41 +629,19 @@ pub fn base_rate_reference_structure_section(r: &FoundersUpkeep) -> String {
     out
 }
 
-/// Mode 1's living-tissue resistance `ρ` (world rules, *Consumption is
-/// incremental → Living tissue resists drains*, *How large `ρ` is*): mode 1's
-/// heterotrophs are decomposers and producer-line mixotrophs, consumers not
-/// adapted to living tissue, so the domain closes it to them. The domain's
-/// value for those consumers, not a fitted one.
-pub const MODE1_LIVING_RESISTANCE: f32 = 1.0;
-
-/// Turn living-tissue resistance on in `world` at [`MODE1_LIVING_RESISTANCE`]
-/// and return the `ρ` set.
-pub fn set_living_resistance(world: &mut World) -> f32 {
-    world.params_mut().living_resistance = MODE1_LIVING_RESISTANCE;
-    MODE1_LIVING_RESISTANCE
-}
-
-/// The summary section recording the living-tissue resistance a run set.
-pub fn living_resistance_section(rho: f32) -> String {
-    format!(
-        "## Living-tissue resistance (--living-resistance)\n\n\
-         ρ = {rho}: every drain on a living target is multiplied by 1 − ρ = {}; \
-         carcass drains are unchanged",
-        1.0 - rho
-    )
-}
-
 /// The decomposer mesocosm (#884): mode 1's mesocosm in its arm with
 /// decomposers, under the rules hypothesis G's ladder reads it in
 /// (`docs/system-design/end-state.md`, *The decomposer guild*, *Its setup*).
 /// Declared once here so every rung reads the same mesocosm and a
 /// recalibration moves them together. It is applied to a world at founding
 /// ([`DecomposerMesocosm::apply`]); the committed mesocosm without it is
-/// unchanged, living resistance off and decomposition at the world's own
-/// kinetics (#864). #814's fourth rule, the size-scaled base rate at
-/// `S_p` 6.937, is the world's own since #862
-/// ([`explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE`]), so the
-/// declaration no longer sets it.
+/// unchanged, decomposition at the world's own kinetics (#864). Two of
+/// #814's rules are the world's own and the declaration no longer sets
+/// them: the size-scaled base rate at `S_p` 6.937 since #862
+/// ([`explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE`]), and living
+/// resistance at `ρ = 1` since #865
+/// ([`explorers_sim::DEFAULT_LIVING_RESISTANCE`]), the value the mesocosm
+/// declared.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct DecomposerMesocosm {
     /// `L`, the litter half-life under full saturation, in producer lifespans
@@ -690,16 +668,15 @@ pub struct DecomposerRules {
     /// The founders' upkeep under the rules applied, at the world's base
     /// rate (#862).
     pub upkeep: FoundersUpkeep,
-    pub living_resistance: f32,
 }
 
 impl DecomposerMesocosm {
     /// The decomposer mesocosm as the design declares it: #814's rules at
-    /// L 1 and K 1, at the founding litter ratio 170, with living
-    /// resistance, the one not yet the world's. Saturating decomposition is
-    /// the world's since #864, and L 1 is its own `k_d`, so the declaration
-    /// moves only `K`, stated in founder capabilities. The size-scaled base
-    /// rate runs at the world's `S_p`, #814's 6.937.
+    /// L 1 and K 1, at the founding litter ratio 170. Saturating
+    /// decomposition is the world's since #864, and L 1 is its own `k_d`, so
+    /// the declaration moves only `K`, stated in founder capabilities. The
+    /// size-scaled base rate runs at the world's `S_p`, #814's 6.937, and
+    /// living tissue resists at the world's `ρ = 1` (#865).
     pub const DECLARED: Self = Self {
         litter_half_life: 1.0,
         enzyme_half_saturation: 1.0,
@@ -707,21 +684,18 @@ impl DecomposerMesocosm {
     };
 
     /// Turn the rules on in `world` at founding, at the declared values:
-    /// [`set_decomposition_kinetics`] and [`set_living_resistance`], and read
-    /// the founders' upkeep ([`founders_upkeep`]). `None`, leaving the world
-    /// untouched, when it has no decomposer founders, since `K` is in their
-    /// capabilities.
+    /// [`set_decomposition_kinetics`], and read the founders' upkeep
+    /// ([`founders_upkeep`]). `None`, leaving the world untouched, when it
+    /// has no decomposer founders, since `K` is in their capabilities.
     pub fn apply(&self, world: &mut World) -> Option<DecomposerRules> {
         let kinetics = set_decomposition_kinetics(
             world,
             self.litter_half_life,
             Some(self.enzyme_half_saturation),
         )?;
-        let living_resistance = set_living_resistance(world);
         Some(DecomposerRules {
             kinetics,
             upkeep: founders_upkeep(world),
-            living_resistance,
         })
     }
 }
@@ -3826,7 +3800,10 @@ mod tests {
 
     /// A producer death the stepper marks `Senesced` is recorded among the
     /// senescent lifespans as well as among all of them; with no hazard,
-    /// none is.
+    /// none is. Run for 300 ticks since #865: no producer is grazed at the
+    /// world's own `ρ = 1`, so within 100 ticks every producer death is
+    /// senescent (158 of 158 on seed 11) and with no hazard none dies; at 300,
+    /// 691 of 711 are.
     #[test]
     fn senescent_producer_deaths_are_recorded_apart() {
         let spec = Mode1Spec::committed();
@@ -3837,7 +3814,7 @@ mod tests {
             };
             run_mode1(
                 &mut mode1_mesocosm(&spec, wear, 11, Community::ProducersOnly),
-                100,
+                300,
                 50,
             )
         };
@@ -4998,10 +4975,10 @@ mod tests {
         );
     }
 
-    /// The decomposer mesocosm (#884) declares #814's rules that are not yet
-    /// the world's at L 1 and K 1, and the domain's founding litter ratio
-    /// 170; the size-scaled base rate at `S_p` 6.937 is the world's own
-    /// (#862). Applied to a world at founding, it sets exactly what the
+    /// The decomposer mesocosm (#884) declares #814's kinetics at L 1 and
+    /// K 1, and the domain's founding litter ratio 170; the size-scaled base
+    /// rate at `S_p` 6.937 (#862) and living resistance at `ρ = 1` (#865) are
+    /// the world's own. Applied to a world at founding, it sets exactly what the
     /// setters set at those values, and reports what they report.
     #[test]
     fn the_decomposer_mesocosm_applies_its_rules_at_their_declared_values() {
@@ -5021,7 +4998,6 @@ mod tests {
         };
         let mut by_hand = build();
         let kinetics = set_decomposition_kinetics(&mut by_hand, 1.0, Some(1.0)).unwrap();
-        let living_resistance = set_living_resistance(&mut by_hand);
         let upkeep = founders_upkeep(&by_hand);
         assert_eq!(upkeep.base_rate_reference_structure, 6.937);
 
@@ -5031,7 +5007,9 @@ mod tests {
             .expect("the mesocosm has decomposers");
         assert_eq!(rules.kinetics, kinetics);
         assert_eq!(rules.upkeep, upkeep);
-        assert_eq!(rules.living_resistance, living_resistance);
+        // The mesocosm's living tissue resists at the world's own ρ = 1
+        // (#865), the value it declared before.
+        assert_eq!(declared.params().living_resistance, 1.0);
         assert_eq!(declared.params(), by_hand.params());
         assert_eq!(agent_state(&declared), agent_state(&by_hand));
         assert_eq!(carcass_state(&declared), carcass_state(&by_hand));
@@ -5044,10 +5022,11 @@ mod tests {
     }
 
     /// Without the declaration applied, the committed mesocosm is unchanged
-    /// (#884): living resistance is off and decomposition runs at the
-    /// world's own kinetics (#864), and applying the declaration moves no
-    /// agent, carcass or nutrient and no parameter but the three it sets. Of
-    /// those, `k_d` is already the world's, so only `K` and `ρ` move.
+    /// (#884): decomposition runs at the world's own kinetics (#864) and
+    /// living tissue resists at the world's own `ρ` (#865), and applying the
+    /// declaration moves no agent, carcass or nutrient and no parameter but
+    /// the two it sets. Of those, `k_d` is already the world's, so only `K`
+    /// moves.
     #[test]
     fn the_committed_mesocosm_without_the_declaration_is_unchanged() {
         let spec = Mode1Spec::committed();
@@ -5065,7 +5044,10 @@ mod tests {
             p.carcass_decay_constant,
             explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT
         );
-        assert_eq!(p.living_resistance, 0.0);
+        assert_eq!(
+            p.living_resistance,
+            explorers_sim::DEFAULT_LIVING_RESISTANCE
+        );
         assert_eq!(
             p.carcass_half_saturation,
             explorers_sim::DEFAULT_CARCASS_HALF_SATURATION
@@ -5082,7 +5064,6 @@ mod tests {
         let restored = WorldParameters {
             carcass_decay_constant: p.carcass_decay_constant,
             carcass_half_saturation: p.carcass_half_saturation,
-            living_resistance: p.living_resistance,
             ..declared.params().clone()
         };
         assert_eq!(&restored, p);
@@ -5630,13 +5611,20 @@ mod tests {
         // Hazard 3 on seed 4 since #864: under saturating decomposition
         // founders starve sooner, so at 0.3 few or none live to senesce
         // (3 senesced, 76 reserve, 2 structural here).
+        // Without living-tissue resistance (`ρ = 0`) since #865: a
+        // structural death is a member killed by a drain while its reserve
+        // could still pay, and at the world's own ρ = 1 no living member is
+        // drained, so no founder dies structural (seeds 3 to 7, hazards 0.3
+        // to 3). The variant is the mesocosm as it ran before #865.
         let spec = Mode1Spec::committed();
         let build = || {
             let wear = Wear {
                 senescence_hazard: 3.0,
                 ..mesocosm_wear()
             };
-            mode1_mesocosm(&spec, wear, 4, Community::ProducersAndDecomposers)
+            let mut world = mode1_mesocosm(&spec, wear, 4, Community::ProducersAndDecomposers);
+            world.params_mut().living_resistance = 0.0;
+            world
         };
         let ticks = 150;
         let report = run_mode1(&mut build(), ticks, 10);

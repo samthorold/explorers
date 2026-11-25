@@ -91,7 +91,7 @@ pub fn viable_baseline() -> WorldParameters {
         carcass_decay_constant: explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT,
         carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
         base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
-        living_resistance: 0.0,
+        living_resistance: explorers_sim::DEFAULT_LIVING_RESISTANCE,
         contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
         compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
         tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
@@ -322,9 +322,12 @@ pub fn world_case_with_saturating_decomposition() -> impl Strategy<Value = World
         })
 }
 
-/// A stepper case with living-tissue resistance on (#813): the wear case, so
-/// living targets are drained and carcasses form within the run, with `ρ`
-/// drawn across `[0, 1]` or at 1, where no living target is drained, and the
+/// A stepper case across living-tissue resistance (#813): the wear case, so
+/// carcasses form within the run, with `ρ` drawn across `[0, 1]` or at 1,
+/// where no living target is drained. Since #865 the world's own `ρ` is 1, so
+/// every other strategy runs closed to living drains, and this one is where
+/// the properties meet the controlled variants below 1, where living targets
+/// are drained. The
 /// carcass decay constant at the world's own in half the cases and drawn up
 /// to total per tick in the rest. A separate strategy, so `world_case()`
 /// draws exactly the inputs it always has.

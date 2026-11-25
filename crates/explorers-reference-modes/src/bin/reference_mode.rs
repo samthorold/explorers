@@ -75,17 +75,16 @@
 //! `--size-scaled-base-rate`, the switch the rule had before #862, is refused
 //! as unknown.
 //!
-//! `--living-resistance` (#813; world rules, *Consumption is incremental →
-//! Living tissue resists drains*) sets the living-tissue resistance `ρ` to 1,
-//! the design's value for mode 1's consumers: no heterotroph drains a living
-//! target, and carcass drains are unchanged. The summary and artifact record
-//! `ρ`, and the guild readout's living-versus-carcass split is the check.
-//! Without the flag `ρ` stays 0 and nothing is recorded.
+//! Living tissue resists every drain in every world (#813, #865; world rules,
+//! *Consumption is incremental → Living tissue resists drains*), at the
+//! world's own `ρ = 1`: no heterotroph drains a living target, and carcass
+//! drains are unchanged. `--living-resistance`, the switch it had before
+//! #865, is refused as unknown.
 //!
 //! `--decomposer-mesocosm` (#884; `end-state.md`, *The decomposer guild*,
 //! *Its setup*) runs the decomposer mesocosm, hypothesis G's setup: the
-//! rules above (`--litter-half-life`, `--enzyme-half-saturation`,
-//! `--living-resistance`) at the values
+//! rules above (`--litter-half-life`, `--enzyme-half-saturation`) at the
+//! values
 //! [`explorers_reference_modes::mesocosm::DecomposerMesocosm::DECLARED`]
 //! declares, with the size-scaled base rate at the world's `S_p`, so G's
 //! rungs read the mesocosm the crate declares rather than restating it. It
@@ -148,7 +147,7 @@
 //!                [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K]
 //!                [--litter-half-life L] [--enzyme-half-saturation K]
 //!                [--established-producer-structure S_p]
-//!                [--living-resistance] [--decomposer-mesocosm]
+//!                [--decomposer-mesocosm]
 //!                [--starvation-readout]
 //!                [--compatibility-scale S]
 //!                [--early-window C]
@@ -175,13 +174,12 @@ use explorers_reference_modes::mesocosm::{
     EarlyWindow, Mode1Spec, RunOptions, Wear, base_rate_reference_structure_section,
     body_reach_section, carcass_decay_constant_for_half_life, compatibility_scale_section,
     decomposition_kinetics_section, early_window_section, founder_starvation_section,
-    line_extinction_section, living_resistance_section, marker_readout_section,
-    mode1_mesocosm_with_founders, mode1_summary, paired_summary, run_mode1_with, run_paired_with,
-    set_base_rate_reference_structure, set_body_reach_pieces, set_compatibility_scale,
-    set_decomposition_kinetics, set_living_resistance,
+    line_extinction_section, marker_readout_section, mode1_mesocosm_with_founders, mode1_summary,
+    paired_summary, run_mode1_with, run_paired_with, set_base_rate_reference_structure,
+    set_body_reach_pieces, set_compatibility_scale, set_decomposition_kinetics,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--established-producer-structure S_p] [--living-resistance] [--decomposer-mesocosm] [--starvation-readout] [--compatibility-scale S] [--early-window C] [--abort-on-line-extinction] [--seeds N --passes-needed K [--failures-undecided]] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--established-producer-structure S_p] [--decomposer-mesocosm] [--starvation-readout] [--compatibility-scale S] [--early-window C] [--abort-on-line-extinction] [--seeds N --passes-needed K [--failures-undecided]] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -210,8 +208,6 @@ struct Cli {
     /// `S_p` for the size-scaled base rate (#814, #862); `None` keeps the
     /// world's default.
     established_producer_structure: Option<f32>,
-    /// Whether living tissue resists drains, at mode 1's `ρ` = 1 (#813).
-    living_resistance: bool,
     /// The decomposer mesocosm (#884), whose declared values set the rules
     /// above.
     decomposer_mesocosm: Option<DecomposerMesocosm>,
@@ -245,7 +241,6 @@ impl Cli {
             litter_half_life: None,
             enzyme_half_saturation: None,
             established_producer_structure: None,
-            living_resistance: false,
             decomposer_mesocosm: None,
             starvation_readout: false,
             compatibility_scale: None,
@@ -258,10 +253,6 @@ impl Cli {
         while let Some(flag) = args.next() {
             if flag == "--no-decomposers" {
                 cli.community = Community::ProducersOnly;
-                continue;
-            }
-            if flag == "--living-resistance" {
-                cli.living_resistance = true;
                 continue;
             }
             if flag == "--decomposer-mesocosm" {
@@ -351,19 +342,17 @@ impl Cli {
         }
         if let Some(d) = cli.decomposer_mesocosm {
             if cli.established_producer_structure.is_some()
-                || cli.living_resistance
                 || cli.litter_half_life.is_some()
                 || cli.enzyme_half_saturation.is_some()
             {
                 return Err(
-                    "--decomposer-mesocosm sets its rules at their declared values: drop --established-producer-structure, --living-resistance, --litter-half-life and --enzyme-half-saturation"
+                    "--decomposer-mesocosm sets its rules at their declared values: drop --established-producer-structure, --litter-half-life and --enzyme-half-saturation"
                         .into(),
                 );
             }
             if cli.community == Community::ProducersOnly {
                 return Err("--decomposer-mesocosm needs decomposer founders".into());
             }
-            cli.living_resistance = true;
             cli.litter_half_life = Some(d.litter_half_life);
             cli.enzyme_half_saturation = Some(d.enzyme_half_saturation);
         }
@@ -550,9 +539,6 @@ fn run_seed(
     let base_rate = cli
         .established_producer_structure
         .map(|s_p| set_base_rate_reference_structure(&mut world, s_p));
-    let living_resistance = cli
-        .living_resistance
-        .then(|| set_living_resistance(&mut world));
     let starvation_readout = cli.starvation_readout;
     let community = match cli.community {
         Community::ProducersAndDecomposers => "producers and decomposers",
@@ -576,7 +562,7 @@ fn run_seed(
         Some(n) => format!("{header}, {n} decomposer founders"),
         None => header,
     };
-    // The feeding reach, kinetics, base rate and resistance set are run
+    // The feeding reach, kinetics and base rate set are run
     // settings, so they follow the header.
     let with_reach = |header: String| {
         let header = match &body_reach {
@@ -589,10 +575,6 @@ fn run_seed(
         };
         let header = match &base_rate {
             Some(r) => format!("{header}\n\n{}", base_rate_reference_structure_section(r)),
-            None => header,
-        };
-        let header = match living_resistance {
-            Some(rho) => format!("{header}\n\n{}", living_resistance_section(rho)),
             None => header,
         };
         match &compatibility_scale {
@@ -703,9 +685,6 @@ fn run_seed(
     if let Some(r) = base_rate {
         artifact["base_rate_reference_structure"] =
             serde_json::to_value(r).expect("the base rate serialises");
-    }
-    if let Some(rho) = living_resistance {
-        artifact["living_resistance"] = serde_json::json!(rho);
     }
     if let Some(d) = cli.decomposer_mesocosm {
         artifact["decomposer_mesocosm"] =
