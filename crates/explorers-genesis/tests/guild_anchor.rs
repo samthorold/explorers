@@ -79,25 +79,32 @@ fn recipe() -> WorldRecipe {
 /// every seed, all still
 /// scoring with full clustering: fitness 0.718, 0.764 and 0.764, coexistence
 /// 1.0, 1.0 and 0.99.
+/// Re-pinned under #901: no draw takes a store below zero, so the last share
+/// of a cell's uptake split, or of an exhausted carcass's nutrient, is capped
+/// at what the store still holds. That is a physics change of a few ulps,
+/// where a split used to overdraw, not a changed read. The ulps grow over the
+/// run. Seed 2 moved only in the last bits of oscillation. Seed 1's fitness
+/// went from 0.718 to 0.706, and seed 3's from 0.764 to 0.783, its
+/// coexistence from 0.99 to 1.0. All three seeds keep full clustering.
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
     (
         1,
         [
-            1060617075, 1051002521, 1065353216, 1065353216, 1057778303, 1041240023,
+            1060424392, 1049897269, 1065353216, 1065353216, 1057560199, 1040434109,
         ],
     ),
     (
         2,
         [
-            1061395074, 1045375255, 1065353216, 1065353216, 1062903742, 1035722258,
+            1061395074, 1045375264, 1065353216, 1065353216, 1062903742, 1035722258,
         ],
     ),
     (
         3,
         [
-            1061386492, 1051973695, 1065353216, 1065185444, 1060538155, 1039706700,
+            1061717459, 1051316316, 1065353216, 1065353216, 1062022939, 1038683476,
         ],
     ),
 ];

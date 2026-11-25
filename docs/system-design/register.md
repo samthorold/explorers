@@ -14,7 +14,7 @@ Kept by hand. Before any change, review the rows marked Due: read the hypothesis
 | Part | Hypothesis | Status | Highest rung | Last reading | Due |
 |---|---|---|---|---|---|
 | 1 | S1 Energy is conserved | Due | – | none | Due: never read under its rule. `prop_conservation` checks the ledgers. |
-| 1 | S2 Nutrient is conserved, founding included | Due | – | none | Due: never read under its rule. `prop_conservation` and `founder_nutrient_binding` check it. |
+| 1 | S2 Nutrient is conserved, founding included | Due | – | none | Due: never read under its rule. `prop_conservation` and `founder_nutrient_binding` check it; since #901 `prop_conservation` checks every cell against the zero floor after every tick, not only the pool's total. |
 | 1 | S3 Energy flows one way; the pyramid of flow cannot invert | Due | – | none | Due: no test yet. |
 | 1 | S4 Carcass energy leaves only through drains; leachable nutrient leaches first order | Due | – | none | Due: no test yet. |
 | 1 | S5 Wear relaxes to an equilibrium rising with activity, falling with kappa | Due | – | none | Due: no test yet. |

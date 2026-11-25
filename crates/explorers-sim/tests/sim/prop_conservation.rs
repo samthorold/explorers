@@ -278,6 +278,11 @@ fn check_stores_non_negative(case: &WorldCase) -> Result<(), TestCaseError> {
             "available pool is negative after tick {tick}: {}",
             world.nutrient_pool(),
         );
+        // Per cell, too: a positive total can hide a cell overdrawn below
+        // zero (#901).
+        for (i, &c) in world.nutrient_grid().cells().iter().enumerate() {
+            prop_assert!(c >= 0.0, "cell {i} is negative after tick {tick}: {c}");
+        }
     }
     Ok(())
 }
@@ -333,6 +338,110 @@ fn issue_444_minimal_case() -> WorldCase {
         dist,
         seed: 0,
         ticks: 1,
+    }
+}
+
+/// The proptest-shrunk case from #901, built from its printed values: both
+/// starvation-cascade switches on, a pool of 50 over four cells drawn down by
+/// 28 founders' seed bodies to 1.05e-5 in the one cell they share.
+fn issue_901_first_case() -> WorldCase {
+    let params = WorldParameters {
+        solar_flux_magnitude: 17.886423,
+        base_trophic_efficiency: 0.1,
+        trophic_distance_decay: 0.1,
+        reproduction_efficiency: 0.1,
+        base_metabolic_rate: 0.01,
+        movement_cost_coefficient: 0.001,
+        sensing_range_coefficient: 1.0,
+        reproduction_energy_threshold: 5.0,
+        reproduction_nutrient_threshold: 1.0,
+        mutation_rate: 0.01,
+        mutation_magnitude: 0.01,
+        contact_range_coefficient: 0.5,
+        world_extent: 20.0,
+        initial_population_size: 28,
+        light_competition_radius: 1.0,
+        photo_maintenance_cost: 0.001,
+        heterotrophy_maintenance_cost: 0.001,
+        initial_nutrient_pool: 50.0,
+        growth_efficiency: 0.3,
+        wear_rate: 0.01,
+        wear_degradation_steepness: 1.0,
+        somatic_maintenance_cost_coefficient: 0.1,
+        use_wear_rate: 0.0,
+        structure_maintenance_coefficient: 0.01,
+        repair_rate: 0.0,
+        senescence_hazard: 0.0,
+        base_nutrient_ratio: 0.2638049,
+        specification_nutrient_coefficient: 0.36853546,
+        reproductive_compatibility_distance: 0.5,
+        mobility_maintenance_cost: 0.0,
+        maintenance_cost_exponent: 1.5,
+        nutrient_grid_cell_size: 10.0,
+        growth_retention_multiplier: 1.0,
+        reserve_mobilisation_rate: 0.05,
+        offspring_structure_fraction: 0.47227257,
+        asexual_propensity_maintenance_cost: 0.01,
+        dispersal_propagule_cost_coefficient: 0.0,
+        dispersal_propagule_cost_exponent: 2.0,
+        dispersal_reach_coefficient: 10.0,
+        body_reach_coefficient: 0.0,
+        network_connection_cap: 0,
+        network_creation_cost: 0.0,
+        network_maintenance_cost: 0.0,
+        network_redistribution_rate: 0.0,
+        network_transfer_efficiency: 0.0,
+        recognition_distance: 0.0,
+        uptake_structure_exponent: 0.0,
+        uptake_reference_structure: 100.0,
+        cross_trait_cost: 0.0,
+        leaching_rate: 0.0,
+        carcass_decay_constant: 0.0,
+        carcass_half_saturation: 1.0,
+        mass_specific_base_rate: 0.0,
+        living_resistance: 0.0,
+        starvation_draws_earmark: true,
+        starvation_shrinks: true,
+        hyphal_uptake: false,
+        contact_distance: 0.1,
+        marker_isolation: false,
+        compatibility_scale: 1.0,
+        growth_dilutes_wear: false,
+    };
+    let dist = InitialDistribution {
+        mean_traits: TraitVector {
+            photosynthetic_absorption: 0.6351212,
+            heterotrophy: 0.33678985,
+            mobility: 0.6862951,
+            kappa: 0.0,
+            fecundity: 0.35,
+            asexual_propensity: 0.0,
+            dispersal: 0.0,
+        },
+        trait_covariance: 0.70214385,
+        initial_cluster_count: 5,
+        initial_energy_per_agent: 34.9989,
+        founder_aggregation: 0.65709233,
+    };
+    WorldCase {
+        params,
+        dist,
+        seed: 10581603512686480826,
+        ticks: 1,
+    }
+}
+
+/// Uptake never overdraws a cell (#901): where demand exceeds a cell's pool,
+/// the proportional shares, each rounded in f32, can sum past it, and the
+/// last drawer used to leave the cell a rounding residue below zero. In the
+/// #901 case a cell founded at 1.05e-5 ended the tick at -2.3e-13.
+#[test]
+fn proportional_uptake_never_overdraws_a_cell() {
+    let case = issue_901_first_case();
+    let mut world = World::new(case.params.clone(), case.dist.clone(), case.seed);
+    world.step();
+    for (i, &c) in world.nutrient_grid().cells().iter().enumerate() {
+        assert!(c >= 0.0, "cell {i} is negative after one tick: {c}");
     }
 }
 
