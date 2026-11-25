@@ -207,11 +207,17 @@ pub fn absorb_nutrients_after_moves(
 
         let available = *cell_pool;
         for &(i, demand) in agent_demands.iter() {
-            let uptake = if total_demand <= available {
+            let share = if total_demand <= available {
                 demand
             } else {
                 demand / total_demand * available
             };
+            // Each share is rounded in f32, so the shares can sum past the
+            // cell by a few ulps; capping each at what the cell still holds
+            // leaves it at zero, never below, and the agent is credited
+            // exactly what the cell gave (#901). Where the cell covers the
+            // share the cap leaves it unchanged, bit for bit.
+            let uptake = share.min(*cell_pool);
             // Credit the uptake, split by kappa (ADR-0003): the kappa share feeds
             // the free store (the growth build-permit), the (1 - kappa) share the
             // reproductive-nutrient earmark. Unlike energy there is no retention
@@ -1525,7 +1531,13 @@ pub fn resolve_drains_routed(
                 } else {
                     actual_drain / available
                 };
-                let nutrient_transferred = tick_start_nutrient * nutrient_fraction;
+                // Capped at what the carcass still holds: the f32 shares of
+                // an exhausted carcass can sum past its tick-start nutrient,
+                // and the last bite would leave it a debt that mineralises
+                // as a negative to the cell (#901). Where the carcass covers
+                // the share the cap leaves it unchanged, bit for bit.
+                let nutrient_transferred = (tick_start_nutrient * nutrient_fraction)
+                    .min(carcasses[carcass_idx].nutrient.max(0.0));
 
                 let retained = bite_retention(
                     nutrient_transferred,

@@ -110,8 +110,12 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// example4 already runs sexual and asexual placement kernels; the wear
 /// anchor moved to `example4.json+wear` (see [`golden_recipe`]), pinned at
 /// the commit that deleted them.
+/// example4 re-pinned for #901: a share of a cell's uptake split, or of an
+/// exhausted carcass's nutrient, is capped at what the store still holds.
+/// That moves example4 by rounding where a split used to overdraw.
+/// `example4.json+wear` never overdraws and is unchanged.
 const GOLDEN: [(&str, u64, u64, u64); 2] = [
-    ("example4.json", 7, 300, 0x62ea225e32de936b),
+    ("example4.json", 7, 300, 0x0c2e901adc3dea11),
     ("example4.json+wear", 11, 300, 0x6d81249183cdaa77),
 ];
 
