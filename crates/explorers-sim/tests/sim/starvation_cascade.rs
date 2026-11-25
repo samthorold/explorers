@@ -35,9 +35,13 @@ fn traits() -> TraitVector {
 }
 
 /// A still world with no nutrient pool, no mutation and no wear, so a lone
-/// agent's stores change only by its upkeep.
+/// agent's stores change only by its upkeep. Tissue turnover is held at 0, a
+/// controlled variant: it would recycle shed tissue into the stores the
+/// cascade draws on, and leave the agent its own litter to eat, and this
+/// suite reads the cascade alone (S23); turnover's own rule is S21's.
 fn params(draws_earmark: bool, shrinks: bool) -> WorldParameters {
     WorldParameters {
+        tissue_turnover_rate: 0.0,
         starvation_draws_earmark: draws_earmark,
         starvation_shrinks: shrinks,
         initial_nutrient_pool: 0.0,

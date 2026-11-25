@@ -46,6 +46,13 @@ pub enum EventKind {
     /// every death carries, so a death count reads `Died` alone and the cause
     /// reads this. `energy_delta` is 0.
     Senesced,
+    /// Tissue turnover (#859; world rules, *Somatic wear*, *Tissue
+    /// turnover*): `source` shed `τ` of its structure this tick. `target` is
+    /// the necromass carcass the unrecycled part went to, `energy_delta` the
+    /// structure it gave that carcass and `nutrient_delta` the nutrient bound
+    /// in it; the recycled part stayed in the agent. `position` is the
+    /// agent's. One event per living agent with structure, every tick.
+    Shed,
 }
 
 #[derive(Clone, Debug, PartialEq)]

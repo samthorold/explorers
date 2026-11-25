@@ -7,8 +7,8 @@ use crate::support;
 use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use proptest::prelude::*;
 use support::{
-    WorldCase, world_case, world_case_with_hyphal_uptake, world_case_with_living_resistance,
-    world_case_with_marker_isolation, world_case_with_network,
+    WorldCase, world_case, world_case_with_fast_tissue_turnover, world_case_with_hyphal_uptake,
+    world_case_with_living_resistance, world_case_with_marker_isolation, world_case_with_network,
     world_case_with_saturating_decomposition, world_case_with_size_scaled_uptake,
     world_case_with_starvation_cascade, world_case_with_wear,
 };
@@ -159,6 +159,19 @@ proptest! {
     #[test]
     fn conservation_holds_with_the_starvation_cascade(
         case in world_case_with_starvation_cascade()
+    ) {
+        check_energy_ledger_identity(&case)?;
+        check_nutrient_closure(&case)?;
+        check_stores_non_negative(&case)?;
+    }
+
+    /// The three conservation invariants with fast tissue turnover (#859):
+    /// shedding splits structure and its bound nutrient exactly between the
+    /// agent and its necromass pile, with no heat, and the pile drains and
+    /// decays as any carcass does.
+    #[test]
+    fn conservation_holds_with_fast_tissue_turnover(
+        case in world_case_with_fast_tissue_turnover()
     ) {
         check_energy_ledger_identity(&case)?;
         check_nutrient_closure(&case)?;
@@ -396,6 +409,7 @@ fn issue_901_first_case() -> WorldCase {
         contact_distance: 0.1,
         marker_isolation: false,
         compatibility_scale: 1.0,
+        tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
     };
     let dist = InitialDistribution {
         mean_traits: TraitVector {

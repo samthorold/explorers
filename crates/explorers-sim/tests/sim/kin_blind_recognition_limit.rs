@@ -24,6 +24,9 @@
 //! example10, example11 and example13, whose mobile heterotrophs sense cues,
 //! move again because foraging movement follows what a resource releases.
 //! Recognition still subtracts nothing at `recognition_distance = 0`.
+//! Re-pinned for #859: tissue turnover moves every world (the living shed
+//! each tick, and consumers drain the necromass), the kin-blind world with
+//! it; recognition still subtracts nothing at `recognition_distance = 0`.
 
 use explorers_sim::{World, WorldRecipe};
 
@@ -70,12 +73,12 @@ fn fingerprint(world: &World) -> u64 {
 /// The scenarios, seeds and horizons, with the pre-recognition fingerprint of
 /// each.
 const PINNED: [(&str, u64, u64, u64); 2] = [
-    ("example4.json", 7, 200, 0x44a1_e670_cbfa_2309),
+    ("example4.json", 7, 200, 0x8e60_dd1c_f5bf_6990),
     (
         "example9_detrital_pathway.json",
         11,
         200,
-        0x3bae_d4a1_50c5_90bf,
+        0x23ec_12ce_c4e9_9c5d,
     ),
 ];
 

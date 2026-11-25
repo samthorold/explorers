@@ -539,6 +539,7 @@ fn default_recipe() -> WorldRecipe {
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
+            tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
         },
         initial_distribution: Some(InitialDistribution {
             mean_traits: TraitVector {

@@ -86,25 +86,31 @@ fn recipe() -> WorldRecipe {
 /// run. Seed 2 moved only in the last bits of oscillation. Seed 1's fitness
 /// went from 0.718 to 0.706, and seed 3's from 0.764 to 0.783, its
 /// coexistence from 0.99 to 1.0. All three seeds keep full clustering.
+/// Re-pinned under #859: every living agent sheds tissue each tick into
+/// necromass piles that consumers drain (tissue turnover) — a physics change,
+/// not a changed read. Seed 1's fitness fell from 0.706 to 0.388 (clustering
+/// 1.0 to 0.571, coexistence 1.0 to 0.14); seed 2's rose from 0.764 to 0.783
+/// and seed 3's moved from 0.783 to 0.776. The carcass-locked fraction rose
+/// on every seed (0.129, 0.092, 0.114 to 0.198, 0.166, 0.223).
 /// Re-capture with
 /// `cargo test -p explorers-genesis --test guild_anchor -- --ignored print_golden --nocapture`.
 const GOLDEN: [(u64, [u32; 6]); 3] = [
     (
         1,
         [
-            1060424392, 1049897269, 1065353216, 1065353216, 1057560199, 1040434109,
+            1053202332, 1045896555, 1058162981, 1041194025, 1059145646, 1045077641,
         ],
     ),
     (
         2,
         [
-            1061395074, 1045375264, 1065353216, 1065353216, 1062903742, 1035722258,
+            1061712955, 1046703273, 1065353216, 1063843267, 1065353216, 1042915854,
         ],
     ),
     (
         3,
         [
-            1061717459, 1051316316, 1065353216, 1065353216, 1062022939, 1038683476,
+            1061586972, 1043412467, 1065353216, 1065185444, 1064329806, 1046777059,
         ],
     ),
 ];

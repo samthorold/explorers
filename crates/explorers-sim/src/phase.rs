@@ -1662,6 +1662,130 @@ pub fn leach_carcasses(
     events
 }
 
+/// First id given to a necromass carcass (#859). Agents take ids from 0 up
+/// and seeded carcasses from `u64::MAX / 2`, so necromass ids start at
+/// `u64::MAX / 4`, disjoint from both: a necromass carcass is never taken
+/// for a dead agent's carcass, or for a seeded one.
+pub const NECROMASS_ID_BASE: u64 = u64::MAX / 4;
+
+/// Which necromass carcass each living agent sheds into (#859), and the next
+/// necromass id. An agent keeps adding to its pile while the pile is still in
+/// the world and in the agent's nutrient cell; otherwise it starts a new one.
+/// One pile per agent per cell keeps the carcass count bounded by the living,
+/// not by their ticks. Read only by lookup, never iterated, so its hash order
+/// reaches no output.
+#[derive(Clone, Debug)]
+pub struct NecromassIndex {
+    by_agent: FxHashMap<u64, u64>,
+    next_id: u64,
+}
+
+impl Default for NecromassIndex {
+    fn default() -> Self {
+        Self {
+            by_agent: FxHashMap::default(),
+            next_id: NECROMASS_ID_BASE,
+        }
+    }
+}
+
+/// Tissue turnover (#859; world rules, *Somatic wear*, *Tissue turnover*):
+/// every living agent with structure sheds `τ S`, `τ` the
+/// `tissue_turnover_rate`, with the nutrient it binds, `τ S × ratio`. The
+/// recycled fraction [`crate::TISSUE_RECYCLED_FRACTION`] of both returns to
+/// the agent, energy to its reserve and nutrient to its free, unearmarked
+/// store (its own nutrient coming back, not uptake, so kappa does not split
+/// it). The rest goes to necromass at the agent's cell: a carcass carrying
+/// the agent's traits, whose nutrient is all bound in its structure. Peak
+/// structure falls by `1 − τ`; wear is unchanged. No heat: what is shed is
+/// conserved exactly between agent and litter.
+///
+/// Agents shed in id order, so new piles take their ids in an order that does
+/// not follow the agent slice. Returns a [`EventKind::Shed`] event per agent
+/// that shed. A no-op at `τ = 0`.
+pub fn turn_over_tissue(
+    agents: &mut [Agent],
+    carcasses: &mut Vec<Carcass>,
+    index: &mut NecromassIndex,
+    nutrient_grid: &crate::spatial::NutrientGrid,
+    params: &WorldParameters,
+) -> Vec<Event> {
+    let mut events = Vec::new();
+    let tau = params.tissue_turnover_rate;
+    if tau <= 0.0 {
+        index.by_agent.clear();
+        return events;
+    }
+    let r = crate::TISSUE_RECYCLED_FRACTION;
+    let carcass_at: FxHashMap<u64, usize> = (carcasses.iter().enumerate())
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    let mut order: Vec<usize> = (0..agents.len()).collect();
+    order.sort_by_key(|&i| agents[i].id);
+    let mut by_agent = FxHashMap::default();
+    for i in order {
+        let agent = &mut agents[i];
+        if agent.structure <= 0.0 {
+            continue;
+        }
+        let ratio = crate::stoichiometric_demand(&agent.traits, 1.0, params);
+        let shed = tau * agent.structure;
+        let recycled = r * shed;
+        let litter = shed - recycled;
+        let shed_nutrient = shed * ratio;
+        let recycled_nutrient = r * shed_nutrient;
+        let litter_nutrient = shed_nutrient - recycled_nutrient;
+
+        agent.structure -= shed;
+        agent.peak_structure *= 1.0 - tau;
+        agent.reserve += recycled;
+        agent.nutrient += recycled_nutrient;
+
+        let cell = nutrient_grid.cell_index_for(agent.position);
+        let pile = (index.by_agent.get(&agent.id))
+            .and_then(|id| carcass_at.get(id).copied())
+            .filter(|&c| nutrient_grid.cell_index_for(carcasses[c].position) == cell);
+        let pile_id = match pile {
+            Some(c) => {
+                let carcass = &mut carcasses[c];
+                carcass.energy += litter;
+                carcass.energy_at_death += litter;
+                carcass.nutrient += litter_nutrient;
+                carcass.id
+            }
+            None => {
+                let id = index.next_id;
+                index.next_id += 1;
+                carcasses.push(Carcass {
+                    id,
+                    position: agent.position,
+                    energy: litter,
+                    energy_at_death: litter,
+                    nutrient: litter_nutrient,
+                    traits: agent.traits,
+                });
+                id
+            }
+        };
+        by_agent.insert(agent.id, pile_id);
+        events.push(Event {
+            tick: 0,
+            seq: 0,
+            kind: EventKind::Shed,
+            source: agent.id,
+            target: Some(pile_id),
+            energy_delta: litter,
+            position: Some(agent.position),
+            target_was_carcass: false,
+            second_parent: None,
+            nutrient_delta: litter_nutrient,
+        });
+    }
+    // Only the living shed, so only they keep a pile.
+    index.by_agent = by_agent;
+    events
+}
+
 /// Senescent death (world rules, *Somatic wear*): a living agent dies this
 /// tick with probability `h = η · w`, `w` its total wear over the functional
 /// traits, drawn from its own keyed stream. At `h = 0` there is no draw.
@@ -2905,6 +3029,7 @@ mod tests {
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
+            tissue_turnover_rate: crate::DEFAULT_TISSUE_TURNOVER_RATE,
         }
     }
 

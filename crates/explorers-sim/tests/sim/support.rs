@@ -99,6 +99,7 @@ pub fn viable_baseline() -> WorldParameters {
         contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
         marker_isolation: false,
         compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
+        tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
     }
 }
 
@@ -291,6 +292,18 @@ pub fn world_case_with_wear() -> impl Strategy<Value = WorldCase> {
             case.params.senescence_hazard = hazard;
             case
         })
+}
+
+/// A stepper case with tissue turnover fast (#859): the saturating case, so
+/// necromass piles are drained, decay and cross the remnant floor within the
+/// run, with the turnover rate drawn from the domain's default up to half the
+/// body a tick, so a short run sheds far more than the default does. Every
+/// world turns over at the default; this strategy stresses it.
+pub fn world_case_with_fast_tissue_turnover() -> impl Strategy<Value = WorldCase> {
+    (world_case_with_saturating_decomposition(), 0.005f32..=0.5).prop_map(|(mut case, tau)| {
+        case.params.tissue_turnover_rate = tau;
+        case
+    })
 }
 
 /// A stepper case with saturating carcass decomposition on (#803): the wear
