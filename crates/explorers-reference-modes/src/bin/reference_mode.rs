@@ -47,18 +47,21 @@
 //! Without the flag, or at 0, the coefficient is the spec's and nothing is
 //! recorded.
 //!
-//! `--litter-half-life L` (#805; world rules, *Carcass decomposition
-//! saturates in its decomposers*) turns saturating decomposition on, with
-//! the decay constant `k_d = ln 2 / (L × T_p)` at which a carcass under full
-//! saturation halves in L producer lifespans, `T_p` the median established
-//! producer lifespan at the committed wear (229 ticks).
+//! Saturating decomposition runs in every world (#864; world rules, *Carcass
+//! decomposition saturates in its decomposers*), at the world's own decay
+//! constant, a litter half-life of one producer lifespan.
+//! `--litter-half-life L` (#805) sets the decay constant in its place, to
+//! `k_d = ln 2 / (L × T_p)` at which a carcass under full saturation halves
+//! in L producer lifespans, `T_p` the median established producer lifespan
+//! at the committed wear (229 ticks).
 //! `--enzyme-half-saturation K` sets the half-saturation constant to K
 //! decomposer founder drain capabilities (effective heterotrophy × `u_H` at
 //! founding, read from the world the run builds); without it, the world's
-//! default. K needs L, since it has no effect while `k_d` is 0, and needs
-//! decomposer founders. The summary and artifact record L, `T_p`, `k_d`, the
-//! founders' capability and K in founder capabilities and absolute units.
-//! Without the flags nothing is recorded and the world is unchanged.
+//! default. K needs decomposer founders; without L it runs at the world's
+//! own `k_d`, recorded as L 1. The summary and artifact record L, `T_p`,
+//! `k_d`, the founders' capability and K in founder capabilities and absolute
+//! units. Without the flags nothing is recorded and the world keeps its own
+//! kinetics.
 //!
 //! The base metabolic cost is `b · S` in every world (#862; world rules,
 //! flow 8, *The base rate scales with structure*), with `b =
@@ -371,15 +374,15 @@ impl Cli {
             return Err("--body-reach-pieces needs decomposer founders".into());
         }
         if cli.enzyme_half_saturation.is_some() {
-            if cli.litter_half_life.is_none() {
-                return Err(
-                    "--enzyme-half-saturation needs --litter-half-life: K has no effect while k_d is 0"
-                        .into(),
-                );
-            }
             if cli.community == Community::ProducersOnly {
                 return Err("--enzyme-half-saturation needs decomposer founders".into());
             }
+            // Saturating decomposition is in every world (#864): K alone
+            // runs at the world's own k_d, a litter half-life of one
+            // producer lifespan, recorded as such.
+            cli.litter_half_life = cli
+                .litter_half_life
+                .or(Some(explorers_sim::REFERENCE_LITTER_HALF_LIFE));
         }
         if let Some(l) = cli.litter_half_life {
             let k_d = carcass_decay_constant_for_half_life(l, ESTABLISHED_PRODUCER_LIFESPAN_TICKS);

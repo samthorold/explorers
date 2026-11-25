@@ -126,9 +126,12 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// Both re-pinned for #863: the starvation cascade in every world, so a
 /// starving agent pays upkeep from its earmark, then its structure, before
 /// it dies.
+/// Both re-pinned for #864: saturating decomposition in every world, so a
+/// carcass yields `k_d · S · Σc / (K + Σc)` a tick rather than its drainers'
+/// summed capability.
 const GOLDEN: [(&str, u64, u64, u64); 2] = [
-    ("example4.json", 7, 300, 0x906edf532c4a0626),
-    ("example4.json+wear", 11, 300, 0x15edf9681f4e04ca),
+    ("example4.json", 7, 300, 0xf6876c0088d38269),
+    ("example4.json+wear", 11, 300, 0xe6d5f823affcdef5),
 ];
 
 #[test]

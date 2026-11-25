@@ -528,7 +528,7 @@ fn default_recipe() -> WorldRecipe {
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
-            carcass_decay_constant: 0.0,
+            carcass_decay_constant: explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,

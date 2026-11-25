@@ -1456,15 +1456,10 @@ pub fn resolve_drains_routed(
         // Saturating decomposition (world-rules.md, *Carcass decomposition
         // saturates in its decomposers*): the carcass yields
         // D = k_d · S · Σc / (K + Σc) in all, each drainer taking c / Σc of
-        // it, capped by the structure present. Off (k_d = 0), the yield is
-        // the additive Σc, shared only at the cap.
-        let saturating = params.carcass_decay_constant > 0.0;
-        let total_yield = if saturating {
-            params.carcass_decay_constant * available * total_demand
-                / (params.carcass_half_saturation + total_demand)
-        } else {
-            total_demand
-        };
+        // it, capped by the structure present. Physics in every world since
+        // #864, with no additive path.
+        let total_yield = params.carcass_decay_constant * available * total_demand
+            / (params.carcass_half_saturation + total_demand);
         let exhausted = total_yield >= available;
         // Every consumer's nutrient share is taken against the carcass's
         // tick-start nutrient (gather-pass state, like demand), never against
@@ -1477,10 +1472,8 @@ pub fn resolve_drains_routed(
         for &(consumer_idx, demand, trophic_eff) in &consumers {
             let actual_drain = if exhausted {
                 (demand / total_demand) * available
-            } else if saturating {
-                (demand / total_demand) * total_yield
             } else {
-                demand
+                (demand / total_demand) * total_yield
             };
 
             let energy_gained = actual_drain * trophic_eff;
@@ -1567,9 +1560,8 @@ pub fn resolve_drains_routed(
         // carcass, so a drained one below a tiny fraction of its structure at
         // death leaves the world. Its last structure dissipates and its
         // nutrient mineralises to its cell.
-        if saturating
-            && carcasses[carcass_idx].energy
-                < crate::CARCASS_REMNANT_FLOOR_FRACTION * carcasses[carcass_idx].energy_at_death
+        if carcasses[carcass_idx].energy
+            < crate::CARCASS_REMNANT_FLOOR_FRACTION * carcasses[carcass_idx].energy_at_death
         {
             dissipated += carcasses[carcass_idx].energy.max(0.0);
             carcasses[carcass_idx].energy = 0.0;
@@ -2973,7 +2965,7 @@ mod tests {
             recognition_distance: 0.0,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
-            carcass_decay_constant: 0.0,
+            carcass_decay_constant: crate::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
@@ -2985,6 +2977,27 @@ mod tests {
 
     fn make_agent(id: u64, position: (f32, f32), reserve: f32, traits: TraitVector) -> Agent {
         Agent::new(id, position, reserve, 0.0, 0.0, traits)
+    }
+
+    /// `params` with decomposition kinetics under which a carcass of
+    /// structure `s` yields `bite` in a tick, whatever its drainers'
+    /// capability, split among them by capability: the limit `K = 0` of
+    /// saturating decomposition, at `k_d = bite / s` (#864). For tests that
+    /// read another rule (nutrient retention, kappa, routing) through a
+    /// carcass bite of a known size.
+    fn with_carcass_bite(params: WorldParameters, bite: f32, s: f32) -> WorldParameters {
+        WorldParameters {
+            carcass_decay_constant: bite / s,
+            carcass_half_saturation: 0.0,
+            ..params
+        }
+    }
+
+    /// What one drainer of capability `c` alone takes from a carcass of
+    /// structure `s` in a tick, in the stepper's own arithmetic:
+    /// `k_d · S · c / (K + c)`.
+    fn lone_carcass_yield(params: &WorldParameters, s: f32, c: f32) -> f32 {
+        params.carcass_decay_constant * s * c / (params.carcass_half_saturation + c)
     }
 
     /// `agent` at the base-rate reference structure `S_p`, where its base cost
@@ -5715,9 +5728,10 @@ mod tests {
             &recognising_params(),
             &mut nutrient_grid,
         );
+        // Never spared: its full capability enters the saturating yield.
         assert_eq!(
             drained_from(&result, PARENT, 50).to_bits(),
-            parent_capability().to_bits()
+            lone_carcass_yield(&recognising_params(), 1000.0, parent_capability()).to_bits()
         );
     }
 
@@ -6011,7 +6025,9 @@ mod tests {
         // An agent with heterotrophy can drain a living target AND a carcass
         // in the same tick — the same trait drives both, target state determines
         // which efficiency applies.
-        let params = test_params(); // consumption_efficiency=0.5, decomposition_efficiency=0.5
+        // consumption_efficiency=0.5, decomposition_efficiency=0.5; the
+        // carcass yields 2.0.
+        let params = with_carcass_bite(test_params(), 2.0, 10.0);
         let heterotroph_traits = TraitVector {
             heterotrophy: 2.0,
             ..zero_traits()
@@ -7423,7 +7439,8 @@ mod tests {
         // between them exhaust the carcass receive identical shares and the
         // carcass ends with no nutrient residue. (Re-reading the carcass's
         // nutrient after each decrement gave N/2 then N/4, stranding a quarter.)
-        let params = test_params();
+        // k_d = 1 at K = 0: the carcass yields all it holds this tick.
+        let params = with_carcass_bite(test_params(), 4.0, 4.0);
         let consumer_traits = TraitVector {
             heterotrophy: 2.0, // demand 2.0 each; trophic_eff 0.5 -> gains 1.0 each
             ..zero_traits()
@@ -7493,7 +7510,7 @@ mod tests {
         // consumers by their drains against the tick-start nutrient. Two equal
         // bites taking half the energy release half the nutrient, a quarter
         // each — not N/4 then 3N/16.
-        let params = test_params();
+        let params = with_carcass_bite(test_params(), 4.0, 8.0);
         let consumer_traits = TraitVector {
             heterotrophy: 2.0,
             ..zero_traits()
@@ -7559,7 +7576,7 @@ mod tests {
         // ADR-0004: nutrient retained from decomposing a carcass is split by
         // kappa, exactly like the living-target route and autotrophic uptake. The
         // detrital chain funds decomposer reproduction from ingested nutrient.
-        let params = test_params();
+        let params = with_carcass_bite(test_params(), 2.0, 10.0);
         let consumer_traits = TraitVector {
             heterotrophy: 2.0,
             kappa: 0.25,
@@ -7620,12 +7637,16 @@ mod tests {
     /// nutrient-rich carcass, with `free` nutrient in its store and a surplus
     /// of 10 above its retention buffer (world-rules.md flow 3, the deficit).
     fn producer_carcass_retention(free: f32) -> f32 {
-        let params = WorldParameters {
-            growth_efficiency: 0.5,
-            // Structure 5 at S_p 5 pays the base rate 0.1 (#862).
-            base_rate_reference_structure: 5.0,
-            ..test_params()
-        };
+        let params = with_carcass_bite(
+            WorldParameters {
+                growth_efficiency: 0.5,
+                // Structure 5 at S_p 5 pays the base rate 0.1 (#862).
+                base_rate_reference_structure: 5.0,
+                ..test_params()
+            },
+            1.0,
+            100.0,
+        );
         // ratio = 0.1 + 0.2 × 2 = 0.5; buffer = 0.1 × 2 = 0.2.
         let traits = TraitVector {
             photosynthetic_absorption: 1.0,
@@ -7681,12 +7702,16 @@ mod tests {
         // deficit: it keeps ratio × energy gained from a living and a carcass
         // bite alike. The deficit is read before any drain, so the reserve its
         // living meal adds does not open one for the carcass bite.
-        let params = WorldParameters {
-            growth_efficiency: 0.5,
-            // Structure 5 at S_p 5 pays the base rate 0.1 (#862).
-            base_rate_reference_structure: 5.0,
-            ..test_params()
-        };
+        let params = with_carcass_bite(
+            WorldParameters {
+                growth_efficiency: 0.5,
+                // Structure 5 at S_p 5 pays the base rate 0.1 (#862).
+                base_rate_reference_structure: 5.0,
+                ..test_params()
+            },
+            2.0,
+            10.0,
+        );
         let consumer_traits = TraitVector {
             heterotrophy: 2.0, // ratio = 0.1 + 0.2 × 2 = 0.5; buffer = 0.2
             ..zero_traits()
@@ -7737,12 +7762,16 @@ mod tests {
     fn drain_deficit_is_a_per_tick_budget_shared_by_a_consumers_bites() {
         // An empty producer (deficit 2.5, as above) taking two carcass bites
         // in one tick keeps each bite's energy match, and its deficit once.
-        let params = WorldParameters {
-            growth_efficiency: 0.5,
-            // Structure 5 at S_p 5 pays the base rate 0.1 (#862).
-            base_rate_reference_structure: 5.0,
-            ..test_params()
-        };
+        let params = with_carcass_bite(
+            WorldParameters {
+                growth_efficiency: 0.5,
+                // Structure 5 at S_p 5 pays the base rate 0.1 (#862).
+                base_rate_reference_structure: 5.0,
+                ..test_params()
+            },
+            1.0,
+            100.0,
+        );
         let traits = TraitVector {
             photosynthetic_absorption: 1.0,
             heterotrophy: 1.0,
@@ -11400,7 +11429,7 @@ mod tests {
         // A decomposer (id 1) excreting from a nutrient-rich carcass, paid
         // by partners 3 and 4: every unit it does not keep reaches them ¾ / ¼,
         // reported as `SurplusRouted` events from it to each.
-        let params = test_params();
+        let params = with_carcass_bite(test_params(), 2.0, 10.0);
         let decomposer = TraitVector {
             heterotrophy: 2.0,
             ..zero_traits()
@@ -11466,7 +11495,7 @@ mod tests {
         // The decomposer (id 1) eats its partner 3 to death in the living pass,
         // then excretes from a carcass. Partner 3 already holds its carcass, so
         // the surplus goes to partner 4 alone and nutrient is conserved.
-        let params = test_params();
+        let params = with_carcass_bite(test_params(), 2.0, 10.0);
         let decomposer = TraitVector {
             heterotrophy: 2.0,
             ..zero_traits()

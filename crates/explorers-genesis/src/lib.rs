@@ -437,7 +437,7 @@ mod tests {
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
             leaching_rate: 0.0,
-            carcass_decay_constant: 0.0,
+            carcass_decay_constant: explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT,
             carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
@@ -802,7 +802,16 @@ mod tests {
         // the full series. The carry changes only what is *recorded* — the
         // run's own verdict stays the gate's, so the atlas is the same map
         // whether or not a rollout was drawn for the check.
+        //
+        // A base rate of 1.5, not the shared fixture's 0.9, since #864: under
+        // saturating decomposition the 0.9 world, energy-dead at the gate's
+        // tick 50, recovers by the horizon (a gate disagreement), and this
+        // test needs a world that stays dead.
         let (params, dist) = energy_dying_world();
+        let params = WorldParameters {
+            base_metabolic_rate: 1.5,
+            ..params
+        };
         let config = |fraction: f32| RunConfig {
             max_ticks: 600,
             eval_config: EvalConfig {

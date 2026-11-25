@@ -402,8 +402,10 @@ pub const ESTABLISHED_PRODUCER_LIFESPAN_TICKS: f32 = 229.0;
 /// The decay constant `k_d` at which a carcass under full saturation
 /// (`Σc ≫ K`) has a half-life of `lifespans` producer lifespans of
 /// `producer_lifespan` ticks: `k_d = ln 2 / (L × T_p)`, per tick.
+/// The stepper's own conversion ([`explorers_sim::carcass_decay_constant`]),
+/// which sets the world's default from the same anchor (#864).
 pub fn carcass_decay_constant_for_half_life(lifespans: f32, producer_lifespan: f32) -> f32 {
-    std::f32::consts::LN_2 / (lifespans * producer_lifespan)
+    explorers_sim::carcass_decay_constant(lifespans, producer_lifespan)
 }
 
 /// The saturating-decomposition kinetics `--litter-half-life` and
@@ -657,7 +659,8 @@ pub fn living_resistance_section(rho: f32) -> String {
 /// Declared once here so every rung reads the same mesocosm and a
 /// recalibration moves them together. It is applied to a world at founding
 /// ([`DecomposerMesocosm::apply`]); the committed mesocosm without it is
-/// unchanged, its rules off. #814's fourth rule, the size-scaled base rate at
+/// unchanged, living resistance off and decomposition at the world's own
+/// kinetics (#864). #814's fourth rule, the size-scaled base rate at
 /// `S_p` 6.937, is the world's own since #862
 /// ([`explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE`]), so the
 /// declaration no longer sets it.
@@ -691,11 +694,12 @@ pub struct DecomposerRules {
 }
 
 impl DecomposerMesocosm {
-    /// The decomposer mesocosm as the design declares it: #814's rules that
-    /// are not yet the world's (saturating decomposition, its
-    /// half-saturation, and living resistance) at L 1 and K 1, at the
-    /// founding litter ratio 170. The size-scaled base rate runs at the
-    /// world's `S_p`, #814's 6.937.
+    /// The decomposer mesocosm as the design declares it: #814's rules at
+    /// L 1 and K 1, at the founding litter ratio 170, with living
+    /// resistance, the one not yet the world's. Saturating decomposition is
+    /// the world's since #864, and L 1 is its own `k_d`, so the declaration
+    /// moves only `K`, stated in founder capabilities. The size-scaled base
+    /// rate runs at the world's `S_p`, #814's 6.937.
     pub const DECLARED: Self = Self {
         litter_half_life: 1.0,
         enzyme_half_saturation: 1.0,
@@ -4969,7 +4973,29 @@ mod tests {
         assert_eq!(kinetics.half_saturation_founder_capabilities, None);
         let mut world = mode1_mesocosm(&spec, mesocosm_wear(), 1, Community::ProducersOnly);
         assert!(set_decomposition_kinetics(&mut world, 1.0, Some(1.0)).is_none());
-        assert_eq!(world.params().carcass_decay_constant, 0.0);
+        assert_eq!(
+            world.params().carcass_decay_constant,
+            explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT
+        );
+    }
+
+    /// The world's carcass decay constant is anchored in this mesocosm
+    /// (#864), as the turnover rate is: the declared litter half-life of one
+    /// established producer lifespan gives exactly the world's own `k_d`, so
+    /// the declaration sets no `k_d` the world does not already run.
+    #[test]
+    fn the_worlds_decay_constant_is_the_declared_mesocosms() {
+        assert_eq!(
+            carcass_decay_constant_for_half_life(
+                DecomposerMesocosm::DECLARED.litter_half_life,
+                ESTABLISHED_PRODUCER_LIFESPAN_TICKS
+            ),
+            explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT
+        );
+        assert_eq!(
+            Mode1Spec::committed().parameters.carcass_decay_constant,
+            explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT
+        );
     }
 
     /// The decomposer mesocosm (#884) declares #814's rules that are not yet
@@ -5018,8 +5044,10 @@ mod tests {
     }
 
     /// Without the declaration applied, the committed mesocosm is unchanged
-    /// (#884): its rules are off, and applying the declaration moves no
-    /// agent, carcass or nutrient and no parameter but the three it sets.
+    /// (#884): living resistance is off and decomposition runs at the
+    /// world's own kinetics (#864), and applying the declaration moves no
+    /// agent, carcass or nutrient and no parameter but the three it sets. Of
+    /// those, `k_d` is already the world's, so only `K` and `ρ` move.
     #[test]
     fn the_committed_mesocosm_without_the_declaration_is_unchanged() {
         let spec = Mode1Spec::committed();
@@ -5033,7 +5061,10 @@ mod tests {
         };
         let committed = build();
         let p = committed.params();
-        assert_eq!(p.carcass_decay_constant, 0.0);
+        assert_eq!(
+            p.carcass_decay_constant,
+            explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT
+        );
         assert_eq!(p.living_resistance, 0.0);
         assert_eq!(
             p.carcass_half_saturation,
@@ -5056,6 +5087,10 @@ mod tests {
         };
         assert_eq!(&restored, p);
         assert_ne!(declared.params(), p);
+        assert_eq!(
+            declared.params().carcass_decay_constant,
+            p.carcass_decay_constant
+        );
     }
 
     /// Litter inflow (#804): a death adds the structure its carcass held at
@@ -5592,13 +5627,16 @@ mod tests {
         // all three causes, each read as the replay reads it. Seed 3 since
         // #859: under tissue turnover seed 4's founders no longer die
         // structural deaths (3 senesced, 71 reserve, 7 structural on seed 3).
+        // Hazard 3 on seed 4 since #864: under saturating decomposition
+        // founders starve sooner, so at 0.3 few or none live to senesce
+        // (3 senesced, 76 reserve, 2 structural here).
         let spec = Mode1Spec::committed();
         let build = || {
             let wear = Wear {
-                senescence_hazard: 0.3,
+                senescence_hazard: 3.0,
                 ..mesocosm_wear()
             };
-            mode1_mesocosm(&spec, wear, 3, Community::ProducersAndDecomposers)
+            mode1_mesocosm(&spec, wear, 4, Community::ProducersAndDecomposers)
         };
         let ticks = 150;
         let report = run_mode1(&mut build(), ticks, 10);
@@ -5801,13 +5839,16 @@ mod tests {
             .map(|a| a.id)
             .collect();
         // Under the committed mesocosm's bare rules the founders recruit and
-        // 14 of the 81 are alive at the rung's declared 50, all dead by 160:
-        // the window holds at 50 and is refuted at 160. (Until #863, without
+        // some are alive early, all dead by 160: the window holds early and
+        // is refuted at 160. (At #863, 14 of the 81 were alive at the rung's
+        // declared 50. Until #863, without
         // the starvation cascade, all were dead by tick 19 and the window
-        // was refuted at 50; held at 15. This test checks the instrument, and
-        // it is not a reading of rung 2.)
+        // was refuted at 50; held at 15. Since #864, under saturating
+        // decomposition, the last dies at tick 50 and 12 are alive at 30, so
+        // the window is read at 30. This test checks the instrument, and it
+        // is not a reading of rung 2.)
         let mut elapsed = 0;
-        for (at, holds) in [(50, true), (160, false)] {
+        for (at, holds) in [(30, true), (160, false)] {
             while elapsed < at {
                 world.step();
                 elapsed += 1;

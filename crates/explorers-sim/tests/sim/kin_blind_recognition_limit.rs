@@ -29,6 +29,9 @@
 //! it; recognition still subtracts nothing at `recognition_distance = 0`.
 //! Re-pinned for #860: hyphal uptake in every world, so still heterotrophs
 //! and mixotrophs draw pool nutrient through their heterotrophy.
+//! Re-pinned for #864: saturating decomposition in every world, so a carcass
+//! yields `k_d · S · Σc / (K + Σc)` a tick; recognition still subtracts
+//! nothing at `recognition_distance = 0`.
 
 use explorers_sim::{World, WorldRecipe};
 
@@ -75,12 +78,12 @@ fn fingerprint(world: &World) -> u64 {
 /// The scenarios, seeds and horizons, with the pre-recognition fingerprint of
 /// each.
 const PINNED: [(&str, u64, u64, u64); 2] = [
-    ("example4.json", 7, 200, 0x02f5_5813_6069_4251),
+    ("example4.json", 7, 200, 0xbe9d_9bad_8bd1_b513),
     (
         "example9_detrital_pathway.json",
         11,
         200,
-        0xd050_e2ae_fdb1_2b40,
+        0x2072_5243_daa2_21cf,
     ),
 ];
 

@@ -313,18 +313,22 @@ fn decomposer_mesocosm_refuses_its_rules_flags_and_no_decomposers() {
     }
 }
 
-/// K has no effect while `k_d` is 0, so `--enzyme-half-saturation` without
-/// `--litter-half-life` is refused.
+/// Saturating decomposition is in every world since #864, so
+/// `--enzyme-half-saturation` alone sets K at the world's own `k_d`, a litter
+/// half-life of one producer lifespan, and records it.
 #[test]
-fn enzyme_half_saturation_without_litter_half_life_is_refused() {
-    let output = Command::new(env!("CARGO_BIN_EXE_reference_mode"))
-        .args(["--ticks", "1", "--enzyme-half-saturation", "1"])
-        .output()
-        .expect("the instrument runs");
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--enzyme-half-saturation"), "{stderr}");
-    assert!(stderr.contains("--litter-half-life"), "{stderr}");
+fn enzyme_half_saturation_alone_runs_at_the_worlds_own_decay_constant() {
+    let dir = scratch("enzyme-alone");
+    let alone = run_with(&dir.join("alone.json"), &["--enzyme-half-saturation", "2"]);
+    let k = &alone["decomposition_kinetics"];
+    assert_eq!(k["litter_half_life"], 1.0);
+    let k_d = k["decay_constant"].as_f64().unwrap();
+    assert_eq!(
+        k_d as f32,
+        explorers_sim::DEFAULT_CARCASS_DECAY_CONSTANT,
+        "{k}"
+    );
+    assert_eq!(k["half_saturation_founder_capabilities"], 2.0);
 }
 
 /// The size-scaled base rate has no switch since #862: the retired

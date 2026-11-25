@@ -1,12 +1,13 @@
-//! Saturating carcass decomposition (#803; world-rules.md, *Consumption is
-//! incremental → Carcass decomposition saturates in its decomposers*).
+//! Saturating carcass decomposition (#803, #864; world-rules.md,
+//! *Consumption is incremental → Carcass decomposition saturates in its
+//! decomposers*; end state S24).
 //!
 //! Per carcass, per tick, the structure drained is
 //! `D = k_d · S · Σc / (K + Σc)`, each drainer taking `c / Σc` of it, `c` its
 //! drain before the cap (`eff_heterotrophy × u_H`). A drained carcass below
 //! `CARCASS_REMNANT_FLOOR_FRACTION` of its structure at death leaves the
-//! world. Living targets are untouched, and `k_d = 0` is today's additive
-//! drain.
+//! world. Living targets are untouched. It is physics in every world since
+//! #864, with no switch and no additive path.
 
 use crate::support;
 
@@ -14,8 +15,9 @@ use explorers_sim::phase::{DrainResult, resolve_drains};
 use explorers_sim::spatial::{NutrientGrid, SpatialGrid};
 use explorers_sim::units::HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK;
 use explorers_sim::{
-    Agent, CARCASS_REMNANT_FLOOR_FRACTION, Carcass, TraitVector, World, WorldParameters,
-    WorldRecipe,
+    Agent, CARCASS_REMNANT_FLOOR_FRACTION, Carcass, DEFAULT_CARCASS_DECAY_CONSTANT,
+    DEFAULT_CARCASS_HALF_SATURATION, REFERENCE_LITTER_HALF_LIFE, REFERENCE_PRODUCER_LIFESPAN_TICKS,
+    TraitVector, World, WorldParameters, WorldRecipe,
 };
 
 const EXTENT: f32 = 100.0;
@@ -110,6 +112,94 @@ fn yield_with(n: u64, params: &WorldParameters, structure: f32) -> f32 {
 fn capability(agent: &Agent, params: &WorldParameters) -> f32 {
     agent.effective_trait_with_steepness(1, params.wear_degradation_steepness)
         * HETEROTROPHY_STRUCTURE_DRAIN_PER_TICK
+}
+
+/// S24's rung test (end-state.md, part 1, *Carcass decomposition saturates
+/// in its decomposers*): in the world's own physics, with no switch to set,
+/// one carcass drained by 1 to 256 unit decomposers yields
+/// `k_d · S · Σc / (K + Σc)` in a tick, to float rounding, each decomposer
+/// taking `c / Σc` of it. The yield rises with every decomposer added, never
+/// exceeds `k_d · S`, and comes within 1 % of it as they crowd the carcass.
+/// No store goes below zero. `k_d` is the world's: a litter half-life under
+/// full saturation of one producer lifespan of the world's reference
+/// producer, `ln 2 / (L × T_p)`.
+#[test]
+fn s24_rung_a_carcass_yields_at_most_its_decay_constant_times_its_stock_and_approaches_it_as_decomposers_crowd_it()
+ {
+    let params = WorldParameters {
+        world_extent: EXTENT,
+        ..support::viable_baseline()
+    };
+    let k_d = params.carcass_decay_constant;
+    assert_eq!(k_d, DEFAULT_CARCASS_DECAY_CONSTANT, "the world's own k_d");
+    let anchored =
+        std::f32::consts::LN_2 / (REFERENCE_LITTER_HALF_LIFE * REFERENCE_PRODUCER_LIFESPAN_TICKS);
+    assert!(
+        (k_d - anchored).abs() <= 1e-9,
+        "k_d {k_d} is ln 2 / (L × T_p) = {anchored}"
+    );
+    let half = params.carcass_half_saturation;
+    assert_eq!(half, DEFAULT_CARCASS_HALF_SATURATION);
+
+    let s = 100.0_f32;
+    let ceiling = k_d * s;
+    let mut previous = 0.0_f32;
+    for n in [1u64, 2, 4, 8, 16, 64, 256] {
+        let mut agents: Vec<Agent> = (0..n).map(|i| drainer(i, 1.0)).collect();
+        let c = capability(&agents[0], &params);
+        let mut carcasses = vec![carcass(s, 6.0)];
+        let mut nutrient_grid = NutrientGrid::new(EXTENT, 10.0, 0.0);
+        let result = drain(&mut agents, &mut carcasses, &params, &mut nutrient_grid);
+        let drains = carcass_drains(&result);
+        assert_eq!(drains.len() as u64, n, "every decomposer drains it");
+        let total: f32 = drains.iter().map(|&(_, d)| d).sum();
+        let sum_c = n as f32 * c;
+        let expected = ceiling * sum_c / (half + sum_c);
+        assert!(
+            (total - expected).abs() <= 1e-4 * expected,
+            "{n} decomposers: yield {total}, expected k_d·S·Σc/(K+Σc) = {expected}"
+        );
+        for &(id, d) in &drains {
+            assert!(
+                (d - expected / n as f32).abs() <= 1e-4 * expected / n as f32,
+                "{n} decomposers: decomposer {id} took {d}, not its share c/Σc"
+            );
+        }
+        assert!(
+            total <= ceiling * (1.0 + 1e-6),
+            "{n} decomposers: yield {total} exceeds k_d·S = {ceiling}"
+        );
+        assert!(
+            total > previous,
+            "{n} decomposers yield {total}, no more than fewer did: {previous}"
+        );
+        previous = total;
+        let c0 = &carcasses[0];
+        assert!(c0.energy >= 0.0 && c0.nutrient >= 0.0, "a store below zero");
+        assert!((c0.energy - (s - total)).abs() <= 1e-4 * s);
+        assert!(nutrient_grid.cells().iter().all(|&v| v >= 0.0));
+        assert!(agents.iter().all(|a| a.nutrient >= 0.0 && a.reserve >= 0.0));
+    }
+    assert!(
+        (ceiling - previous) / ceiling < 0.01,
+        "a crowded carcass yields close to k_d·S = {ceiling}, got {previous}"
+    );
+}
+
+/// A recipe that predates #864 carries no `carcass_decay_constant`: it loads
+/// at the world's own, not at the retired off value.
+#[test]
+fn a_recipe_without_the_decay_constant_loads_the_worlds_own() {
+    let mut value = serde_json::to_value(support::viable_baseline()).unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("carcass_decay_constant");
+    let loaded: WorldParameters = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        loaded.carcass_decay_constant,
+        DEFAULT_CARCASS_DECAY_CONSTANT
+    );
 }
 
 #[test]
@@ -309,18 +399,20 @@ fn a_carcass_leaves_the_world_at_the_floor_and_the_ledgers_balance() {
 }
 
 #[test]
-fn with_k_d_zero_a_spent_carcass_stands_as_today() {
-    // Off: the additive drain empties the carcass and it stays in the
-    // carcass list, empty, exactly as before #803.
-    let mut world = floor_world(params(0.0, 0.01));
-    for _ in 0..60 {
-        world.step();
-    }
-    assert_eq!(world.agents().len(), 1, "the decomposer outlives the run");
-    let c = world
-        .carcasses()
-        .iter()
-        .find(|c| c.id == 999)
-        .expect("the off path never removes a carcass");
-    assert!(c.energy <= 0.0);
+fn with_k_d_zero_a_carcass_yields_nothing() {
+    // The controlled variant (#864): there is no additive path, so at
+    // k_d = 0 a drained carcass keeps all it holds.
+    let mut agents = vec![drainer(0, 1.0), drainer(1, 1.0)];
+    let mut carcasses = vec![carcass(30.0, 2.0)];
+    let mut nutrient_grid = NutrientGrid::new(EXTENT, 10.0, 0.0);
+    let result = drain(
+        &mut agents,
+        &mut carcasses,
+        &params(0.0, 1.0),
+        &mut nutrient_grid,
+    );
+    let total: f32 = carcass_drains(&result).iter().map(|&(_, d)| d).sum();
+    assert_eq!(total, 0.0);
+    assert_eq!(carcasses[0].energy, 30.0);
+    assert_eq!(carcasses[0].nutrient, 2.0);
 }
