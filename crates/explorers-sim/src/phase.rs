@@ -738,9 +738,7 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
             let dissipated = energy_spent - to_structure;
             let structure_before = agent.structure;
             agent.structure += to_structure;
-            if params.growth_dilutes_wear {
-                dilute_wear(&mut agent.wear, structure_before, agent.structure);
-            }
+            dilute_wear(&mut agent.wear, structure_before, agent.structure);
             // Growth is the only flow that increases structure: advance the
             // peak high-water mark the death threshold is measured against.
             agent.record_peak_structure();
@@ -783,8 +781,9 @@ pub fn grow(agents: &mut [Agent], params: &WorldParameters) -> (Vec<Event>, f32)
     (events, total_dissipated)
 }
 
-/// Growth dilutes wear (#840; world rules, *Somatic wear*, *Growth dilutes
-/// wear*): new structure is built unworn, so growth that takes structure from
+/// Growth dilutes wear (#840, in every world since #858; world rules, *Somatic
+/// wear*, *Growth dilutes wear*; end state S20): new structure is built
+/// unworn, so growth that takes structure from
 /// `before` to `after` scales the wear on every functional trait by
 /// `before / after`. Only growth dilutes: when structure did not rise, or
 /// there was none to begin with (`before <= 0`, nothing worn to spread), the
@@ -2906,7 +2905,6 @@ mod tests {
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
-            growth_dilutes_wear: false,
         }
     }
 

@@ -758,20 +758,6 @@ impl DecomposerMesocosm {
     }
 }
 
-/// Turn growth dilution of wear on (#840; world rules, *Somatic wear*,
-/// *Growth dilutes wear*), for mode 1's *Ageing* reading.
-pub fn set_growth_dilutes_wear(world: &mut World) {
-    world.params_mut().growth_dilutes_wear = true;
-}
-
-/// The summary section recording that a run diluted wear by growth.
-pub fn growth_dilutes_wear_section() -> String {
-    "## Growth dilutes wear (--growth-dilutes-wear)\n\n\
-     on: a tick of growth from S to S + ΔS scales every functional trait's wear by S / (S + ΔS); \
-     loss of structure leaves wear unchanged"
-        .to_string()
-}
-
 /// Mode 1's producers' founding cluster under marker isolation (#837).
 pub const MODE1_PRODUCER_CLUSTER: u32 = 0;
 /// Mode 1's decomposer founders' founding cluster under marker isolation
@@ -5879,10 +5865,12 @@ mod tests {
             .map(|a| a.id)
             .collect();
         // Under the committed mesocosm's bare rules the founders recruit but
-        // are all dead by tick 50: the window holds at 20 and is refuted at
-        // the rung's declared 50.
+        // are all dead by tick 50: the window holds at 15 and is refuted at
+        // the rung's declared 50. (Held at 20 until #858: growth dilution
+        // moved the last founder's death from tick 24 to 19; 12 of the 81
+        // are alive at 15.)
         let mut elapsed = 0;
-        for (at, holds) in [(20, true), (50, false)] {
+        for (at, holds) in [(15, true), (50, false)] {
             while elapsed < at {
                 world.step();
                 elapsed += 1;

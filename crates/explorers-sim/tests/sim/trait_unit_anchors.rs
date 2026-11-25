@@ -114,9 +114,12 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// exhausted carcass's nutrient, is capped at what the store still holds.
 /// That moves example4 by rounding where a split used to overdraw.
 /// `example4.json+wear` never overdraws and is unchanged.
+/// `example4.json+wear` re-pinned for #858: growth dilutes wear in every
+/// world, so its growing agents carry less wear. example4 runs wear-free, so
+/// there is no wear to dilute, and it is unchanged.
 const GOLDEN: [(&str, u64, u64, u64); 2] = [
     ("example4.json", 7, 300, 0x0c2e901adc3dea11),
-    ("example4.json+wear", 11, 300, 0x6d81249183cdaa77),
+    ("example4.json+wear", 11, 300, 0x628962233acb2987),
 ];
 
 #[test]
