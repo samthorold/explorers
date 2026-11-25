@@ -81,9 +81,10 @@ proptest! {
 proptest! {
     #![proptest_config(support::proptest_config(128))]
 
-    /// The three conservation invariants with size-scaled uptake on (#644):
-    /// scaling each agent's demand by its body changes who takes how much,
-    /// never how much exists.
+    /// The three conservation invariants across uptake reference structures
+    /// (#644; uptake is size-scaled in every case since #866): scaling each
+    /// agent's demand by its body changes who takes how much, never how much
+    /// exists.
     #[test]
     fn conservation_holds_with_size_scaled_uptake(
         case in world_case_with_size_scaled_uptake()
@@ -400,7 +401,6 @@ fn issue_901_first_case() -> WorldCase {
         network_redistribution_rate: 0.0,
         network_transfer_efficiency: 0.0,
         recognition_distance: 0.0,
-        uptake_structure_exponent: 0.0,
         uptake_reference_structure: 100.0,
         cross_trait_cost: 0.0,
         leaching_rate: 0.0,

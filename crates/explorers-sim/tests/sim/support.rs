@@ -83,7 +83,6 @@ pub fn viable_baseline() -> WorldParameters {
         network_maintenance_cost: 0.0,
         network_redistribution_rate: 0.0,
         network_transfer_efficiency: 0.0,
-        uptake_structure_exponent: 0.0,
         uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
         recognition_distance: 0.5,
         cross_trait_cost: 0.0,
@@ -138,9 +137,9 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
             1.0f32..=5.0,  // 29 growth_retention_multiplier
             0.05f32..=0.5, // 30 offspring_structure_fraction
             0.05f32..=1.0, // 31 reserve_mobilisation_rate
-            0.0f32..=1.0,  // 32 uptake_structure_exponent (#653)
+            0.0f32..=1.0, // 32 retired uptake structure exponent (#866): still drawn, unread, so committed seeds replay the same cases
             0.0f32..=0.14, // cross_trait_cost (#669; out of the box since #701)
-            0.0f32..=1.5,  // recognition_distance (not searched): kin-blind to wide
+            0.0f32..=1.5, // recognition_distance (not searched): kin-blind to wide
             0.0f32..=0.2, // leaching_rate (#698; searched over [0, 0.01] since #701): off to a ~3-tick half-life
         ),
     );
@@ -167,7 +166,6 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
         growth_retention_multiplier: c.1,
         offspring_structure_fraction: c.2,
         reserve_mobilisation_rate: c.3,
-        uptake_structure_exponent: c.4,
         cross_trait_cost: c.5,
         recognition_distance: c.6,
         leaching_rate: c.7,
@@ -243,14 +241,14 @@ pub fn world_case() -> impl Strategy<Value = WorldCase> {
         })
 }
 
-/// A stepper case with size-scaled uptake switched on (#644): the C1 domain
-/// with the uptake structure exponent drawn from `(0, 1]` and the reference
-/// structure from founder-sized bodies to the design default and beyond. A
-/// separate strategy, so `world_case()` — and every default-path property —
-/// draws exactly the inputs it always has.
+/// A stepper case with the uptake reference structure varied (#644; uptake
+/// is linear in structure in every world since #866): the C1 domain with the
+/// reference drawn from founder-sized bodies to far above the default. The
+/// retired exponent is still drawn, unread, so committed regression seeds
+/// replay the cases they were saved for. A separate strategy, so
+/// `world_case()` draws exactly the inputs it always has.
 pub fn world_case_with_size_scaled_uptake() -> impl Strategy<Value = WorldCase> {
-    (world_case(), 0.05f32..=1.0, 0.5f32..=200.0).prop_map(|(mut case, b, s_ref)| {
-        case.params.uptake_structure_exponent = b;
+    (world_case(), 0.05f32..=1.0, 0.5f32..=200.0).prop_map(|(mut case, _retired_b, s_ref)| {
         case.params.uptake_reference_structure = s_ref;
         case
     })

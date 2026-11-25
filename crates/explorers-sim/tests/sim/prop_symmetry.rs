@@ -191,7 +191,7 @@ proptest! {
 proptest! {
     #![proptest_config(support::proptest_config(128))]
 
-    /// Determinism with size-scaled uptake on (#644): the same case stepped
+    /// Determinism across uptake reference structures (#644, #866): the same case stepped
     /// twice is bit-identical.
     #[test]
     fn trajectory_is_deterministic_with_size_scaled_uptake(
@@ -209,7 +209,7 @@ proptest! {
         prop_assert_eq!(a.nutrient_pool().to_bits(), b.nutrient_pool().to_bits());
     }
 
-    /// Agent-order permutation with size-scaled uptake on (#644): demand reads
+    /// Agent-order permutation across uptake reference structures (#644, #866): demand reads
     /// only the agent's own body, so the uptake pass stays order-invariant.
     #[test]
     fn trajectory_is_invariant_under_agent_order_permutation_with_size_scaled_uptake(
@@ -218,7 +218,7 @@ proptest! {
         check_order_permutation_invariance(&case)?;
     }
 
-    /// Toroidal translation with size-scaled uptake on (#644).
+    /// Toroidal translation across uptake reference structures (#644, #866).
     #[test]
     fn trajectory_is_covariant_under_toroidal_translation_with_size_scaled_uptake(
         tc in translation_case_from(world_case_with_size_scaled_uptake())
@@ -553,8 +553,8 @@ fn mate_on_reach_boundary(world: &World) -> Option<(u64, u64)> {
 /// - Nutrient: `repro_nutrient` gains the `(1 − kappa)` share of every
 ///   nutrient credit. A non-heterotroph's only credit is pool uptake, at most
 ///   its uptake demand (`phase::nutrient_uptake_demand`: effective
-///   photosynthesis × `AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK`, size-scaled when
-///   the uptake structure exponent is on, #644); a heterotroph's ingested
+///   photosynthesis × `AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK`, × structure / s_ref, #644,
+///   #866); a heterotroph's ingested
 ///   nutrient is not bounded here.
 ///
 /// The 1e-3 relative slack covers the stepper's summation rounding.

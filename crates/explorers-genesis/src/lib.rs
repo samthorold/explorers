@@ -432,7 +432,6 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
-            uptake_structure_exponent: 0.0,
             uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
@@ -490,10 +489,12 @@ mod tests {
             world_extent: 20.0,
             solar_flux_magnitude: 10.0,
             growth_efficiency: 0.5,
-            // Seed agents with all-reserve, no structure, so the small
-            // populations explored here don't collapse identically against
-            // the structural death threshold.
-            offspring_structure_fraction: 0.0,
+            // Seed agents nearly all-reserve, so the small populations
+            // explored here don't collapse identically against the
+            // structural death threshold. A small body (0.05, not 0) since
+            // #866: uptake is linear in structure, so structureless founders
+            // took up nothing and every seed froze alike.
+            offspring_structure_fraction: 0.05,
             ..test_params()
         };
         let dist = InitialDistribution {
@@ -809,10 +810,12 @@ mod tests {
         // test needs a world that stays dead. Since #865 living tissue
         // resists every drain, so its producers are no longer grazed, and the
         // 1.5 world recovers by the horizon as well: the fixture stays dead
-        // in the controlled variant without resistance, `ρ = 0`.
+        // in the controlled variant without resistance, `ρ = 0`. A base rate
+        // of 3.0 since #866: under size-scaled uptake the 1.5 world recovers
+        // by the horizon too.
         let (params, dist) = energy_dying_world();
         let params = WorldParameters {
-            base_metabolic_rate: 1.5,
+            base_metabolic_rate: 3.0,
             living_resistance: 0.0,
             ..params
         };

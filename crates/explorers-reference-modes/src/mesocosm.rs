@@ -5615,14 +5615,16 @@ mod tests {
         // structural death is a member killed by a drain while its reserve
         // could still pay, and at the world's own ρ = 1 no living member is
         // drained, so no founder dies structural (seeds 3 to 7, hazards 0.3
-        // to 3). The variant is the mesocosm as it ran before #865.
+        // to 3). The variant is the mesocosm as it ran before #865. Seed 3
+        // since #866: under size-scaled uptake no founder on seed 4 dies
+        // structural; on seed 3 founders die of all three causes.
         let spec = Mode1Spec::committed();
         let build = || {
             let wear = Wear {
                 senescence_hazard: 3.0,
                 ..mesocosm_wear()
             };
-            let mut world = mode1_mesocosm(&spec, wear, 4, Community::ProducersAndDecomposers);
+            let mut world = mode1_mesocosm(&spec, wear, 3, Community::ProducersAndDecomposers);
             world.params_mut().living_resistance = 0.0;
             world
         };

@@ -112,7 +112,7 @@ A heterotroph *population* of one role — consumer or decomposer — as distinc
 _Avoid_: decomposer presence, has-a-decomposer (a role tag on one agent is exactly what a guild is not), trophic level (the guild is the observable that would justify that word)
 
 **Nutrient uptake**:
-An agent extracting nutrient from the **available pool** at its location — the autotroph's route for nutrient to enter a living agent, and, through **hyphal uptake**, a still heterotroph's (heterotrophs otherwise acquire nutrient by consumption). Rate depends on the agent's effective autotrophy and, only when the **uptake structure exponent** is nonzero, on its structure — the same sessile infrastructure (analogous to roots) that captures light also extracts nutrients from the substrate. Autotrophic uptake does not read **substrate contact**. Co-located agents share the available pool proportionally, weighted by their effective uptake rate (size-scaled when the exponent is on). Each tick's uptake is split immediately by **kappa** — the (1 − kappa) share earmarked as **reproductive nutrient**, the remainder added to the free store available for growth.
+An agent extracting nutrient from the **available pool** at its location — the autotroph's route for nutrient to enter a living agent, and, through **hyphal uptake**, a still heterotroph's (heterotrophs otherwise acquire nutrient by consumption). Rate depends on the agent's effective autotrophy and, through **size-scaled uptake**, in proportion to its structure — the same sessile infrastructure (analogous to roots) that captures light also extracts nutrients from the substrate. Autotrophic uptake does not read **substrate contact**. Co-located agents share the available pool proportionally, weighted by their size-scaled demand. Each tick's uptake is split immediately by **kappa** — the (1 − kappa) share earmarked as **reproductive nutrient**, the remainder added to the free store available for growth.
 _Avoid_: feeding (feeding is consumption of other agents), mining (implies deliberate extraction from rock)
 
 **Routed surplus**:
@@ -301,12 +301,12 @@ _Avoid_: territory (implies defence and exclusion, and catchments overlap), rang
 A stand's standing litter per unit of the standing biomass of all its decomposers together, read over the whole stand and never per individual. It is the inverse of what the domain reports as decomposer biomass, a percentage of the litter it stands in. It rises as a stand settles, because founding decomposers are few and grow into their litter. Many individuals' overlapping **catchments** share every stand's litter, so the litter ratio, not a catchment, sets how much litter each unit of decomposer has to live on.
 _Avoid_: stock ratio, biomass fraction (both leave the direction unclear)
 
-**Uptake structure exponent**:
-The exponent `b` by which **nutrient uptake** grows with body size: demand `= effective_autotrophy × u_A × (structure / uptake_reference_structure)^b`, the root-mass counterpart of structure's weight in **light competition**. A world parameter (dimensionless). At `b = 0` uptake is size-blind; at `b > 0` a body with no structure takes up nothing.
-_Avoid_: root coefficient (there is no separate root organ; the body is the uptake surface)
+**Size-scaled uptake**:
+**Nutrient uptake** in proportion to the body: demand `= rate × u_A × structure / uptake_reference_structure`, the root-mass counterpart of structure's weight in **light competition**. A body with no structure takes up nothing.
+_Avoid_: uptake structure exponent (retired: the exponent is 1, not a parameter), root coefficient (there is no separate root organ; the body is the uptake surface)
 
 **Uptake reference structure**:
-The body size `s_ref` at which size-scaled **nutrient uptake** equals size-blind uptake, whatever the **uptake structure exponent**. A world parameter, in units of structure; inert while the exponent is 0.
+The body size `s_ref` at which **size-scaled uptake** equals size-blind uptake, `effective autotrophy × u_A`. A world parameter, in units of structure.
 
 **Base-rate reference structure**:
 The body size `S_p` at which an agent pays the base rate the world states, `base_metabolic_rate`, on top of the structure term. Every body pays the **mass-specific base rate** `b = base_metabolic_rate / S_p + structure_maintenance_coefficient` per unit of its structure, so one of structure `S_p` pays what a per-agent constant would. Its value is the structure of a median established producer. A world parameter, in units of structure.

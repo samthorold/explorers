@@ -295,7 +295,10 @@ fn example9_wires_producer_to_carcass_to_decomposer_exactly() {
     let mut deposit_drains_by_others = 0usize;
     let mut cross_lineage_drains = 0usize;
     let mut cursor = 0usize;
-    for _ in 0..800 {
+    // 1200 ticks, up from 800 since #866: with uptake linear in structure the
+    // ring's small founders take up less, so its first producer deaths come
+    // later.
+    for _ in 0..1200 {
         world.step();
         for ev in world.event_log().since(cursor) {
             match ev.kind {

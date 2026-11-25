@@ -58,13 +58,15 @@ and 9 founder-distribution fields — each over a range, linearly unless the coo
 box**. The full box, `default_ranges()`, spans every field's plausible range, and the search runs over
 it by default.
 
-The 33rd coordinate is the **uptake structure exponent** `b`, linear over `[0, 1]` (#653). The range
-must hold `b = 0` exactly, the size-blind uptake every earlier world ran, so a log scale is out; above
-1 a large body would take up more per unit structure than a small one. Its partner, the uptake
-reference structure, stays out of the box at 100. The reasons are in world-rules.md flow 2
-(*Size-scaled uptake*). The 32-coordinate box before it is the **size-blind box**
-(`size_blind_ranges()`): `decode` reads a box without `b`'s coordinate as `b = 0`, so a unit vector
-drawn under it still names the world it always named.
+The 33rd coordinate is **retired**. It was the uptake structure exponent `b`, linear over `[0, 1]`
+(#653), and since #866 the exponent is 1 in every world, set by the domain and not searched
+(world-rules.md flow 2, *Size-scaled uptake*). A box that has the coordinate, the archived atlases'
+boxes among them, still decodes, with the coordinate read and ignored, so a unit vector drawn under it
+still names a world; under the current physics that world takes up in proportion to structure,
+whatever its `b` coordinate says. The 32-coordinate box before it, the **size-blind box**
+(`size_blind_ranges()`), decodes to the same worlds. The uptake reference structure stays out of the
+box, at its default, the base rate's `S_p`. Reviving genesis drops the coordinate from the box (*Genesis
+searches a settled physics*).
 
 The **cross-trait cost** `c_AH` is not in the box. Its default 0 holds in every world genesis searches, so the box is the 33-coordinate **untaxed box** (`untaxed_ranges()`), and the leaching rate is held outside it (below). The term is latent (world-rules.md trade-off #5): it was specified as the lever for a signature that is now reported rather than required, genesis did not select on it when it was searched, and a dimension the search does not select on only adds noise. If it comes out of reserve, its range is linear over `[0, 0.14]`. That range holds `c_AH = 0` exactly, which rules out a log scale. Its top is measured, not copied from the per-trait costs: it is the `c_AH` at which a typical light-fed mixotroph that drains pays about twice its median drain income ([`668-cross-trait-calibration.md`](../research/668-cross-trait-calibration.md)). `decode` reads a box without `c_AH`'s coordinate as `c_AH = 0`, so an atlas searched under the untaxed box names the same worlds whether or not the coordinate exists. The box with `c_AH` as its 34th coordinate is the **taxed box** (`taxed_ranges()`), the one it is searched over if it comes out of reserve.
 
@@ -95,8 +97,9 @@ only the box. It is opt-in: it keeps outcome prediction but costs the illuminati
   `NARROWED_BAND_FRACTION` (0.25) of its full span. The band is centred on the value `decode` inherits
   for that field from the known-viable baseline. The five founder-distribution fields inherit no value,
   so their band is centred on the midpoint of the full range. A band that would cross a full-range
-  bound is slid back inside it, keeping its width. The uptake structure exponent's centre is the
-  baseline's 0, so its band is the bottom quarter of `[0, 1]`. Likewise a narrowing of the taxed box
+  bound is slid back inside it, keeping its width. The retired uptake structure exponent's band
+  was the bottom quarter of `[0, 1]`, around the baseline's 0; it is read and ignored like the full
+  box's coordinate. Likewise a narrowing of the taxed box
   would give `c_AH` the bottom quarter of `[0, 0.14]`, and one of the leached box would give `λ` the
   bottom quarter of `[0, 0.01]`, `[0, 0.0025]`, still on the square scale: the band is cut in `λ`, as
   every band is cut in its field, so it would span the bottom half of the coordinate `u`. The narrowed

@@ -1215,7 +1215,6 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
-            uptake_structure_exponent: 0.0,
             uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
@@ -2089,12 +2088,14 @@ mod tests {
         // 20-unit world these structureless bodies (no offspring structure)
         // now keep ratio × energy gained from each bite instead of a
         // whole-body cap of zero, and the population went extinct by tick 19,
-        // before turning over.
+        // before turning over. Founded with a small body (offspring structure
+        // 0.05) since #866: uptake is linear in structure, so structureless
+        // founders took up nothing, never reproduced and never turned over.
         let params = explorers_sim::WorldParameters {
             base_metabolic_rate: 0.1,
             movement_cost_coefficient: 0.01,
             reproduction_energy_threshold: 10.0,
-            offspring_structure_fraction: 0.0,
+            offspring_structure_fraction: 0.05,
             initial_nutrient_pool: 50.0,
             ..live_world_params()
         };
@@ -2844,7 +2845,6 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
-            uptake_structure_exponent: 0.0,
             uptake_reference_structure: explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
