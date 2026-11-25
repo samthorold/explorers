@@ -1072,28 +1072,32 @@ pub struct GuildReadout {
     pub passes: bool,
 }
 
-/// Litter inflow (#804): the structure of the carcasses deaths create, split
-/// by whether the dead was a producer (the income read) or anything else.
+/// Litter inflow (#804): the structure of the carcasses deaths create, and
+/// the necromass the living shed (#859), split by whether the dead or the
+/// shedder was a producer (the income read) or anything else.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
 pub struct LitterInflow {
-    /// Carcass structure at death from producer deaths.
+    /// Carcass structure at death from producer deaths, and producers'
+    /// necromass.
     pub producer: f64,
-    /// Carcass structure at death from every other death.
+    /// The same from every other agent.
     pub other: f64,
 }
 
 impl LitterInflow {
     /// Book one event. A `Died` adds the structure its carcass held at death,
     /// read from `at_death` by the carcass's id (a runtime carcass keeps its
-    /// agent's id); `producer` says whether the dead was a producer. Anything
-    /// else is ignored.
+    /// agent's id); a `Shed` adds the necromass it gave its pile (tissue
+    /// turnover, #859). `producer` says whether the dead or the shedder was a
+    /// producer. Anything else is ignored.
     pub fn book(&mut self, event: &Event, producer: bool, at_death: &FxHashMap<u64, f32>) {
-        if event.kind != EventKind::Died {
-            return;
-        }
-        let structure = *at_death
-            .get(&event.source)
-            .expect("every death leaves a carcass") as f64;
+        let structure = match event.kind {
+            EventKind::Died => *at_death
+                .get(&event.source)
+                .expect("every death leaves a carcass") as f64,
+            EventKind::Shed => event.energy_delta as f64,
+            _ => return,
+        };
         if producer {
             self.producer += structure;
         } else {
@@ -2220,13 +2224,15 @@ pub fn clear_centre(world: &mut World) -> Clearance {
 }
 
 /// The event kinds the observer reads: income for the role read, births,
-/// and deaths with their senescent cause.
-const OBSERVED_KINDS: [EventKind; 5] = [
+/// deaths with their senescent cause, and shed tissue, the litter's other
+/// inflow (#859).
+const OBSERVED_KINDS: [EventKind; 6] = [
     EventKind::Photosynthesized,
     EventKind::Consumed,
     EventKind::Born,
     EventKind::Senesced,
     EventKind::Died,
+    EventKind::Shed,
 ];
 
 /// A living line member as a step begins: what its metabolism reads, and the
@@ -2937,7 +2943,7 @@ const LITTER_TITLE: &str =
 
 /// The header of the litter reading's table: one row per arm, from
 /// [`litter_row`].
-const LITTER_HEADER: &str = "| ticks | standing litter per cell: mean (min–max) | inflow per cell per tick: mean (min–max) | from producer deaths | from other deaths | carcasses: all / holding structure (means) |";
+const LITTER_HEADER: &str = "| ticks | standing litter per cell: mean (min–max) | inflow per cell per tick: mean (min–max) | from producers (deaths and shed tissue) | from others | carcasses: all / holding structure (means) |";
 
 /// One arm's litter reading over its second half.
 fn litter_row(w: &LitterWindow) -> String {
@@ -4945,6 +4951,26 @@ mod tests {
     /// half-life of L producer lifespans is `k_d = ln 2 / (L × T_p)`, so
     /// under full saturation (`Σc ≫ K`, here K a millionth of the drainer's
     /// capability) a carcass drained every tick halves in L × `T_p` ticks.
+    /// The stepper's turnover rate is anchored in this mesocosm (#859): its
+    /// time anchor is the declared litter half-life and the established
+    /// producer lifespan, so a recalibration of either fails here until the
+    /// anchor moves with it.
+    #[test]
+    fn the_stepper_turnover_anchor_is_the_declared_mesocosms_litter_half_life() {
+        assert_eq!(
+            explorers_sim::REFERENCE_LITTER_HALF_LIFE,
+            DecomposerMesocosm::DECLARED.litter_half_life
+        );
+        assert_eq!(
+            explorers_sim::REFERENCE_PRODUCER_LIFESPAN_TICKS,
+            ESTABLISHED_PRODUCER_LIFESPAN_TICKS
+        );
+        assert_eq!(
+            Mode1Spec::committed().parameters.tissue_turnover_rate,
+            explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE
+        );
+    }
+
     #[test]
     fn litter_half_life_under_full_saturation_is_l_producer_lifespans() {
         let t_p = ESTABLISHED_PRODUCER_LIFESPAN_TICKS;
@@ -5134,7 +5160,8 @@ mod tests {
 
     /// Litter inflow (#804): a death adds the structure its carcass held at
     /// death, booked to producers when the dead was a producer and to the
-    /// others otherwise. Drains, births and every other event add nothing.
+    /// others otherwise; a shedding adds the necromass it gave its pile
+    /// (#859). Drains, births and every other event add nothing.
     #[test]
     fn a_death_adds_its_carcass_structure_at_death_to_the_litter_inflow() {
         use explorers_sim::event::{Event, EventLog};
@@ -5158,6 +5185,10 @@ mod tests {
             event(3, EventKind::Born, 4),
             event(4, EventKind::Died, 2),
             event(5, EventKind::Died, 3),
+            // Shed tissue is litter too (#859): each adds the 9.0 it gave its
+            // pile, a producer's to producers.
+            event(6, EventKind::Shed, 3),
+            event(7, EventKind::Shed, 4),
         ] {
             log.append(e).unwrap();
         }
@@ -5172,11 +5203,11 @@ mod tests {
         assert_eq!(
             inflow,
             LitterInflow {
-                producer: 4.5,
-                other: 1.5,
+                producer: 13.5,
+                other: 10.5,
             }
         );
-        assert_eq!(inflow.total(), 6.0);
+        assert_eq!(inflow.total(), 24.0);
     }
 
     /// A run samples the world's litter beside the centre patch (#804): the
@@ -5661,14 +5692,16 @@ mod tests {
         assert_eq!(DeathCause::of(false, None), DeathCause::Structural);
 
         // A senescence hazard well above the mesocosm's: founders die of
-        // all three causes, each read as the replay reads it.
+        // all three causes, each read as the replay reads it. Seed 3 since
+        // #859: under tissue turnover seed 4's founders no longer die
+        // structural deaths (3 senesced, 71 reserve, 7 structural on seed 3).
         let spec = Mode1Spec::committed();
         let build = || {
             let wear = Wear {
                 senescence_hazard: 0.3,
                 ..mesocosm_wear()
             };
-            mode1_mesocosm(&spec, wear, 4, Community::ProducersAndDecomposers)
+            mode1_mesocosm(&spec, wear, 3, Community::ProducersAndDecomposers)
         };
         let ticks = 150;
         let report = run_mode1(&mut build(), ticks, 10);

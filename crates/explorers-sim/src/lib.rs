@@ -134,6 +134,50 @@ pub const DEFAULT_REPAIR_RATE: f32 = 1.0;
 /// [`DEFAULT_REPAIR_RATE`] is.
 pub const DEFAULT_SENESCENCE_HAZARD: f32 = 0.01;
 
+/// Tissue lifetime `H` (world rules, *Somatic wear*, *Tissue turnover*): the
+/// mean time a unit of structure lives before it is shed, `1/τ`, in litter
+/// half-lives. The domain puts it at about 0.25–1 (fungal biomass turns over
+/// in 130–150 days, leaves in about a year, against litter half-lives of
+/// 0.5–4 years: `docs/ecology/fungi.md`, *Turnover*; `plants.md`, *Turnover*).
+/// 0.5 is the band's geometric centre.
+pub const TISSUE_LIFETIME_LITTER_HALF_LIVES: f32 = 0.5;
+
+/// The world's time anchor for the turnover rate: a litter half-life of
+/// `REFERENCE_LITTER_HALF_LIFE` producer lifespans of
+/// `REFERENCE_PRODUCER_LIFESPAN_TICKS` ticks, the mode 1 mesocosm's declared
+/// `L` and its established producers' lifespan `T_p`
+/// (`explorers-reference-modes`, `DecomposerMesocosm::DECLARED`,
+/// `ESTABLISHED_PRODUCER_LIFESPAN_TICKS`).
+pub const REFERENCE_LITTER_HALF_LIFE: f32 = 1.0;
+/// See [`REFERENCE_LITTER_HALF_LIFE`].
+pub const REFERENCE_PRODUCER_LIFESPAN_TICKS: f32 = 229.0;
+
+/// The turnover rate `τ = 1 / (H × L × T_p)` per tick, for a tissue lifetime
+/// of `h` litter half-lives, a litter half-life of `l` producer lifespans and
+/// a producer lifespan of `t_p` ticks.
+pub const fn tissue_turnover_rate(h: f32, l: f32, t_p: f32) -> f32 {
+    1.0 / (h * l * t_p)
+}
+
+/// The turnover rate every world runs at unless it states its own: the
+/// domain's tissue lifetime against the world's time anchor, about 0.0087
+/// per tick (a tissue lifetime of 114.5 ticks).
+pub const DEFAULT_TISSUE_TURNOVER_RATE: f32 = tissue_turnover_rate(
+    TISSUE_LIFETIME_LITTER_HALF_LIVES,
+    REFERENCE_LITTER_HALF_LIFE,
+    REFERENCE_PRODUCER_LIFESPAN_TICKS,
+);
+
+/// The recycled fraction `r` of shed tissue (world rules, *Tissue turnover*):
+/// one world value for energy and nutrient. Plants resorb about half of a
+/// leaf's nitrogen and phosphorus before it falls (`docs/ecology/plants.md`,
+/// *Resorption before shedding*).
+pub const TISSUE_RECYCLED_FRACTION: f32 = 0.5;
+
+fn default_tissue_turnover_rate() -> f32 {
+    DEFAULT_TISSUE_TURNOVER_RATE
+}
+
 fn default_repair_rate() -> f32 {
     DEFAULT_REPAIR_RATE
 }
@@ -768,6 +812,16 @@ pub struct WorldParameters {
     /// `marker_isolation` is on. Default [`DEFAULT_COMPATIBILITY_SCALE`].
     #[serde(default = "default_compatibility_scale")]
     pub compatibility_scale: f32,
+    /// Turnover rate `τ` (world-rules.md, *Somatic wear*, *Tissue turnover*):
+    /// each tick every living agent sheds `τ` of its structure, with the
+    /// nutrient it binds. [`TISSUE_RECYCLED_FRACTION`] of the slice returns to
+    /// the agent (energy to reserve, nutrient to its free store) and the rest
+    /// leaves as necromass at its cell. Its peak structure falls by the same
+    /// factor and its wear is unchanged. Physics in every world: the default
+    /// is the domain's, [`DEFAULT_TISSUE_TURNOVER_RATE`]. Per tick, in
+    /// `[0, 1)`; 0 is a controlled variant, never a default.
+    #[serde(default = "default_tissue_turnover_rate")]
+    pub tissue_turnover_rate: f32,
 }
 
 /// Dimensions of the neutral marker (#837; world-rules.md flow 4, *Eight
@@ -1299,6 +1353,9 @@ pub struct World {
     /// tick, so this is the payment the next tick's routed surplus is split
     /// by. Empty while the network is off.
     last_partner_payments: phase::PartnerPayments,
+    /// The necromass pile each living agent sheds into (tissue turnover,
+    /// #859), and the next necromass id.
+    necromass: phase::NecromassIndex,
 }
 
 impl World {
@@ -1423,6 +1480,7 @@ impl World {
             nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
             last_move_distance: rustc_hash::FxHashMap::default(),
             last_partner_payments: phase::PartnerPayments::default(),
+            necromass: phase::NecromassIndex::default(),
         }
     }
 
@@ -1520,6 +1578,7 @@ impl World {
                 nutrient_ledger: nutrient_ledger::NutrientLedger::new(),
                 last_move_distance: rustc_hash::FxHashMap::default(),
                 last_partner_payments: phase::PartnerPayments::default(),
+                necromass: phase::NecromassIndex::default(),
             }
         } else if let Some(ref distribution) = recipe.initial_distribution {
             Self::new(recipe.parameters.clone(), distribution.clone(), seed)
@@ -1872,6 +1931,20 @@ impl World {
             self.agents.retain(|a| a.reserve > 0.0);
         }
 
+        // 10. Tissue turnover (world rules, *Somatic wear*, *Tissue
+        // turnover*): the living shed `τ` of their structure, part recycled
+        // to themselves and the rest to necromass at their cell. Last in the
+        // tick, as deaths are, so the litter is first drained next tick and
+        // the shed tissue is regrown by next tick's growth.
+        let shed_events = phase::turn_over_tissue(
+            &mut self.agents,
+            &mut self.carcasses,
+            &mut self.necromass,
+            &self.nutrient_grid,
+            &self.params,
+        );
+        events.extend(shed_events);
+
         // A connection dissolves when either endpoint dies (flow 5): drop any that
         // now reference a removed agent, so the next tick never sees a dangling link.
         self.prune_dead_connections();
@@ -2001,6 +2074,18 @@ impl World {
                         carcass_energy,
                     );
                 }
+            }
+        }
+
+        // Record tissue turnover (agent -> its necromass pile). The recycled
+        // part never leaves the agent.
+        for ev in events.iter().filter(|e| e.kind == event::EventKind::Shed) {
+            if ev.energy_delta > 0.0 {
+                self.ledger.record(
+                    EnergyEndpoint::Agent(ev.source),
+                    EnergyEndpoint::Carcass(ev.target.expect("Shed event has its pile")),
+                    ev.energy_delta,
+                );
             }
         }
 
@@ -2381,6 +2466,7 @@ mod tests {
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
+            tissue_turnover_rate: crate::DEFAULT_TISSUE_TURNOVER_RATE,
         }
     }
 
@@ -4882,6 +4968,7 @@ mod tests {
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
+            tissue_turnover_rate: crate::DEFAULT_TISSUE_TURNOVER_RATE,
         }
     }
 

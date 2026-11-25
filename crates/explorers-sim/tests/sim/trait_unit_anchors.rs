@@ -117,9 +117,11 @@ fn recipe_trajectory_hash(name: &str, recipe: &WorldRecipe, seed: u64, ticks: u6
 /// `example4.json+wear` re-pinned for #858: growth dilutes wear in every
 /// world, so its growing agents carry less wear. example4 runs wear-free, so
 /// there is no wear to dilute, and it is unchanged.
+/// Both re-pinned for #859: every living agent sheds tissue each tick, part
+/// recycled and the rest left as necromass piles, which consumers drain.
 const GOLDEN: [(&str, u64, u64, u64); 2] = [
-    ("example4.json", 7, 300, 0x0c2e901adc3dea11),
-    ("example4.json+wear", 11, 300, 0x628962233acb2987),
+    ("example4.json", 7, 300, 0xa0690b1d4d1b9195),
+    ("example4.json+wear", 11, 300, 0x2ece0984798a888e),
 ];
 
 #[test]
