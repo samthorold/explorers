@@ -444,7 +444,6 @@ mod tests {
             living_resistance: 0.0,
             starvation_draws_earmark: false,
             starvation_shrinks: false,
-            hyphal_uptake: false,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
             marker_isolation: false,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,

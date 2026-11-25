@@ -27,6 +27,8 @@
 //! Re-pinned for #859: tissue turnover moves every world (the living shed
 //! each tick, and consumers drain the necromass), the kin-blind world with
 //! it; recognition still subtracts nothing at `recognition_distance = 0`.
+//! Re-pinned for #860: hyphal uptake in every world, so still heterotrophs
+//! and mixotrophs draw pool nutrient through their heterotrophy.
 
 use explorers_sim::{World, WorldRecipe};
 
@@ -73,12 +75,12 @@ fn fingerprint(world: &World) -> u64 {
 /// The scenarios, seeds and horizons, with the pre-recognition fingerprint of
 /// each.
 const PINNED: [(&str, u64, u64, u64); 2] = [
-    ("example4.json", 7, 200, 0x8e60_dd1c_f5bf_6990),
+    ("example4.json", 7, 200, 0x8090_7671_3ef3_10e3),
     (
         "example9_detrital_pathway.json",
         11,
         200,
-        0x23ec_12ce_c4e9_9c5d,
+        0xf51c_dc35_5094_49ec,
     ),
 ];
 

@@ -95,7 +95,6 @@ pub fn viable_baseline() -> WorldParameters {
         living_resistance: 0.0,
         starvation_draws_earmark: false,
         starvation_shrinks: false,
-        hyphal_uptake: false,
         contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
         marker_isolation: false,
         compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
@@ -262,12 +261,12 @@ pub fn world_case_with_size_scaled_uptake() -> impl Strategy<Value = WorldCase> 
     })
 }
 
-/// A stepper case with hyphal uptake switched on (#727): the C1 domain with
-/// the contact distance drawn from a tenth of the default to ten times it. A
+/// A stepper case with the contact distance hyphal uptake reads (#727; in
+/// every world since #860) drawn from a tenth of the default to ten times it,
+/// so heterotrophs from nearly roving to nearly still draw on the pool. A
 /// separate strategy, so `world_case()` draws exactly the inputs it always has.
-pub fn world_case_with_hyphal_uptake() -> impl Strategy<Value = WorldCase> {
+pub fn world_case_with_varied_contact_distance() -> impl Strategy<Value = WorldCase> {
     (world_case(), 0.01f32..=1.0).prop_map(|(mut case, d_c)| {
-        case.params.hyphal_uptake = true;
         case.params.contact_distance = d_c;
         case
     })
