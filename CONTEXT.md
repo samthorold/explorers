@@ -11,7 +11,7 @@ The fundamental unit of the simulation. Everything in the world is an agent: org
 _Avoid_: entity, creature, organism (when referring to the simulation abstraction)
 
 **Trait vector**:
-A seven-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Organised in three layers. **Allocation** (1 dimension): kappa — the fraction of mobilised energy routed to soma vs reproduction. **Specification** (3 dimensions): autotrophy, heterotrophy, mobility — these determine how an agent acquires energy and moves through the world. Autotrophy and heterotrophy are independent dimensions, not a spectrum — an agent can invest in both, paying each trait's maintenance separately. **Reproduction** (3 dimensions): fecundity, asexual propensity, dispersal. All seven traits are independently evolvable, each carrying its own cost — there is no shared budget that forces them to sum to a fixed value. Some capabilities are subordinate to trait dimensions rather than independent traits: sensing is subordinate to mobility (mobile agents sense; sessile agents do not need to), nutrient uptake is implicit in autotrophy. Some quantities are derived from the trait vector rather than stored in it: mate selectivity emerges from trait-space divergence evaluated against a physics-defined **reproductive compatibility distance**, not from an explicit trait.
+A seven-dimensional vector of continuous values that defines an agent's identity and determines all behaviour. Organised in three layers. **Allocation** (1 dimension): kappa — the fraction of mobilised energy routed to soma vs reproduction. **Specification** (3 dimensions): autotrophy, heterotrophy, mobility — these determine how an agent acquires energy and moves through the world. Autotrophy and heterotrophy are independent dimensions, not a spectrum — an agent can invest in both, paying each trait's maintenance separately. **Reproduction** (3 dimensions): fecundity, asexual propensity, dispersal. All seven traits are independently evolvable, each carrying its own cost — there is no shared budget that forces them to sum to a fixed value. Some capabilities are subordinate to trait dimensions rather than independent traits: sensing is subordinate to mobility (mobile agents sense; sessile agents do not need to), nutrient uptake is implicit in autotrophy. Mate selectivity is not a trait either: it follows ancestry, through the **neutral marker** outside the trait vector (**marker isolation**).
 _Avoid_: stats, attributes, genome (genome implies a genotype/phenotype distinction that doesn't exist here)
 
 **Kappa**:
@@ -207,11 +207,11 @@ The sensing model. Agents detect others within their sensing range, but signal s
 ### Reproduction and evolution
 
 **Sexual reproduction**:
-Two agents whose trait vectors are within the **reproductive compatibility distance** produce an offspring via budding. Both parents survive. Each parent invests energy from the reproduction fraction of mobilised energy (1 − kappa). Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Sexual reproduction requires physical contact on the surface — both agents must be within physical interaction range as determined by their traits.
+Two agents that pass their **marker isolation** draw produce an offspring via budding. Both parents survive. Each parent invests energy from the reproduction fraction of mobilised energy (1 − kappa). Offspring receives the sum of both investments scaled by reproduction efficiency (remainder dissipated). Offspring traits are produced by uniform crossover (each dimension independently selected from one parent, per Gavrilets 2004) plus Gaussian mutation. Sexual reproduction requires physical contact on the surface — both agents must be within physical interaction range as determined by their traits.
 _Avoid_: mating, breeding (too specific to animal analogues)
 
 **Mate selectivity**:
-Not an explicit trait dimension. Reproductive isolation emerges from trait-space divergence evaluated against the **reproductive compatibility distance** — a world parameter, not a per-agent trait. Agents whose trait vectors are within the compatibility distance can mate; those further apart cannot. Speciation pressure comes from the physics of the compatibility threshold interacting with trait-space clustering, not from individual choosiness. Under **marker isolation** the same holds with **neutral marker** distance and the **compatibility scale** in place of trait distance and the threshold.
+Not an explicit trait dimension. Reproductive isolation is **marker isolation**: it follows **neutral marker** distance against the **compatibility scale**, a world parameter, not a per-agent trait. Isolation comes from ancestry diverging, not from individual choosiness.
 _Avoid_: choosiness, pickiness, compatibility trait
 
 **Reproductive investment**:
@@ -219,7 +219,7 @@ The energy a parent transfers to offspring at birth, drawn from the parent's acc
 _Avoid_: brood size, litter size
 
 **Fecundity**:
-A reproduction trait controlling the number of offspring per reproductive event. The reproduction fraction of mobilised energy (1 − kappa) is the total energy budget invested per event; fecundity determines how many offspring share that budget. High fecundity produces many poorly-provisioned offspring (r-strategy). Low fecundity produces few well-provisioned offspring (K-strategy). The actual offspring count is stochastic — drawn from a Poisson distribution with mean equal to the fecundity trait. For sexual reproduction, the effective fecundity is the average of both parents'. Because fecundity is part of the trait vector, it contributes to trait-space distance and therefore to reproductive compatibility — agents with very different reproductive strategies are less likely to be within the **reproductive compatibility distance**.
+A reproduction trait controlling the number of offspring per reproductive event. The reproduction fraction of mobilised energy (1 − kappa) is the total energy budget invested per event; fecundity determines how many offspring share that budget. High fecundity produces many poorly-provisioned offspring (r-strategy). Low fecundity produces few well-provisioned offspring (K-strategy). The actual offspring count is stochastic — drawn from a Poisson distribution with mean equal to the fecundity trait. For sexual reproduction, the effective fecundity is the average of both parents'.
 _Avoid_: clutch size, litter size (too specific to animal analogues)
 
 **Asexual reproduction**:
@@ -231,7 +231,7 @@ A reproduction trait controlling how far offspring land from the parent. Represe
 _Avoid_: spore dispersal (too specific to one mechanism), range (overloaded term)
 
 **Reproductive reach**:
-The spatial distance over which two agents can find each other to mate — the spatial counterpart to the **reproductive compatibility distance** (which is the trait-space counterpart). Derived, not a trait or a world parameter: it combines an agent's mobility-derived perception with its dispersal-derived gamete broadcast, added smoothly with no floor or ceiling. Mate-finding has two physical solutions — move the organism or move its gametes — so a mobile agent reaches mates by locomotion (a wolf) and a sessile agent by broadcasting gametes (pollen, spores). A mobility-0 agent is therefore not reproductively isolated as long as it invests in dispersal. A sexual event requires both axes: partners within reproductive reach (space) *and* within the compatibility distance (trait space).
+The spatial distance over which two agents can find each other to mate — the spatial counterpart to **marker isolation** (the ancestry counterpart). Derived, not a trait or a world parameter: it combines an agent's mobility-derived perception with its dispersal-derived gamete broadcast, added smoothly with no floor or ceiling. Mate-finding has two physical solutions — move the organism or move its gametes — so a mobile agent reaches mates by locomotion (a wolf) and a sessile agent by broadcasting gametes (pollen, spores). A mobility-0 agent is therefore not reproductively isolated as long as it invests in dispersal. A sexual event requires both axes: partners within reproductive reach (space) *and* compatible in ancestry.
 _Avoid_: mating range (overloaded), sensing range (reach is broader than perception — gamete broadcast extends it)
 
 **Feeding reach**:
@@ -239,7 +239,7 @@ The spatial distance over which a consumer can drain a target's body (a living a
 _Avoid_: contact radius (a uniform world value — feeding reach is a per-agent derived property), grazing range (overloaded)
 
 **Speciation**:
-The divergence of agent populations into distinct clusters in trait space that no longer interbreed due to trait distance exceeding the **reproductive compatibility distance** — or, under **marker isolation**, due to their **neutral markers** having drifted apart. Not designed — emerges from selection and reproductive dynamics.
+The divergence of agent populations into distinct clusters that no longer interbreed because their **neutral markers** have drifted apart (**marker isolation**). Not designed — emerges from selection and reproductive dynamics.
 _Avoid_: species (as a designed concept — there are no species definitions, only emergent clusters)
 
 **Neutral marker**:
@@ -251,10 +251,11 @@ Reproductive isolation read from **neutral marker** distance rather than trait d
 _Avoid_: genetic incompatibility (implies a mechanism the marker does not model)
 
 **Compatibility scale**:
-The world parameter setting how quickly compatibility falls with **neutral marker** distance under **marker isolation**. The ancestry counterpart of the **reproductive compatibility distance**.
+The world parameter setting how quickly compatibility falls with **neutral marker** distance under **marker isolation**.
+_Avoid_: reproductive compatibility distance (the retired trait-distance threshold it replaced)
 
 **Founding cluster**:
-A group of founders seeded together at world creation as one population (see **initial cluster count**). Under **marker isolation** a founding cluster shares one ancestry, and different founding clusters are unrelated.
+A group of founders seeded together at world creation as one population (see **initial cluster count**). A founding cluster shares one ancestry, and different founding clusters are unrelated.
 _Avoid_: founding patch (that is a cluster's seeding footprint in space; see **founder aggregation**)
 
 ### World parameters
@@ -268,12 +269,8 @@ Total energy available per tick within a **light competition radius**. Divided a
 **Light competition radius**:
 The radius within which producers compete for solar flux. Producers outside this radius do not affect each other's energy intake. A world parameter. Interacts with world extent and population density to determine how crowded the light environment is.
 
-**Reproductive compatibility distance**:
-The trait-space distance threshold within which two agents can sexually reproduce. A world parameter, not a trait — individual agents do not evolve their own selectivity. Mate selectivity is derived: it emerges from the interaction between trait-space clustering and this physics-defined threshold. If two agents' trait vectors are within the compatibility distance, they can mate; otherwise they cannot. This is the mechanism through which speciation occurs — clusters that diverge beyond the compatibility distance become reproductively isolated.
-_Avoid_: mate selectivity threshold (selectivity implies a per-agent choice — this is a world constant)
-
 **Recognition distance**:
-The trait-space distance over which a consumer spares living targets that resemble it: expressed drain is suppressed most toward a near-identical target, which is spared entirely, and not at all beyond this distance. A world parameter (0 is the kin-blind limit), the feeding counterpart of the **reproductive compatibility distance**, measured on the same trait-space metric. Carcasses are never spared.
+The trait-space distance over which a consumer spares living targets that resemble it: expressed drain is suppressed most toward a near-identical target, which is spared entirely, and not at all beyond this distance. A world parameter (0 is the kin-blind limit), measured on the trait-space metric. Carcasses are never spared.
 _Avoid_: kin recognition (the cue is similarity, which cannot tell kin from near-identical non-kin), kin distance
 
 **Base metabolic rate**:
@@ -463,4 +460,4 @@ When an agent's reserve reaches zero (starvation, predation) or its structure dr
 >
 > **Dev:** How do species form?
 >
-> **Domain:** They don't — not by design. Agents reproduce sexually when their trait-space distance is within the reproductive compatibility distance — a world parameter, not a per-agent trait. Over time, clusters form in trait space that stop interbreeding because their trait distance exceeds that threshold. We call that speciation, but there's no species registry. It's emergent.
+> **Domain:** They don't — not by design. Agents reproduce sexually when they pass a compatibility draw that falls with how far their neutral markers have drifted apart — their ancestry, not their traits. Lineages whose markers have drifted far apart stop interbreeding. We call that speciation, but there's no species registry. It's emergent.

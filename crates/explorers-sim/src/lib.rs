@@ -208,9 +208,6 @@ fn default_specification_nutrient_coefficient() -> f32 {
 fn default_sensing_range_coefficient() -> f32 {
     10.0
 }
-fn default_reproductive_compatibility_distance() -> f32 {
-    2.0
-}
 fn default_reproduction_nutrient_threshold() -> f32 {
     1.0
 }
@@ -535,11 +532,6 @@ pub struct WorldParameters {
     /// How much each unit of specification investment adds to the nutrient ratio.
     #[serde(default = "default_specification_nutrient_coefficient")]
     pub specification_nutrient_coefficient: f32,
-    /// Trait-space distance threshold for sexual reproduction compatibility.
-    /// A world parameter, not a per-agent trait. Speciation emerges when clusters
-    /// diverge beyond this fixed threshold.
-    #[serde(default = "default_reproductive_compatibility_distance")]
-    pub reproductive_compatibility_distance: f32,
     /// Per-tick energy cost of maintaining mobility machinery, paid whether or not
     /// the agent moves. Distinct from movement_cost_coefficient (per-distance cost).
     #[serde(default)]
@@ -665,8 +657,7 @@ pub struct WorldParameters {
     #[serde(default)]
     pub network_transfer_efficiency: f32,
     /// Recognition distance (world-rules.md, "Recognition: living targets that
-    /// resemble the consumer are spared"): the trait-space distance — on the
-    /// same metric as `reproductive_compatibility_distance` — over which a
+    /// resemble the consumer are spared"): the trait-space distance over which a
     /// consumer spares living targets that resemble it. Expression is
     /// ungated, so the drain toward a living target is capability ×
     /// `max(0, 1 − RECOGNITION_RESTRAINT × resemblance)`: an identical target
@@ -786,24 +777,18 @@ pub struct WorldParameters {
     /// [`DEFAULT_CONTACT_DISTANCE`].
     #[serde(default = "default_contact_distance")]
     pub contact_distance: f32,
-    /// Marker isolation switch (#837; world-rules.md flow 4, *Reproductive
-    /// isolation follows ancestry, through a neutral marker*): when on, every
-    /// birth steps each agent's neutral [`Agent::marker`], and a candidate
-    /// pair within reproductive reach can mate only if it passes one keyed
-    /// draw against its compatibility `c = exp(−d² / (2s²))`, `d` the marker
-    /// distance and `s` [`Self::compatibility_scale`]. A seeker takes the
-    /// passing candidate nearest in the marker, and trait distance and
-    /// `reproductive_compatibility_distance` play no part in mating. World
-    /// creation puts each founding cluster's founders at its own marker
-    /// origin ([`marker_origin`]). Default `false` is off: no marker is drawn,
-    /// no RNG is consumed, mating is the trait-distance rule, and every
-    /// existing recipe, pin and fixture is bit-unchanged.
-    #[serde(default)]
-    pub marker_isolation: bool,
-    /// Compatibility scale `s` (#837): the marker distance over which
-    /// compatibility falls, `c = exp(−d² / (2s²))`. Marker units (the marker
-    /// steps by one unit per dimension per birth). Read only while
-    /// `marker_isolation` is on. Default [`DEFAULT_COMPATIBILITY_SCALE`].
+    /// Compatibility scale `s` (world-rules.md flow 4, *Reproductive
+    /// isolation follows ancestry, through a neutral marker*; physics in
+    /// every world since #861): every birth steps each agent's neutral
+    /// [`Agent::marker`], and a candidate pair within reproductive reach can
+    /// mate only if it passes one keyed draw against its compatibility
+    /// `c = exp(−d² / (2s²))`, `d` the marker distance. A seeker takes the
+    /// passing candidate nearest in the marker; trait distance plays no part
+    /// in mating. World creation puts each founding cluster's founders at its
+    /// own marker origin ([`marker_origin`]), `10 s` from every other.
+    /// Marker units (the marker steps by one unit per dimension per birth).
+    /// Fixed, not searched; instruments may override it. Default
+    /// [`DEFAULT_COMPATIBILITY_SCALE`].
     #[serde(default = "default_compatibility_scale")]
     pub compatibility_scale: f32,
     /// Turnover rate `τ` (world-rules.md, *Somatic wear*, *Tissue turnover*):
@@ -825,10 +810,13 @@ pub const MARKER_DIMS: usize = 8;
 /// A neutral marker: ancestry, carried outside the trait vector (#837).
 pub type Marker = [f32; MARKER_DIMS];
 
-/// Default compatibility scale `s`: one marker step. Inert while
-/// `marker_isolation` is off; instruments set their own (mode 1 reads
-/// `s = 100`).
-pub const DEFAULT_COMPATIBILITY_SCALE: f32 = 1.0;
+/// Design default compatibility scale `s = 100` marker steps (world-rules.md
+/// flow 4, *The compatibility scale*). Two lineages `g` generations from
+/// their common ancestor sit `d² ≈ 16 g` apart, so `c ≈ exp(−g / 1250)`:
+/// relatives stay interfertile over the hundreds of generations of a run
+/// and isolation sets in over thousands. The domain gives the shape of the
+/// rise, not its generation count; this is the design's figure.
+pub const DEFAULT_COMPATIBILITY_SCALE: f32 = 100.0;
 
 fn default_compatibility_scale() -> f32 {
     DEFAULT_COMPATIBILITY_SCALE
@@ -839,14 +827,9 @@ pub fn marker_distance_squared(a: &Marker, b: &Marker) -> f32 {
     a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum()
 }
 
-/// A founder's marker (#837): its founding cluster's [`marker_origin`] with
-/// `marker_isolation` on; all zero, the field unread, with it off.
+/// A founder's marker (#837): its founding cluster's [`marker_origin`].
 fn founder_marker(params: &WorldParameters, cluster: u32) -> Marker {
-    if params.marker_isolation {
-        marker_origin(cluster, params.compatibility_scale)
-    } else {
-        [0.0; MARKER_DIMS]
-    }
+    marker_origin(cluster, params.compatibility_scale)
 }
 
 /// A pair's compatibility under marker isolation (#837):
@@ -965,8 +948,8 @@ pub struct AgentSpec {
     #[serde(default)]
     pub nutrient: f32,
     /// The founding cluster this agent belongs to (#837; world-rules.md flow
-    /// 4, *Founders*). With `marker_isolation` on, world creation puts it at
-    /// its cluster's [`marker_origin`]; off, it is not read. Omitted in a
+    /// 4, *Founders*). World creation puts it at its cluster's
+    /// [`marker_origin`]. Omitted in a
     /// recipe, and not written when 0, so recipes are unchanged.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub founding_cluster: u32,
@@ -1070,8 +1053,7 @@ pub struct Agent {
     pub repro_nutrient: f32,
     /// The neutral marker (#837; world-rules.md flow 4): ancestry, outside
     /// the trait vector, read by no cost, flow or channel, only by mating's
-    /// compatibility under `marker_isolation`. All zero, and never stepped,
-    /// with the switch off.
+    /// compatibility. Stepped at every birth.
     pub marker: Marker,
 }
 
@@ -2449,7 +2431,6 @@ mod tests {
             senescence_hazard: 0.0,
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
-            reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
             nutrient_grid_cell_size: 10.0,
@@ -2457,7 +2438,6 @@ mod tests {
             reserve_mobilisation_rate: 1.0,
             offspring_structure_fraction: 0.2,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
-            marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: crate::DEFAULT_TISSUE_TURNOVER_RATE,
         }
@@ -3299,25 +3279,35 @@ mod tests {
     }
 
     #[test]
-    fn marker_isolation_parameters_round_trip_and_default_off() {
-        // #837: a recipe or checkpoint that predates marker isolation loads
-        // with it off and the scale at its default; a recipe's founders load
-        // in cluster 0, and cluster 0 is not written, so recipes are
-        // unchanged.
+    fn marker_parameters_round_trip_and_retired_fields_still_load() {
+        // #837, #861: the scale round-trips and defaults when omitted; a
+        // recipe or checkpoint that still carries the retired switch or the
+        // retired trait threshold loads to the same parameters; a recipe's
+        // founders load in cluster 0, and cluster 0 is not written, so
+        // recipes are unchanged.
         let mut params = test_params();
-        params.marker_isolation = true;
-        params.compatibility_scale = 100.0;
+        params.compatibility_scale = 7.0;
         let json = serde_json::to_string(&params).unwrap();
         let back: WorldParameters = serde_json::from_str(&json).unwrap();
         assert_eq!(back, params);
 
         let mut value = serde_json::to_value(test_params()).unwrap();
         let fields = value.as_object_mut().unwrap();
-        fields.remove("marker_isolation");
         fields.remove("compatibility_scale");
         let without: WorldParameters = serde_json::from_value(value).unwrap();
-        assert!(!without.marker_isolation);
         assert_eq!(without.compatibility_scale, DEFAULT_COMPATIBILITY_SCALE);
+
+        for on in [true, false] {
+            let mut value = serde_json::to_value(test_params()).unwrap();
+            let fields = value.as_object_mut().unwrap();
+            fields.insert("marker_isolation".into(), serde_json::json!(on));
+            fields.insert(
+                "reproductive_compatibility_distance".into(),
+                serde_json::json!(3.8),
+            );
+            let loaded: WorldParameters = serde_json::from_value(value).unwrap();
+            assert_eq!(loaded, test_params());
+        }
 
         let spec = AgentSpec {
             position: (1.0, 2.0),
@@ -4950,7 +4940,6 @@ mod tests {
             use_wear_rate: 0.01,
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
-            reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
             nutrient_grid_cell_size: 10.0,
@@ -4958,7 +4947,6 @@ mod tests {
             reserve_mobilisation_rate: 1.0,
             offspring_structure_fraction: 0.2,
             contact_distance: crate::DEFAULT_CONTACT_DISTANCE,
-            marker_isolation: false,
             compatibility_scale: crate::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: crate::DEFAULT_TISSUE_TURNOVER_RATE,
         }
@@ -5469,7 +5457,6 @@ mod tests {
             base_metabolic_rate: 0.0,
             reproduction_energy_threshold: 5.0,
             reproduction_nutrient_threshold: 1.0,
-            reproductive_compatibility_distance: 10.0,
             ..conservation_params()
         };
         let dist = InitialDistribution {

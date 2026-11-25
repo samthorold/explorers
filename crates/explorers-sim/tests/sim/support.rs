@@ -67,7 +67,6 @@ pub fn viable_baseline() -> WorldParameters {
         senescence_hazard: explorers_sim::DEFAULT_SENESCENCE_HAZARD,
         base_nutrient_ratio: 0.1,
         specification_nutrient_coefficient: 0.2,
-        reproductive_compatibility_distance: 2.0,
         mobility_maintenance_cost: 0.0,
         maintenance_cost_exponent: 2.0,
         nutrient_grid_cell_size: 10.0,
@@ -96,7 +95,6 @@ pub fn viable_baseline() -> WorldParameters {
         starvation_draws_earmark: false,
         starvation_shrinks: false,
         contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
-        marker_isolation: false,
         compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
         tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
     }
@@ -133,9 +131,9 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
             1.0f32..=20.0,              // 13 light_competition_radius
             0.001f32..=0.1,             // 14 photo_maintenance_cost
             0.001f32..=0.1,             // 15 heterotrophy_maintenance_cost
-            0.5f32..=5.0,               // 16 reproductive_compatibility_distance
-            0.01f32..=0.5,              // 24 base_nutrient_ratio
-            0.01f32..=0.5,              // 25 specification_nutrient_coefficient
+            0.5f32..=5.0, // 16 retired trait threshold (#861): still drawn, unread, so committed seeds replay the same cases
+            0.01f32..=0.5, // 24 base_nutrient_ratio
+            0.01f32..=0.5, // 25 specification_nutrient_coefficient
         ),
         (
             1.5f32..=3.0,  // 28 maintenance_cost_exponent
@@ -165,7 +163,6 @@ pub fn world_parameters() -> impl Strategy<Value = WorldParameters> {
         light_competition_radius: b.3,
         photo_maintenance_cost: b.4,
         heterotrophy_maintenance_cost: b.5,
-        reproductive_compatibility_distance: b.6,
         base_nutrient_ratio: b.7,
         specification_nutrient_coefficient: b.8,
         maintenance_cost_exponent: c.0,
@@ -409,15 +406,13 @@ pub fn world_case_with_starvation_cascade() -> impl Strategy<Value = WorldCase> 
         })
 }
 
-/// A stepper case with marker isolation on (#837): the C1 domain, its
-/// founding clusters at origins `10 s` apart, with the compatibility scale
+/// A stepper case with the compatibility scale varied (#837, #861): the C1
+/// domain, its founding clusters at origins `10 s` apart, with the scale
 /// drawn from a fraction of one marker step, where kin soon stop mating, to
-/// far beyond the drift a short run makes, where every kin pair passes. A
-/// separate strategy, so `world_case()` draws exactly the inputs it always
-/// has.
-pub fn world_case_with_marker_isolation() -> impl Strategy<Value = WorldCase> {
+/// far beyond the drift a short run makes, where every kin pair passes.
+/// `world_case()` runs marker isolation at the default scale.
+pub fn world_case_with_varied_compatibility_scale() -> impl Strategy<Value = WorldCase> {
     (world_case(), prop_oneof![0.3f32..=3.0, 10.0f32..=1000.0]).prop_map(|(mut case, s)| {
-        case.params.marker_isolation = true;
         case.params.compatibility_scale = s;
         case
     })

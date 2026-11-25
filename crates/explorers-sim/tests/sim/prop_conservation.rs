@@ -8,9 +8,9 @@ use explorers_sim::{InitialDistribution, TraitVector, World, WorldParameters};
 use proptest::prelude::*;
 use support::{
     WorldCase, world_case, world_case_with_fast_tissue_turnover, world_case_with_living_resistance,
-    world_case_with_marker_isolation, world_case_with_network,
-    world_case_with_saturating_decomposition, world_case_with_size_scaled_uptake,
-    world_case_with_starvation_cascade, world_case_with_varied_contact_distance,
+    world_case_with_network, world_case_with_saturating_decomposition,
+    world_case_with_size_scaled_uptake, world_case_with_starvation_cascade,
+    world_case_with_varied_compatibility_scale, world_case_with_varied_contact_distance,
     world_case_with_wear,
 };
 
@@ -145,11 +145,12 @@ proptest! {
         check_stores_non_negative(&case)?;
     }
 
-    /// The three conservation invariants under marker isolation (#837): the
-    /// marker changes who mates, never what a mating moves.
+    /// The three conservation invariants across compatibility scales (#837,
+    /// #861): the marker changes who mates, never what a mating moves, and a
+    /// blocked cross moves nothing.
     #[test]
-    fn conservation_holds_with_marker_isolation(
-        case in world_case_with_marker_isolation()
+    fn conservation_holds_across_compatibility_scales(
+        case in world_case_with_varied_compatibility_scale()
     ) {
         check_energy_ledger_identity(&case)?;
         check_nutrient_closure(&case)?;
@@ -316,7 +317,6 @@ fn issue_444_minimal_case() -> WorldCase {
         light_competition_radius: 1.0,
         photo_maintenance_cost: 0.001,
         heterotrophy_maintenance_cost: 0.001,
-        reproductive_compatibility_distance: 0.5,
         base_nutrient_ratio: 0.01,
         specification_nutrient_coefficient: 0.01,
         maintenance_cost_exponent: 1.5,
@@ -381,7 +381,6 @@ fn issue_901_first_case() -> WorldCase {
         senescence_hazard: 0.0,
         base_nutrient_ratio: 0.2638049,
         specification_nutrient_coefficient: 0.36853546,
-        reproductive_compatibility_distance: 0.5,
         mobility_maintenance_cost: 0.0,
         maintenance_cost_exponent: 1.5,
         nutrient_grid_cell_size: 10.0,
@@ -410,7 +409,6 @@ fn issue_901_first_case() -> WorldCase {
         starvation_draws_earmark: true,
         starvation_shrinks: true,
         contact_distance: 0.1,
-        marker_isolation: false,
         compatibility_scale: 1.0,
         tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
     };

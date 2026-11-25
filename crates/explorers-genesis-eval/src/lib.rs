@@ -1199,7 +1199,6 @@ mod tests {
             senescence_hazard: explorers_sim::DEFAULT_SENESCENCE_HAZARD,
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
-            reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
             nutrient_grid_cell_size: 10.0,
@@ -1228,7 +1227,6 @@ mod tests {
             starvation_draws_earmark: false,
             starvation_shrinks: false,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
-            marker_isolation: false,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
         }
@@ -2824,7 +2822,6 @@ mod tests {
             senescence_hazard: explorers_sim::DEFAULT_SENESCENCE_HAZARD,
             base_nutrient_ratio: 0.1,
             specification_nutrient_coefficient: 0.2,
-            reproductive_compatibility_distance: 2.0,
             mobility_maintenance_cost: 0.0,
             maintenance_cost_exponent: 1.0,
             nutrient_grid_cell_size: 10.0,
@@ -2853,7 +2850,6 @@ mod tests {
             starvation_draws_earmark: false,
             starvation_shrinks: false,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
-            marker_isolation: false,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
         };

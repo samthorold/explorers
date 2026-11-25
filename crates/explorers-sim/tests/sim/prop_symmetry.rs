@@ -11,8 +11,8 @@ use explorers_sim::{
 };
 use proptest::prelude::*;
 use support::{
-    WorldCase, world_case, world_case_with_living_resistance, world_case_with_marker_isolation,
-    world_case_with_size_scaled_uptake,
+    WorldCase, world_case, world_case_with_living_resistance, world_case_with_size_scaled_uptake,
+    world_case_with_varied_compatibility_scale,
 };
 
 /// Relative tolerance for *summed* world totals under a permutation. The
@@ -241,13 +241,13 @@ proptest! {
         check_order_permutation_invariance(&case)?;
     }
 
-    /// Order-permutation invariance under marker isolation (#837): the
-    /// compatibility draw and the marker's inheritance are keyed on stable
-    /// identity, and mates sort by marker distance with id tiebreaks, so the
-    /// pair set and every marker are a pure function of world state.
+    /// Order-permutation invariance across compatibility scales (#837, #861):
+    /// the compatibility draw and the marker's inheritance are keyed on
+    /// stable identity, and mates sort by marker distance with id tiebreaks,
+    /// so the pair set and every marker are a pure function of world state.
     #[test]
-    fn trajectory_is_invariant_under_agent_order_permutation_with_marker_isolation(
-        case in world_case_with_marker_isolation()
+    fn trajectory_is_invariant_under_agent_order_permutation_across_compatibility_scales(
+        case in world_case_with_varied_compatibility_scale()
     ) {
         check_order_permutation_invariance(&case)?;
     }
@@ -514,15 +514,14 @@ fn producers_on_light_competition_boundary(world: &World) -> Option<(u64, u64)> 
 /// Mate-finding reach (#548 audit): `resolve_reproduction` skips a candidate
 /// whose distance exceeds the seeker's reach (effective mobility × sensing
 /// coefficient + dispersal × dispersal-reach coefficient; the sensing term is
-/// zero in this domain). Only a pair of sexually eligible, trait-compatible
-/// agents can be flipped. Eligibility is decided mid-tick, so the guard
+/// zero in this domain). Only a pair of sexually eligible agents can be
+/// flipped; marker compatibility is a keyed draw, so every pair is guarded. Eligibility is decided mid-tick, so the guard
 /// over-approximates it with `could_reach_reproduction_threshold`. Returns the
 /// first (seeker, mate) pair on the seeker's reach boundary.
 fn mate_on_reach_boundary(world: &World) -> Option<(u64, u64)> {
     let params = world.params();
     let extent = params.world_extent;
     let k = params.wear_degradation_steepness;
-    let compat = params.reproductive_compatibility_distance;
     let candidates: Vec<&Agent> = world
         .agents()
         .iter()
@@ -533,7 +532,6 @@ fn mate_on_reach_boundary(world: &World) -> Option<(u64, u64)> {
             + seeker.traits.dispersal * params.dispersal_reach_coefficient;
         if let Some(mate) = candidates.iter().find(|m| {
             m.id != seeker.id
-                && (compat <= 0.0 || seeker.traits.distance(&m.traits) <= compat)
                 && (toroidal_distance(seeker.position, m.position, extent) - reach).abs()
                     <= TRANSLATION_BOUNDARY_TOLERANCE
         }) {

@@ -103,17 +103,15 @@
 //! on the earmark and on structure, summarised as medians and counts.
 //! Without any of them nothing is recorded and the world is unchanged.
 //!
-//! `--marker-isolation --compatibility-scale S` (#837; world rules, flow 4,
-//! *Reproductive isolation follows ancestry, through a neutral marker*) turns
-//! marker isolation on at compatibility scale S: mode 1's producers found
-//! cluster 0 and its decomposer founders cluster 1, 10 S apart in the
-//! marker, and a pair mates only past a draw against its compatibility. The
-//! two flags go together. The summary and artifact record S, and each run or
-//! arm writes the marker readout: per sample, the founder line's living
-//! members and the share of them below autotrophy 0.1, and at the end the
-//! mean and lowest pairwise compatibility within the line and within the
-//! producers. Without the flags nothing is recorded and the world is
-//! unchanged.
+//! Reproductive isolation follows ancestry in every world (#837, #861; world
+//! rules, flow 4, *Reproductive isolation follows ancestry, through a neutral
+//! marker*): mode 1's producers found cluster 0 and its decomposer founders
+//! cluster 1, 10 s apart in the marker, and a pair mates only past a draw
+//! against its compatibility. Each run or arm writes the marker readout: per
+//! sample, the founder line's living members and the share of them below
+//! autotrophy 0.1, and at the end the mean and lowest pairwise compatibility
+//! within the line and within the producers. `--compatibility-scale S` sets
+//! `s` in place of the default, and the summary and artifact record it.
 //!
 //! It reads by the ladder (#857; `end-state.md`, *The decomposer guild*,
 //! *Its ladder*), so the expensive rungs fail fast:
@@ -151,7 +149,7 @@
 //!                [--living-resistance] [--decomposer-mesocosm]
 //!                [--starvation-draws-earmark]
 //!                [--starvation-shrinks] [--starvation-readout]
-//!                [--marker-isolation --compatibility-scale S]
+//!                [--compatibility-scale S]
 //!                [--early-window C]
 //!                [--abort-on-line-extinction]
 //!                [--seeds N --passes-needed K [--failures-undecided]]
@@ -172,18 +170,18 @@ use explorers_reference_modes::ladder::{
     OnFailure, SeedRule, read_in_sequence, sequential_reading_section,
 };
 use explorers_reference_modes::mesocosm::{
-    Community, DecomposerMesocosm, ESTABLISHED_PRODUCER_LIFESPAN_TICKS, EarlyWindow,
-    MarkerIsolation, Mode1Spec, RunOptions, Wear, body_reach_section,
-    carcass_decay_constant_for_half_life, decomposition_kinetics_section, early_window_section,
-    founder_starvation_section, line_extinction_section, living_resistance_section,
-    marker_isolation_section, marker_readout_section, mode1_mesocosm_with_founders, mode1_summary,
-    paired_summary, run_mode1_with, run_paired_with, set_body_reach_pieces,
-    set_decomposition_kinetics, set_living_resistance, set_marker_isolation,
-    set_size_scaled_base_rate, set_size_scaled_base_rate_at, set_starvation_cascade,
-    size_scaled_base_rate_section, starvation_cascade_section,
+    Community, CompatibilityScale, DecomposerMesocosm, ESTABLISHED_PRODUCER_LIFESPAN_TICKS,
+    EarlyWindow, Mode1Spec, RunOptions, Wear, body_reach_section,
+    carcass_decay_constant_for_half_life, compatibility_scale_section,
+    decomposition_kinetics_section, early_window_section, founder_starvation_section,
+    line_extinction_section, living_resistance_section, marker_readout_section,
+    mode1_mesocosm_with_founders, mode1_summary, paired_summary, run_mode1_with, run_paired_with,
+    set_body_reach_pieces, set_compatibility_scale, set_decomposition_kinetics,
+    set_living_resistance, set_size_scaled_base_rate, set_size_scaled_base_rate_at,
+    set_starvation_cascade, size_scaled_base_rate_section, starvation_cascade_section,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--decomposer-mesocosm] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--marker-isolation --compatibility-scale S] [--early-window C] [--abort-on-line-extinction] [--seeds N --passes-needed K [--failures-undecided]] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--size-scaled-base-rate] [--established-producer-structure S_p] [--living-resistance] [--decomposer-mesocosm] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--compatibility-scale S] [--early-window C] [--abort-on-line-extinction] [--seeds N --passes-needed K [--failures-undecided]] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -224,9 +222,7 @@ struct Cli {
     starvation_shrinks: bool,
     /// Whether to write the founder starvation readout with both steps off.
     starvation_readout: bool,
-    /// Whether reproductive isolation follows the neutral marker (#837).
-    marker_isolation: bool,
-    /// Its compatibility scale `s` (#837).
+    /// A compatibility scale `s` in place of the default (#837, #861).
     compatibility_scale: Option<f32>,
     /// The early window's founder tick (#857): read G's rung 2 over the run.
     early_window: Option<u64>,
@@ -260,7 +256,6 @@ impl Cli {
             starvation_draws_earmark: false,
             starvation_shrinks: false,
             starvation_readout: false,
-            marker_isolation: false,
             compatibility_scale: None,
             early_window: None,
             abort_on_line_extinction: false,
@@ -295,10 +290,6 @@ impl Cli {
             }
             if flag == "--starvation-readout" {
                 cli.starvation_readout = true;
-                continue;
-            }
-            if flag == "--marker-isolation" {
-                cli.marker_isolation = true;
                 continue;
             }
             if flag == "--abort-on-line-extinction" {
@@ -430,12 +421,6 @@ impl Cli {
                     .into(),
             );
         }
-        if cli.marker_isolation != cli.compatibility_scale.is_some() {
-            return Err(
-                "--marker-isolation and --compatibility-scale go together: s is read only under the switch"
-                    .into(),
-            );
-        }
         if let Some(c) = cli.early_window {
             if c > cli.ticks {
                 return Err(format!(
@@ -512,11 +497,12 @@ fn main() {
         }
     }
 
-    // Marker isolation acts at world creation, so it is set on the spec.
-    let marker_isolation = cli
+    // The compatibility scale acts at world creation, so it is set on the
+    // spec.
+    let compatibility_scale = cli
         .compatibility_scale
-        .map(|s| set_marker_isolation(&mut spec, s));
-    let run = |seed| run_seed(&cli, &spec, wear, marker_isolation, seed);
+        .map(|s| set_compatibility_scale(&mut spec, s));
+    let run = |seed| run_seed(&cli, &spec, wear, compatibility_scale, seed);
 
     let (summary, artifact, default_out) = match cli.sequence {
         None => {
@@ -572,7 +558,7 @@ fn run_seed(
     cli: &Cli,
     spec: &Mode1Spec,
     wear: Wear,
-    marker_isolation: Option<MarkerIsolation>,
+    compatibility_scale: Option<CompatibilityScale>,
     seed: u64,
 ) -> SeedRun {
     let mut world = mode1_mesocosm_with_founders(
@@ -652,8 +638,8 @@ fn run_seed(
             Some(c) => format!("{header}\n\n{}", starvation_cascade_section(c)),
             None => header,
         };
-        match &marker_isolation {
-            Some(m) => format!("{header}\n\n{}", marker_isolation_section(m)),
+        match &compatibility_scale {
+            Some(m) => format!("{header}\n\n{}", compatibility_scale_section(m)),
             None => header,
         }
     };
@@ -772,9 +758,8 @@ fn run_seed(
         artifact["starvation_cascade"] =
             serde_json::to_value(c).expect("the starvation cascade serialises");
     }
-    if let Some(m) = marker_isolation {
-        artifact["marker_isolation"] =
-            serde_json::to_value(m).expect("the marker isolation serialises");
+    if let Some(m) = compatibility_scale {
+        artifact["compatibility_scale"] = serde_json::json!(m.compatibility_scale);
     }
     if let Some(readout) = starvation {
         artifact["founder_starvation"] = readout;

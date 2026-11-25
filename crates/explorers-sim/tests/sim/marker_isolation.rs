@@ -1,13 +1,13 @@
 //! Reproductive isolation follows ancestry, through a neutral marker (#837;
-//! world-rules.md flow 4).
+//! world-rules.md flow 4), physics in every world since #861.
 //!
 //! Each agent carries an eight-dimensional neutral marker, inherited by
 //! crossover (or copied, asexually) and stepped by a unit Gaussian per
-//! dimension at every birth. Under `marker_isolation` a candidate pair within
-//! reach mates only if it passes one keyed draw against
-//! `c = exp(−d² / (2s²))`; a seeker takes the passing candidate nearest in the
-//! marker. Founding clusters start at origins `10 s` apart. With the switch
-//! off nothing of this runs.
+//! dimension at every birth. A candidate pair within reach mates only if it
+//! passes one keyed draw against `c = exp(−d² / (2s²))`; a seeker takes the
+//! passing candidate nearest in the marker. Founding clusters start at
+//! origins `10 s` apart. The rung test of S26 (end-state.md, part 1) is
+//! `s26_rung_…`.
 
 use crate::support;
 
@@ -20,7 +20,9 @@ use explorers_sim::{
 
 const EXTENT: f32 = 100.0;
 
-fn params(marker_isolation: bool, scale: f32) -> WorldParameters {
+/// The world's own physics, with a few agents in reach: no marker field is
+/// set, so founding and mating run at the default compatibility scale.
+fn default_physics() -> WorldParameters {
     WorldParameters {
         world_extent: EXTENT,
         initial_population_size: 0,
@@ -28,10 +30,15 @@ fn params(marker_isolation: bool, scale: f32) -> WorldParameters {
         reproduction_nutrient_threshold: 1.0,
         mutation_rate: 0.0,
         mutation_magnitude: 0.0,
-        reproductive_compatibility_distance: 5.0,
-        marker_isolation,
-        compatibility_scale: scale,
         ..support::viable_baseline()
+    }
+}
+
+/// The same physics with an instrument's compatibility scale.
+fn params(scale: f32) -> WorldParameters {
+    WorldParameters {
+        compatibility_scale: scale,
+        ..default_physics()
     }
 }
 
@@ -90,6 +97,91 @@ fn recipe(params: WorldParameters, agents: Vec<AgentSpec>) -> WorldRecipe {
     }
 }
 
+/// Two co-located, trait-identical breeders with markers `a` and `b`.
+fn pair(a: Marker, b: Marker) -> Vec<Agent> {
+    let t = traits(0.5, 0.5, 0.0);
+    vec![
+        breeder(1, (10.0, 10.0), t, a),
+        breeder(2, (10.5, 10.0), t, b),
+    ]
+}
+
+/// The sexual pairs a reproduction pass formed, each as (low id, high id).
+fn pairs(result: &explorers_sim::phase::ReproductionResult) -> Vec<(u64, u64)> {
+    let mut v: Vec<(u64, u64)> = (result.events.iter())
+        .filter(|e| e.kind == explorers_sim::event::EventKind::Reproduced)
+        .filter_map(|e| e.target.map(|t| (e.source.min(t), e.source.max(t))))
+        .collect();
+    v.sort();
+    v
+}
+
+/// S26's rung (end-state.md, part 1): reproductive isolation follows
+/// ancestry. Exact for unrelated founding clusters: two founders of
+/// different clusters, co-located, trait-identical and ready, never cross,
+/// and the cross they cannot make draws nothing from either earmark (S15's
+/// conservation is untouched). Close relatives stay interfertile: two
+/// founders of one cluster mate. Directional for relatives: the share of
+/// ticks a pair mates falls with its marker distance.
+#[test]
+fn s26_rung_unrelated_founding_clusters_never_cross_and_relatives_stay_interfertile_until_their_markers_diverge()
+ {
+    let p = default_physics();
+    let s = p.compatibility_scale;
+    let t = traits(0.5, 0.5, 0.0);
+    let founders = |a: u32, b: u32| -> Vec<Agent> {
+        let roster = vec![spec((10.0, 10.0), t, a), spec((10.5, 10.0), t, b)];
+        let world = World::from_recipe(&recipe(p.clone(), roster), 1);
+        (world.agents().iter().cloned())
+            .map(|mut x| {
+                x.repro_reserve = 30.0;
+                x.repro_nutrient = 30.0;
+                x
+            })
+            .collect()
+    };
+    for tick in 0..2000 {
+        let mut unrelated = founders(0, 1);
+        let result = reproduce(&mut unrelated, &p, tick);
+        assert!(
+            result.offspring.is_empty(),
+            "tick {tick}: unrelated crossed"
+        );
+        assert!(result.events.is_empty(), "tick {tick}: a cross was made");
+        for x in &unrelated {
+            assert_eq!((x.repro_reserve, x.repro_nutrient), (30.0, 30.0));
+        }
+    }
+    let mut mated = 0;
+    for tick in 0..50 {
+        let mut kin = founders(1, 1);
+        mated += usize::from(!pairs(&reproduce(&mut kin, &p, tick)).is_empty());
+    }
+    assert_eq!(mated, 50, "founders of one cluster are fully interfertile");
+
+    // Relatives at marker distance d = k s / 2: the share of ticks they mate
+    // falls with d.
+    let shares: Vec<f64> = (0..5)
+        .map(|k| {
+            let mut far = [0.0; MARKER_DIMS];
+            far[3] = k as f32 * s / 2.0;
+            let n = 400;
+            let mated = (0..n)
+                .filter(|&tick| {
+                    !pairs(&reproduce(&mut pair([0.0; MARKER_DIMS], far), &p, tick)).is_empty()
+                })
+                .count();
+            mated as f64 / n as f64
+        })
+        .collect();
+    for w in shares.windows(2) {
+        assert!(
+            w[1] < w[0],
+            "mating does not fall with marker distance: {shares:?}"
+        );
+    }
+}
+
 #[test]
 fn each_founding_cluster_starts_at_its_origin_ten_scales_from_every_other() {
     let s = 3.0;
@@ -99,7 +191,7 @@ fn each_founding_cluster_starts_at_its_origin_ten_scales_from_every_other() {
         spec((2.0, 0.0), traits(0.0, 1.0, 0.0), 1),
         spec((3.0, 0.0), traits(0.0, 1.0, 0.0), 2),
     ];
-    let world = World::from_recipe(&recipe(params(true, s), agents), 1);
+    let world = World::from_recipe(&recipe(params(s), agents), 1);
     let m: Vec<Marker> = world.agents().iter().map(|a| a.marker).collect();
     assert_eq!(m[0], marker_origin(0, s));
     assert_eq!(m[1], marker_origin(0, s));
@@ -139,57 +231,6 @@ fn compatibility_falls_as_a_gaussian_in_marker_distance() {
     assert!((c / (-50.0_f64).exp() - 1.0).abs() < 1e-4, "c = {c}");
 }
 
-/// Two co-located, trait-identical breeders with markers `a` and `b`, the
-/// trait rule's ideal pair.
-fn pair(a: Marker, b: Marker) -> Vec<Agent> {
-    let t = traits(0.5, 0.5, 0.0);
-    vec![
-        breeder(1, (10.0, 10.0), t, a),
-        breeder(2, (10.5, 10.0), t, b),
-    ]
-}
-
-#[test]
-fn unrelated_founding_clusters_never_mate_while_one_cluster_mates_as_before() {
-    let s = 100.0;
-    let on = params(true, s);
-    let off = params(false, s);
-    for tick in 0..2000 {
-        let mut unrelated = pair(marker_origin(0, s), marker_origin(1, s));
-        let result = reproduce(&mut unrelated, &on, tick);
-        assert!(result.offspring.is_empty(), "tick {tick}: c = e^-50 mated");
-    }
-    let mut mated = 0;
-    for tick in 0..50 {
-        let mut kin = pair(marker_origin(1, s), marker_origin(1, s));
-        let mut plain = pair([0.0; MARKER_DIMS], [0.0; MARKER_DIMS]);
-        let with = reproduce(&mut kin, &on, tick);
-        let without = reproduce(&mut plain, &off, tick);
-        // c = 1 at d = 0: the pair mates exactly as without the switch, the
-        // same brood, bodies and parentage, all but the marker.
-        assert_eq!(with.parents, without.parents, "tick {tick}");
-        assert_eq!(with.offspring.len(), without.offspring.len());
-        for (x, y) in with.offspring.iter().zip(&without.offspring) {
-            assert_eq!(x.traits, y.traits);
-            assert_eq!(x.position, y.position);
-            assert_eq!(x.reserve, y.reserve);
-            assert_eq!(x.structure, y.structure);
-        }
-        mated += usize::from(!with.parents.is_empty());
-    }
-    assert!(mated > 40, "a clonal cluster mates: {mated} of 50 ticks");
-}
-
-/// The sexual pairs a reproduction pass formed, each as (low id, high id).
-fn pairs(result: &explorers_sim::phase::ReproductionResult) -> Vec<(u64, u64)> {
-    let mut v: Vec<(u64, u64)> = (result.events.iter())
-        .filter(|e| e.kind == explorers_sim::event::EventKind::Reproduced)
-        .filter_map(|e| e.target.map(|t| (e.source.min(t), e.source.max(t))))
-        .collect();
-    v.sort();
-    v
-}
-
 #[test]
 fn mates_are_chosen_by_marker_distance_not_trait_distance() {
     let s = 1000.0;
@@ -197,24 +238,20 @@ fn mates_are_chosen_by_marker_distance_not_trait_distance() {
     let mut far = near;
     far[0] = 30.0; // c = exp(−900 / 2e6) ≈ 0.9998: compatible, but farther.
     let a = traits(0.5, 0.5, 0.0);
-    // C is far from A in traits, beyond the trait threshold of 5.
+    // C is far from A in traits, B identical to it.
     let c = TraitVector {
         mobility: 9.0,
         ..traits(3.0, 0.0, 0.0)
     };
     assert!(a.distance(&c) > 5.0);
-    let world = || {
-        vec![
+    for tick in 0..20 {
+        let mut world = vec![
             breeder(1, (10.0, 10.0), a, near),
             breeder(2, (10.5, 10.0), a, far),
             breeder(3, (10.0, 10.5), c, near),
-        ]
-    };
-    for tick in 0..20 {
-        let on = pairs(&reproduce(&mut world(), &params(true, s), tick));
-        let off = pairs(&reproduce(&mut world(), &params(false, s), tick));
-        assert_eq!(off, vec![(1, 2)], "tick {tick}: the trait rule pairs A, B");
-        assert_eq!(on, vec![(1, 3)], "tick {tick}: the marker pairs A, C");
+        ];
+        let formed = pairs(&reproduce(&mut world, &params(s), tick));
+        assert_eq!(formed, vec![(1, 3)], "tick {tick}: the marker pairs A, C");
     }
 }
 
@@ -246,7 +283,7 @@ fn moments(steps: &[f32]) -> (f64, f64) {
 fn a_sexual_offspring_takes_each_marker_dimension_from_one_parent_plus_a_unit_step() {
     let p: Marker = std::array::from_fn(|d| d as f32);
     let q: Marker = std::array::from_fn(|d| 1000.0 + d as f32);
-    let on = params(true, 1.0e5);
+    let on = params(1.0e5);
     let (mut offspring, mut from_p, mut from_q) = (Vec::new(), 0, 0);
     for tick in 0..300 {
         let result = reproduce(&mut pair(p, q), &on, tick);
@@ -276,7 +313,7 @@ fn a_sexual_offspring_takes_each_marker_dimension_from_one_parent_plus_a_unit_st
 #[test]
 fn an_asexual_offspring_copies_its_parent_marker_plus_a_unit_step() {
     let m: Marker = std::array::from_fn(|d| 5.0 * d as f32 - 7.0);
-    let on = params(true, 10.0);
+    let on = params(10.0);
     let mut offspring = Vec::new();
     for tick in 0..300 {
         let mut alone = vec![breeder(1, (10.0, 10.0), traits(1.0, 0.0, 1.0), m)];
@@ -290,83 +327,11 @@ fn an_asexual_offspring_copies_its_parent_marker_plus_a_unit_step() {
     assert!((square - 1.0).abs() < 0.1, "mean square step {square}");
 }
 
-#[test]
-fn with_the_switch_off_no_marker_is_drawn() {
-    let off = params(false, 1.0);
-    for tick in 0..20 {
-        let mut alone = vec![breeder(1, (10.0, 10.0), traits(1.0, 0.0, 1.0), [0.0; 8])];
-        let mut two = pair([0.0; 8], [0.0; 8]);
-        let born = (reproduce(&mut alone, &off, tick).offspring.into_iter())
-            .chain(reproduce(&mut two, &off, tick).offspring);
-        for child in born {
-            assert_eq!(child.marker, [0.0; MARKER_DIMS]);
-        }
-    }
-}
-
-/// One agent's state as bits: id, position, scalar stores, traits, marker.
-type AgentBits = (u64, [u32; 2], [u32; 6], [u32; 7], Marker);
-
-/// Every agent's state, exactly, for comparing two worlds.
-fn state(world: &World) -> Vec<AgentBits> {
-    let mut v: Vec<_> = (world.agents().iter())
-        .map(|a| {
-            (
-                a.id,
-                [a.position.0.to_bits(), a.position.1.to_bits()],
-                [
-                    a.reserve,
-                    a.structure,
-                    a.peak_structure,
-                    a.nutrient,
-                    a.repro_reserve,
-                    a.repro_nutrient,
-                ]
-                .map(f32::to_bits),
-                std::array::from_fn(|d| a.traits.get(d).to_bits()),
-                a.marker,
-            )
-        })
-        .collect();
-    v.sort_by_key(|x| x.0);
-    v
-}
-
-/// With the switch off, founding clusters and the compatibility scale are
-/// not read: a world is the world without them, state for state, through
-/// births, and every marker stays zero.
-#[test]
-fn with_the_switch_off_a_world_is_unchanged_state_for_state() {
-    let roster = |clustered: bool| -> Vec<AgentSpec> {
-        (0..30)
-            .map(|i| {
-                let t = traits(1.0 - (i % 3) as f32 * 0.4, (i % 3) as f32 * 0.4, 0.3);
-                let cluster = if clustered { i % 3 } else { 0 };
-                spec(((i * 7 % 40) as f32, (i * 11 % 40) as f32), t, cluster)
-            })
-            .collect()
-    };
-    let plain = support::viable_baseline();
-    let mut scaled = plain.clone();
-    scaled.compatibility_scale = 0.01;
-    let mut a = World::from_recipe(&recipe(plain, roster(false)), 5);
-    let mut b = World::from_recipe(&recipe(scaled, roster(true)), 5);
-    let mut births = 0;
-    for _ in 0..60 {
-        a.step();
-        b.step();
-        births += a.last_tick_births();
-        assert_eq!(state(&a), state(&b), "tick {}", a.tick());
-    }
-    assert!(births > 0, "the run has births");
-    assert!(a.agents().iter().all(|x| x.marker == [0.0; MARKER_DIMS]));
-}
-
 /// A world founded from an initial distribution puts its clusters, laid on
 /// round robin by id, at their origins too.
 #[test]
 fn a_distribution_world_founds_each_cluster_at_its_origin() {
-    let mut p = params(true, 2.0);
+    let mut p = params(2.0);
     p.initial_population_size = 9;
     let dist = explorers_sim::InitialDistribution {
         mean_traits: traits(0.5, 0.5, 0.0),
@@ -375,7 +340,7 @@ fn a_distribution_world_founds_each_cluster_at_its_origin() {
         initial_energy_per_agent: 50.0,
         founder_aggregation: explorers_sim::DEFAULT_FOUNDER_AGGREGATION,
     };
-    let world = World::new(p.clone(), dist.clone(), 3);
+    let world = World::new(p, dist, 3);
     for a in world.agents() {
         assert_eq!(
             a.marker,
@@ -383,12 +348,5 @@ fn a_distribution_world_founds_each_cluster_at_its_origin() {
             "agent {}",
             a.id
         );
-    }
-    // The markers draw nothing: positions and traits are the switch-off
-    // world's.
-    p.marker_isolation = false;
-    let off = World::new(p, dist, 3);
-    for (x, y) in world.agents().iter().zip(off.agents()) {
-        assert_eq!((x.position, x.traits), (y.position, y.traits));
     }
 }
