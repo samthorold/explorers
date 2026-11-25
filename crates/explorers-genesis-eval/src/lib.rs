@@ -1224,8 +1224,6 @@ mod tests {
             carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
-            starvation_draws_earmark: false,
-            starvation_shrinks: false,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,
@@ -2811,8 +2809,12 @@ mod tests {
             light_competition_radius: 1000.0,
             photo_maintenance_cost: 0.0,
             heterotrophy_maintenance_cost: 0.0,
-            initial_nutrient_pool: 0.0,
-            growth_efficiency: 0.0,
+            // The founder has a body (a pool to bind it and growth efficiency
+            // above 0), so the base rate `b · S` charges it more than it
+            // holds: since #863 a body with no structure and no trait upkeep
+            // pays nothing and lives on its earmark.
+            initial_nutrient_pool: 5000.0,
+            growth_efficiency: 0.5,
             wear_rate: 0.0,
             wear_degradation_steepness: 0.0,
             somatic_maintenance_cost_coefficient: 0.0,
@@ -2847,8 +2849,6 @@ mod tests {
             carcass_half_saturation: explorers_sim::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: explorers_sim::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
-            starvation_draws_earmark: false,
-            starvation_shrinks: false,
             contact_distance: explorers_sim::DEFAULT_CONTACT_DISTANCE,
             compatibility_scale: explorers_sim::DEFAULT_COMPATIBILITY_SCALE,
             tissue_turnover_rate: explorers_sim::DEFAULT_TISSUE_TURNOVER_RATE,

@@ -207,8 +207,24 @@ pub fn metabolise_soa(s: &mut AgentSoA, params: &WorldParameters) -> (Vec<Event>
     let exp = params.maintenance_cost_exponent;
 
     for i in 0..s.len() {
-        let cost = maintenance_cost(s, i, params, exp).min(s.reserve[i].max(0.0));
-        s.reserve[i] -= cost;
+        let need = maintenance_cost(s, i, params, exp);
+        let paid = need.min(s.reserve[i].max(0.0));
+        s.reserve[i] -= paid;
+        // The starvation cascade (flow 8), as `phase::starvation_cascade`:
+        // the earmark, then structure, each capped at what it holds.
+        let mut unpaid = need - paid;
+        if unpaid > 0.0 {
+            let drawn = unpaid.min(s.repro_reserve[i].max(0.0));
+            s.repro_reserve[i] -= drawn;
+            unpaid -= drawn;
+        }
+        if unpaid > 0.0 {
+            let burned = unpaid.min(s.structure[i].max(0.0));
+            s.structure[i] -= burned;
+            s.nutrient[i] += stoichiometric_demand(&s.traits_at(i), burned, params);
+            unpaid -= burned;
+        }
+        let cost = paid + ((need - paid) - unpaid);
         total_dissipated += cost;
         events.push(Event {
             tick: 0,

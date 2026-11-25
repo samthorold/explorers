@@ -750,25 +750,6 @@ pub struct WorldParameters {
     /// bit-unchanged.
     #[serde(default)]
     pub living_resistance: f32,
-    /// The starvation cascade's first step (world-rules.md flow 8, *When
-    /// reserve cannot pay: the starvation cascade*, step 1): when on, upkeep
-    /// that unallocated reserve cannot pay is drawn next from the energy
-    /// earmark (`repro_reserve`). Energy only: the reproductive-nutrient
-    /// earmark is untouched. Default `false` is off: the shortfall moves on
-    /// to shrinking, or with that off too the agent dies when its reserve
-    /// runs out, so every existing recipe, pin and fixture is bit-unchanged.
-    #[serde(default)]
-    pub starvation_draws_earmark: bool,
-    /// The starvation cascade's second step, shrinking (flow 8, step 2): when
-    /// on, upkeep that reserve (and the earmark, with its switch on) cannot
-    /// pay is paid by burning structure. A unit of structure yields its
-    /// embodied energy in full; the nutrient bound in it (`burned × demand`)
-    /// returns to the free, unearmarked store; the peak structure does not
-    /// fall, so the agent dies by the structural death rule
-    /// (`structural_fragility × peak_structure`). Default `false` is off, as
-    /// above.
-    #[serde(default)]
-    pub starvation_shrinks: bool,
     /// Contact distance `d_c` (world-rules.md flow 2, *Substrate contact is
     /// one predicate*; *Unit anchors*): the movement length over which
     /// substrate contact falls by `1/e`. Units of length. Hyphal uptake
@@ -1713,7 +1694,7 @@ impl World {
         events.extend(metab_events);
         // Agents that could not fund this tick's metabolism have starved; they
         // die at the death check whatever later phases credit them (#540).
-        let starved_ids = phase::starved_ids(&self.agents, &self.params);
+        let starved_ids = phase::starved_ids(&self.agents);
         // Each consumer's nutrient deficit, read once on the surplus the grow
         // phase is about to mobilise (execution-model.md, Pass 1): what the
         // surplus is waiting on caps the nutrient it keeps from a bite (flow 3).
@@ -1931,14 +1912,10 @@ impl World {
             self.carcasses.push(c);
         }
 
-        // Remove dead agents (those with reserve <= 0 or structure below
-        // threshold). Under the starvation cascade a living agent can hold no
-        // reserve, so the dead are named by the carcasses they left.
-        if phase::starvation_cascade_on(&self.params) {
-            self.agents.retain(|a| !threshold_dead.contains(&a.id));
-        } else {
-            self.agents.retain(|a| a.reserve > 0.0);
-        }
+        // Remove dead agents. Under the starvation cascade (flow 8) a living
+        // agent can hold no reserve, so the dead are named by the carcasses
+        // they left.
+        self.agents.retain(|a| !threshold_dead.contains(&a.id));
 
         // 10. Tissue turnover (world rules, *Somatic wear*, *Tissue
         // turnover*): the living shed `τ` of their structure, part recycled
@@ -2434,8 +2411,6 @@ mod tests {
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
-            starvation_draws_earmark: false,
-            starvation_shrinks: false,
             solar_flux_magnitude: 10.0,
             base_trophic_efficiency: 0.5,
             trophic_distance_decay: 0.0,
@@ -3281,23 +3256,21 @@ mod tests {
     }
 
     #[test]
-    fn starvation_cascade_switches_round_trip_and_default_off() {
-        // #821: a recipe or checkpoint that predates the starvation cascade
-        // loads with both steps off (death when reserve runs out).
-        let mut params = test_params();
-        params.starvation_draws_earmark = true;
-        params.starvation_shrinks = true;
-        let json = serde_json::to_string(&params).unwrap();
-        let back: WorldParameters = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, params);
-
-        let mut value = serde_json::to_value(test_params()).unwrap();
-        let fields = value.as_object_mut().unwrap();
-        fields.remove("starvation_draws_earmark");
-        fields.remove("starvation_shrinks");
-        let without: WorldParameters = serde_json::from_value(value).unwrap();
-        assert!(!without.starvation_draws_earmark);
-        assert!(!without.starvation_shrinks);
+    fn a_recipe_that_still_sets_the_retired_starvation_cascade_switches_loads() {
+        // #863: the starvation cascade runs in every world, so its #821
+        // switches are gone. A recipe or checkpoint written while they
+        // existed, with either on or off, still loads, to the same parameters.
+        for (earmark, shrinks) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut value = serde_json::to_value(test_params()).unwrap();
+            let fields = value.as_object_mut().unwrap();
+            fields.insert(
+                "starvation_draws_earmark".into(),
+                serde_json::json!(earmark),
+            );
+            fields.insert("starvation_shrinks".into(), serde_json::json!(shrinks));
+            let loaded: WorldParameters = serde_json::from_value(value).unwrap();
+            assert_eq!(loaded, test_params());
+        }
     }
 
     #[test]
@@ -4343,7 +4316,9 @@ mod tests {
                 },
                 AgentSpec {
                     position: (1.0, 0.0),
-                    reserve: 0.05, // below one tick's metabolism → starves this step
+                    // Founded with nothing: no reserve, earmark or structure
+                    // for the starvation cascade to draw on → starves this step.
+                    reserve: 0.0,
                     traits: zero_traits(),
                     nutrient: 0.0,
                     founding_cluster: 0,
@@ -4962,8 +4937,6 @@ mod tests {
             carcass_half_saturation: crate::DEFAULT_CARCASS_HALF_SATURATION,
             base_rate_reference_structure: crate::DEFAULT_BASE_RATE_REFERENCE_STRUCTURE,
             living_resistance: 0.0,
-            starvation_draws_earmark: false,
-            starvation_shrinks: false,
             solar_flux_magnitude: 10.0,
             base_metabolic_rate: 0.5,
             growth_efficiency: 0.5,

@@ -253,7 +253,9 @@ fn example9_demographics_are_invariant_under_agent_order_shuffle() {
 }
 
 /// The wiring of the path from producer to carcass to decomposer, exact on
-/// example9 (seed 1, 200 ticks). The scenario holds the producer ring far
+/// example9 (seed 1, 800 ticks; since #863 the starvation cascade carries a
+/// starving producer on its earmark and structure, and the ring's first death
+/// comes at tick 660, where it came within 200 before). The scenario holds the producer ring far
 /// outside the decomposer's fixed feeding reach (`body_reach_coefficient = 0`),
 /// so the geometry fixes what each leg of the path must do:
 ///
@@ -293,7 +295,7 @@ fn example9_wires_producer_to_carcass_to_decomposer_exactly() {
     let mut deposit_drains_by_others = 0usize;
     let mut cross_lineage_drains = 0usize;
     let mut cursor = 0usize;
-    for _ in 0..200 {
+    for _ in 0..800 {
         world.step();
         for ev in world.event_log().since(cursor) {
             match ev.kind {

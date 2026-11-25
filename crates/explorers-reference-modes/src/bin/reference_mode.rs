@@ -92,17 +92,15 @@
 //! (`decomposer_mesocosm`) beside them.
 //! Without it nothing is recorded and the world is unchanged.
 //!
-//! `--starvation-draws-earmark` and `--starvation-shrinks` (#821; world
-//! rules, flow 8, *When reserve cannot pay: the starvation cascade*) turn on
-//! the cascade's two steps: upkeep reserve cannot pay is drawn from the
-//! energy earmark, then paid by burning structure. Each works alone. The
-//! summary and artifact record both switches. Either option, or
-//! `--starvation-readout` alone (for a control with both off), also writes
-//! the founder starvation readout per run or arm: for each decomposer
-//! founder, the tick it died, whether it reproduced before its unallocated
-//! reserve first ran out, the earmark it held then, and the ticks it lived
-//! on the earmark and on structure, summarised as medians and counts.
-//! Without any of them nothing is recorded and the world is unchanged.
+//! The starvation cascade runs in every world (#821, #863; world rules, flow
+//! 8, *When reserve cannot pay: the starvation cascade*): upkeep reserve
+//! cannot pay is drawn from the energy earmark, then paid by burning
+//! structure. `--starvation-readout` writes the founder starvation readout
+//! per run or arm: for each decomposer founder, the tick it died, whether it
+//! reproduced before its unallocated reserve first ran out, the earmark it
+//! held then, and the ticks it lived on the earmark and on structure,
+//! summarised as medians and counts. Without it nothing is recorded and the
+//! world is unchanged.
 //!
 //! Reproductive isolation follows ancestry in every world (#837, #861; world
 //! rules, flow 4, *Reproductive isolation follows ancestry, through a neutral
@@ -148,8 +146,7 @@
 //!                [--litter-half-life L] [--enzyme-half-saturation K]
 //!                [--established-producer-structure S_p]
 //!                [--living-resistance] [--decomposer-mesocosm]
-//!                [--starvation-draws-earmark]
-//!                [--starvation-shrinks] [--starvation-readout]
+//!                [--starvation-readout]
 //!                [--compatibility-scale S]
 //!                [--early-window C]
 //!                [--abort-on-line-extinction]
@@ -178,11 +175,10 @@ use explorers_reference_modes::mesocosm::{
     line_extinction_section, living_resistance_section, marker_readout_section,
     mode1_mesocosm_with_founders, mode1_summary, paired_summary, run_mode1_with, run_paired_with,
     set_base_rate_reference_structure, set_body_reach_pieces, set_compatibility_scale,
-    set_decomposition_kinetics, set_living_resistance, set_starvation_cascade,
-    starvation_cascade_section,
+    set_decomposition_kinetics, set_living_resistance,
 };
 
-const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--established-producer-structure S_p] [--living-resistance] [--decomposer-mesocosm] [--starvation-draws-earmark] [--starvation-shrinks] [--starvation-readout] [--compatibility-scale S] [--early-window C] [--abort-on-line-extinction] [--seeds N --passes-needed K [--failures-undecided]] [--out PATH]";
+const USAGE: &str = "usage: reference_mode [--spec PATH] [--ticks N] [--seed S] [--wear-rate W] [--use-wear-rate U] [--repair-rate R] [--senescence-hazard H] [--sample-every K] [--clear-at T] [--no-decomposers] [--litter-x N] [--decomposer-founders N] [--body-reach-pieces K] [--litter-half-life L] [--enzyme-half-saturation K] [--established-producer-structure S_p] [--living-resistance] [--decomposer-mesocosm] [--starvation-readout] [--compatibility-scale S] [--early-window C] [--abort-on-line-extinction] [--seeds N --passes-needed K [--failures-undecided]] [--out PATH]";
 
 struct Cli {
     spec: PathBuf,
@@ -216,11 +212,7 @@ struct Cli {
     /// The decomposer mesocosm (#884), whose declared values set the rules
     /// above.
     decomposer_mesocosm: Option<DecomposerMesocosm>,
-    /// The starvation cascade's steps (#821): the earmark pays, then
-    /// structure.
-    starvation_draws_earmark: bool,
-    starvation_shrinks: bool,
-    /// Whether to write the founder starvation readout with both steps off.
+    /// Whether to write the founder starvation readout (#821).
     starvation_readout: bool,
     /// A compatibility scale `s` in place of the default (#837, #861).
     compatibility_scale: Option<f32>,
@@ -252,8 +244,6 @@ impl Cli {
             established_producer_structure: None,
             living_resistance: false,
             decomposer_mesocosm: None,
-            starvation_draws_earmark: false,
-            starvation_shrinks: false,
             starvation_readout: false,
             compatibility_scale: None,
             early_window: None,
@@ -273,14 +263,6 @@ impl Cli {
             }
             if flag == "--decomposer-mesocosm" {
                 cli.decomposer_mesocosm = Some(DecomposerMesocosm::DECLARED);
-                continue;
-            }
-            if flag == "--starvation-draws-earmark" {
-                cli.starvation_draws_earmark = true;
-                continue;
-            }
-            if flag == "--starvation-shrinks" {
-                cli.starvation_shrinks = true;
                 continue;
             }
             if flag == "--starvation-readout" {
@@ -568,14 +550,7 @@ fn run_seed(
     let living_resistance = cli
         .living_resistance
         .then(|| set_living_resistance(&mut world));
-    let cascade = (cli.starvation_draws_earmark || cli.starvation_shrinks).then(|| {
-        set_starvation_cascade(
-            &mut world,
-            cli.starvation_draws_earmark,
-            cli.starvation_shrinks,
-        )
-    });
-    let starvation_readout = cli.starvation_readout || cascade.is_some();
+    let starvation_readout = cli.starvation_readout;
     let community = match cli.community {
         Community::ProducersAndDecomposers => "producers and decomposers",
         Community::ProducersOnly => "producers only",
@@ -615,10 +590,6 @@ fn run_seed(
         };
         let header = match living_resistance {
             Some(rho) => format!("{header}\n\n{}", living_resistance_section(rho)),
-            None => header,
-        };
-        let header = match &cascade {
-            Some(c) => format!("{header}\n\n{}", starvation_cascade_section(c)),
             None => header,
         };
         match &compatibility_scale {
@@ -736,10 +707,6 @@ fn run_seed(
     if let Some(d) = cli.decomposer_mesocosm {
         artifact["decomposer_mesocosm"] =
             serde_json::to_value(d).expect("the decomposer mesocosm serialises");
-    }
-    if let Some(c) = cascade {
-        artifact["starvation_cascade"] =
-            serde_json::to_value(c).expect("the starvation cascade serialises");
     }
     if let Some(m) = compatibility_scale {
         artifact["compatibility_scale"] = serde_json::json!(m.compatibility_scale);

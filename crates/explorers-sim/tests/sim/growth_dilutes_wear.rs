@@ -101,13 +101,11 @@ fn a_fall_in_structure_leaves_wear_unchanged() {
     // A starving body burns structure for its upkeep (the starvation
     // cascade), then has no surplus to grow with: its structure falls and its
     // wear stays where it was.
-    let p = WorldParameters {
-        starvation_shrinks: true,
-        ..params()
-    };
+    let p = params();
     for traits in [producer(), decomposer()] {
         let mut a = worn(traits, 10.0);
         a.reserve = 0.0;
+        a.repro_reserve = 0.0;
         let mut agents = vec![a];
         let before = agents[0].clone();
         phase::metabolise(&mut agents, &p);
