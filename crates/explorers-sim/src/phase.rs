@@ -115,12 +115,11 @@ pub fn nutrient_uptake_demand(agent: &Agent, params: &WorldParameters) -> f32 {
 }
 
 /// An agent's pool-uptake demand in nutrient per tick (world-rules.md flow 2):
-/// effective autotrophy × the autotrophy anchor `u_A` (#459), scaled by
-/// `(structure / uptake_reference_structure)^b` when the uptake structure
-/// exponent `b` is nonzero (#644). It reads structure where the light share
-/// does: uptake runs after photosynthesis and before growth, and neither moves
-/// structure. At `b = 0` the size term is skipped, not evaluated, so demand is
-/// bit-identical to the size-blind rule at every structure, including zero.
+/// effective autotrophy × the autotrophy anchor `u_A` (#459) × `structure /
+/// uptake_reference_structure`: uptake is linear in the body (size-scaled
+/// uptake, physics in every world since #866), so a body with no structure
+/// takes up nothing. It reads structure where the light share does: uptake
+/// runs after photosynthesis and before growth, and neither moves structure.
 ///
 /// Hyphal uptake (#727, physics in every world since #860) adds `contact ×
 /// effective heterotrophy` to the rate, contact being [`substrate_contact`]
@@ -135,11 +134,7 @@ pub fn nutrient_uptake_demand_after_move(
     let rate = agent.effective_trait_with_steepness(0, k)
         + substrate_contact(distance_moved, params) * agent.effective_trait_with_steepness(1, k);
     let demand = rate * crate::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK;
-    let b = params.uptake_structure_exponent;
-    if b == 0.0 {
-        return demand;
-    }
-    demand * (agent.structure / params.uptake_reference_structure).powf(b)
+    demand * (agent.structure / params.uptake_reference_structure)
 }
 
 /// Absorb nutrients: uptake from the local nutrient grid cell at each agent's
@@ -2958,7 +2953,6 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
-            uptake_structure_exponent: 0.0,
             uptake_reference_structure: crate::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             // Kin-blind: these tests pin drain mechanics; recognition tests
             // set the distance explicitly.
@@ -2977,6 +2971,27 @@ mod tests {
 
     fn make_agent(id: u64, position: (f32, f32), reserve: f32, traits: TraitVector) -> Agent {
         Agent::new(id, position, reserve, 0.0, 0.0, traits)
+    }
+
+    /// An agent at the world's default uptake reference structure, where the
+    /// size term of uptake is exactly 1 (#866), for tests of another uptake
+    /// rule (kappa, sharing, contact). Its body binds nutrient of its own, so
+    /// read what it took up with [`taken_up`].
+    fn rooted_agent(id: u64, position: (f32, f32), reserve: f32, traits: TraitVector) -> Agent {
+        Agent::new(
+            id,
+            position,
+            reserve,
+            crate::DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
+            0.0,
+            traits,
+        )
+    }
+
+    /// Nutrient an agent founded with none has taken up: its free store and
+    /// its earmark, leaving out what its structure binds.
+    fn taken_up(agent: &Agent) -> f32 {
+        agent.nutrient + agent.repro_nutrient
     }
 
     /// `params` with decomposition kinetics under which a carcass of
@@ -3605,7 +3620,7 @@ mod tests {
             kappa: 0.3,
             ..zero_traits()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut agents = vec![rooted_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
         absorb_nutrients(&mut agents, &mut grid, &params);
@@ -3636,7 +3651,7 @@ mod tests {
             photosynthetic_absorption: 0.5,
             ..zero_traits()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut agents = vec![rooted_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
         let events = absorb_nutrients(&mut agents, &mut grid, &params);
@@ -3646,9 +3661,9 @@ mod tests {
         // demand = eff_autotrophy = 0.5 (no wear degradation on fresh agent)
         let expected = 0.5;
         assert!(
-            (agents[0].nutrient_total(&params) - expected).abs() < 1e-3,
+            (taken_up(&agents[0]) - expected).abs() < 1e-3,
             "uptake should equal effective autotrophy, got {}",
-            agents[0].nutrient_total(&params)
+            taken_up(&agents[0])
         );
         assert!((grid.total() - (100.0 - expected)).abs() < 1e-3);
     }
@@ -3661,8 +3676,8 @@ mod tests {
             ..zero_traits()
         };
         let mut agents = vec![
-            make_agent(1, (0.0, 0.0), 10.0, traits),
-            make_agent(2, (1.0, 0.0), 10.0, traits),
+            rooted_agent(1, (0.0, 0.0), 10.0, traits),
+            rooted_agent(2, (1.0, 0.0), 10.0, traits),
         ];
         // Place all nutrient in the cell where agents are
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
@@ -3672,11 +3687,9 @@ mod tests {
 
         assert_eq!(events.len(), 2);
         // Both have same demand, so each gets half
-        let total_uptake = agents[0].nutrient_total(&params) + agents[1].nutrient_total(&params);
+        let total_uptake = taken_up(&agents[0]) + taken_up(&agents[1]);
         assert!((total_uptake - 0.1).abs() < 1e-3);
-        assert!(
-            (agents[0].nutrient_total(&params) - agents[1].nutrient_total(&params)).abs() < 1e-3
-        );
+        assert!((taken_up(&agents[0]) - taken_up(&agents[1])).abs() < 1e-3);
     }
 
     // --- Hyphal uptake (#654, #727; physics since #860) ---
@@ -3692,13 +3705,13 @@ mod tests {
             heterotrophy: 0.4,
             ..zero_traits()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut agents = vec![rooted_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
         absorb_nutrients(&mut agents, &mut grid, &params);
 
         let expected = 0.4 * crate::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK;
-        assert_eq!(agents[0].nutrient_total(&params), expected);
+        assert_eq!(taken_up(&agents[0]), expected);
         assert_eq!(grid.total(), 100.0 - expected);
     }
 
@@ -3709,14 +3722,14 @@ mod tests {
             heterotrophy: 0.4,
             ..zero_traits()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut agents = vec![rooted_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
         let moved = FxHashMap::from_iter([(1, 3.0 * params.contact_distance)]);
 
         absorb_nutrients_after_moves(&mut agents, &mut grid, &params, &moved);
 
         let expected = (-3.0_f32).exp() * 0.4;
-        let got = agents[0].nutrient_total(&params);
+        let got = taken_up(&agents[0]);
         assert!((got - expected).abs() < 1e-6, "got {got}, want {expected}");
     }
 
@@ -3740,12 +3753,12 @@ mod tests {
             heterotrophy: 0.5,
             ..zero_traits()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut agents = vec![rooted_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
         absorb_nutrients(&mut agents, &mut grid, &params);
 
-        assert_eq!(agents[0].nutrient_total(&params), 0.75);
+        assert_eq!(taken_up(&agents[0]), 0.75);
     }
 
     #[test]
@@ -3760,8 +3773,8 @@ mod tests {
             ..zero_traits()
         };
         let mut agents = vec![
-            make_agent(1, (0.0, 0.0), 10.0, producer),
-            make_agent(2, (1.0, 0.0), 10.0, decomposer),
+            rooted_agent(1, (0.0, 0.0), 10.0, producer),
+            rooted_agent(2, (1.0, 0.0), 10.0, decomposer),
         ];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         *grid.at_position((0.0, 0.0)) = 0.4;
@@ -3769,8 +3782,8 @@ mod tests {
         absorb_nutrients(&mut agents, &mut grid, &params);
 
         // Demand 0.6 : 0.2 over a pool of 0.4 → 0.3 : 0.1.
-        let roots = agents[0].nutrient_total(&params);
-        let hyphae = agents[1].nutrient_total(&params);
+        let roots = taken_up(&agents[0]);
+        let hyphae = taken_up(&agents[1]);
         assert!((roots - 0.3).abs() < 1e-6, "roots {roots}");
         assert!((hyphae - 0.1).abs() < 1e-6, "hyphae {hyphae}");
         assert!(grid.total().abs() < 1e-6);
@@ -3783,25 +3796,24 @@ mod tests {
             photosynthetic_absorption: 0.5,
             ..zero_traits()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut agents = vec![rooted_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
         let moved = FxHashMap::from_iter([(1, 1.0)]);
 
         absorb_nutrients_after_moves(&mut agents, &mut grid, &params, &moved);
 
-        assert_eq!(agents[0].nutrient_total(&params), 0.5);
+        assert_eq!(taken_up(&agents[0]), 0.5);
     }
 
     // --- Size-scaled uptake (#644) ---
 
     #[test]
     fn size_scaled_uptake_gives_a_larger_producer_proportionally_more_from_a_rich_cell() {
-        // #644: at b = 1, uptake demand is effective autotrophy × u_A ×
+        // #644, #866: uptake demand is effective autotrophy × u_A ×
         // structure / s_ref, so a producer three times the reference body takes
         // three times what one at the reference takes, when the cell can serve
         // them both.
         let mut params = test_params();
-        params.uptake_structure_exponent = 1.0;
         params.uptake_reference_structure = 2.0;
         let traits = TraitVector {
             photosynthetic_absorption: 0.5,
@@ -3826,12 +3838,11 @@ mod tests {
 
     #[test]
     fn size_scaled_uptake_shares_a_depleted_cell_in_proportion_to_scaled_demand() {
-        // #644: when the cell cannot meet total demand, each agent's share is
-        // proportional to its size-scaled demand. At b = 1/2, s_ref = 1, bodies
-        // of 1 and 9 demand 1 and 3 (same autotrophy), so a pool of 0.4 splits
-        // 0.1 : 0.3 and is exhausted.
+        // #644, #866: when the cell cannot meet total demand, each agent's
+        // share is proportional to its size-scaled demand. At s_ref = 1,
+        // bodies of 1 and 3 demand 1 and 3 (same autotrophy), so a pool of 0.4
+        // splits 0.1 : 0.3 and is exhausted.
         let mut params = test_params();
-        params.uptake_structure_exponent = 0.5;
         params.uptake_reference_structure = 1.0;
         let traits = TraitVector {
             photosynthetic_absorption: 1.0,
@@ -3839,7 +3850,7 @@ mod tests {
         };
         let mut agents = vec![
             Agent::new(1, (0.0, 0.0), 10.0, 1.0, 0.0, traits),
-            Agent::new(2, (1.0, 0.0), 10.0, 9.0, 0.0, traits),
+            Agent::new(2, (1.0, 0.0), 10.0, 3.0, 0.0, traits),
         ];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         *grid.at_position((0.0, 0.0)) = 0.4;
@@ -3859,10 +3870,9 @@ mod tests {
 
     #[test]
     fn size_scaled_uptake_gives_a_zero_structure_agent_nothing() {
-        // #644: at b > 0 a body with no structure has no roots: it demands
+        // #644, #866: a body with no structure has no roots: it demands
         // nothing, emits no uptake event and leaves the pool untouched.
-        let mut params = test_params();
-        params.uptake_structure_exponent = 1.0 / 3.0;
+        let params = test_params();
         let traits = TraitVector {
             photosynthetic_absorption: 1.0,
             ..zero_traits()
@@ -3878,28 +3888,25 @@ mod tests {
     }
 
     #[test]
-    fn size_blind_uptake_at_b_zero_ignores_structure_bit_for_bit() {
-        // #644: at the default b = 0 the size term is skipped, so demand is
-        // effective autotrophy × u_A exactly — at zero structure, at the
-        // reference and far from it — whatever the reference structure.
+    fn a_body_at_the_reference_structure_takes_up_the_size_blind_demand_bit_for_bit() {
+        // #866: at structure s_ref the size term is exactly 1, so demand is
+        // effective autotrophy × u_A to the bit, whatever the reference.
         let traits = TraitVector {
             photosynthetic_absorption: 0.37,
             ..zero_traits()
         };
-        for s_ref in [0.0, 1.0, crate::DEFAULT_UPTAKE_REFERENCE_STRUCTURE] {
+        for s_ref in [1.0, crate::DEFAULT_UPTAKE_REFERENCE_STRUCTURE, 1234.5] {
             let mut params = test_params();
             params.uptake_reference_structure = s_ref;
-            for structure in [0.0, 1.0, 7.3, 1234.5] {
-                let agent = Agent::new(1, (0.0, 0.0), 10.0, structure, 0.0, traits);
-                let size_blind = agent
-                    .effective_trait_with_steepness(0, params.wear_degradation_steepness)
-                    * crate::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK;
-                assert_eq!(
-                    nutrient_uptake_demand(&agent, &params).to_bits(),
-                    size_blind.to_bits(),
-                    "structure {structure}, s_ref {s_ref}"
-                );
-            }
+            let agent = Agent::new(1, (0.0, 0.0), 10.0, s_ref, 0.0, traits);
+            let size_blind = agent
+                .effective_trait_with_steepness(0, params.wear_degradation_steepness)
+                * crate::units::AUTOTROPHY_NUTRIENT_UPTAKE_PER_TICK;
+            assert_eq!(
+                nutrient_uptake_demand(&agent, &params).to_bits(),
+                size_blind.to_bits(),
+                "s_ref {s_ref}"
+            );
         }
     }
 
@@ -3914,7 +3921,7 @@ mod tests {
             photosynthetic_absorption: 0.5,
             ..zero_traits()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut agents = vec![rooted_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
         let events = absorb_nutrients(&mut agents, &mut grid, &params);
@@ -3924,7 +3931,7 @@ mod tests {
             "agent with autotrophy should absorb nutrients on its first tick"
         );
         assert!(
-            agents[0].nutrient_total(&params) > 0.0,
+            taken_up(&agents[0]) > 0.0,
             "nutrient uptake should be positive"
         );
     }
@@ -3938,7 +3945,7 @@ mod tests {
             photosynthetic_absorption: 0.5,
             ..zero_traits()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut agents = vec![rooted_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
         let events = absorb_nutrients(&mut agents, &mut grid, &params);
@@ -3948,9 +3955,9 @@ mod tests {
         // demand = effective_autotrophy = 0.5
         let expected = 0.5;
         assert!(
-            (agents[0].nutrient_total(&params) - expected).abs() < 1e-3,
+            (taken_up(&agents[0]) - expected).abs() < 1e-3,
             "autotrophy-derived uptake expected {expected}, got {}",
-            agents[0].nutrient_total(&params)
+            taken_up(&agents[0])
         );
     }
 
@@ -3963,7 +3970,7 @@ mod tests {
             mobility: 0.5,
             ..zero_traits()
         };
-        let mut agents = vec![make_agent(1, (0.0, 0.0), 10.0, traits)];
+        let mut agents = vec![rooted_agent(1, (0.0, 0.0), 10.0, traits)];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 100.0);
 
         let events = absorb_nutrients(&mut agents, &mut grid, &params);
@@ -3973,7 +3980,7 @@ mod tests {
             "zero-autotrophy agent should get no nutrient uptake events"
         );
         assert!(
-            (agents[0].nutrient_total(&params)).abs() < 1e-6,
+            (taken_up(&agents[0])).abs() < 1e-6,
             "zero-autotrophy agent should have zero nutrient"
         );
         assert!(
@@ -3993,8 +4000,8 @@ mod tests {
         };
         // Agent A at (-40, 0), Agent B at (40, 0) — in different cells (cell_size=10)
         let mut agents = vec![
-            make_agent(1, (-40.0, 0.0), 10.0, traits),
-            make_agent(2, (40.0, 0.0), 10.0, traits),
+            rooted_agent(1, (-40.0, 0.0), 10.0, traits),
+            rooted_agent(2, (40.0, 0.0), 10.0, traits),
         ];
         let mut grid = crate::spatial::NutrientGrid::new(100.0, 10.0, 0.0);
         // Give only agent A's cell nutrient
@@ -4005,19 +4012,18 @@ mod tests {
 
         // Agent A should have absorbed nutrient
         assert!(
-            agents[0].nutrient_total(&params) > 0.0,
+            taken_up(&agents[0]) > 0.0,
             "agent in nutrient-rich cell should absorb, got {}",
-            agents[0].nutrient_total(&params)
+            taken_up(&agents[0])
         );
         // Agent B should have absorbed nothing
         assert!(
-            (agents[1].nutrient_total(&params)).abs() < 1e-6,
+            (taken_up(&agents[1])).abs() < 1e-6,
             "agent in nutrient-poor cell should absorb nothing, got {}",
-            agents[1].nutrient_total(&params)
+            taken_up(&agents[1])
         );
         // Total nutrient conserved
-        let total =
-            grid.total() + agents[0].nutrient_total(&params) + agents[1].nutrient_total(&params);
+        let total = grid.total() + taken_up(&agents[0]) + taken_up(&agents[1]);
         assert!(
             (total - 5.0).abs() < 1e-3,
             "total nutrient should be conserved, got {}",

@@ -38,13 +38,22 @@ fn producer(autotrophy: f32) -> TraitVector {
     }
 }
 
+/// The bodies these tests found: the world's uptake reference structure, where
+/// size-scaled uptake's size term is 1 (#866).
+const S_REF: f32 = explorers_sim::DEFAULT_UPTAKE_REFERENCE_STRUCTURE;
+
 /// A still world of lone heterotrophs at the world's default physics: no
 /// mutation, no wear, so each agent's effective traits are its raw traits and
-/// a mobile agent's stride is `mobility × u_M` every tick.
+/// a mobile agent's stride is `mobility × u_M` every tick. No growth and no
+/// tissue turnover either, so every body keeps its founding structure and a
+/// still and a roving agent take up by contact alone on a later tick, uptake
+/// being linear in structure since #866.
 fn lone_heterotroph_params() -> WorldParameters {
     WorldParameters {
         mutation_rate: 0.0,
         mutation_magnitude: 0.0,
+        reserve_mobilisation_rate: 0.0,
+        tissue_turnover_rate: 0.0,
         ..support::viable_baseline()
     }
 }
@@ -95,9 +104,9 @@ fn s27_rung_a_still_heterotroph_takes_up_pool_nutrient_by_heterotrophy_a_roving_
         10.0 * params.contact_distance,
         "a full stride is ten contact distances"
     );
-    let low = Agent::new(0, (-35.0, -35.0), 100.0, 3.0, 5.0, heterotroph(0.25, 0.0));
-    let high = Agent::new(0, (35.0, -35.0), 100.0, 3.0, 5.0, heterotroph(0.5, 0.0));
-    let rover = Agent::new(0, (35.0, 35.0), 100.0, 3.0, 5.0, heterotroph(0.5, 1.0));
+    let low = Agent::new(0, (-35.0, -35.0), 100.0, S_REF, 5.0, heterotroph(0.25, 0.0));
+    let high = Agent::new(0, (35.0, -35.0), 100.0, S_REF, 5.0, heterotroph(0.5, 0.0));
+    let rover = Agent::new(0, (35.0, 35.0), 100.0, S_REF, 5.0, heterotroph(0.5, 1.0));
     let mut world = world_with(params, &[low, high, rover]);
     let ids: Vec<u64> = world.agents().iter().map(|a| a.id).collect();
     let first = world.tick();
@@ -136,8 +145,8 @@ fn s27_rung_a_still_heterotroph_takes_up_pool_nutrient_by_heterotrophy_a_roving_
         ..lone_heterotroph_params()
     };
     let cell_pool = 0.09_f32;
-    let roots = Agent::new(0, (-25.0, -25.0), 100.0, 3.0, 5.0, producer(0.6));
-    let hyphae = Agent::new(0, (-24.0, -24.0), 100.0, 3.0, 5.0, heterotroph(0.3, 0.0));
+    let roots = Agent::new(0, (-25.0, -25.0), 100.0, S_REF, 5.0, producer(0.6));
+    let hyphae = Agent::new(0, (-24.0, -24.0), 100.0, S_REF, 5.0, heterotroph(0.3, 0.0));
     let mut world = world_with(depleted, &[roots, hyphae]);
     let cell = world.nutrient_grid().cell_index_for((-25.0, -25.0));
     assert_eq!(cell, world.nutrient_grid().cell_index_for((-24.0, -24.0)));
@@ -170,8 +179,8 @@ fn s27_rung_a_still_heterotroph_takes_up_pool_nutrient_by_heterotrophy_a_roving_
 fn a_heterotroph_striding_three_contact_distances_absorbs_e_to_the_minus_three_of_a_still_one() {
     let params = lone_heterotroph_params();
     let stride = 3.0 * params.contact_distance;
-    let still = Agent::new(0, (-25.0, -25.0), 100.0, 3.0, 5.0, heterotroph(0.5, 0.0));
-    let mover = Agent::new(0, (25.0, 25.0), 100.0, 3.0, 5.0, heterotroph(0.5, stride));
+    let still = Agent::new(0, (-25.0, -25.0), 100.0, S_REF, 5.0, heterotroph(0.5, 0.0));
+    let mover = Agent::new(0, (25.0, 25.0), 100.0, S_REF, 5.0, heterotroph(0.5, stride));
     let mut world = world_with(params, &[still, mover]);
     let still_id = world.agents()[0].id;
     let mover_id = world.agents()[1].id;

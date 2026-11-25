@@ -674,19 +674,14 @@ pub struct WorldParameters {
     /// separation (~1.4), so it covers kin clusters without sparing prey.
     #[serde(default = "default_recognition_distance")]
     pub recognition_distance: f32,
-    /// Uptake structure exponent `b` (#644; world-rules.md flow 2): pool
-    /// uptake demand grows with the body as root mass grows with shoot mass,
-    /// `effective autotrophy × u_A × (structure / uptake_reference_structure)^b`.
-    /// Light share already scales with structure; this lets uptake follow it.
-    /// Dimensionless. Default `0.0` disables it — demand is effective
-    /// autotrophy × `u_A` exactly as before, whatever the structure — so every
-    /// existing recipe, pin and the atlas are bit-unchanged.
-    #[serde(default)]
-    pub uptake_structure_exponent: f32,
-    /// Reference structure `s_ref` of size-scaled uptake (#644): the body at
-    /// which demand equals the size-blind demand, whatever the exponent. Units
-    /// of structure. Inert while `uptake_structure_exponent` is 0. Default
-    /// [`DEFAULT_UPTAKE_REFERENCE_STRUCTURE`].
+    /// Reference structure `s_ref` of size-scaled uptake (#644, #866;
+    /// world-rules.md flow 2, *Size-scaled uptake*): pool-uptake demand is
+    /// `rate × u_A × structure / s_ref`, linear in the body, so a body of
+    /// structure `s_ref` takes up what the size-blind rule gave it. Units of
+    /// structure, finite and above 0. Default
+    /// [`DEFAULT_UPTAKE_REFERENCE_STRUCTURE`]. Recipes from before #866 may
+    /// carry `uptake_structure_exponent`, the exponent this rule fixed at 1;
+    /// it is ignored on load.
     #[serde(default = "default_uptake_reference_structure")]
     pub uptake_reference_structure: f32,
     /// Autotrophy × heterotrophy cross-trait cost `c_AH` (world-rules.md,
@@ -899,16 +894,15 @@ fn default_contact_distance() -> f32 {
     DEFAULT_CONTACT_DISTANCE
 }
 
-/// Design default reference structure for size-scaled uptake (#644). Chosen
-/// so that switching the exponent on leaves total producer uptake demand of
-/// the order it is today: over the atlas (b = 0, ticks 1000–2000, producers
-/// with effective autotrophy > 0.05, autotrophy-weighted) the structure that
-/// leaves total demand unchanged is 40 at b = 1/3, 85 at b = 2/3 and 140 at
-/// b = 1. At 100, total demand moves by 0.74×, 0.90× and 1.40× across those
-/// exponents. The structure distribution is heavy-tailed (median 8, 90th
-/// percentile 460; founders about 1.8), so a reference near the typical
-/// *individual* would multiply total demand several-fold.
-pub const DEFAULT_UPTAKE_REFERENCE_STRUCTURE: f32 = 100.0;
+/// Design default reference structure of size-scaled uptake (world-rules.md
+/// flow 2, *Size-scaled uptake*, #866): the base rate's `S_p`,
+/// [`DEFAULT_BASE_RATE_REFERENCE_STRUCTURE`], the median established
+/// producer's structure. At it a producer's uptake, like its base cost, is
+/// what the size-blind rule gave it, so the calibrated producer budget holds
+/// at one body for both flows. A reference read from a run's total demand
+/// (#644's 100, from the atlas at the size-blind rule) is an output of the
+/// physics it would set, and is not used.
+pub const DEFAULT_UPTAKE_REFERENCE_STRUCTURE: f32 = DEFAULT_BASE_RATE_REFERENCE_STRUCTURE;
 
 fn default_uptake_reference_structure() -> f32 {
     DEFAULT_UPTAKE_REFERENCE_STRUCTURE
@@ -2430,7 +2424,6 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
-            uptake_structure_exponent: 0.0,
             uptake_reference_structure: DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,
@@ -3409,27 +3402,41 @@ mod tests {
     }
 
     #[test]
-    fn size_scaled_uptake_parameters_round_trip_and_default_off() {
-        // #644: the two uptake-scaling parameters round-trip, and a recipe or
-        // checkpoint that predates them loads size-blind (b = 0) with the
-        // design-default reference structure.
+    fn uptake_reference_structure_round_trips_defaults_and_ignores_the_retired_exponent() {
+        // #644, #866: the reference structure round-trips; a recipe or
+        // checkpoint that predates it loads at the default, S_p; one that
+        // still carries the retired exponent, at any value, loads to the same
+        // parameters, the field ignored.
         let mut params = test_params();
-        params.uptake_structure_exponent = 2.0 / 3.0;
         params.uptake_reference_structure = 40.0;
         let json = serde_json::to_string(&params).unwrap();
         let back: WorldParameters = serde_json::from_str(&json).unwrap();
         assert_eq!(back, params);
 
         let mut value = serde_json::to_value(test_params()).unwrap();
-        let obj = value.as_object_mut().unwrap();
-        obj.remove("uptake_structure_exponent");
-        obj.remove("uptake_reference_structure");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("uptake_reference_structure");
         let without: WorldParameters = serde_json::from_value(value).unwrap();
-        assert_eq!(without.uptake_structure_exponent, 0.0);
         assert_eq!(
             without.uptake_reference_structure,
             DEFAULT_UPTAKE_REFERENCE_STRUCTURE
         );
+        assert_eq!(
+            DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
+            DEFAULT_BASE_RATE_REFERENCE_STRUCTURE
+        );
+
+        for b in [0.0, 0.371735, 1.0] {
+            let mut value = serde_json::to_value(test_params()).unwrap();
+            value
+                .as_object_mut()
+                .unwrap()
+                .insert("uptake_structure_exponent".into(), serde_json::json!(b));
+            let loaded: WorldParameters = serde_json::from_value(value).unwrap();
+            assert_eq!(loaded, test_params());
+        }
     }
 
     #[test]
@@ -4959,7 +4966,6 @@ mod tests {
             network_maintenance_cost: 0.0,
             network_redistribution_rate: 0.0,
             network_transfer_efficiency: 0.0,
-            uptake_structure_exponent: 0.0,
             uptake_reference_structure: DEFAULT_UPTAKE_REFERENCE_STRUCTURE,
             recognition_distance: 0.5,
             cross_trait_cost: 0.0,

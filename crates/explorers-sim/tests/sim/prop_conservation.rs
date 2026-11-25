@@ -399,7 +399,6 @@ fn issue_901_first_case() -> WorldCase {
         network_redistribution_rate: 0.0,
         network_transfer_efficiency: 0.0,
         recognition_distance: 0.0,
-        uptake_structure_exponent: 0.0,
         uptake_reference_structure: 100.0,
         cross_trait_cost: 0.0,
         leaching_rate: 0.0,
